@@ -388,13 +388,6 @@ interface CoworkPermissionRequest {
   toolUseId?: string | null;
 }
 
-interface CoworkApiConfig {
-  apiKey: string;
-  baseURL: string;
-  model: string;
-  apiType?: 'anthropic' | 'openai';
-}
-
 type OpenClawEnginePhase = SharedOpenClawEnginePhase;
 
 interface OpenClawEngineStatus {
@@ -893,11 +886,7 @@ interface IElectronAPI {
     onStreamError: (requestId: string, callback: (error: string) => void) => () => void;
     onStreamAbort: (requestId: string, callback: () => void) => () => void;
   };
-  getApiConfig: () => Promise<CoworkApiConfig | null>;
-  checkApiConfig: (options?: {
-    probeModel?: boolean;
-  }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
-  saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
+  checkApiConfig: () => Promise<{ hasConfig: boolean; error?: string }>;
   generateSessionTitle: (request: GenerateSessionTitleRequest) => Promise<string | null>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
   dsh: {
@@ -2729,8 +2718,8 @@ interface WeixinOpenClawConfig {
 }
 
 interface IMSettings {
-  systemPrompt?: string;
-  skillsEnabled: boolean;
+  /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
+  platformAgentBindings?: Record<string, string>;
 }
 
 interface IMGatewayStatus {

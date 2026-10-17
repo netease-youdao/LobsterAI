@@ -8,7 +8,9 @@ export const OPENCLAW_LOOPBACK_STATE_FILE = 'loopback-state.json';
 
 export const OpenClawLoopbackService = {
   TokenProxy: 'tokenProxy',
-  CompatProxy: 'compatProxy',
+  // Persisted under the historical compat-proxy key so upgrades keep the
+  // Copilot passthrough's port (and openclaw.json) unchanged.
+  CopilotProxy: 'compatProxy',
   McpBridge: 'mcpBridge',
 } as const;
 export type OpenClawLoopbackService = typeof OpenClawLoopbackService[keyof typeof OpenClawLoopbackService];

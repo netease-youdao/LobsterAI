@@ -112,13 +112,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     channelPrefixWeixin: '微信',
     channelPrefixNeteaseBee: '小蜜蜂',
     channelPrefixEmail: '邮件',
-    // NIM chat type labels
-    nimQChat: '圈组',
-    nimGroup: '群聊',
 
     // Timeout hint
     taskTimedOut: '[任务超时] 任务因超过最大允许时长而被自动停止。你可以继续对话以从中断处继续。',
-    imSessionStoppedReply: '任务已被手动停止。你可以继续发送消息开始新的对话。',
 
     // Thinking-only hint
     taskThinkingOnly:
@@ -525,15 +521,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     channelPrefixWeixin: 'WeChat',
     channelPrefixNeteaseBee: 'Xiaomifeng',
     channelPrefixEmail: 'Email',
-    // NIM chat type labels
-    nimQChat: 'QChat',
-    nimGroup: 'Group',
 
     // Timeout hint
     taskTimedOut:
       '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
-    imSessionStoppedReply:
-      'The task was manually stopped. You can send a new message to start a fresh conversation.',
 
     // OAuth flow messages
     qwenOAuthRequestingDeviceCode: 'Requesting device authorization code...',

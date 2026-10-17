@@ -67,3 +67,46 @@ export function readGeminiStreamEvent(event: SseEvent): StreamChunk {
     .join('');
   return text ? { text } : {};
 }
+
+const readErrorMessage = (value: unknown): string | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const message = (value as Record<string, unknown>).message;
+  return typeof message === 'string' && message ? message : undefined;
+};
+
+/** Reads one OpenAI Chat Completions streaming chunk. Reasoning and tool deltas are ignored. */
+export function readOpenAIChatStreamEvent(event: SseEvent): StreamChunk {
+  if (event.data.trim() === '[DONE]') return { done: true };
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(event.data) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+  if (payload.error) return { error: readErrorMessage(payload.error) ?? 'stream error' };
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const delta = (choices[0] as Record<string, unknown> | undefined)?.delta as Record<string, unknown> | undefined;
+  return typeof delta?.content === 'string' && delta.content ? { text: delta.content } : {};
+}
+
+/** Reads one OpenAI Responses streaming event. Reasoning and tool events are ignored. */
+export function readOpenAIResponsesStreamEvent(event: SseEvent): StreamChunk {
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(event.data) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+  const type = payload.type ?? event.event;
+  if (type === 'response.output_text.delta') {
+    return typeof payload.delta === 'string' && payload.delta ? { text: payload.delta } : {};
+  }
+  if (type === 'response.completed' || type === 'response.incomplete') return { done: true };
+  if (type === 'response.failed' || type === 'error') {
+    const response = payload.response as Record<string, unknown> | undefined;
+    return {
+      error: readErrorMessage(response?.error) ?? readErrorMessage(payload.error) ?? readErrorMessage(payload) ?? 'stream error',
+    };
+  }
+  return {};
+}

@@ -283,13 +283,6 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'dreamingTimezone'
 >>;
 
-export interface CoworkApiConfig {
-  apiKey: string;
-  baseURL: string;
-  model: string;
-  apiType?: 'anthropic' | 'openai';
-}
-
 export type OpenClawEnginePhase = SharedOpenClawEnginePhase;
 
 export interface OpenClawEngineStatus {

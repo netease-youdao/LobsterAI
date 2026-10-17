@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'vitest';
 
-import { readAnthropicStreamEvent, readGeminiStreamEvent, splitSseEvents } from './sse';
+import {
+  readAnthropicStreamEvent,
+  readGeminiStreamEvent,
+  readOpenAIChatStreamEvent,
+  readOpenAIResponsesStreamEvent,
+  splitSseEvents,
+} from './sse';
 
 describe('server-sent events', () => {
   test('keeps an unfinished event for the next chunk', () => {
@@ -37,5 +43,34 @@ describe('gemini stream', () => {
 
   test('surfaces API errors', () => {
     expect(readGeminiStreamEvent({ data: '{"error":{"message":"quota"}}' })).toEqual({ error: 'quota' });
+  });
+});
+
+describe('openai chat completions stream', () => {
+  test('reads content deltas and ignores reasoning and tool deltas', () => {
+    expect(readOpenAIChatStreamEvent({ data: '{"choices":[{"delta":{"content":"Hi"}}]}' })).toEqual({ text: 'Hi' });
+    expect(readOpenAIChatStreamEvent({ data: '{"choices":[{"delta":{"reasoning_content":"hmm"}}]}' })).toEqual({});
+    expect(readOpenAIChatStreamEvent({ data: '{"choices":[{"delta":{"tool_calls":[]}}]}' })).toEqual({});
+  });
+
+  test('reports the end and errors', () => {
+    expect(readOpenAIChatStreamEvent({ data: '[DONE]' })).toEqual({ done: true });
+    expect(readOpenAIChatStreamEvent({ data: '{"error":{"message":"rate limited"}}' })).toEqual({ error: 'rate limited' });
+    expect(readOpenAIChatStreamEvent({ data: 'not json' })).toEqual({});
+  });
+});
+
+describe('openai responses stream', () => {
+  test('reads output text deltas and ignores reasoning', () => {
+    expect(readOpenAIResponsesStreamEvent({ data: '{"type":"response.output_text.delta","delta":"Hi"}' })).toEqual({ text: 'Hi' });
+    expect(readOpenAIResponsesStreamEvent({ event: 'response.output_text.delta', data: '{"delta":" there"}' })).toEqual({ text: ' there' });
+    expect(readOpenAIResponsesStreamEvent({ data: '{"type":"response.reasoning_summary_text.delta","delta":"hmm"}' })).toEqual({});
+  });
+
+  test('reports the end and errors', () => {
+    expect(readOpenAIResponsesStreamEvent({ data: '{"type":"response.completed"}' })).toEqual({ done: true });
+    expect(readOpenAIResponsesStreamEvent({ data: '{"type":"response.failed","response":{"error":{"message":"bad model"}}}' }))
+      .toEqual({ error: 'bad model' });
+    expect(readOpenAIResponsesStreamEvent({ data: '{"type":"error","message":"overloaded"}' })).toEqual({ error: 'overloaded' });
   });
 });

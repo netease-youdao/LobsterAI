@@ -199,7 +199,6 @@ import {
   OpenClawLoopbackRepairOutcome,
 } from '../shared/openclawEngine/constants';
 import { OpenClawRepairPhase, OpenClawRepairStage } from '../shared/openclawEngine/repair';
-import { PlatformRegistry } from '../shared/platform';
 import type { ProviderConfig } from '../shared/providers';
 import {
   ModelRuntimeProfile,
@@ -342,11 +341,9 @@ import {
   clearServerModelMetadata,
   evaluateServerModelRunGate,
   getAllServerModelMetadata,
-  getCurrentApiConfig,
   getServerModelMetadata,
   isKnownPackageKimiK3ModelId,
   resolveAllEnabledProviderConfigs,
-  resolveCurrentApiConfig,
   resolveRawApiConfig,
   type ServerModelMetadataInput,
   ServerModelRunGateReason,
@@ -357,19 +354,17 @@ import {
 } from './libs/claudeSettings';
 import { appendClientBannerVersion } from './libs/clientBannerRequest';
 import {
+  getCopilotLoopbackPort,
+  startCopilotLoopbackProxy,
+  stopCopilotLoopbackProxy,
+} from './libs/copilotLoopbackProxy';
+import {
   clearCopilotTokenState,
   initCopilotTokenManager,
   refreshCopilotTokenNow,
   setCopilotTokenState,
 } from './libs/copilotTokenManager';
-import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { getCoworkLogPath } from './libs/coworkLogger';
-import {
-  getCoworkOpenAICompatProxyPort,
-  registerProxyTokenRefresher,
-  startCoworkOpenAICompatProxy,
-  stopCoworkOpenAICompatProxy,
-} from './libs/coworkOpenAICompatProxy';
 import {
   type CoworkTempJanitor,
   createCoworkTempJanitor,
@@ -380,7 +375,6 @@ import { CoworkTurnUsageService } from './libs/coworkTurnUsage';
 import {
   ensureElectronNodeShim,
   getElectronNodeRuntimePath,
-  probeCoworkModelReadiness,
 } from './libs/coworkUtil';
 import {
   assertDataMigrationSqliteSnapshotMatchesLiveSync,
@@ -479,11 +473,7 @@ import {
   shouldSyncServerModelConfig,
   syncServerModelConfigIfNeeded,
 } from './libs/openclawAgentModels';
-import {
-  buildManagedSessionKey,
-  DEFAULT_MANAGED_AGENT_ID,
-  OpenClawChannelSessionSync,
-} from './libs/openclawChannelSessionSync';
+import { OpenClawChannelSessionSync } from './libs/openclawChannelSessionSync';
 import { createOpenClawRepairBackupDirectory, OpenClawRepairFailure, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './libs/openclawCompatibilityRepair';
 import { OpenClawModelRuntimeChange, resolveOpenClawModelRuntimeChange } from './libs/openclawConfigAdmission';
 import { createOpenClawConfigAutoRestoreHandler } from './libs/openclawConfigAutoRestore';
@@ -2652,7 +2642,7 @@ const shouldRefreshServerQuotaForSession = (sessionId: string): boolean => {
     return isLobsteraiServerModelRef(agentModelRef);
   }
 
-  const apiConfig = resolveCurrentApiConfig();
+  const apiConfig = resolveRawApiConfig();
   return apiConfig.providerMetadata?.providerName === ProviderName.LobsteraiServer;
 };
 
@@ -4243,112 +4233,6 @@ const getIMGatewayManager = () => {
       },
       getOpenClawSessionKeysForCoworkSession: (sessionId: string) => {
         return openClawRuntimeAdapter?.getSessionKeysForSession(sessionId) ?? [];
-      },
-      createScheduledTask: async ({ sessionId, message, request }) => {
-        // if (message.platform === 'dingtalk') {
-        //   await getIMGatewayManager().primeConversationReplyRoute(
-        //     message.platform,
-        //     message.conversationId,
-        //     sessionId,
-        //   );
-        // }
-        const channelName = PlatformRegistry.channelOf(message.platform);
-        const hasChannel = !!(channelName && message.conversationId);
-        // Strip IM subtype prefix (e.g. "direct:ou_xxx" -> "ou_xxx")
-        let deliveryTo = message.conversationId;
-        if (hasChannel && deliveryTo) {
-          const colonIdx = deliveryTo.indexOf(':');
-          if (colonIdx > 0) {
-            deliveryTo = deliveryTo.slice(colonIdx + 1);
-          }
-        }
-        const task = await getCronJobService().addJob({
-          name: request.taskName,
-          description: '',
-          enabled: true,
-          schedule: {
-            kind: 'at',
-            at: request.scheduleAt,
-          },
-          sessionTarget: hasChannel ? 'isolated' : 'main',
-          wakeMode: 'now',
-          payload: hasChannel
-            ? { kind: 'agentTurn', message: request.payloadText }
-            : { kind: 'systemEvent', text: request.payloadText },
-          delivery: {
-            mode: hasChannel ? 'announce' : 'none',
-            ...(channelName ? { channel: channelName } : {}),
-            ...(hasChannel
-              ? { to: deliveryTo }
-              : message.conversationId
-                ? { to: message.conversationId }
-                : {}),
-          },
-          agentId: DEFAULT_MANAGED_AGENT_ID,
-          ...(hasChannel
-            ? {}
-            : { sessionKey: buildManagedSessionKey(sessionId, DEFAULT_MANAGED_AGENT_ID) }),
-        });
-        return {
-          id: task.id,
-          name: task.name,
-          agentId: task.agentId,
-          sessionKey: task.sessionKey,
-          payloadText:
-            task.payload.kind === 'systemEvent'
-              ? task.payload.text
-              : task.payload.kind === 'agentTurn'
-                ? task.payload.message
-                : '',
-          scheduleAt: task.schedule.kind === 'at' ? task.schedule.at : request.scheduleAt,
-        };
-      },
-    });
-
-    // Initialize with LLM config provider
-    imGatewayManager.initialize({
-      getLLMConfig: async () => {
-        type LlmProviderConfig = {
-          enabled?: boolean;
-          apiKey?: string;
-          baseUrl?: string;
-          models?: Array<{ id: string }>;
-        };
-        type LlmAppConfig = {
-          providers?: Record<string, LlmProviderConfig>;
-          api?: { key?: string; baseUrl?: string };
-          model?: { defaultModel?: string };
-        };
-        const appConfig = sqliteStore.get<LlmAppConfig>('app_config');
-        if (!appConfig) return null;
-
-        // Find first enabled provider
-        const providers = appConfig.providers || {};
-        for (const [providerName, providerConfig] of Object.entries(providers)) {
-          if (providerConfig.enabled && providerConfig.apiKey) {
-            const model = providerConfig.models?.[0]?.id;
-            return {
-              apiKey: providerConfig.apiKey,
-              baseUrl: providerConfig.baseUrl,
-              model: model,
-              provider: providerName,
-            };
-          }
-        }
-
-        // Fallback to legacy api config
-        if (appConfig.api?.key) {
-          return {
-            apiKey: appConfig.api.key,
-            baseUrl: appConfig.api.baseUrl,
-            model: appConfig.model?.defaultModel,
-          };
-        }
-
-        return null;
-      },
-      getSkillsPrompt: async () => {
-        return getSkillManager().buildAutoRoutingPrompt();
       },
     });
 
@@ -13649,43 +13533,11 @@ if (!gotTheLock) {
     return getCoworkStore().listRecentCwds(boundedLimit);
   });
 
-  ipcMain.handle('get-api-config', async () => {
-    return getCurrentApiConfig();
+  // Only reports whether a model is usable: the raw config carries API keys.
+  ipcMain.handle('check-api-config', async () => {
+    const { config, error } = resolveRawApiConfig();
+    return { hasConfig: config !== null, error };
   });
-
-  ipcMain.handle('check-api-config', async (_event, options?: { probeModel?: boolean }) => {
-    const { config, error } = resolveCurrentApiConfig();
-    if (config && options?.probeModel) {
-      const probe = await probeCoworkModelReadiness();
-      if (probe.ok === false) {
-        return { hasConfig: false, config: null, error: probe.error };
-      }
-    }
-    return { hasConfig: config !== null, config, error };
-  });
-
-  ipcMain.handle(
-    'save-api-config',
-    async (
-      _event,
-      config: {
-        apiKey: string;
-        baseURL: string;
-        model: string;
-        apiType?: 'anthropic' | 'openai';
-      },
-    ) => {
-      try {
-        saveCoworkApiConfig(config);
-        return { success: true };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to save API config',
-        };
-      }
-    },
-  );
 
   // Dialog handlers
   ipcMain.handle('dialog:selectDirectory', async event => {
@@ -15436,9 +15288,9 @@ if (!gotTheLock) {
       });
     }
 
-    currentAppCleanupStep = 'openai-compat-proxy';
-    await stopCoworkOpenAICompatProxy().catch(error => {
-      console.error('Failed to stop OpenAI compatibility proxy:', error);
+    currentAppCleanupStep = 'copilot-loopback-proxy';
+    await stopCopilotLoopbackProxy().catch(error => {
+      console.error('Failed to stop Copilot loopback proxy:', error);
     });
 
     currentAppCleanupStep = 'html-preview-server';
@@ -15749,31 +15601,6 @@ if (!gotTheLock) {
         });
     }
 
-    registerProxyTokenRefresher(ProviderName.LobsteraiServer, async rejectedToken => {
-      const latestAccessToken = getAuthTokens()?.accessToken;
-      if (latestAccessToken && rejectedToken && latestAccessToken !== rejectedToken) {
-        return {
-          outcome: AuthRefreshOutcome.Success,
-          accessToken: latestAccessToken,
-        };
-      }
-      return authSessionManager.refresh(AuthRefreshReason.CompatProxy);
-    });
-
-    registerProxyTokenRefresher(ProviderName.Copilot, async () => {
-      try {
-        const { refreshCopilotTokenNow } = await import('./libs/copilotTokenManager');
-        const refreshed = await refreshCopilotTokenNow();
-        return {
-          outcome: AuthRefreshOutcome.Success,
-          accessToken: refreshed.copilotToken,
-        };
-      } catch (err) {
-        console.warn('[Auth] Copilot proxy token refresh failed:', err);
-        return { outcome: AuthRefreshOutcome.TransientFailure };
-      }
-    });
-
     // Start the lightweight token proxy before OpenClaw config sync so that
     // lobsterai-server provider can use the proxy URL in its config.
     profiler.mark('openClawTokenProxy');
@@ -15911,17 +15738,18 @@ if (!gotTheLock) {
     await applyProxyPreference(getUseSystemProxyFromConfig(appConfig));
     profiler.measure('applyProxyPreference');
 
-    profiler.mark('coworkOpenAICompatProxy');
-    await startCoworkOpenAICompatProxy({
+    profiler.mark('copilotLoopbackProxy');
+    // A stable port keeps the Copilot baseUrl rendered into openclaw.json the same.
+    await startCopilotLoopbackProxy({
       authToken: getOpenClawLoopbackState().proxyToken,
-      preferredPort: getOpenClawLoopbackState().getPreferredPort(OpenClawLoopbackService.CompatProxy),
+      preferredPort: getOpenClawLoopbackState().getPreferredPort(OpenClawLoopbackService.CopilotProxy),
     }).then(() => {
-      const compatProxyPort = getCoworkOpenAICompatProxyPort();
-      if (compatProxyPort) getOpenClawLoopbackState().rememberPort(OpenClawLoopbackService.CompatProxy, compatProxyPort);
+      const copilotProxyPort = getCopilotLoopbackPort();
+      if (copilotProxyPort) getOpenClawLoopbackState().rememberPort(OpenClawLoopbackService.CopilotProxy, copilotProxyPort);
     }).catch(error => {
-      console.error('Failed to start OpenAI compatibility proxy:', error);
+      console.error('Failed to start Copilot loopback proxy:', error);
     });
-    profiler.measure('coworkOpenAICompatProxy');
+    profiler.measure('copilotLoopbackProxy');
 
     // ── Pre-warm quota & model caches so provider resolution and config sync
     // see real server data instead of empty defaults ──
@@ -16038,6 +15866,7 @@ if (!gotTheLock) {
       services: {
         languageClient: desktopLanguageClient,
         quickAnswer: new CompanionQuickAnswerService({ getSessionKey: getAuthSessionKey,
+          getProxyToken: () => getOpenClawLoopbackState().proxyToken,
           reportAnalytics: event => getMainLogReporter().report(event) }),
       },
       store: getStore(),

@@ -96,7 +96,6 @@ import { MediaGenerationTool } from '../../mediaGenerationPolicy';
 import type { SubagentMessageStore } from '../../subagentMessageStore';
 import type { SubagentRunStore } from '../../subagentRunStore';
 import { getServerModelMetadata } from '../claudeSettings';
-import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
 import { getServerApiBaseUrl } from '../endpoints';
 import { createCoworkLlmTrace, createLlmTraceparent } from '../llmTrace';
 import { registerLlmUsageContext } from '../llmUsageContext';
@@ -5817,7 +5816,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     this.store.updateSession(sessionId, { status: 'running' });
     this.emitSessionStatus(sessionId, 'running');
-    setCoworkProxySessionId(sessionId);
     firstResponseTiming.gatewayReadyStartedAtMs = Date.now();
     await this.ensureGatewayClientReady();
     registerLlmUsageContext(llmTrace.traceId, sessionId,
@@ -12331,7 +12329,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.refreshContinuityCapsule(sessionId, ContinuityCapsuleSource.PostRun);
     }
     this.activeTurns.delete(sessionId);
-    setCoworkProxySessionId(null);
     if (completedNormally && !turn?.yieldedRunId) {
       setTimeout(() => this.startPendingGoalContinuation(sessionId), 0);
     } else if (!completedNormally && !this.yieldedSessions.has(sessionId)) {

@@ -23,8 +23,8 @@ export interface ResolvedStdioCommand {
 
 /**
  * Get the packaged npm bin directory path.
- * This is a lightweight alternative to getEnhancedEnv() — it only computes
- * the LOBSTERAI_NPM_BIN_DIR path without resolving API config or proxy settings.
+ * It only computes the LOBSTERAI_NPM_BIN_DIR path without resolving proxy
+ * settings.
  */
 function getPackagedNpmBinDir(): string | undefined {
   if (!app.isPackaged) return undefined;

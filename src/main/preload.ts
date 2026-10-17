@@ -414,15 +414,7 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('window:state-changed', handler);
     },
   },
-  getApiConfig: () => ipcRenderer.invoke('get-api-config'),
-  checkApiConfig: (options?: { probeModel?: boolean }) =>
-    ipcRenderer.invoke('check-api-config', options),
-  saveApiConfig: (config: {
-    apiKey: string;
-    baseURL: string;
-    model: string;
-    apiType?: 'anthropic' | 'openai';
-  }) => ipcRenderer.invoke('save-api-config', config),
+  checkApiConfig: () => ipcRenderer.invoke('check-api-config'),
   generateSessionTitle: (request: GenerateSessionTitleRequest) =>
     ipcRenderer.invoke(CoworkIpcChannel.GenerateSessionTitle, request),
   getRecentCwds: (limit?: number) => ipcRenderer.invoke('get-recent-cwds', limit),

@@ -12,7 +12,6 @@ import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { fetchJsonWithTimeout } from './http';
-import { IMChatHandler } from './imChatHandler';
 import { IMCoworkHandler } from './imCoworkHandler';
 import {
   buildDingTalkSendParamsFromRoute,
@@ -21,11 +20,6 @@ import {
   resolveManagedSessionDeliveryRoute,
   resolveOpenClawDeliveryRouteForSessionKeys,
 } from './imDeliveryRoute';
-import type {
-  IMScheduledTaskCreationResult,
-  ParsedIMScheduledTaskRequest,
-} from './imScheduledTaskHandler';
-import { createIMScheduledTaskRequestDetector } from './imScheduledTaskHandler';
 import { IMStore } from './imStore';
 import {
   IMConnectivityCheck,
@@ -33,7 +27,6 @@ import {
   IMConnectivityVerdict,
   IMGatewayConfig,
   IMGatewayStatus,
-  IMMessage,
   Platform,
 } from './types';
 import { WeixinPluginActivation } from './weixinPluginActivation';
@@ -126,11 +119,6 @@ export interface IMGatewayManagerOptions {
   getOpenClawGatewayClient?: () => GatewayClientLike | null;
   ensureOpenClawGatewayReady?: () => Promise<void>;
   getOpenClawSessionKeysForCoworkSession?: (sessionId: string) => string[];
-  createScheduledTask?: (params: {
-    sessionId: string;
-    message: IMMessage;
-    request: ParsedIMScheduledTaskRequest;
-  }) => Promise<IMScheduledTaskCreationResult>;
 }
 
 export class IMGatewayManager extends EventEmitter {
@@ -140,10 +128,7 @@ export class IMGatewayManager extends EventEmitter {
     }
   });
   private imStore: IMStore;
-  private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
-  private getLLMConfig: (() => Promise<any>) | null = null;
-  private getSkillsPrompt: (() => Promise<string | null>) | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
   private syncOpenClawConfig:
     | ((reason?: string, options?: { restartGatewayIfRunning?: boolean; requireSuccess?: boolean }) => Promise<void>)
@@ -152,13 +137,6 @@ export class IMGatewayManager extends EventEmitter {
   private getOpenClawGatewayClient: (() => GatewayClientLike | null) | null = null;
   private ensureOpenClawGatewayReady: (() => Promise<void>) | null = null;
   private getOpenClawSessionKeysForCoworkSession: ((sessionId: string) => string[]) | null = null;
-  private createScheduledTask:
-    | ((params: {
-        sessionId: string;
-        message: IMMessage;
-        request: ParsedIMScheduledTaskRequest;
-      }) => Promise<IMScheduledTaskCreationResult>)
-    | null = null;
 
   // Cowork dependencies
   private coworkRuntime: CoworkRuntime | null = null;
@@ -185,7 +163,6 @@ export class IMGatewayManager extends EventEmitter {
     this.getOpenClawGatewayClient = options?.getOpenClawGatewayClient ?? null;
     this.ensureOpenClawGatewayReady = options?.ensureOpenClawGatewayReady ?? null;
     this.getOpenClawSessionKeysForCoworkSession = options?.getOpenClawSessionKeysForCoworkSession ?? null;
-    this.createScheduledTask = options?.createScheduledTask ?? null;
 
     // Forward gateway events
     this.setupGatewayEventForwarding();
@@ -233,56 +210,16 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   /**
-   * Initialize the manager with LLM and skills providers
-   */
-  initialize(options: {
-    getLLMConfig: () => Promise<any>;
-    getSkillsPrompt?: () => Promise<string | null>;
-  }): void {
-    this.getLLMConfig = options.getLLMConfig;
-    this.getSkillsPrompt = options.getSkillsPrompt ?? null;
-  }
-
-  /**
-   * Update chat handler with current settings
-   */
-  private updateChatHandler(): void {
-    if (!this.getLLMConfig) {
-      console.warn('[IMGatewayManager] LLM config provider not set');
-      return;
-    }
-
-    const imSettings = this.imStore.getIMSettings();
-
-    this.chatHandler = new IMChatHandler({
-      getLLMConfig: this.getLLMConfig,
-      getSkillsPrompt: this.getSkillsPrompt || undefined,
-      imSettings,
-    });
-
-    // Update or create Cowork handler if dependencies are available
-    this.updateCoworkHandler();
-  }
-
-  /**
    * Update or create Cowork handler
    * Always creates handler if dependencies are available (Cowork mode is always enabled for IM)
    */
   private updateCoworkHandler(): void {
     // Always create Cowork handler if we have the required dependencies
     if (this.coworkRuntime && this.coworkStore && !this.coworkHandler) {
-      const detectScheduledTaskRequest = this.getLLMConfig && this.createScheduledTask
-        ? createIMScheduledTaskRequestDetector({
-            getLLMConfig: this.getLLMConfig,
-          })
-        : undefined;
       this.coworkHandler = new IMCoworkHandler({
         coworkRuntime: this.coworkRuntime,
         coworkStore: this.coworkStore,
         imStore: this.imStore,
-        getSkillsPrompt: this.getSkillsPrompt || undefined,
-        detectScheduledTaskRequest,
-        createScheduledTask: this.createScheduledTask || undefined,
         sendAsyncReply: async (platform, conversationId, text) => {
           return this.sendConversationReply(platform, conversationId, text);
         },
@@ -308,9 +245,9 @@ export class IMGatewayManager extends EventEmitter {
     this.imStore.setConfig(config);
     if (config.weixin?.enabled === false) this.weixinPluginActivation.cancel();
 
-    // Update chat handler if settings changed
+    // Make sure the Cowork handler exists once IM settings are saved
     if (config.settings) {
-      this.updateChatHandler();
+      this.updateCoworkHandler();
     }
 
 
@@ -807,8 +744,8 @@ export class IMGatewayManager extends EventEmitter {
 
   // ==================== Gateway Control ====================
   async startGateway(platform: Platform): Promise<void> {
-    // Ensure chat handler is ready
-    this.updateChatHandler();
+    // Ensure Cowork handler is ready
+    this.updateCoworkHandler();
 
     if (platform === 'dingtalk') {
       // DingTalk runs via OpenClaw gateway (dingtalk-connector plugin)
@@ -940,8 +877,8 @@ export class IMGatewayManager extends EventEmitter {
   async startAllEnabled(): Promise<void> {
     const config = this.getConfig();
 
-    // Ensure chat handler is ready (called once instead of per-platform)
-    this.updateChatHandler();
+    // Ensure Cowork handler is ready (called once instead of per-platform)
+    this.updateCoworkHandler();
 
     // --- OpenClaw platforms: collect and batch into a single sync ---
 

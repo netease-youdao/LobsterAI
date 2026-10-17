@@ -4,8 +4,8 @@ import {
   LanguageTool, LanguageToolCode, type LanguageToolEvent, LanguageToolEventType, type LanguageToolQuotas,
   type LanguageToolRequest, type LanguageToolResult, TranslationTarget,
 } from '../../shared/desktopCompanion/languageTools';
+import { splitSseEvents } from '../libs/sse';
 import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companionAnalytics';
-import { splitSseEvents } from './sse';
 
 interface LanguageClientDeps {
   reportAnalytics?: CompanionAnalyticsReporter;

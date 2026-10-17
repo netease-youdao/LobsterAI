@@ -69,10 +69,7 @@ import {
   resolveAllProviderApiKeys,
   resolveRawApiConfig,
 } from './claudeSettings';
-import {
-  getCoworkOpenAICompatProxyBaseURL,
-  getCoworkOpenAICompatProxyToken,
-} from './coworkOpenAICompatProxy';
+import { getCopilotLoopbackAuthToken, getCopilotLoopbackBaseUrl } from './copilotLoopbackProxy';
 import type { LobsterBrowserMcpStdioLaunch } from './lobsterBrowserMcpServer';
 import { buildPresetContextWindows } from './modelPresetContext';
 import {
@@ -803,10 +800,6 @@ const normalizeBaseUrlPath = (rawBaseUrl: string, pathName: string): string => {
  * Strip the `/chat/completions` endpoint suffix from a base URL so that the
  * OpenClaw gateway can append its own path without duplication.
  *
- * Aligned with the detection logic in `buildOpenAIChatCompletionsURL`
- * (coworkFormatTransform.ts) which returns the URL as-is when it already
- * ends with `/chat/completions`.
- *
  * e.g. "https://gw.example.com/v1/chat/completions" → "https://gw.example.com/v1"
  *      "https://gw.example.com/v1"                   → "https://gw.example.com/v1"  (unchanged)
  */
@@ -1130,10 +1123,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     providerId: OpenClawProviderId.LobsteraiCopilot,
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
-    resolveRuntimeBaseUrl: () => {
-      const proxyBase = getCoworkOpenAICompatProxyBaseURL('local');
-      return proxyBase ? `${proxyBase}/v1/copilot` : null;
-    },
+    resolveRuntimeBaseUrl: getCopilotLoopbackBaseUrl,
     resolveApiKey: () => '${LOBSTER_PROXY_TOKEN}',
   },
 };
@@ -3552,7 +3542,7 @@ export class OpenClawConfigSync {
     env.LOBSTER_PROVIDER_API_KEY = 'legacy-unused';
 
     // Must equal the token the loopback proxies verify, even if the compat proxy failed to start.
-    env.LOBSTER_PROXY_TOKEN = this.getProxyAuthToken?.() || getCoworkOpenAICompatProxyToken() || 'unconfigured';
+    env.LOBSTER_PROXY_TOKEN = this.getProxyAuthToken?.() || getCopilotLoopbackAuthToken() || 'unconfigured';
 
     // MCP Bridge Secret — always set so stale openclaw.json with
     // ${LOBSTER_MCP_BRIDGE_SECRET} placeholder doesn't crash the gateway.

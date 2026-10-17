@@ -26,17 +26,22 @@ import {
   parseModelThinkingConfig,
 } from '../../shared/providers/modelThinking';
 import type { SqliteStore } from '../sqliteStore';
-import type { CoworkApiConfig } from './coworkConfigStore';
-import { type AnthropicApiFormat,normalizeProviderApiFormat } from './coworkFormatTransform';
-import {
-  configureCoworkOpenAICompatProxy,
-  getCoworkOpenAICompatProxyBaseURL,
-  getCoworkOpenAICompatProxyStatus,
-  type OpenAICompatProxyTarget,
-} from './coworkOpenAICompatProxy';
 import { readOpenAICodexAuthFile } from './openaiCodexAuth';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
 import { hasXaiOAuthCredential } from './xaiAuth';
+
+type AnthropicApiFormat = 'anthropic' | 'openai';
+
+function normalizeProviderApiFormat(format: unknown): AnthropicApiFormat {
+  return format === 'openai' ? 'openai' : 'anthropic';
+}
+
+export type CoworkApiConfig = {
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  apiType?: 'anthropic' | 'openai';
+};
 
 type LocalProviderConfig = Omit<ProviderConfig, 'apiFormat'> & { apiFormat?: ApiFormat | 'native' };
 
@@ -723,121 +728,6 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   };
 }
 
-export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): ApiConfigResolution {
-  const sqliteStore = getStore();
-  if (!sqliteStore) {
-    return {
-      config: null,
-      error: 'Store is not initialized.',
-    };
-  }
-
-  const appConfig = sqliteStore.get<AppConfig>('app_config');
-  if (!appConfig) {
-    return {
-      config: null,
-      error: 'Application config not found.',
-    };
-  }
-
-  const { matched, error } = resolveMatchedProvider(appConfig);
-  if (!matched) {
-    return {
-      config: null,
-      error,
-    };
-  }
-
-  const resolvedBaseURL = matched.baseURL;
-  let resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
-
-  // Providers that don't require auth (e.g. Ollama) still need a non-empty
-  // placeholder so downstream components (OpenClaw gateway, compat proxy)
-  // don't reject the request with "No API key found for provider".
-  const effectiveApiKey = resolvedApiKey
-    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
-
-  if (matched.apiFormat === 'anthropic') {
-    return {
-      config: {
-        apiKey: effectiveApiKey,
-        baseURL: resolvedBaseURL,
-        model: matched.modelId,
-        apiType: 'anthropic',
-      },
-      providerMetadata: {
-        providerName: matched.providerName,
-        codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
-        runtimeProfile: matched.runtimeProfile,
-        supportsImage: matched.supportsImage,
-        supportsVideo: matched.supportsVideo,
-        supportsThinking: matched.supportsThinking,
-        thinkingConfig: matched.thinkingConfig,
-        requestCapabilities: matched.requestCapabilities,
-        modelName: matched.modelName,
-        contextWindow: matched.contextWindow,
-        maxTokens: matched.maxTokens,
-      },
-    };
-  }
-
-  const proxyStatus = getCoworkOpenAICompatProxyStatus();
-  if (!proxyStatus.running) {
-    return {
-      config: null,
-      error: 'OpenAI compatibility proxy is not running.',
-    };
-  }
-
-  const openaiApiMode = resolveProviderOpenAIApiMode(matched.providerName, {
-    ...matched.providerConfig,
-    apiFormat: matched.apiFormat,
-  });
-  configureCoworkOpenAICompatProxy({
-    baseURL: resolvedBaseURL,
-    apiKey: resolvedApiKey || undefined,
-    model: matched.modelId,
-    provider: matched.providerName,
-    openaiApiMode,
-  });
-
-  const proxyBaseURL = getCoworkOpenAICompatProxyBaseURL(target);
-  if (!proxyBaseURL) {
-    return {
-      config: null,
-      error: 'OpenAI compatibility proxy base URL is unavailable.',
-    };
-  }
-
-  return {
-    config: {
-      apiKey: resolvedApiKey || 'lobsterai-openai-compat',
-      baseURL: proxyBaseURL,
-      model: matched.modelId,
-      apiType: 'openai',
-    },
-    providerMetadata: {
-      providerName: matched.providerName,
-      codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
-      runtimeProfile: matched.runtimeProfile,
-      supportsImage: matched.supportsImage,
-      supportsVideo: matched.supportsVideo,
-      supportsThinking: matched.supportsThinking,
-      thinkingConfig: matched.thinkingConfig,
-      requestCapabilities: matched.requestCapabilities,
-      modelName: matched.modelName,
-      contextWindow: matched.contextWindow,
-      maxTokens: matched.maxTokens,
-      ...(openaiApiMode ? { openaiApiMode } : {}),
-      ...(matched.geminiNative ? { geminiNative: true } : {}),
-    },
-  };
-}
-
-export function getCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): CoworkApiConfig | null {
-  return resolveCurrentApiConfig(target).config;
-}
-
 /**
  * Resolve the raw API config directly from the app config,
  * without requiring the OpenAI compatibility proxy.
@@ -981,16 +871,6 @@ export function resolveAllProviderApiKeys(): Record<string, string> {
   return result;
 }
 
-
-export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {
-  const baseEnv = { ...process.env } as Record<string, string>;
-
-  baseEnv.ANTHROPIC_AUTH_TOKEN = config.apiKey;
-  baseEnv.ANTHROPIC_API_KEY = config.apiKey;
-  baseEnv.ANTHROPIC_BASE_URL = config.baseURL;
-  baseEnv.ANTHROPIC_MODEL = config.model;
-  return baseEnv;
-}
 
 export type ProviderRawConfig = {
   providerName: string;
