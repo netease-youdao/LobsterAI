@@ -258,6 +258,7 @@ import {
   readEnterpriseApiErrorCode,
   resolveEnterpriseMembershipRevocationSource,
 } from './enterpriseAccount/membershipRevocation';
+import { registerFollowUpSuggestionIpc } from './followUpSuggestion';
 import { setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import {
@@ -5973,6 +5974,12 @@ if (!gotTheLock) {
     return `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}`;
   };
 
+  registerFollowUpSuggestionIpc({
+    isAllowedSender: event => event.sender === mainWindow?.webContents
+      || (desktopCompanionManager?.isComposerWebContents(event.sender) ?? false),
+    getAccountScope: getAuthSessionKey,
+  });
+
   resolveAppUpdateGraySession = () => {
     const tokens = getAuthTokens();
     if (!tokens || !getCurrentMediaAccountScope()) return null;
@@ -10206,6 +10213,7 @@ if (!gotTheLock) {
     async (
       _event,
       options: {
+        companionScreenshotRequestId?: string;
         analytics?: UsageContext;
         prompt: string;
         cwd?: string;
@@ -10229,6 +10237,12 @@ if (!gotTheLock) {
       },
     ) => {
       try {
+        const screenshotRequestId = options.companionScreenshotRequestId;
+        const screenshotRequestCurrent = () => !screenshotRequestId || (
+          _event.senderFrame === _event.sender.mainFrame
+          && desktopCompanionManager?.isScreenshotTaskRequestCurrent(screenshotRequestId, _event.sender)
+        );
+        if (!screenshotRequestCurrent()) return { success: false, error: t('desktopCompanionRequestFailed') };
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -10331,6 +10345,7 @@ if (!gotTheLock) {
         if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
           return { success: false, error: t('authAccountChanged') };
         }
+        if (!screenshotRequestCurrent()) return { success: false, error: t('desktopCompanionRequestFailed') };
         let session = coworkStoreInstance.createSession(
           title,
           taskWorkingDirectory,
@@ -10372,6 +10387,10 @@ if (!gotTheLock) {
           );
         }
 
+        if (!screenshotRequestCurrent()) {
+          coworkStoreInstance.deleteSession(session.id);
+          return { success: false, error: t('desktopCompanionRequestFailed') };
+        }
         const skinTurn = turnIsPlan ? { mediaSelection: turnMediaSelection } : getSkinRuntimeController().prepareTurn({
           sessionId: session.id,
           kitIds: options.kitIds,
@@ -10433,6 +10452,7 @@ if (!gotTheLock) {
         }, ipcStartedAtMs);
 
         coworkStoreInstance.updateSession(session.id, { status: 'running' });
+        if (screenshotRequestId) desktopCompanionManager?.finishScreenshotTaskRequest(screenshotRequestId, session.id);
 
         const runtime = getCoworkEngineRouter();
         console.log(

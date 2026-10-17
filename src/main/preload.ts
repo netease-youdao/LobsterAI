@@ -75,12 +75,14 @@ import {
 } from '../shared/desktopCompanion/constants';
 import { CompanionResultIpc } from '../shared/desktopCompanion/results';
 import { CompanionScreenshotIpc } from '../shared/desktopCompanion/screenshot';
+import { ScreenshotTaskIpc } from '../shared/desktopCompanion/screenshotTask';
 import { DialogIpc } from '../shared/dialog/constants';
 import { DshIpcChannel } from '../shared/dshEngine/constants';
 import {
   EnterpriseAccountIpcChannel,
   type EnterpriseQuotaRequestType,
 } from '../shared/enterpriseAccount/constants';
+import { FOLLOW_UP_SUGGESTION_CHANNEL, type FollowUpSuggestionRequest } from '../shared/followUpSuggestion';
 import {
   type HtmlShareAccessMode,
   type HtmlShareAnalyticsInput,
@@ -174,8 +176,13 @@ contextBridge.exposeInMainWorld('electron', {
     getScreenshotFrame: () => ipcRenderer.invoke(CompanionScreenshotIpc.GetFrame),
     screenshotReady: () => ipcRenderer.invoke(CompanionScreenshotIpc.Ready),
     finishScreenshot: rect => ipcRenderer.invoke(CompanionScreenshotIpc.Finish, rect),
+    consumeScreenshotRequest: id => ipcRenderer.invoke(ScreenshotTaskIpc.Consume, id),
+    screenshotTaskStarted: (requestId, sessionId) => ipcRenderer.invoke(ScreenshotTaskIpc.Started, { requestId, sessionId }),
     getState: () => ipcRenderer.invoke(DesktopCompanionIpc.GetState),
     setPreferences: patch => ipcRenderer.invoke(DesktopCompanionIpc.SetPreferences, patch),
+    applyCustomSkin: (dataUrl, name) => ipcRenderer.invoke(DesktopCompanionIpc.ApplyCustomSkin, { dataUrl, name }),
+    renameCustomSkin: (id, name) => ipcRenderer.invoke(DesktopCompanionIpc.RenameCustomSkin, { id, name }),
+    deleteCustomSkin: id => ipcRenderer.invoke(DesktopCompanionIpc.DeleteCustomSkin, id),
     getSelectionExcludedApps: () => ipcRenderer.invoke(DesktopCompanionIpc.GetSelectionExcludedApps),
     setDraft: draft => ipcRenderer.invoke(DesktopCompanionIpc.SetDraft, draft),
     selectSession: id => ipcRenderer.invoke(DesktopCompanionIpc.SelectSession, id),
@@ -627,8 +634,10 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
   cowork: {
+    suggestFollowUp: (input: FollowUpSuggestionRequest): Promise<string | null> => ipcRenderer.invoke(FOLLOW_UP_SUGGESTION_CHANNEL, input),
     // Session management
     startSession: (options: {
+      companionScreenshotRequestId?: string;
       analytics?: UsageContext;
       prompt: string;
       cwd?: string;

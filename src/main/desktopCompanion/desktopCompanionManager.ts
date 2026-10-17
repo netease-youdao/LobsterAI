@@ -23,6 +23,7 @@ import {
   CompanionPermission as CompanionPermissionValue,
   type CompanionQuickAnswerRequest,
   type CompanionSurfaceSize,
+  DEFAULT_COMPANION_SKIN,
   DEFAULT_DESKTOP_COMPANION_PREFERENCES,
   type DesktopCompanionAttachment,
   type DesktopCompanionDraft,
@@ -48,6 +49,7 @@ import {
   DesktopCompanionTiming,
   EMPTY_DESKTOP_COMPANION_DRAFT,
 } from '../../shared/desktopCompanion/constants';
+import { type CompanionCustomSkinAsset, isCustomCompanionSkin, normalizeCompanionSkinEntries, normalizeCompanionSkinName } from '../../shared/desktopCompanion/customSkin';
 import {
   type CompanionFileKind,
   CompanionFileKind as FileKind,
@@ -67,6 +69,8 @@ import {
 import { companionHintCopyKeys, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
 import { isSpeechActive, LanguageTool } from '../../shared/desktopCompanion/languageTools';
 import type { CompanionTaskInfo } from '../../shared/desktopCompanion/results';
+import { CompanionScreenshotAction } from '../../shared/desktopCompanion/screenshot';
+import { ScreenshotTaskIpc } from '../../shared/desktopCompanion/screenshotTask';
 import { normalizeSelectionTaskContext } from '../../shared/desktopCompanion/selectionTaskContext';
 import { normalizeCompanionToolbarOrder } from '../../shared/desktopCompanion/selectionToolbar';
 import { COMPANION_SKINS, companionOrbSize, normalizeCompanionSkin } from '../../shared/desktopCompanion/skins';
@@ -75,16 +79,18 @@ import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companion
 import { copyCompanionText } from './companionClipboard';
 import { CompanionHintsController } from './companionHints';
 import { CompanionResultsController } from './companionResults';
-import { CompanionScreenshotController } from './companionScreenshot';
+import { type CompanionCaptureResult,CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { CompanionStageController } from './companionStage';
 import { type CompanionWindowEnvironment, createCompanionWindow, dismissCompanionPanelOnBlur } from './companionWindow';
+import { deleteCustomCompanionSkin, loadCustomCompanionSkin, saveCustomCompanionSkin } from './customSkinStore';
 import { CompanionFileDragMonitor, FileDragEvent, type FileDragMonitor, type FileDragStart } from './fileDragMonitor';
 import { CompanionFileDragProximity } from './fileDragProximity';
 import { CompanionForegroundMonitor, type ForegroundAppMonitor } from './foregroundAppMonitor';
 import type { CompanionLanguageClient } from './languageToolClient';
 import { CompanionLanguageToolsController } from './languageToolsController';
 import { CompanionQuickAnswerService } from './quickAnswerService';
+import { ScreenshotTaskRequests } from './screenshotTaskRequests';
 import { getCompanionSelectionApps } from './selectionApps';
 
 const MAX_SNOOZE_TIMER_MS = 24 * 60 * 60_000;
@@ -123,6 +129,7 @@ export function normalizeCompanionPreferences(value: unknown): DesktopCompanionP
     enabled: typeof stored.enabled === 'boolean' ? stored.enabled : DEFAULT_DESKTOP_COMPANION_PREFERENCES.enabled,
     shortcut: typeof stored.shortcut === 'string' ? stored.shortcut : DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut,
     skin: normalizeCompanionSkin(stored.skin),
+    ...(stored.customSkins ? { customSkins: normalizeCompanionSkinEntries(stored.customSkins) } : {}),
     selectionToolbar: stored.selectionToolbar !== false,
     dragAssist: stored.dragAssist !== false,
     contextHints: stored.contextHints !== false,
@@ -175,6 +182,8 @@ function describeDraggedPaths(paths: string[]): DesktopCompanionDropFile[] {
 }
 
 export class DesktopCompanionManager {
+  private readonly screenshotTasks = new ScreenshotTaskRequests();
+  private screenshotGeneration = 0;
   private pendingMainPage: DesktopCompanionMainPage | null = null;
   private orb: BrowserWindow | null = null;
   private panel: BrowserWindow | null = null;
@@ -190,6 +199,7 @@ export class DesktopCompanionManager {
   /** The display a panel opened without the orb stays on while it is open. */
   private panelWorkArea: Rectangle | null = null;
   private preferences: DesktopCompanionPreferences;
+  private customSkins: CompanionCustomSkinAsset[] = [];
   private draft: DesktopCompanionDraft;
   private sessionId: string | null;
   private position: CompanionPoint | undefined;
@@ -222,6 +232,13 @@ export class DesktopCompanionManager {
     this.analytics = new CompanionAnalytics(options.reportAnalytics, options.getAnalyticsOwner);
     const { store } = options;
     this.preferences = normalizeCompanionPreferences(store.get(DesktopCompanionStoreKey.Preferences));
+    this.customSkins = normalizeCompanionSkinEntries(this.preferences.customSkins).flatMap(entry => {
+      const asset = loadCustomCompanionSkin(entry.id);
+      return asset ? [{ ...asset, name: entry.name }] : [];
+    });
+    if (isCustomCompanionSkin(this.preferences.skin) && !this.customSkins.some(asset => asset.id === this.preferences.skin)) {
+      this.preferences.skin = DEFAULT_COMPANION_SKIN;
+    }
     this.draft = normalizeCompanionDraft(store.get(DesktopCompanionStoreKey.Draft));
     const sessionId = store.get(DesktopCompanionStoreKey.Session);
     this.sessionId = typeof sessionId === 'string' ? sessionId : null;
@@ -315,6 +332,8 @@ export class DesktopCompanionManager {
     const category = this.foregroundAppId ? categorizeCompanionApp(this.foregroundAppId) : null;
     return {
       result: this.results.state,
+      screenshotRequest: this.screenshotTasks.pending,
+      customSkins: this.customSkins.map(asset => ({ ...asset })),
       revision: this.revision,
       speechStatus: this.languageTools.speechStatus,
       preferences: {
@@ -346,6 +365,9 @@ export class DesktopCompanionManager {
     if (typeof patch?.enabled === 'boolean') next.enabled = patch.enabled;
     if (typeof patch?.shortcut === 'string') next.shortcut = patch.shortcut.trim().slice(0, 100);
     if (typeof patch?.skin === 'string') next.skin = normalizeCompanionSkin(patch.skin);
+    if (isCustomCompanionSkin(next.skin) && !this.customSkins.some(asset => asset.id === next.skin)) {
+      return { success: false, state: this.getState(), error: t('desktopCompanionRequestFailed') };
+    }
     if (typeof patch?.selectionToolbar === 'boolean') next.selectionToolbar = patch.selectionToolbar;
     if (typeof patch?.dragAssist === 'boolean') next.dragAssist = patch.dragAssist;
     if (typeof patch?.contextHints === 'boolean') next.contextHints = patch.contextHints;
@@ -378,6 +400,22 @@ export class DesktopCompanionManager {
     return { success: true, state: this.getState() };
   }
 
+  private updateCustomSkins(assets: CompanionCustomSkinAsset[], skin: string): DesktopCompanionResult {
+    const next = { ...this.preferences, skin, customSkins: assets.map(({ id, name }) => ({ id, ...(name ? { name } : {}) })) };
+    try { this.options.store.set(DesktopCompanionStoreKey.Preferences, next); }
+    catch (error) {
+      console.error('[DesktopCompanion] Custom skin preferences save failed:', error);
+      return { success: false, state: this.getState(), error: t('desktopCompanionRequestFailed') };
+    }
+    const previousSize = this.orbSize();
+    this.preferences = next;
+    this.customSkins = assets;
+    this.resizeOrb(previousSize);
+    this.publish();
+    this.options.onPreferencesChanged();
+    return { success: true, state: this.getState() };
+  }
+
   private toggleOrb(fromPointer: boolean): void {
     if (this.capturing) return;
     this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Orb, interactionType: Interaction.Click });
@@ -398,7 +436,18 @@ export class DesktopCompanionManager {
     else this.showPanel(source);
   }
 
-  resetLanguageTools(): void { this.languageTools.reset(); this.clearTaskAnalytics(); }
+  resetLanguageTools(): void {
+    this.screenshotGeneration += 1;
+    this.screenshotTasks.reset();
+    this.screenshot.cancel();
+    this.languageTools.reset(); this.clearTaskAnalytics(); this.publish();
+  }
+
+  isScreenshotTaskRequestCurrent(id: string, sender: WebContents): boolean {
+    return this.isComposerWebContents(sender) && this.screenshotTasks.isCurrent(id);
+  }
+
+  finishScreenshotTaskRequest(id: string, sessionId: string): void { this.screenshotTasks.finish(id, sessionId); }
 
   clearTaskAnalytics(): void { this.analytics.clearTasks(); this.panelJourneyId = undefined; }
 
@@ -447,6 +496,8 @@ export class DesktopCompanionManager {
       DesktopCompanionIpc.TaskUpdated, DesktopCompanionIpc.PanelPassThrough, DesktopCompanionIpc.PanelLoginVisible,
     ]) ipcMain.removeAllListeners(channel);
     for (const channel of Object.values(DesktopCompanionIpc)) ipcMain.removeHandler(channel);
+    for (const channel of Object.values(ScreenshotTaskIpc)) ipcMain.removeHandler(channel);
+    this.screenshotTasks.reset();
     this.foreground.removeListener('change', this.onForegroundChange);
     this.fileDrag.removeListener(FileDragEvent.Start, this.onGlobalDragStart);
     this.fileDrag.removeListener(FileDragEvent.End, this.onGlobalDragEnd);
@@ -752,10 +803,6 @@ export class DesktopCompanionManager {
 
   private async askScreenshot(): Promise<void> {
     if (this.capturing || this.disposing) return;
-    if (this.draft.attachments.length >= 20) {
-      await dialog.showMessageBox({ type: 'info', message: t('desktopCompanionScreenshotFull') });
-      return;
-    }
     const finish = this.analytics.tool({ source: AnalyticsSource.ContextMenu, tool: CompanionAnalyticsTool.Screenshot });
     this.capturing = true;
     const restorePanel = this.panelVisible;
@@ -764,19 +811,30 @@ export class DesktopCompanionManager {
     this.fileDrag.stop();
     this.dragProximity.stop();
     this.selection.sync();
-    let attachment: DesktopCompanionAttachment | null = null;
+    const generation = this.screenshotGeneration;
+    let capture: CompanionCaptureResult | null = null;
     let failed = false;
     try {
-      attachment = await this.screenshot.capture(this.companionWindows());
+      capture = await this.screenshot.capture(this.companionWindows());
     } catch (error) {
       failed = true;
       console.error('[DesktopCompanion] Screenshot failed', error);
     } finally {
-      finish(failed ? AnalyticsOutcome.Failed : attachment ? AnalyticsOutcome.Success : AnalyticsOutcome.Cancelled);
+      finish(failed ? AnalyticsOutcome.Failed : capture ? AnalyticsOutcome.Success : AnalyticsOutcome.Cancelled);
       this.capturing = false;
-      if (!this.disposing) {
+      if (!this.disposing && generation === this.screenshotGeneration) {
         this.applyActivity();
-        if (attachment) this.openPanelWithAttachments([attachment], AnalyticsSource.ContextMenu);
+        if (capture && 'path' in capture) {
+          if (capture.action === CompanionScreenshotAction.ExtractText || capture.action === CompanionScreenshotAction.Translate) {
+            this.screenshotTasks.offer({ id: randomUUID(), action: capture.action, attachment: capture });
+            this.showPanel(AnalyticsSource.ContextMenu);
+            this.publish();
+          } else if (this.draft.attachments.length < 20) this.openPanelWithAttachments([capture], AnalyticsSource.ContextMenu);
+          else {
+            if (restorePanel) this.showPanel();
+            await dialog.showMessageBox({ type: 'info', message: t('desktopCompanionScreenshotFull') });
+          }
+        }
         else if (restorePanel) this.showPanel();
       }
     }
@@ -904,10 +962,13 @@ export class DesktopCompanionManager {
       { label: t('desktopCompanionScreenshot'), click: () => this.askScreenshot() },
       {
         label: t('desktopCompanionChangeSkin'),
-        submenu: COMPANION_SKINS.map(skin => ({
+        submenu: [...COMPANION_SKINS.map(skin => ({
           label: t(skin.nameKey), type: 'radio' as const, checked: this.preferences.skin === skin.id,
           click: () => this.setPreferences({ skin: skin.id }, AnalyticsSource.ContextMenu),
-        })),
+        })), ...this.customSkins.map((skin, index) => ({
+          label: skin.name || `${t('desktopCompanionCustomSkin')} ${index + 1}`, type: 'radio' as const, checked: this.preferences.skin === skin.id,
+          click: () => this.setPreferences({ skin: skin.id }, AnalyticsSource.ContextMenu),
+        }))],
       },
       { type: 'separator' },
       this.snooze
@@ -945,6 +1006,38 @@ export class DesktopCompanionManager {
     });
     handle(DesktopCompanionIpc.GetState, () => this.getState());
     handle(DesktopCompanionIpc.SetPreferences, (value, sender) => this.setPreferences(value as Partial<DesktopCompanionPreferences>, this.analyticsSource(sender.id)));
+    handle(DesktopCompanionIpc.ApplyCustomSkin, (value, sender) => {
+      if (sender.id !== this.options.getMainWindow()?.webContents.id) throw new Error('Only settings can edit companion skins');
+      const payload = value as { dataUrl?: unknown; name?: unknown } | null;
+      try {
+        const saved = saveCustomCompanionSkin(payload?.dataUrl);
+        const existing = this.customSkins.find(asset => asset.id === saved.id);
+        const name = normalizeCompanionSkinName(payload?.name) || existing?.name;
+        const asset = { ...saved, ...(name ? { name } : {}) };
+        const assets = existing ? this.customSkins.map(item => item.id === asset.id ? asset : item) : [...this.customSkins, asset];
+        return this.updateCustomSkins(assets, asset.id);
+      } catch (error) {
+        console.error('[DesktopCompanion] Custom skin save failed:', error);
+        return { success: false, state: this.getState(), error: t('desktopCompanionRequestFailed') };
+      }
+    });
+    handle(DesktopCompanionIpc.RenameCustomSkin, (value, sender) => {
+      if (sender.id !== this.options.getMainWindow()?.webContents.id) throw new Error('Only settings can edit companion skins');
+      const payload = value as { id?: unknown; name?: unknown } | null;
+      const name = normalizeCompanionSkinName(payload?.name);
+      if (!name || !this.customSkins.some(asset => asset.id === payload?.id)) return { success: false, state: this.getState(), error: t('desktopCompanionRequestFailed') };
+      return this.updateCustomSkins(this.customSkins.map(asset => asset.id === payload?.id ? { ...asset, name } : asset), this.preferences.skin);
+    });
+    handle(DesktopCompanionIpc.DeleteCustomSkin, (value, sender) => {
+      if (sender.id !== this.options.getMainWindow()?.webContents.id) throw new Error('Only settings can edit companion skins');
+      if (!this.customSkins.some(asset => asset.id === value)) return { success: false, state: this.getState(), error: t('desktopCompanionRequestFailed') };
+      const result = this.updateCustomSkins(this.customSkins.filter(asset => asset.id !== value), this.preferences.skin === value ? DEFAULT_COMPANION_SKIN : this.preferences.skin);
+      if (result.success) {
+        try { deleteCustomCompanionSkin(value); }
+        catch (error) { console.warn('[DesktopCompanion] Unreferenced custom skin cleanup failed:', error); }
+      }
+      return result;
+    });
     handle(DesktopCompanionIpc.GetSelectionExcludedApps, () => getCompanionSelectionApps(this.preferences.selectionExcludedApps));
     handle(DesktopCompanionIpc.SetDraft, value => { this.setDraft(value); return this.getState(); });
     handle(DesktopCompanionIpc.SelectSession, value => { this.selectSession(value); return this.getState(); });
@@ -953,6 +1046,18 @@ export class DesktopCompanionManager {
       if (typeof value !== 'string' || !value) return;
       this.hidePanel();
       this.followTask(value.slice(0, 200));
+    });
+    handle(ScreenshotTaskIpc.Consume, (value, sender) => {
+      if (!this.isComposerWebContents(sender) || typeof value !== 'string') return null;
+      const request = this.screenshotTasks.consume(value);
+      this.publish();
+      return request;
+    });
+    handle(ScreenshotTaskIpc.Started, (value, sender) => {
+      if (!this.isComposerWebContents(sender) || !value || typeof value !== 'object') return false;
+      const { requestId, sessionId } = value as { requestId?: unknown; sessionId?: unknown };
+      if (typeof requestId !== 'string' || typeof sessionId !== 'string' || !this.screenshotTasks.matches(requestId, sessionId)) return false;
+      this.hidePanel(); this.followTask(sessionId); return true;
     });
     handle(DesktopCompanionIpc.ToggleOrb, value => this.toggleOrb(value === true));
     handle(DesktopCompanionIpc.TogglePanel, (_value, sender) => this.togglePanel(this.analyticsSource(sender.id)));

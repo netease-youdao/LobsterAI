@@ -1,4 +1,5 @@
 import { DEFAULT_COMPANION_SKIN, DesktopCompanionSize } from './constants';
+import { isCustomCompanionSkin } from './customSkin';
 
 export const CompanionSkinKind = {
   /** The app icon's lobster on a disc; task status appears in a small badge. */
@@ -30,10 +31,11 @@ export const COMPANION_SKINS: readonly CompanionSkin[] = [
 ];
 
 export function normalizeCompanionSkin(value: unknown): string {
-  return typeof value === 'string' && COMPANION_SKINS.some(skin => skin.id === value) ? value : DEFAULT_COMPANION_SKIN;
+  return typeof value === 'string' && (isCustomCompanionSkin(value) || COMPANION_SKINS.some(skin => skin.id === value)) ? value : DEFAULT_COMPANION_SKIN;
 }
 
 export function getCompanionSkin(id: string): CompanionSkin {
+  if (isCustomCompanionSkin(id)) return { id, nameKey: 'desktopCompanionCustomSkin', kind: CompanionSkinKind.Image, asset: null, accent: '#EE3B2F' };
   return COMPANION_SKINS.find(skin => skin.id === id) ?? COMPANION_SKINS[0];
 }
 

@@ -11,9 +11,10 @@ interface CompanionCharacterProps {
   size: number;
   showBadge?: boolean;
   className?: string;
+  customAsset?: string;
 }
 
-export default function CompanionCharacter({ skin, mood, size, showBadge = true, className }: CompanionCharacterProps) {
+export default function CompanionCharacter({ skin, mood, size, showBadge = true, className, customAsset }: CompanionCharacterProps) {
   const definition = getCompanionSkin(skin);
   const badge = mood === CompanionMood.Done ? 'done' : mood === CompanionMood.Attention ? 'attention' : mood === CompanionMood.Error ? 'error' : null;
   return (
@@ -24,8 +25,8 @@ export default function CompanionCharacter({ skin, mood, size, showBadge = true,
       style={{ width: size, height: size, '--skin-accent': definition.accent } as CSSProperties}
     >
       {definition.kind === CompanionSkinKind.Brand && <LobsterMark size={size} />}
-      {definition.kind === CompanionSkinKind.Image && definition.asset
-        && <img className="character-image" src={definition.asset} alt="" draggable={false} />}
+      {definition.kind === CompanionSkinKind.Image && (definition.asset || customAsset)
+        && <img className="character-image" src={definition.asset || customAsset} alt="" draggable={false} />}
       {showBadge && mood === CompanionMood.Working && (
         <span className="character-thinking" aria-hidden="true">
           <span /><span /><span />
