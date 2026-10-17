@@ -290,6 +290,7 @@ import { registerKitHandlers } from './ipcHandlers/kits';
 import { hasUnsafeMarkdownEdits, registerMarkdownEditingHandlers } from './ipcHandlers/markdownEditing';
 import { registerMcpHandlers } from './ipcHandlers/mcp';
 import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
+import { registerOpenClawUserConfigHandlers } from './ipcHandlers/openclawUserConfig/handlers';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPluginHandlers } from './ipcHandlers/plugins';
 import {
@@ -524,7 +525,11 @@ import {
   sameOpenClawConfigContent,
 } from './libs/openclawConfigTarget';
 import { getRecentOpenClawDailyLogEntries } from './libs/openclawDailyLogs';
-import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
+import {
+  isOpenClawConfigStartupFailure,
+  OpenClawEngineManager,
+  type OpenClawEngineStatus,
+} from './libs/openclawEngineManager';
 import {
   backupOpenClawConfig,
   getOpenClawGatewayRepairBusyError,
@@ -563,6 +568,7 @@ import {
   startOpenClawTokenProxy,
   stopOpenClawTokenProxy,
 } from './libs/openclawTokenProxy';
+import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './libs/openclawUserConfigOverlay';
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { collectOpenWithArgv, OpenWithPathQueue } from './libs/openWithPathQueue';
@@ -2204,6 +2210,7 @@ let storeInitPromise: Promise<SqliteStore> | null = null;
 let sqliteBackupManager: SqliteBackupManager | null = null;
 let openClawEngineManager: OpenClawEngineManager | null = null;
 let openClawConfigSync: OpenClawConfigSync | null = null;
+let openClawUserConfigOverlay: OpenClawUserConfigOverlay | null = null;
 let openClawBootstrapPromise: Promise<OpenClawEngineStatus> | null = null;
 let cachedSubscriptionStatus: string = AuthSubscriptionStatus.Free;
 let cachedMediaGenerationEntitled = false;
@@ -2406,11 +2413,57 @@ const handleOpenClawConfigAutoRestore = createOpenClawConfigAutoRestoreHandler({
   },
 });
 
+/**
+ * A config OpenClaw rejects with user overrides applied is retried without
+ * them; one that fails without them as well gets them back.
+ */
+const recoverFromUserConfigOverlayFailure = (
+  outcome: OpenClawUserConfigFailureOutcome,
+  options: { restartGateway: boolean },
+): void => {
+  if (outcome === OpenClawUserConfigFailureOutcome.None) return;
+  if (isQuitting || isDataMigrationRestoreInProgress) return;
+  const reason = outcome === OpenClawUserConfigFailureOutcome.Suspended
+    ? 'user-config-overlay-suspended'
+    : 'user-config-overlay-restored';
+  void (async (): Promise<void> => {
+    // Let a startup attempt that is still unwinding finish first.
+    await openClawBootstrapPromise?.catch((): null => null);
+    const result = await syncOpenClawConfig({ reason });
+    if (!result.success) {
+      console.warn(`[OpenClawUserOverlay] Config sync after ${outcome} overrides failed: ${result.error ?? 'unknown error'}`);
+    }
+    // A gateway that refused to start gets one attempt without the overrides.
+    if (options.restartGateway && outcome === OpenClawUserConfigFailureOutcome.Suspended
+      && !isQuitting && !openClawManualRepairActive) {
+      await getOpenClawEngineManager().restartGateway(reason, { retryBlocked: true });
+    }
+  })().catch((error: unknown) => {
+    console.error('[OpenClawUserOverlay] Recovery after a rejected config failed:', error);
+  });
+};
+
+const handleOpenClawUserConfigEngineStatus = (status: OpenClawEngineStatus): void => {
+  // Nothing to attribute before the first render created the overlay.
+  if (!openClawUserConfigOverlay) return;
+  if (status.phase === OpenClawEnginePhase.Running) {
+    openClawUserConfigOverlay.handleConfigAccepted();
+    return;
+  }
+  if (status.phase !== OpenClawEnginePhase.Error || openClawManualRepairActive) return;
+  if (!isOpenClawConfigStartupFailure(status.message)) return;
+  recoverFromUserConfigOverlayFailure(
+    openClawUserConfigOverlay.handleConfigFailure(status.message),
+    { restartGateway: true },
+  );
+};
+
 const bindOpenClawStatusForwarder = (): void => {
   if (openClawStatusForwarderBound) return;
   const manager = getOpenClawEngineManager();
   manager.on('status', status => {
     forwardOpenClawStatus(status);
+    handleOpenClawUserConfigEngineStatus(status);
   });
   manager.on('configAutoRestored', handleOpenClawConfigAutoRestore);
   openClawStatusForwarderBound = true;
@@ -2660,6 +2713,14 @@ const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
   return 'openclaw';
 };
 
+const getOpenClawUserConfigOverlay = (): OpenClawUserConfigOverlay => {
+  openClawUserConfigOverlay ??= new OpenClawUserConfigOverlay({
+    getConfigDir: () => path.dirname(getOpenClawEngineManager().getConfigPath()),
+    getStore: () => getStore(),
+  });
+  return openClawUserConfigOverlay;
+};
+
 const getOpenClawConfigSync = (): OpenClawConfigSync => {
   if (!openClawConfigSync) {
     openClawConfigSync = new OpenClawConfigSync({
@@ -2810,6 +2871,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           .filter(p => !isHiddenUserPluginId(p.pluginId))
           .map(p => ({ pluginId: p.pluginId, enabled: p.enabled, config: p.config })),
       canUseMediaGeneration: () => cachedMediaGenerationEntitled,
+      userConfigOverlay: getOpenClawUserConfigOverlay(),
     });
   }
   return openClawConfigSync;
@@ -3362,6 +3424,7 @@ const _syncOpenClawConfigImpl = async (
       return { ...delivery, mode: OpenClawConfigDeliveryMode.Fallback, detail: 'Gateway generation changed during application confirmation.' };
     }
     if (delivery.mode === OpenClawConfigDeliveryMode.Applied) {
+      getOpenClawUserConfigOverlay().handleConfigAccepted();
       if (openClawConfigRecovery.applied(target, manager.getGatewayProcessGeneration())) {
         clearDeferredRestart();
         deferredRestartReason = null;
@@ -3372,6 +3435,10 @@ const _syncOpenClawConfigImpl = async (
       clearDeferredRestart();
       deferredRestartReason = null;
       deferredRestartRequestedAt = null;
+      recoverFromUserConfigOverlayFailure(
+        getOpenClawUserConfigOverlay().handleConfigFailure(delivery.detail),
+        { restartGateway: false },
+      );
     }
     return delivery;
   };
@@ -3697,6 +3764,8 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       await openClawConfigApplyQueue;
       const pendingWork = buildOpenClawRepairBusyResult(originalPath, manager.getStatus());
       if (pendingWork) return pendingWork;
+      // Repair restores LobsterAI's own config; user overrides wait for an explicit apply.
+      getOpenClawUserConfigOverlay().suspendForRepair();
       console.log('[OpenClawRepair] starting gateway state repair.');
       if (openClawRuntimeAdapter) {
         openClawRuntimeAdapter.disconnectGatewayClient();
@@ -10137,6 +10206,16 @@ if (!gotTheLock) {
     getStore: () => getStore(),
     setDecisionToolHandler: handler => getMcpRuntime().setDecisionToolHandler(handler),
     syncOpenClawConfig,
+  });
+
+  registerOpenClawUserConfigHandlers({
+    getOverlay: getOpenClawUserConfigOverlay,
+    syncOpenClawConfig,
+    restartGatewayIfStopped: async reason => {
+      const manager = getOpenClawEngineManager();
+      if (manager.getStatus().phase !== OpenClawEnginePhase.Error) return;
+      await manager.restartGateway(reason, { retryBlocked: true });
+    },
   });
 
   registerDshHandlers({

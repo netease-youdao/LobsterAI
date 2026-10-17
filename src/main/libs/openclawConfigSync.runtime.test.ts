@@ -18,6 +18,7 @@ import { OpenClawAgentOwnership } from './openclawAgentModels';
 import { OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
 import { persistOpenClawConfigTarget } from './openclawConfigTarget';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
+import { OpenClawUserConfigOverlay } from './openclawUserConfigOverlay';
 
 vi.mock('electron', () => ({
   app: {
@@ -229,6 +230,65 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(prepared).toMatchObject({ ok: true, changed: true });
     expect(prepared.target?.raw).toContain('4121');
     expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
+
+  test('merges openclaw.user.json overrides into every render and removes them again', async () => {
+    const values = new Map<string, unknown>();
+    const userConfigOverlay = new OpenClawUserConfigOverlay({
+      getConfigDir: () => stateDir,
+      getStore: () => ({
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        set: (key: string, value: unknown) => { values.set(key, value); },
+      }),
+    });
+    const userConfigPath = path.join(stateDir, 'openclaw.user.json');
+    fs.writeFileSync(userConfigPath, `{
+      // Comments are allowed.
+      agents: { defaults: { blockStreamingDefault: "on" } },
+      hooks: { internal: { enabled: true } },
+      gateway: { auth: { mode: "none" } },
+      plugins: { allow: ["my-plugin"], entries: { "my-plugin": { enabled: true } } },
+    }`);
+    const sync = await createSync({ userConfigOverlay });
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    expect(sync.sync('user-overlay-apply')).toMatchObject({ ok: true, changed: true });
+    const applied = read();
+    expect(applied.agents.defaults.blockStreamingDefault).toBe('on');
+    expect(applied.agents.defaults.model).toBeTruthy();
+    expect(applied.hooks).toEqual({ internal: { enabled: true } });
+    expect(applied.gateway.auth).toEqual({ mode: 'token', token: '${OPENCLAW_GATEWAY_TOKEN}' });
+    expect(applied.plugins.allow).toEqual(expect.arrayContaining([OPENCLAW_MEMORY_CORE_PLUGIN_ID, 'my-plugin']));
+    expect(applied.plugins.entries['my-plugin']).toEqual({ enabled: true });
+    expect(sync.sync('user-overlay-steady')).toMatchObject({ ok: true, changed: false });
+
+    fs.writeFileSync(userConfigPath, '{}');
+    expect(sync.sync('user-overlay-cleared')).toMatchObject({ ok: true, changed: true });
+    const cleared = read();
+    expect(cleared.agents.defaults.blockStreamingDefault).toBeUndefined();
+    expect(cleared.hooks).toBeUndefined();
+    expect(cleared.plugins.allow).not.toContain('my-plugin');
+    expect(cleared.plugins.entries['my-plugin']).toBeUndefined();
+    expect(cleared.plugins.allow).toContain(OPENCLAW_MEMORY_CORE_PLUGIN_ID);
+    expect(sync.sync('user-overlay-cleared-steady')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('applies openclaw.user.json overrides while no model is configured', async () => {
+    const values = new Map<string, unknown>();
+    const userConfigOverlay = new OpenClawUserConfigOverlay({
+      getConfigDir: () => stateDir,
+      getStore: () => ({
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        set: (key: string, value: unknown) => { values.set(key, value); },
+      }),
+    });
+    fs.writeFileSync(path.join(stateDir, 'openclaw.user.json'), '{ hooks: { internal: { enabled: true } } }');
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync({ userConfigOverlay });
+    expect(sync.sync('user-overlay-minimal')).toMatchObject({ ok: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.hooks).toEqual({ internal: { enabled: true } });
+    expect(config.models).toBeUndefined();
   });
 
   test('activates virtual-model routing hooks and preserves the grant across config syncs', async () => {

@@ -82,7 +82,12 @@ import {
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
-import { createOpenClawConfigTarget, type OpenClawConfigTarget, readOpenClawConfigRaw } from './openclawConfigTarget';
+import {
+  createOpenClawConfigTarget,
+  type OpenClawConfigTarget,
+  readOpenClawConfigRaw,
+  resolveOpenClawOwnedSections,
+} from './openclawConfigTarget';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
 import {
@@ -105,6 +110,7 @@ import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenCl
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 import { withRequiredOpenClawSessionStoreOwner } from './openclawSessionStoreOwner';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
+import type { OpenClawUserConfigOverlaySource } from './openclawUserConfigOverlay';
 import { getActiveSystemProxyUrl, isSystemProxyEnabled } from './systemProxy';
 
 export type AskUserCallbackConfig = {
@@ -1934,6 +1940,8 @@ type OpenClawConfigSyncDeps = {
   getAgents?: () => Agent[];
   getUserPlugins?: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
   canUseMediaGeneration?: () => boolean;
+  /** Overrides from openclaw.user.json, merged on top of every rendered config. */
+  userConfigOverlay?: OpenClawUserConfigOverlaySource;
 };
 
 export class OpenClawConfigSync {
@@ -1970,6 +1978,7 @@ export class OpenClawConfigSync {
   private readonly getAgents?: () => Agent[];
   private readonly getUserPlugins: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
   private readonly canUseMediaGeneration: () => boolean;
+  private readonly userConfigOverlay?: OpenClawUserConfigOverlaySource;
   private previousBindingsJson?: string;
   private currentBindingsObj: { bindings?: Array<Record<string, unknown>> } = {};
 
@@ -2007,6 +2016,7 @@ export class OpenClawConfigSync {
     this.getAgents = deps.getAgents;
     this.getUserPlugins = deps.getUserPlugins ?? (() => []);
     this.canUseMediaGeneration = deps.canUseMediaGeneration ?? (() => false);
+    this.userConfigOverlay = deps.userConfigOverlay;
   }
 
   /**
@@ -2456,8 +2466,12 @@ export class OpenClawConfigSync {
     let existingPlugins: Record<string, unknown> = {};
     let existingConfig: Record<string, unknown> = {};
     let existingSessionStoreOwner: unknown;
+    // Render from the file minus overrides the user has since removed; the
+    // target keeps `baseRaw` so the rebase also removes them from the file.
+    const overlaySession = this.userConfigOverlay?.begin(baseRaw);
+    const generationBaseRaw = overlaySession?.generationBaseRaw ?? baseRaw;
     try {
-      const existing = JSON.parse(baseRaw);
+      const existing = JSON.parse(generationBaseRaw);
       existingConfig = asConfigRecord(existing) ?? {};
       existingGateway = (existing.gateway ?? {}) as Record<string, unknown>;
       existingSessionStoreOwner = existing.agents?.defaults?.sessionStore;
@@ -3371,7 +3385,12 @@ export class OpenClawConfigSync {
       legacyOwner: existingSessionStoreOwner,
     });
     managedConfig = withManagedOpenClawModelPolicy(managedConfig, existingConfig);
-    const target = createOpenClawConfigTarget(baseRaw, `${JSON.stringify(managedConfig, null, 2)}\n`);
+    const overlaid = overlaySession?.apply(managedConfig, resolveOpenClawOwnedSections(managedConfig));
+    if (overlaid) managedConfig = overlaid.config;
+    const target = createOpenClawConfigTarget(baseRaw, `${JSON.stringify(managedConfig, null, 2)}\n`, undefined, {
+      mergeBaseRaw: generationBaseRaw,
+      extraOwnedSections: overlaid?.ownedTopLevelKeys,
+    });
     const nextContent = target.raw;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
       providers: (managedConfig.models as Record<string, unknown>)?.providers,
@@ -4267,6 +4286,8 @@ export class OpenClawConfigSync {
     } catch {
       currentContent = '';
     }
+    const overlaySession = this.userConfigOverlay?.begin(currentContent);
+    const generationContent = overlaySession?.generationBaseRaw ?? currentContent;
 
     // Preserve all non-provider sections, including channel accounts, agent
     // bindings, and gateway auth. Losing them on logout tears down live IM.
@@ -4275,9 +4296,9 @@ export class OpenClawConfigSync {
     // configured, causing the gateway to fail to start because those env
     // vars are no longer injected.
     let mergedConfig: Record<string, unknown> = { ...baseMinimalConfig };
-    if (currentContent) {
+    if (generationContent) {
       try {
-        const existing = asConfigRecord(JSON.parse(currentContent));
+        const existing = asConfigRecord(JSON.parse(generationContent));
         mergedConfig = { ...baseMinimalConfig, ...existing };
         delete mergedConfig.models;
         // Preserve IM channel plugin entries — these reference their own env
@@ -4333,7 +4354,15 @@ export class OpenClawConfigSync {
     if (asConfigRecord(agentDefaults?.modelPolicy)) {
       mergedConfig = withManagedOpenClawModelPolicy(mergedConfig, mergedConfig);
     }
-    const target = createOpenClawConfigTarget(currentContent, `${JSON.stringify(mergedConfig, null, 2)}\n`, ['models']);
+    const minimalOwnedSections = ['models'];
+    const overlaid = overlaySession?.apply(mergedConfig, minimalOwnedSections);
+    if (overlaid) mergedConfig = overlaid.config;
+    const target = createOpenClawConfigTarget(
+      currentContent,
+      `${JSON.stringify(mergedConfig, null, 2)}\n`,
+      minimalOwnedSections,
+      { mergeBaseRaw: generationContent, extraOwnedSections: overlaid?.ownedTopLevelKeys },
+    );
     const nextContent = target.raw;
 
     // Preserve migration semantics while ignoring write provenance.

@@ -67,11 +67,11 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    const loadData = async () => {
+    const loadData = async (forceRefresh = false) => {
       setIsLoading(true);
       try {
         const [mkKits, installed] = await Promise.all([
-          kitService.fetchMarketplaceKits(),
+          kitService.fetchMarketplaceKits({ forceRefresh }),
           kitService.getInstalledKits(),
         ]);
         dispatch(setMarketplaceKits(mkKits));
@@ -83,7 +83,10 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
       }
     };
 
-    loadData();
+    void loadData();
+    const handleOnline = () => { void loadData(true); };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
   }, [isOpen, dispatch]);
 
   // Calculate available height and focus search input when popover opens

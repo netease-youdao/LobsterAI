@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { net } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -39,6 +40,9 @@ vi.mock('electron', () => ({
       registeredHandlers.set(channel, handler);
     }),
   },
+  net: {
+    fetch: vi.fn(),
+  },
   session: {
     defaultSession: {
       fetch: vi.fn(),
@@ -54,7 +58,8 @@ import {
   ComputerUseKitId,
   ComputerUseSkillId,
 } from '../../../shared/computerUse/constants';
-import { KitStoreKey } from '../../../shared/kit/constants';
+import { KitIpcChannel, KitStoreKey, type KitStoreResponse } from '../../../shared/kit/constants';
+import { SkinPackKitId } from '../../../shared/skin/kit';
 import { getCurrentComputerUseKitBundleDescriptor } from '../../computerUse/computerUseKit';
 import {
   ComputerUseRuntimes,
@@ -265,12 +270,55 @@ async function installComputerUseKit(): Promise<{
 }
 
 beforeEach(async () => {
+  vi.mocked(net.fetch).mockReset();
   registeredHandlers.clear();
   sendSpy.mockClear();
   setProcessTarget(MAC_RUNTIME);
   fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
   fs.mkdirSync(path.join(TEST_USER_DATA, 'tmp'), { recursive: true });
   await prepareComputerUseArchives();
+});
+
+describe('kit catalog availability', () => {
+  const fetchStore = (): Promise<KitStoreResponse> => {
+    registerKitHandlers(makeDeps([]).deps);
+    return registeredHandlers.get(KitIpcChannel.FetchStore)!() as Promise<KitStoreResponse>;
+  };
+
+  test('fetches the public catalog through Electron with a deadline and appends built-in kits', async () => {
+    vi.mocked(net.fetch).mockResolvedValue(new Response(JSON.stringify({
+      data: { value: { kits: [{ id: 'online-kit' }] } },
+    })));
+
+    const result = await fetchStore();
+    expect(result.success).toBe(true);
+    expect(JSON.parse(result.data!).data.value.kits.map((kit: { id: string }) => kit.id))
+      .toEqual(['online-kit', SkinPackKitId.BuiltIn, ComputerUseKitId.BuiltIn]);
+    expect(net.fetch).toHaveBeenCalledWith('https://example.invalid/kits.json', {
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  test('returns built-in kits with an explicit failure when the request times out', async () => {
+    vi.mocked(net.fetch).mockRejectedValue(new Error('Request timeout'));
+
+    const result = await fetchStore();
+    expect(result).toMatchObject({ success: false, error: 'Request timeout' });
+    expect(JSON.parse(result.data!).data.value.kits.map((kit: { id: string }) => kit.id))
+      .toEqual([SkinPackKitId.BuiltIn, ComputerUseKitId.BuiltIn]);
+  });
+
+  test('reports HTTP failures while keeping offline kits available', async () => {
+    vi.mocked(net.fetch).mockResolvedValue(new Response('Unavailable', { status: 503 }));
+    expect(await fetchStore()).toMatchObject({ success: false, error: 'HTTP 503' });
+  });
+
+  test('falls back to built-in kits if the server returns malformed JSON', async () => {
+    vi.mocked(net.fetch).mockResolvedValue(new Response('not JSON'));
+    const result = await fetchStore();
+    expect(result.success).toBe(false);
+    expect(JSON.parse(result.data!).data.value.kits).toHaveLength(2);
+  });
 });
 
 afterEach(() => {

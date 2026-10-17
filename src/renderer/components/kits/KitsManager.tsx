@@ -167,6 +167,8 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
   const [kits, setKits] = useState<MarketplaceKit[]>([]);
   const [installedKits, setInstalledKits] = useState<Record<string, InstalledKit>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [hasCatalogError, setHasCatalogError] = useState(false);
+  const loadRequestId = useRef(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<KitTab>(KitTab.Marketplace);
   const [selectedKit, setSelectedKit] = useState<MarketplaceKit | null>(null);
@@ -176,21 +178,36 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
   const [installPrompt, setInstallPrompt] = useState<{ kitId: string; text: string } | null>(null);
   const [kitPendingUninstall, setKitPendingUninstall] = useState<MarketplaceKit | null>(null);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (forceRefresh = false) => {
+    const requestId = ++loadRequestId.current;
     setIsLoading(true);
-    const [marketKits, installed] = await Promise.all([
-      kitService.fetchMarketplaceKits(),
-      kitService.getInstalledKits(),
-    ]);
-    setKits(marketKits);
-    setInstalledKits(installed);
-    dispatch(setMarketplaceKits(marketKits));
-    dispatch(setInstalledKitsAction(installed));
-    setIsLoading(false);
+    try {
+      const [catalog, installed] = await Promise.all([
+        kitService.fetchMarketplaceCatalog({ forceRefresh }),
+        kitService.getInstalledKits(),
+      ]);
+      if (requestId !== loadRequestId.current) return;
+      setKits(catalog.kits);
+      setHasCatalogError(Boolean(catalog.error));
+      setInstalledKits(installed);
+      dispatch(setMarketplaceKits(catalog.kits));
+      dispatch(setInstalledKitsAction(installed));
+    } catch (error) {
+      console.error('[KitsManager] Failed to load kit data:', error);
+      if (requestId === loadRequestId.current) setHasCatalogError(true);
+    } finally {
+      if (requestId === loadRequestId.current) setIsLoading(false);
+    }
   }, [dispatch]);
 
   useEffect(() => {
-    loadData();
+    void loadData();
+    const handleOnline = () => { void loadData(true); };
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      loadRequestId.current += 1;
+    };
   }, [loadData]);
 
   const installedCount = useMemo(
@@ -476,6 +493,22 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
     </Modal>
   ) : null;
 
+  const catalogWarning = hasCatalogError ? (
+    <div role="status" className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
+      <ExclamationTriangleIcon className="h-5 w-5 shrink-0 text-warning" aria-hidden="true" />
+      <p className="flex-1 text-sm text-secondary">{i18nService.t('kitStoreLoadFailed')}</p>
+      <button
+        type="button"
+        onClick={() => { void loadData(true); }}
+        disabled={isLoading}
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary-muted disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <ArrowPathIcon className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
+        {i18nService.t(isLoading ? 'kitLoading' : 'retry')}
+      </button>
+    </div>
+  ) : null;
+
   // Detail view
   if (selectedKit) {
     const installed = isKitInstalled(selectedKit.id);
@@ -503,6 +536,8 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
         {actionError && (
           <ErrorMessage message={actionError} onClose={() => setActionError('')} />
         )}
+
+        {catalogWarning}
 
         {/* Kit header */}
         <div className="rounded-xl border border-border bg-surface p-4 shadow-card">
@@ -697,6 +732,8 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
         {i18nService.t('kitDescription')}
       </p>
 
+      {catalogWarning}
+
       {/* Sticky toolbar: Search + tabs */}
       <div
         data-skin-management-toolbar="true"
@@ -771,7 +808,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
       </div>
 
       {/* Kit grid */}
-      {isLoading ? (
+      {isLoading && kits.length === 0 ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-hidden="true">
           {Array.from({ length: 4 }).map((_, idx) => (
             <div key={idx} className="min-h-[116px] animate-pulse rounded-xl border border-border bg-surface p-4">
@@ -786,7 +823,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking, onUseKit }) => {
             </div>
           ))}
         </div>
-      ) : filteredKits.length === 0 ? (
+      ) : hasCatalogError && kits.length === 0 ? null : filteredKits.length === 0 ? (
         <div className="py-12 text-center">
           <p className="text-sm text-secondary">
             {searchQuery.trim()

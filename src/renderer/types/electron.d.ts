@@ -107,6 +107,7 @@ import type {
   InstalledKitRecord,
   KitReference,
   KitSkillMetadata,
+  KitStoreResponse,
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
 import type {
@@ -150,6 +151,10 @@ import type {
   OpenClawLoopbackRepairOutcome,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
+import type {
+  OpenClawUserConfigActionResult,
+  OpenClawUserConfigStatus,
+} from '../../shared/openclawUserConfig/constants';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -800,7 +805,7 @@ interface IElectronAPI {
     onChanged: (callback: () => void) => () => void;
   };
   kits: {
-    fetchStore: () => Promise<{ success: boolean; data?: string; error?: string }>;
+    fetchStore: () => Promise<KitStoreResponse>;
     install: (params: {
       kitId: string;
       bundleUrl: string;
@@ -945,6 +950,13 @@ interface IElectronAPI {
       set: (
         config: OpenClawSessionPolicyConfig,
       ) => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
+    };
+    userConfig: {
+      getStatus: () => Promise<OpenClawUserConfigStatus>;
+      setEnabled: (enabled: boolean) => Promise<OpenClawUserConfigActionResult>;
+      openFile: () => Promise<OpenClawUserConfigActionResult>;
+      revealFile: () => Promise<OpenClawUserConfigActionResult>;
+      apply: () => Promise<OpenClawUserConfigActionResult>;
     };
     session: {
       patch: (options: {
