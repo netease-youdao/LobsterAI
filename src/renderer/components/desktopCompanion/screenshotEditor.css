@@ -1,0 +1,26 @@
+.screenshot-editor .screenshot-selection { box-sizing: border-box; border: 1px solid #fff; }
+.screenshot-annotation-canvas { position: absolute; pointer-events: none; }
+.screenshot-resize { position: absolute; width: 9px; height: 9px; border: 1px solid #27272a; background: white; border-radius: 2px; transform: translate(-50%, -50%); pointer-events: auto; }
+.screenshot-resize-nw, .screenshot-resize-se { cursor: nwse-resize; }
+.screenshot-resize-ne, .screenshot-resize-sw { cursor: nesw-resize; }
+.screenshot-resize-n, .screenshot-resize-s { cursor: ns-resize; }
+.screenshot-resize-e, .screenshot-resize-w { cursor: ew-resize; }
+.screenshot-dimensions { position: absolute; padding: 4px 8px; background: #27272a; color: white; border-radius: 5px; font-size: 12px; pointer-events: none; }
+.screenshot-editor-toolbar { position: absolute; z-index: 2; max-width: min(700px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 8px; background: #fff; color: #27272a; border: 1px solid #e4e4e7; border-radius: 12px; box-shadow: 0 6px 24px #0003; cursor: default; font-size: 13px; }
+.screenshot-editor-toolbar fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.screenshot-editor-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.screenshot-editor-actions { border-top: 1px solid #e4e4e7; margin-top: 6px; padding-top: 6px; }
+.screenshot-editor-toolbar button, .screenshot-text-editor button { min-height: 32px; padding: 5px 10px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.screenshot-editor-toolbar button:hover, .screenshot-text-editor button:hover { background: #f4f4f5; }
+.screenshot-editor-toolbar button[aria-pressed="true"] { background: #ffede8; color: #cf391e; }
+.screenshot-editor-toolbar button.screenshot-primary-action { background: #e7472a; color: white; }
+.screenshot-editor-toolbar button:disabled, .screenshot-editor-toolbar fieldset:disabled { opacity: 0.5; cursor: default; }
+.screenshot-editor-toolbar input[type="color"] { width: 29px; height: 29px; padding: 1px; background: transparent; border: 1px solid #e4e4e7; cursor: pointer; }
+.screenshot-weight { display: flex; align-items: center; gap: 4px; margin: 0 4px; }
+.screenshot-weight select { padding: 4px; border: 1px solid #e4e4e7; border-radius: 4px; background: #fff; color: #27272a; }
+.screenshot-text-editor { position: absolute; z-index: 3; width: min(250px, calc(100vw - 16px)); padding: 5px; border-radius: 6px; background: #fff; color: #27272a; box-shadow: 0 4px 18px #0003; cursor: default; }
+.screenshot-text-editor textarea { box-sizing: border-box; width: 100%; height: 85px; resize: none; background: #fff; border: 1px solid #e4e4e7; user-select: text; font-family: sans-serif; }
+.screenshot-editor [role="alert"] { color: #b42318; padding-top: 6px; }
+.screenshot-editor .screenshot-hint { max-width: calc(100vw - 32px); white-space: normal; }
+.screenshot-editor button:focus-visible, .screenshot-editor input:focus-visible, .screenshot-editor select:focus-visible { outline: 2px solid #e7472a; outline-offset: 2px; }
+.screenshot-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }

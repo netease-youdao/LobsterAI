@@ -91,6 +91,7 @@ import type {
   EnterpriseAccountIdentitiesResult,
   EnterpriseQuotaRequestResult,
 } from '../../shared/enterpriseAccount/types';
+import type { FollowUpSuggestionRequest } from '../../shared/followUpSuggestion';
 import type {
   HtmlShareAccessMode,
   HtmlShareAnalyticsInput,
@@ -1007,7 +1008,9 @@ interface IElectronAPI {
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
+    suggestFollowUp(input: FollowUpSuggestionRequest): Promise<string | null>;
     startSession: (options: {
+      companionScreenshotRequestId?: string;
       analytics?: UsageContext;
       prompt: string;
       cwd?: string;

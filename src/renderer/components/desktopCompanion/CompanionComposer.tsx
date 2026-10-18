@@ -29,6 +29,7 @@ import { useHomeStartContext } from '../cowork/useHomeStartContext';
 import Toast, { type ToastEventDetail } from '../Toast';
 import { beginCompanionTask } from './analytics';
 import { bootstrapCompanionComposer, refreshCompanionComposer } from './companionComposerBootstrap';
+import { createScreenshotTaskRunner } from './screenshotTask';
 import SelectionTaskContextCard from './SelectionTaskContextCard';
 import { ComposerExit, useComposerMotion } from './useComposerMotion';
 import { useDesktopCompanionState } from './useDesktopCompanionState';
@@ -67,6 +68,8 @@ export default function CompanionComposer() {
   const [ready, setReady] = useState(false);
   const { state: companion } = useDesktopCompanionState();
   const [toast, setToast] = useState<ToastEventDetail | null>(null);
+  // Keep a failed image task retryable while the user fixes a model or network problem.
+  const [screenshotFailure, setScreenshotFailure] = useState<ToastEventDetail | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
   const cardRef = useRef<HTMLDivElement>(null);
   const motionRef = useRef<HTMLDivElement>(null);
@@ -104,7 +107,7 @@ export default function CompanionComposer() {
     const onToast = (event: Event) => showToast((event as CustomEvent<string | ToastEventDetail>).detail);
     window.addEventListener('app:showToast', onToast);
     const stops = [
-      window.electron.auth.onSessionChanged(event => { void authService.handleSessionChanged(event); }),
+      window.electron.auth.onSessionChanged(event => { setScreenshotFailure(null); void authService.handleSessionChanged(event); }),
     ];
     return () => {
       active = false;
@@ -158,6 +161,23 @@ export default function CompanionComposer() {
       await api.setDraft({ ...current.draft, selectionContext: undefined });
     }
   }, [api, selectionContext]);
+
+  const screenshotRequestId = companion?.screenshotRequest?.id;
+  useEffect(() => {
+    if (!ready || !visible || !screenshotRequestId) return;
+    void (async () => {
+      const request = await api.consumeScreenshotRequest(screenshotRequestId);
+      if (!request) return;
+      setScreenshotFailure(null);
+      const run = createScreenshotTaskRunner(request, api.screenshotTaskStarted, (message, retry) => {
+        setScreenshotFailure({ message, actionLabel: t('retry'), onAction: () => { void retry(); } });
+      });
+      await run();
+    })().catch(error => {
+      console.error('[CompanionComposer] Screenshot request failed', error);
+      showToast(t('desktopCompanionRequestFailed'));
+    });
+  }, [api, ready, screenshotRequestId, showToast, visible]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -271,6 +291,7 @@ export default function CompanionComposer() {
 
   // The card sits in the window's corner by the orb; the rest of the window is room for menus.
   const cardAlignClass = placement === DesktopCompanionPanelPlacement.Left ? 'items-end' : 'items-start';
+  const notification = screenshotFailure ?? toast;
 
   return (
     <div className={`flex h-full w-full flex-col justify-end ${cardAlignClass}`} data-composer-room="true">
@@ -311,14 +332,14 @@ export default function CompanionComposer() {
             onGoalCommand={command => submit(command)}
           />
         </div>
-        {toast && (
+        {notification && (
           <Toast
             contained
-            message={toast.message}
-            actionLabel={toast.actionLabel}
-            onAction={toast.onAction}
+            message={notification.message}
+            actionLabel={notification.actionLabel}
+            onAction={notification.onAction}
             closeLabel={t('close')}
-            onClose={() => setToast(null)}
+            onClose={() => screenshotFailure ? setScreenshotFailure(null) : setToast(null)}
           />
         )}
       </div>

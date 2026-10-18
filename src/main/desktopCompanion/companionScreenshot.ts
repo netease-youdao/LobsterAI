@@ -1,10 +1,10 @@
 import { randomUUID } from 'crypto';
-import { app, type BrowserWindow, desktopCapturer, ipcMain, type NativeImage, nativeImage, type Rectangle, screen, systemPreferences } from 'electron';
+import { app, type BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, type NativeImage, nativeImage, type Rectangle, screen, systemPreferences } from 'electron';
 import fs from 'fs/promises';
 import path from 'path';
 
 import { type DesktopCompanionAttachment, DesktopCompanionSurface } from '../../shared/desktopCompanion/constants';
-import { companionScreenshotCrop, CompanionScreenshotIpc } from '../../shared/desktopCompanion/screenshot';
+import { CompanionScreenshotAction as Action, companionScreenshotCrop, CompanionScreenshotIpc } from '../../shared/desktopCompanion/screenshot';
 import { SystemPermissionStatus } from '../../shared/permissions/constants';
 import { t } from '../i18n';
 import { type CompanionWindowEnvironment, createCompanionWindow } from './companionWindow';
@@ -16,12 +16,32 @@ interface CaptureFrame {
   preview?: string;
 }
 
+interface ScreenshotSelection { image: NativeImage; action: Action }
+export type CompanionCaptureResult = (DesktopCompanionAttachment & { action: Action }) | { action: typeof Action.Copy | typeof Action.Save };
+
+/** Inspect the PNG header before decoding renderer bytes, then match the approved crop exactly. */
+export function decodeAnnotatedScreenshot(value: unknown, width: number, height: number): NativeImage {
+  const prefix = 'data:image/png;base64,';
+  if (typeof value !== 'string' || !value.startsWith(prefix) || value.length > 80 * 1024 * 1024) {
+    throw new Error('Invalid screenshot image data');
+  }
+  const bytes = Buffer.from(value.slice(prefix.length), 'base64');
+  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    || bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== width || bytes.readUInt32BE(20) !== height
+    || width * height > 64_000_000) throw new Error('Invalid screenshot image dimensions');
+  const image = nativeImage.createFromBuffer(bytes);
+  const size = image.getSize();
+  if (image.isEmpty() || size.width !== width || size.height !== height) throw new Error('Invalid screenshot image');
+  return image;
+}
+
 /** A one-shot capture. Only the crop is saved; full-screen frames live in memory until selection ends. */
 export class CompanionScreenshotController {
   private frames = new Map<number, CaptureFrame>();
-  private pending: { resolve(image: NativeImage | null): void; reject(error: Error): void } | null = null;
+  private pending: { resolve(selection: ScreenshotSelection | null): void; reject(error: Error): void } | null = null;
   private active = false;
   private disposed = false;
+  private cancelActive: (() => void) | null = null;
   private loadTimer: ReturnType<typeof setTimeout> | undefined;
   private timing: { started: number; captured: number; prepared: number } | null = null;
 
@@ -33,10 +53,9 @@ export class CompanionScreenshotController {
         return callback(frame, value);
       });
     };
-    // Only the overlay uses JPEG. Keep the original pixels for the lossless PNG crop,
-    // and encode at most once even if the renderer requests the frame again.
+    // Annotation exports need lossless source pixels. Encode once and keep them in memory only.
     handle(CompanionScreenshotIpc.GetFrame, frame => frame.preview
-      ??= `data:image/jpeg;base64,${frame.image.toJPEG(90).toString('base64')}`);
+      ??= `data:image/png;base64,${frame.image.toPNG().toString('base64')}`);
     handle(CompanionScreenshotIpc.Ready, frame => {
       frame.window.showInactive();
       const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -57,19 +76,26 @@ export class CompanionScreenshotController {
     });
     handle(CompanionScreenshotIpc.Finish, (frame, value) => {
       if (value === null) { this.finish(null); return; }
-      const crop = companionScreenshotCrop(value, frame.bounds, frame.image.getSize());
+      if (!value || typeof value !== 'object') throw new Error('Invalid screenshot selection');
+      const result = 'rect' in value ? value as { rect: unknown; action?: unknown; imageDataUrl?: unknown } : null;
+      const action = result ? result.action : Action.Ask;
+      if (!Object.values(Action).includes(action as Action)) throw new Error('Invalid screenshot action');
+      const crop = companionScreenshotCrop(result ? result.rect : value, frame.bounds, frame.image.getSize());
       if (!crop) throw new Error('Invalid screenshot selection');
-      this.finish(frame.image.crop(crop));
+      const image = result?.imageDataUrl === undefined ? frame.image.crop(crop)
+        : decodeAnnotatedScreenshot(result.imageDataUrl, crop.width, crop.height);
+      this.finish({ image, action: action as Action });
     });
   }
 
-  async capture(companions: Array<BrowserWindow | null>): Promise<DesktopCompanionAttachment | null> {
+  async capture(companions: Array<BrowserWindow | null>): Promise<CompanionCaptureResult | null> {
     if (this.active || this.disposed) return null;
     this.active = true;
     const started = performance.now();
     const visible = companions.filter((win): win is BrowserWindow => !!win && !win.isDestroyed() && win.isVisible());
     let canceled = false;
     const cancel = () => { canceled = true; this.finish(null); };
+    this.cancelActive = cancel;
     screen.on('display-removed', cancel);
     screen.on('display-metrics-changed', cancel);
     try {
@@ -103,7 +129,7 @@ export class CompanionScreenshotController {
         return { bounds: display.bounds, image };
       });
       this.timing = { started, captured, prepared: performance.now() };
-      const image = await new Promise<NativeImage | null>((resolve, reject) => {
+      const selection = await new Promise<ScreenshotSelection | null>((resolve, reject) => {
         this.pending = { resolve, reject };
         this.loadTimer = setTimeout(() => this.fail(new Error('Screenshot overlay timed out')), 15_000);
         for (const capture of captures) {
@@ -111,7 +137,7 @@ export class CompanionScreenshotController {
             surface: DesktopCompanionSurface.Screenshot, bounds: capture.bounds, focusable: true,
           });
           this.frames.set(win.webContents.id, { ...capture, window: win });
-          win.on('closed', cancel);
+          win.on('closed', () => { if (this.frames.has(win.webContents.id)) cancel(); });
           win.webContents.on('before-input-event', (event, input) => {
             if (input.key === 'Escape') { event.preventDefault(); cancel(); }
           });
@@ -120,13 +146,33 @@ export class CompanionScreenshotController {
         }
       });
       this.closeFrames();
-      if (!image || this.disposed) return null;
+      if (!selection || this.disposed || canceled) return null;
+      const { image, action } = selection;
+      if (action === Action.Copy) {
+        clipboard.writeImage(image);
+        return { action };
+      }
+      if (action === Action.Save) {
+        const result = await dialog.showSaveDialog({
+          defaultPath: path.join(app.getPath('pictures'), `screenshot-${Date.now()}.png`),
+          filters: [{ name: 'PNG', extensions: ['png'] }],
+        });
+        if (result.canceled || !result.filePath || this.disposed || canceled) return null;
+        await fs.writeFile(result.filePath, image.toPNG(), { mode: 0o600 });
+        return { action };
+      }
       const directory = path.join(app.getPath('temp'), 'lobsterai', 'attachments');
       await fs.mkdir(directory, { recursive: true });
+      if (this.disposed || canceled) return null;
       const filePath = path.join(directory, `screenshot-${randomUUID()}.png`);
       await fs.writeFile(filePath, image.toPNG(), { mode: 0o600 });
-      return { path: filePath, name: `${t('desktopCompanionScreenshotName')}.png`, isImage: true };
+      if (this.disposed || canceled) {
+        await fs.rm(filePath, { force: true });
+        return null;
+      }
+      return { action, path: filePath, name: `${t('desktopCompanionScreenshotName')}.png`, isImage: true };
     } finally {
+      this.cancelActive = null;
       this.pending = null;
       this.timing = null;
       clearTimeout(this.loadTimer);
@@ -142,13 +188,14 @@ export class CompanionScreenshotController {
 
   dispose(): void {
     this.disposed = true;
-    this.finish(null);
-    this.closeFrames();
+    this.cancel();
     for (const channel of Object.values(CompanionScreenshotIpc)) ipcMain.removeHandler(channel);
   }
 
-  private finish(image: NativeImage | null): void {
-    this.pending?.resolve(image);
+  cancel(): void { this.cancelActive?.(); this.closeFrames(); }
+
+  private finish(selection: ScreenshotSelection | null): void {
+    this.pending?.resolve(selection);
     this.pending = null;
   }
 

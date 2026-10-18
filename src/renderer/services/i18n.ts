@@ -1,5 +1,7 @@
 import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { followUpSuggestionTranslations } from '../components/cowork/followUpSuggestionCopy';
+import { screenshotTranslations } from '../components/desktopCompanion/screenshotCopy';
 import { configService } from './config';
 
 // 支持的语言类型
@@ -20,6 +22,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelPresetAccountChanged: '账号已切换，请重新选择模型。',
 
     ...desktopCompanionTranslations.zh,
+    ...screenshotTranslations.zh,
+    ...followUpSuggestionTranslations.zh,
     ...mediaTranslations.zh,
     officeSaved: '已自动保存',
     officePending: '等待保存…',
@@ -4570,6 +4574,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelPresetAccountChanged: 'The account changed. Please select a model again.',
 
     ...desktopCompanionTranslations.en,
+    ...screenshotTranslations.en,
+    ...followUpSuggestionTranslations.en,
     ...mediaTranslations.en,
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',

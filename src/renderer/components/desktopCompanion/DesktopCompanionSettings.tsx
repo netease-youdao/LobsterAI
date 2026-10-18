@@ -9,6 +9,7 @@ import {
 } from '../../../shared/desktopCompanion/constants';
 import { COMPANION_SKINS, type CompanionSkin, CompanionSkinKind } from '../../../shared/desktopCompanion/skins';
 import { i18nService } from '../../services/i18n';
+import CustomCompanionSkinEditor from './CustomCompanionSkinEditor';
 import LobsterMark from './mascot/LobsterMark';
 import SelectionToolbarSettings from './SelectionToolbarSettings';
 import { useDesktopCompanionState } from './useDesktopCompanionState';
@@ -125,6 +126,7 @@ export default function DesktopCompanionSettings() {
               );
             })}
           </div>
+          <CustomCompanionSkinEditor assets={state?.customSkins} selectedSkin={preferences?.skin} disabled={!state || saving} onSelect={skin => { void update({ skin }); }} />
         </div>
       </SettingsGroup>
       <SettingsGroup title={t('desktopCompanionGroupFeatures')}>

@@ -57,6 +57,7 @@ async function defaultWorkingDirectory(): Promise<string> {
 }
 
 export interface CompanionTaskRequest {
+  companionScreenshotRequestId?: string;
   prompt: string;
   attachments: DesktopCompanionAttachment[];
   workingDirectory?: string;
@@ -82,6 +83,7 @@ export async function startCompanionTask(request: CompanionTaskRequest): Promise
   });
   if (!prepared.success) return { error: t('desktopCompanionImageFailed') };
   const result = await window.electron.cowork.startSession({
+    companionScreenshotRequestId: request.companionScreenshotRequestId,
     prompt: prepared.payload.finalPrompt,
     cwd,
     agentId: AgentId.Main,

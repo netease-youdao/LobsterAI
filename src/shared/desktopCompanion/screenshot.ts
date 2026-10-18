@@ -6,10 +6,23 @@ export const CompanionScreenshotIpc = {
   Finish: 'desktop-companion:screenshot:finish',
 } as const;
 
+export const CompanionScreenshotAction = {
+  Ask: 'ask', ExtractText: 'extractText', Translate: 'translate', Copy: 'copy', Save: 'save',
+} as const;
+export type CompanionScreenshotAction = typeof CompanionScreenshotAction[keyof typeof CompanionScreenshotAction];
+
+export interface CompanionScreenshotResult {
+  rect: CompanionRect;
+  action: CompanionScreenshotAction;
+  /** Optional annotated PNG crop; unannotated selections use the original frame in main. */
+  imageDataUrl?: string;
+}
+export type CompanionScreenshotFinish = CompanionRect | CompanionScreenshotResult | null;
+
 export interface CompanionScreenshotBridge {
   getScreenshotFrame(): Promise<string>;
   screenshotReady(): Promise<void>;
-  finishScreenshot(rect: CompanionRect | null): Promise<void>;
+  finishScreenshot(result: CompanionScreenshotFinish): Promise<void>;
 }
 
 /** Drag coordinates are local to one display, in logical pixels. */

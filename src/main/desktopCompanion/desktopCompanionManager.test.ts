@@ -28,10 +28,13 @@ import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus } from '../../shared/desktopCompanion/languageTools';
 import { COMPANION_RECENT_TASK_LIMIT, COMPANION_RECENT_TASKS_KEY, CompanionResultIpc, type CompanionTaskInfo } from '../../shared/desktopCompanion/results';
+import { CompanionScreenshotAction as ScreenshotAction } from '../../shared/desktopCompanion/screenshot';
+import { ScreenshotTaskIpc } from '../../shared/desktopCompanion/screenshotTask';
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
 import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../shared/desktopCompanion/selectionToolbar';
 import { CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController } from './companionSelection';
+import { deleteCustomCompanionSkin, loadCustomCompanionSkin, saveCustomCompanionSkin } from './customSkinStore';
 import { DesktopCompanionManager } from './desktopCompanionManager';
 import { FileDragEvent } from './fileDragMonitor';
 import type { CompanionLanguageClient } from './languageToolClient';
@@ -102,6 +105,7 @@ vi.mock('electron', async () => {
     systemPreferences: { isTrustedAccessibilityClient: vi.fn(() => true) },
   };
 });
+vi.mock('./customSkinStore', () => ({ loadCustomCompanionSkin: vi.fn(), saveCustomCompanionSkin: vi.fn(), deleteCustomCompanionSkin: vi.fn() }));
 vi.mock('../i18n', () => ({ t: (key: string) => key, getLanguage: () => 'zh' }));
 vi.mock('./quickAnswerService', () => ({
   CompanionQuickAnswerService: class {
@@ -794,7 +798,7 @@ describe('desktop companion lifecycle', () => {
 
   test('a screenshot opens the panel with the crop and keeps the unsent prompt and attachments', async () => {
     const attachment = { path: '/tmp/screenshot.png', name: 'Screenshot.png', isImage: true };
-    vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockResolvedValue(attachment);
+    vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockResolvedValue({ ...attachment, action: ScreenshotAction.Ask });
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
     invoke(DesktopCompanionIpc.SetDraft, {
@@ -837,16 +841,48 @@ describe('desktop companion lifecycle', () => {
     expect(dialog.showMessageBox).toHaveBeenCalledWith({ type: 'error', message: 'desktopCompanionScreenshotFailed' });
   });
 
-  test('a full draft does not start a screenshot that would silently lose an attachment', async () => {
-    const capture = vi.spyOn(CompanionScreenshotController.prototype, 'capture');
+  test('a full draft rejects an Ask attachment without losing existing attachments', async () => {
+    vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockResolvedValue({ action: ScreenshotAction.Ask, path: '/shot.png', name: 'shot.png' });
     create();
     invoke(DesktopCompanionIpc.SetDraft, {
       attachments: Array.from({ length: 20 }, (_, index) => ({ path: `/tmp/${index}.png`, name: `${index}.png` })),
     });
     await clickMenu('desktopCompanionScreenshot');
-    expect(capture).not.toHaveBeenCalled();
     expect(manager.getState().draft.attachments).toHaveLength(20);
     expect(dialog.showMessageBox).toHaveBeenCalledWith({ type: 'info', message: 'desktopCompanionScreenshotFull' });
+  });
+
+  test.each([ScreenshotAction.ExtractText, ScreenshotAction.Translate])('%s claims its own task and preserves the unsent draft', async action => {
+    vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockResolvedValue({ action, path: '/shot.png', name: 'shot.png', isImage: true });
+    create();
+    invoke(DesktopCompanionIpc.SetDraft, { prompt: 'Keep this', workingDirectory: '/tasks', attachments: [{ path: '/old.pdf', name: 'old.pdf' }] });
+    const draft = manager.getState().draft;
+    await clickMenu('desktopCompanionScreenshot');
+    const request = manager.getState().screenshotRequest!;
+    const panel = mocks.windows.at(-1).webContents;
+    expect(request).toMatchObject({ action, attachment: { path: '/shot.png' } });
+    expect(manager.getState().draft).toEqual(draft);
+    expect(invoke(ScreenshotTaskIpc.Consume, request.id)).toBeNull();
+    expect(invoke(ScreenshotTaskIpc.Consume, request.id, panel)).toEqual(request);
+    expect(invoke(ScreenshotTaskIpc.Consume, request.id, panel)).toBeNull();
+    expect(manager.isScreenshotTaskRequestCurrent(request.id, panel)).toBe(true);
+    expect(invoke(ScreenshotTaskIpc.Started, { requestId: request.id, sessionId: 'foreign' }, panel)).toBe(false);
+    manager.finishScreenshotTaskRequest(request.id, 'created-session');
+    expect(invoke(ScreenshotTaskIpc.Started, { requestId: request.id, sessionId: 'created-session' }, panel)).toBe(true);
+    expect(manager.getState().draft).toEqual(draft);
+    manager.resetLanguageTools();
+    expect(invoke(ScreenshotTaskIpc.Started, { requestId: request.id, sessionId: 'created-session' }, panel)).toBe(false);
+  });
+
+  test.each([ScreenshotAction.Copy, ScreenshotAction.Save])('%s remains available with a full draft and does not modify it', async action => {
+    vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockResolvedValue({ action });
+    create();
+    invoke(DesktopCompanionIpc.SetDraft, { attachments: Array.from({ length: 20 }, (_, index) => ({ path: `/tmp/${index}.png`, name: `${index}.png` })) });
+    const draft = manager.getState().draft;
+    await clickMenu('desktopCompanionScreenshot');
+    expect(manager.getState().draft).toEqual(draft);
+    expect(manager.getState().screenshotRequest).toBeUndefined();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
   });
 
   test('identifies only the live composer web contents across window recreation', () => {
@@ -1949,5 +1985,64 @@ describe('stage: hints and drops', () => {
     expect(fileDrag.start).not.toHaveBeenCalled();
     fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+  });
+});
+
+
+describe('custom companion skin lifecycle', () => {
+  const id = `custom-${'a'.repeat(64)}`;
+  const asset = { id, dataUrl: 'data:image/png;base64,YQ==' };
+  beforeEach(() => {
+    vi.mocked(loadCustomCompanionSkin).mockReturnValue(asset);
+    vi.mocked(saveCustomCompanionSkin).mockReturnValue(asset);
+  });
+  test('persists multiple named skins, selects them, and falls back on deleting the active skin', () => {
+    create();
+    expect(invoke(DesktopCompanionIpc.ApplyCustomSkin, { dataUrl: asset.dataUrl, name: 'Bunny' }).success).toBe(true);
+    expect(manager.getState().preferences.skin).toBe(id);
+    expect(manager.getState().customSkins).toEqual([{ ...asset, name: 'Bunny' }]);
+    expect(invoke(DesktopCompanionIpc.RenameCustomSkin, { id, name: '  Rabbit  ' }).success).toBe(true);
+    expect(manager.getState().customSkins?.[0].name).toBe('Rabbit');
+    const second = { ...asset, id: `custom-${'b'.repeat(64)}` };
+    vi.mocked(saveCustomCompanionSkin).mockReturnValueOnce(second);
+    expect(invoke(DesktopCompanionIpc.ApplyCustomSkin, { dataUrl: asset.dataUrl, name: 'Lobster' }).success).toBe(true);
+    expect(manager.getState().customSkins).toHaveLength(2);
+    expect(manager.setPreferences({ skin: id }).success).toBe(true);
+    expect(invoke(DesktopCompanionIpc.DeleteCustomSkin, id).success).toBe(true);
+    expect(manager.getState().preferences.skin).toBe(DEFAULT_COMPANION_SKIN);
+    expect(manager.getState().customSkins).toEqual([{ ...second, name: 'Lobster' }]);
+    expect(deleteCustomCompanionSkin).toHaveBeenCalledWith(id);
+  });
+  test('restores verified skins and excludes missing files without a blank orb', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { skin: id, customSkins: [{ id, name: 'Rabbit' }] });
+    create();
+    expect(manager.getState().customSkins).toEqual([{ ...asset, name: 'Rabbit' }]);
+    expect(manager.getState().preferences.skin).toBe(id);
+    manager.dispose();
+    vi.mocked(loadCustomCompanionSkin).mockReturnValue(undefined);
+    create();
+    expect(manager.getState().preferences.skin).toBe(DEFAULT_COMPANION_SKIN);
+    expect(manager.getState().customSkins).toEqual([]);
+    expect(manager.setPreferences({ skin: id }).success).toBe(false);
+  });
+  test('rejects custom image writes outside the settings window and ignores arbitrary preference entries', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create();
+    expect(() => invoke(DesktopCompanionIpc.ApplyCustomSkin, { dataUrl: asset.dataUrl }, orb().webContents)).toThrow('Only settings');
+    expect(saveCustomCompanionSkin).not.toHaveBeenCalled();
+    expect(manager.setPreferences({ customSkins: [{ id }] }).success).toBe(true);
+    expect(manager.getState().customSkins).toEqual([]);
+    expect(invoke(DesktopCompanionIpc.RenameCustomSkin, { id, name: 'Rabbit' }).success).toBe(false);
+  });
+  test('keeps the current skin and file when preference persistence fails during deletion', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { skin: id, customSkins: [{ id }] });
+    create();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const persist = vi.spyOn(values, 'set').mockImplementation(() => { throw new Error('disk full'); });
+    expect(invoke(DesktopCompanionIpc.DeleteCustomSkin, id).success).toBe(false);
+    expect(manager.getState().preferences.skin).toBe(id);
+    expect(manager.getState().customSkins).toHaveLength(1);
+    expect(deleteCustomCompanionSkin).not.toHaveBeenCalled();
+    persist.mockRestore();
   });
 });

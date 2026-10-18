@@ -155,6 +155,8 @@ import ChatLoginExperienceModal from './ChatLoginExperienceModal';
 import { getClipboardAttachmentFiles } from './clipboardAttachments';
 import { CoworkUiEvent } from './constants';
 import FolderSelectorPopover from './FolderSelectorPopover';
+import { handleFollowUpSuggestionKey } from './followUpSuggestion';
+import FollowUpSuggestionHint from './FollowUpSuggestionHint';
 import { getCaretPixelPosition } from './getCaretPosition';
 import MediaMentionPicker from './MediaMentionPicker';
 import {
@@ -181,6 +183,7 @@ import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
 import { buildPlanModeSystemPrompt } from './skillSystemPrompt';
+import { useFollowUpSuggestion } from './useFollowUpSuggestion';
 import { usePersistAgentModelSelection } from './usePersistAgentModelSelection';
 import { useCoworkVoiceInput } from './voiceInput/useCoworkVoiceInput';
 import { useVoiceInputShortcut } from './voiceInput/useVoiceInputShortcut';
@@ -543,6 +546,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const availableModels = useSelector((state: RootState) => state.model.availableModels);
     const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
     const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+    const suggestionModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
+    const hasSuggestionPermission = useSelector((state: RootState) => state.cowork.pendingPermissions.some(item => item.sessionId === sessionId));
     const authQuota = useSelector((state: RootState) => state.auth.quota);
     const authOwnerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
     const authAccountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
@@ -2125,7 +2130,32 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setShowAgentMenu(false);
   }, [agents, currentAgentId, reportPromptControl, value]);
 
+  const { suggestion: followUpSuggestion, dismiss: dismissFollowUpSuggestion } = useFollowUpSuggestion({
+    session: currentSession?.id === sessionId ? currentSession : null,
+    accountScope: JSON.stringify([authAccountGeneration, authOwnerAccountKey, suggestionModel.id, suggestionModel.providerKey ?? suggestionModel.provider]),
+    language: i18nService.getLanguage(),
+    enabled: value.length === 0 && !isStreaming && !disabled && !submitDisabled && !remoteManaged
+      && !goalInputActive && !steerInputActive && !isPatchingModel && !isVoiceRecording && !isVoiceRecognizing
+      && !attachments.length && !selectedTextSnippets.length && !browserAnnotationBatches.length
+      && !pendingSteers.length && !hasSuggestionPermission && planConfirmation?.state !== PlanConfirmationState.Awaiting
+      && !mentionPickerOpen && !showAddMenu && !showSkillsPopover && !showAgentMenu && !showFolderMenu
+      && !modelAccessPrompt && !showVoiceLoginPrompt,
+  });
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (handleFollowUpSuggestionKey({
+      event,
+      suggestion: followUpSuggestion,
+      inputValue: textareaRef.current?.value ?? value,
+      accept: text => {
+        setValue(text);
+        dispatch(setDraftPrompt({ sessionId: draftKey, draft: text }));
+        requestAnimationFrame(() => {
+          if (textareaRef.current?.value === text) textareaRef.current.setSelectionRange(text.length, text.length);
+        });
+      },
+      dismiss: dismissFollowUpSuggestion,
+    })) return;
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
 
     if (event.key === 'Backspace' && !isComposing) {
@@ -3719,6 +3749,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         wrapperClassName?: string;
       }) => (
         <div className={wrapperClassName}>
+      {followUpSuggestion && <FollowUpSuggestionHint text={followUpSuggestion} className={textareaClass} style={style} />}
       {activeTextareaValue && hasMediaMentionHighlight && (
         <div
           aria-hidden="true"
@@ -3758,7 +3789,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         onScroll={handleTextareaScroll}
-        placeholder={voiceRecordingUiState.shouldHideInputPlaceholder ? '' : textareaPlaceholderText}
+        placeholder={voiceRecordingUiState.shouldHideInputPlaceholder || followUpSuggestion ? '' : textareaPlaceholderText}
+        aria-description={followUpSuggestion ? i18nService.t('coworkFollowUpSuggestionDescription').replace('{text}', followUpSuggestion) : undefined}
         disabled={disabled || voiceInputLocksEditing}
         rows={rows}
         className={`${textareaClass} relative z-10`}

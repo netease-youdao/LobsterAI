@@ -156,7 +156,7 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
         onClick={event => { if (event.detail === 0) void toggle(); }}
         onContextMenu={event => { event.preventDefault(); void api.showContextMenu(); }}
       >
-        <CompanionCharacter skin={state.preferences.skin} mood={mood} size={skinKind === CompanionSkinKind.Brand ? DesktopCompanionSize.BrandMark : CHARACTER_SIZE} />
+        <CompanionCharacter customAsset={state.customSkins?.find(asset => asset.id === state.preferences.skin)?.dataUrl} skin={state.preferences.skin} mood={mood} size={skinKind === CompanionSkinKind.Brand ? DesktopCompanionSize.BrandMark : CHARACTER_SIZE} />
       </button>
     </div>
   );

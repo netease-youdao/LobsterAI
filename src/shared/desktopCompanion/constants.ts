@@ -1,10 +1,12 @@
 import type { CompanionAnalyticsEvent } from './analytics';
 import type { CompanionAppCategory } from './appCategories';
+import type { CompanionCustomSkinAsset, CompanionCustomSkinEntry } from './customSkin';
 import type { CompanionFileKind } from './fileKinds';
 import type { CompanionHintTopic } from './hintPolicy';
 import type { LanguageToolsBridge, SpeechStatus } from './languageTools';
 import type { CompanionResultsBridge, CompanionResultState } from './results';
 import type { CompanionScreenshotBridge } from './screenshot';
+import type { ScreenshotTaskBridge, ScreenshotTaskRequest } from './screenshotTask';
 import type { CompanionSelectionAction } from './selectionActions';
 import type { CompanionSelectionApp } from './selectionApps';
 import type { CompanionSelectionTaskContext } from './selectionTaskContext';
@@ -14,6 +16,9 @@ export const DesktopCompanionIpc = {
   ReportAnalytics: 'desktop-companion:report-analytics',
   GetState: 'desktop-companion:get-state',
   SetPreferences: 'desktop-companion:set-preferences',
+  ApplyCustomSkin: 'desktop-companion:apply-custom-skin',
+  RenameCustomSkin: 'desktop-companion:rename-custom-skin',
+  DeleteCustomSkin: 'desktop-companion:delete-custom-skin',
   GetSelectionExcludedApps: 'desktop-companion:get-selection-excluded-apps',
   SetDraft: 'desktop-companion:set-draft',
   SelectSession: 'desktop-companion:select-session',
@@ -107,6 +112,7 @@ export interface DesktopCompanionPreferences {
   enabled: boolean;
   shortcut: string;
   skin: string;
+  customSkins?: CompanionCustomSkinEntry[];
   selectionToolbar: boolean;
   dragAssist: boolean;
   contextHints: boolean;
@@ -170,6 +176,8 @@ export interface DesktopCompanionForeground {
 }
 
 export interface DesktopCompanionState {
+  screenshotRequest?: ScreenshotTaskRequest;
+  customSkins?: CompanionCustomSkinAsset[];
   result: CompanionResultState;
   speechStatus?: SpeechStatus;
   revision: number;
@@ -306,10 +314,13 @@ export interface CompanionSurfaceSize {
   height: number;
 }
 
-export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge {
+export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge, ScreenshotTaskBridge {
   reportAnalytics(event: CompanionAnalyticsEvent): Promise<void>;
   getState(): Promise<DesktopCompanionState>;
   setPreferences(patch: Partial<DesktopCompanionPreferences>): Promise<DesktopCompanionResult>;
+  applyCustomSkin(dataUrl: string, name?: string): Promise<DesktopCompanionResult>;
+  renameCustomSkin(id: string, name: string): Promise<DesktopCompanionResult>;
+  deleteCustomSkin(id: string): Promise<DesktopCompanionResult>;
   getSelectionExcludedApps(): Promise<CompanionSelectionApp[]>;
   setDraft(draft: DesktopCompanionDraft): Promise<DesktopCompanionState>;
   selectSession(sessionId: string | null): Promise<DesktopCompanionState>;
