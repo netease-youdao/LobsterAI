@@ -12,8 +12,60 @@ export const CompanionCustomSkin = {
 export interface CompanionCustomSkinAsset {
   id: string;
   name?: string;
-  /** Canonical, decoded and re-encoded PNG from the local skin store. */
+  /** Canonical PNG or validated original GIF from the local skin store. */
   dataUrl: string;
+}
+
+export const CompanionSkinImageFormat = {
+  Png: 'png',
+  Gif: 'gif',
+} as const;
+
+export function isCompanionGif(dataUrl: string | undefined): boolean {
+  return dataUrl?.startsWith('data:image/gif;base64,') === true;
+}
+
+/** Validate every block before handing the bounded file to a browser/native decoder. */
+export function validateCompanionGif(bytes: Uint8Array): { width: number; height: number; frames: number } {
+  const invalid = () => { throw new Error('Invalid companion GIF.'); };
+  if (bytes.length < 14 || bytes.length > CompanionCustomSkin.MaxSavedBytes) invalid();
+  const signature = String.fromCharCode(...bytes.subarray(0, 6));
+  if (signature !== 'GIF87a' && signature !== 'GIF89a') invalid();
+  const word = (offset: number) => bytes[offset] | (bytes[offset + 1] << 8);
+  const width = word(6); const height = word(8);
+  if (!isCompanionSourceSizeAllowed(width, height)) invalid();
+  let offset = 13;
+  let frames = 0;
+  const skip = (length: number) => { offset += length; if (offset > bytes.length) invalid(); };
+  const blocks = () => {
+    let length = 0;
+    while (offset < bytes.length) {
+      const size = bytes[offset++];
+      if (!size) return length;
+      length += size; skip(size);
+    }
+    return invalid();
+  };
+  if (bytes[10] & 0x80) skip(3 * (1 << ((bytes[10] & 7) + 1)));
+  while (offset < bytes.length) {
+    const marker = bytes[offset++];
+    if (marker === 0x3b) {
+      if (!frames || offset !== bytes.length) invalid();
+      return { width, height, frames };
+    }
+    if (marker === 0x21) { skip(1); blocks(); continue; }
+    if (marker !== 0x2c || offset + 9 > bytes.length) invalid();
+    const left = word(offset); const top = word(offset + 2);
+    const frameWidth = word(offset + 4); const frameHeight = word(offset + 6);
+    const packed = bytes[offset + 8];
+    if (!frameWidth || !frameHeight || left + frameWidth > width || top + frameHeight > height) invalid();
+    skip(9);
+    if (packed & 0x80) skip(3 * (1 << ((packed & 7) + 1)));
+    const codeSize = bytes[offset++];
+    if (codeSize < 2 || codeSize > 8 || !blocks()) invalid();
+    frames++;
+  }
+  return invalid();
 }
 
 export interface CompanionCustomSkinEntry { id: string; name?: string }

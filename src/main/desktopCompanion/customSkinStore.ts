@@ -3,7 +3,7 @@ import { app, nativeImage } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import { CompanionCustomSkin, type CompanionCustomSkinAsset, isCustomCompanionSkin } from '../../shared/desktopCompanion/customSkin';
+import { CompanionCustomSkin, type CompanionCustomSkinAsset, CompanionSkinImageFormat, isCompanionGif, isCustomCompanionSkin, validateCompanionGif } from '../../shared/desktopCompanion/customSkin';
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -32,12 +32,14 @@ export function loadCustomCompanionSkin(id: unknown): CompanionCustomSkinAsset |
   try {
     const directory = skinDirectory();
     verifyDirectory(directory);
-    const file = path.join(directory, `${id}.png`);
+    const format = fs.existsSync(path.join(directory, `${id}.gif`)) ? CompanionSkinImageFormat.Gif : CompanionSkinImageFormat.Png;
+    const file = path.join(directory, `${id}.${format}`);
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > CompanionCustomSkin.MaxSavedBytes) return undefined;
     const bytes = fs.readFileSync(file);
-    validateCompanionPng(bytes);
+    if (format === CompanionSkinImageFormat.Gif) validateCompanionGif(bytes); else validateCompanionPng(bytes);
     if (`${CompanionCustomSkin.IdPrefix}${createHash('sha256').update(bytes).digest('hex')}` !== id) return undefined;
+    if (format === CompanionSkinImageFormat.Gif) return { id, dataUrl: `data:image/gif;base64,${bytes.toString('base64')}` };
     const image = nativeImage.createFromBuffer(bytes);
     if (image.isEmpty()) return undefined;
     const displayed = image.toPNG();
@@ -53,7 +55,8 @@ export function deleteCustomCompanionSkin(id: unknown): void {
   const directory = skinDirectory();
   try {
     verifyDirectory(directory);
-    const file = path.join(directory, `${id}.png`);
+    const format = fs.existsSync(path.join(directory, `${id}.gif`)) ? CompanionSkinImageFormat.Gif : CompanionSkinImageFormat.Png;
+    const file = path.join(directory, `${id}.${format}`);
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid companion skin file.');
     fs.unlinkSync(file);
@@ -63,27 +66,35 @@ export function deleteCustomCompanionSkin(id: unknown): void {
 }
 
 export function saveCustomCompanionSkin(value: unknown): CompanionCustomSkinAsset {
-  const prefix = 'data:image/png;base64,';
+  const gif = typeof value === 'string' && isCompanionGif(value);
+  const format = gif ? CompanionSkinImageFormat.Gif : CompanionSkinImageFormat.Png;
+  const prefix = `data:image/${format};base64,`;
   if (typeof value !== 'string' || !value.startsWith(prefix)
     || value.length > prefix.length + Math.ceil(CompanionCustomSkin.MaxSavedBytes / 3) * 4
     || !/^[A-Za-z0-9+/]+={0,2}$/.test(value.slice(prefix.length))) throw new Error('Invalid companion image.');
   const bytes = Buffer.from(value.slice(prefix.length), 'base64');
-  validateCompanionPng(bytes);
-  const image = nativeImage.createFromBuffer(bytes);
-  const size = image.getSize();
-  if (image.isEmpty() || size.width !== CompanionCustomSkin.OutputDimension || size.height !== CompanionCustomSkin.OutputDimension) {
-    throw new Error('Unable to decode companion image.');
+  // GIF frames, timing, disposal, transparency and loop metadata must remain byte-for-byte intact.
+  // Electron nativeImage does not decode GIFs; Chromium plays the validated original bytes.
+  let savedBytes: Buffer = bytes;
+  if (gif) validateCompanionGif(bytes);
+  else {
+    validateCompanionPng(bytes);
+    const image = nativeImage.createFromBuffer(bytes);
+    const size = image.getSize();
+    if (image.isEmpty() || size.width !== CompanionCustomSkin.OutputDimension || size.height !== CompanionCustomSkin.OutputDimension) {
+      throw new Error('Unable to decode companion image.');
+    }
+    savedBytes = image.toPNG();
+    validateCompanionPng(savedBytes);
   }
-  const png = image.toPNG(); // Strip metadata and preserve alpha.
-  validateCompanionPng(png);
-  const id = `${CompanionCustomSkin.IdPrefix}${createHash('sha256').update(png).digest('hex')}`;
+  const id = `${CompanionCustomSkin.IdPrefix}${createHash('sha256').update(savedBytes).digest('hex')}`;
   const directory = skinDirectory();
   fs.mkdirSync(directory, { recursive: true });
   verifyDirectory(directory);
-  const file = path.join(directory, `${id}.png`);
-  try { fs.writeFileSync(file, png, { flag: 'wx', mode: 0o600 }); }
+  const file = path.join(directory, `${id}.${format}`);
+  try { fs.writeFileSync(file, savedBytes, { flag: 'wx', mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !loadCustomCompanionSkin(id)) throw error;
   }
-  return { id, dataUrl: `data:image/png;base64,${png.toString('base64')}` };
+  return { id, dataUrl: `${prefix}${savedBytes.toString('base64')}` };
 }

@@ -1,7 +1,7 @@
-import { CompanionCustomSkin, companionFitRect, isCompanionSourceSizeAllowed } from '../../../shared/desktopCompanion/customSkin';
+import { CompanionCustomSkin, companionFitRect, isCompanionGif, isCompanionSourceSizeAllowed, validateCompanionGif } from '../../../shared/desktopCompanion/customSkin';
 
 export async function readCompanionSkinImage(file: File): Promise<HTMLImageElement> {
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > CompanionCustomSkin.MaxSourceBytes) {
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) || file.size > (file.type === 'image/gif' ? CompanionCustomSkin.MaxSavedBytes : CompanionCustomSkin.MaxSourceBytes)) {
     throw new Error('Invalid image format or file size.');
   }
   const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -10,6 +10,13 @@ export async function readCompanionSkinImage(file: File): Promise<HTMLImageEleme
     reader.onerror = () => reject(new Error('Unable to read image.'));
     reader.readAsDataURL(file);
   });
+  return decodeCompanionSkinImage(dataUrl);
+}
+
+export async function decodeCompanionSkinImage(dataUrl: string): Promise<HTMLImageElement> {
+  if (!/^data:image\/(png|jpeg|webp|gif);base64,/.test(dataUrl)
+    || dataUrl.length > Math.ceil(CompanionCustomSkin.MaxSourceBytes / 3) * 4 + 64) throw new Error('Invalid image.');
+  if (isCompanionGif(dataUrl)) validateCompanionGif(Uint8Array.from(atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), char => char.charCodeAt(0)));
   const image = new Image();
   await new Promise<void>((resolve, reject) => {
     image.onload = () => resolve();
@@ -21,6 +28,7 @@ export async function readCompanionSkinImage(file: File): Promise<HTMLImageEleme
 }
 
 export function cropCompanionSkinImage(image: HTMLImageElement, zoom: number, x: number, y: number): string {
+  if (isCompanionGif(image.src)) return image.src;
   const fit = companionFitRect(image.naturalWidth, image.naturalHeight, zoom, x, y);
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = CompanionCustomSkin.OutputDimension;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { DEFAULT_COMPANION_SKIN, type DesktopCompanionResult } from '../../../shared/desktopCompanion/constants';
-import { CompanionCustomSkin, type CompanionCustomSkinAsset } from '../../../shared/desktopCompanion/customSkin';
+import { CompanionCustomSkin, type CompanionCustomSkinAsset,isCompanionGif } from '../../../shared/desktopCompanion/customSkin';
 import { i18nService } from '../../services/i18n';
 import { cropCompanionSkinImage, readCompanionSkinImage } from './customSkinImage';
 import SavedCompanionSkinCard from './SavedCompanionSkinCard';
@@ -31,6 +31,7 @@ export default function CustomCompanionSkinEditor({ assets = [], selectedSkin, d
   const mounted = useRef(true);
   const working = useRef(false);
   const busy = disabled || pending;
+  const animatedImage = isCompanionGif(image?.src);
   const button = 'rounded-lg border border-border px-3 py-2 text-sm text-foreground hover:bg-secondary/10 disabled:opacity-50';
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -66,7 +67,7 @@ export default function CustomCompanionSkinEditor({ assets = [], selectedSkin, d
         <input value={name} maxLength={CompanionCustomSkin.MaxNameLength} disabled={busy} placeholder={t('desktopCompanionSkinNamePlaceholder')} className="mt-2 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30" onChange={event => setName(event.target.value)} />
       </label>
       <p className="text-xs text-secondary">{t('desktopCompanionSkinConstraints')}</p>
-      <input ref={upload} type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} className="hidden" aria-label={t('desktopCompanionSkinUpload')} onChange={event => {
+      <input ref={upload} type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy} className="hidden" aria-label={t('desktopCompanionSkinUpload')} onChange={event => {
         const file = event.target.files?.[0]; event.target.value = '';
         if (!file || busy || working.current) return;
         working.current = true; setPending(true); setError('');
@@ -80,7 +81,7 @@ export default function CustomCompanionSkinEditor({ assets = [], selectedSkin, d
         <div className="flex justify-center rounded-xl border border-border p-4" style={{ backgroundImage: 'conic-gradient(#80808020 25%, transparent 0 50%, #80808020 0 75%, transparent 0)', backgroundSize: '16px 16px' }}>
           <img src={preview} alt={t('desktopCompanionSkinPreview')} className="h-32 w-32 object-contain" draggable={false} />
         </div>
-        {[
+        {animatedImage ? <p className="text-xs text-secondary">{t('desktopCompanionSkinGifHint')}</p> : [
           { label: 'desktopCompanionSkinZoom', value: zoom, set: setZoom, min: 0.5, max: 3 },
           { label: 'desktopCompanionSkinHorizontal', value: x, set: setX, min: 0, max: 1 },
           { label: 'desktopCompanionSkinVertical', value: y, set: setY, min: 0, max: 1 },
