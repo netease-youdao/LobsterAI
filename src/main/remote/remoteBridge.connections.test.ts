@@ -4,12 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReleaseState, RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../shared/remote/connections';
 import { RemoteCapability, RemoteConnectionReason, type RemoteOwner } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteSyncTarget } from '../../shared/remote/syncTarget';
 import { type InboxEntry, RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 
 const owner: RemoteOwner = { userId: '10001', scopeKey: 'personal' };
 const dispose: Array<() => void> = [];
-function fixture(managed = true) {
+function fixture(managed = true, identified = false) {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
@@ -17,6 +18,7 @@ function fixture(managed = true) {
   let currentOwner: RemoteOwner | null = owner;
   let connectionState: string = RemoteDeviceConnectionState.Allowed;
   let connectionVersion = '1';
+  const syncTarget = identified ? { version: RemoteSyncTarget.Version, dataSpaceId: 'space', dataGeneration: '1' } : undefined;
   const currentDevice = () => ({ deviceId: 'desktop', name: 'Desktop', connectionVersion, connectionState,
     admissionState: connectionState === RemoteDeviceConnectionState.Removed ? RemoteDeviceAdmissionState.Removed : RemoteDeviceAdmissionState.QuotaBlocked,
     slotOccupied: false });
@@ -25,8 +27,8 @@ function fixture(managed = true) {
     let data: unknown;
     if (path.endsWith('/capabilities')) data = { enabled: true, protocolVersions: [1],
       capabilities: [RemoteCapability.SameAccountAccess, ...(managed ? [REMOTE_CONNECTION_MANAGEMENT_CAPABILITY] : [])],
-      deviceConnectionPolicy: managed ? { version: 2 } : undefined };
-    else if (path.endsWith('/devices/register')) data = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
+      syncTarget, deviceConnectionPolicy: managed ? { version: 2 } : undefined };
+    else if (path.endsWith('/devices/register')) data = { deviceId: 'desktop', ...owner, metadataVersion: '1', syncTarget };
     else if (path.endsWith('/device-connections')) data = { observedAt: new Date().toISOString(), presenceAvailable: true,
       quota: { onlineSlotsUsed: 5, maxOnlineDesktops: 5, scope: 'account_scope' }, currentDevice: currentDevice(), connections: [] };
     else if (path.endsWith('/connection/resume') || path.endsWith('/connection/remove')) {
@@ -202,4 +204,119 @@ describe('device connection management bridge', () => {
     });
     await bridge.applyEntry(entry, '1'); expect(execute).not.toHaveBeenCalled();
   });
+});
+
+
+it('requires explicit retirement recovery, uses the persisted replacement and preserves local preferences', async () => {
+  const f = fixture(); await f.bridge.queryConnections();
+  const original = { ...f.deps.identity };
+  let identity = original;
+  const replace = vi.fn(() => { identity = { ...original, installationId: 'replacement-install', deviceKey: 'replacement-key', registrationScope: 'replacement-install' } as typeof original; return identity; });
+  f.bridge.deps.registrationIdentities = { get: () => identity, replace };
+  await expect(f.bridge.configure({ reregister: true })).rejects.toThrow('unavailable');
+  expect(replace).not.toHaveBeenCalled();
+  f.bridge.recordConnectionFailure(new RemoteApiError(47023, 'retired'));
+  await f.bridge.configure({ retry: true });
+  expect(replace).not.toHaveBeenCalled();
+  const previousTarget = f.bridge.targetId;
+  f.store.put(`settings:${previousTarget}:10001:personal`, { name: 'My computer', enabled: true,
+    workspaces: [{ workspaceId: 'work', name: 'Work', path: '/private/tmp', available: true }], settingsVersion: '9' });
+  f.bridge.recordConnectionFailure(new RemoteApiError(47023, 'retired'));
+  const originalRequest = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (actor, path, init) => path.endsWith('/devices/register')
+    ? new Response(JSON.stringify({ code: 0, data: { deviceId: 'replacement', ...owner, metadataVersion: '1' } }))
+    : originalRequest(actor, path, init));
+  await f.bridge.configure({ reregister: true });
+  await expect(f.bridge.configure({ reregister: true })).rejects.toThrow('unavailable');
+  await f.bridge.ensureRegistration();
+  expect(replace).toHaveBeenCalledTimes(1);
+  expect(f.deps.identity).toEqual(original);
+  expect(f.bridge.state()).toMatchObject({ deviceId: 'replacement', name: 'My computer', enabled: true,
+    workspaces: [{ workspaceId: 'work', name: 'Work', available: true }] });
+  const registration = f.request.mock.calls.filter(([, path]) => path.endsWith('/devices/register')).at(-1)!;
+  expect(JSON.parse(String(registration[2].body))).toMatchObject({ installationId: 'replacement-install', deviceKey: 'replacement-key' });
+  expect(f.bridge.targetId).not.toBe(previousTarget);
+  expect(f.bridge.isEntryCurrent({ targetId: previousTarget, owner, command: { commandId: 'old' } })).toBe(false);
+  f.request.mockClear(); await f.bridge.api('/settings', 'GET');
+  expect(f.request.mock.calls[0][2].headers).toMatchObject({ 'X-Remote-Device-Credential': 'replacement.replacement-key' });
+});
+
+
+it('does not mark this desktop retired when removing another retired desktop fails', async () => {
+  const f = fixture(); await f.bridge.queryConnections();
+  f.request.mockRejectedValueOnce(new RemoteApiError(47023, 'other desktop retired'));
+  await expect(f.bridge.api('/devices/other/connection/remove', 'POST', {}, true, 2)).rejects.toThrow('other desktop retired');
+  expect(f.bridge.state().errorCode).not.toBe(47023);
+});
+
+it('recognizes retirement during management reads with the local connection disabled', async () => {
+  const f = fixture(); await f.bridge.queryConnections();
+  await f.bridge.configure({ enabled: false });
+  f.request.mockRejectedValueOnce(new RemoteApiError(47023, 'retired'));
+  await expect(f.bridge.queryConnections()).rejects.toThrow('retired');
+  expect(f.bridge.state()).toMatchObject({ enabled: false, errorCode: 47023 });
+});
+
+
+it('reuses recovery credentials across restart and service aliases after a lost registration response', async () => {
+  const f = fixture(true, true); await f.bridge.queryConnections();
+  const identities = new Map<string, typeof f.deps.identity>();
+  const get = vi.fn((_actor: RemoteOwner, scope: string) => identities.get(scope) ?? f.deps.identity);
+  const replace = vi.fn((_actor: RemoteOwner, scope: string) => {
+    const value = { ...f.deps.identity, installationId: 'new-install', deviceKey: 'new-key', registrationScope: 'new-install' };
+    identities.set(scope, value); return value;
+  });
+  f.bridge.deps.registrationIdentities = { get, replace };
+  f.bridge.recordConnectionFailure(new RemoteApiError(47023, 'retired'));
+  await f.bridge.configure({ reregister: true });
+  const request = f.request.getMockImplementation()!;
+  let loseResponse = true;
+  f.request.mockImplementation(async (actor, path, init) => {
+    if (!path.endsWith('/devices/register')) return request(actor, path, init);
+    if (loseResponse) { loseResponse = false; throw new Error('Response lost'); }
+    return new Response(JSON.stringify({ code: 0, data: { deviceId: 'new-desktop', ...owner, metadataVersion: '1',
+      syncTarget: { version: RemoteSyncTarget.Version, dataSpaceId: 'space', dataGeneration: '1' } } }));
+  });
+  await expect(f.bridge.ensureRegistration()).rejects.toThrow('Response lost');
+  const restarted: any = new RemoteBridge(f.bridge.deps);
+  vi.spyOn(restarted, 'schedule').mockImplementation(() => undefined);
+  try {
+    restarted.accountChanged(); await restarted.ensureRegistration();
+    expect(restarted.state().deviceId).toBe('new-desktop');
+    const target = restarted.targetId;
+    f.deps.getApiBaseUrl = () => 'https://alias.example.com';
+    restarted.accountChanged(); await restarted.ensureRegistration();
+    expect(restarted.targetId).toBe(target);
+    expect(replace).toHaveBeenCalledTimes(1);
+    const requests = f.request.mock.calls.filter(([, path]) => path.endsWith('/devices/register')).slice(1);
+    expect(requests).toHaveLength(3);
+    for (const [, , init] of requests) expect(JSON.parse(String(init.body))).toMatchObject({ installationId: 'new-install', deviceKey: 'new-key' });
+  } finally { restarted.stop(); }
+});
+
+
+it('retains settings when the old registration is rejected before the target is restored on restart', async () => {
+  const f = fixture(); await f.bridge.queryConnections();
+  const settings = { enabled: false, name: 'Saved before restart', workspaces: [
+    { workspaceId: 'work', name: 'Workspace', path: '/private/tmp', available: true }], settingsVersion: '8' };
+  f.store.put(`settings:${f.bridge.targetId}:10001:personal`, settings);
+  let identity = f.deps.identity;
+  f.bridge.deps.registrationIdentities = { get: () => identity, replace: () => {
+    identity = { ...identity, installationId: 'new-install', deviceKey: 'new-key', registrationScope: 'new-install' } as typeof identity;
+    return identity;
+  } };
+  const request = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (actor, path, init) => {
+    if (!path.endsWith('/devices/register')) return request(actor, path, init);
+    if (identity.installationId === 'installation') throw new RemoteApiError(47023, 'retired');
+    return new Response(JSON.stringify({ code: 0, data: { deviceId: 'new-desktop', ...owner, metadataVersion: '1' } }));
+  });
+  const restarted: any = new RemoteBridge(f.bridge.deps);
+  vi.spyOn(restarted, 'schedule').mockImplementation(() => undefined);
+  try {
+    restarted.accountChanged(); await expect(restarted.queryConnections()).rejects.toThrow('retired');
+    expect(restarted.targetId).toBeNull();
+    await restarted.configure({ reregister: true }); await restarted.ensureRegistration();
+    expect(restarted.state()).toMatchObject({ name: settings.name, enabled: false, workspaces: [{ workspaceId: 'work' }] });
+  } finally { restarted.stop(); }
 });

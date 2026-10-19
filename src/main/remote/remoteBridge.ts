@@ -7,7 +7,7 @@ import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import type { OwnershipTarget } from '../../shared/ownership/types';
 import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReasonCode, type RemoteConnectionRemoveRequest, type RemoteConnectionResumeRequest, RemoteDeviceAdmissionState, type RemoteDeviceConnection, RemoteDeviceConnectionState } from '../../shared/remote/connections';
-import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
+import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
 import type { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteFileCapability } from '../../shared/remote/files';
@@ -35,6 +35,7 @@ import type { RemoteSocket } from './remoteNetworkProtocol';
 import { remoteResponseJson } from './remoteNetworkTransport';
 import { isTransientProjectionFailure } from './remoteProjectionCoordinator';
 import { RemoteQuestionError } from './remoteQuestionService';
+import type { RegistrationIdentities, RemoteRegistrationIdentity } from './remoteRegistrationIdentity';
 import { RemoteReplyTransport } from './remoteReplyTransport';
 import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
 import { RemoteSessionDeletionClient, type SessionDeletionDependencies } from './remoteSessionDeletionClient';
@@ -66,10 +67,11 @@ class TaskFailurePersistenceError extends Error {
 }
 interface LocalSettings { createSessionAvailable?: boolean; enabled: boolean; name: string; workspaces: Array<RemoteWorkspace & { path: string }>; settingsVersion: string }
 interface ControlIntent { createSessionAvailable?: boolean; id: string; enabled: boolean; workspaces: RemoteWorkspace[] }
-interface SettingsChanges { retrySessionId?: string; enabled?: boolean; name?: string; workspace?: { name: string; path: string }; removeWorkspaceId?: string; retry?: boolean }
+interface SettingsChanges { reregister?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; workspace?: { name: string; path: string }; removeWorkspaceId?: string; retry?: boolean }
 interface PendingConfiguration { route: string; changes: SettingsChanges[] }
 interface SavedImport extends RetentionImport { uploadCursor?: number; confirmedPartCount?: number; expiresAt?: string; absoluteExpiresAt?: string; reason?: string; projectionVersion?: number; replyProjection?: boolean; importId: string; sessionId: string; baseSourceSeq: string; snapshotEpoch: number; expectedSourceSeq: string; expectedServerSeq: string; beginConfirmed?: boolean; beginAttempted?: boolean; fileSet?: string; manifest: any; parts: Array<ImportPartIndex & { payload?: { records: ProjectionRecord[] } }>; stateVersion?: string }
 export interface BridgeDependencies {
+  registrationIdentities?: RegistrationIdentities;
   createSocket?(url: string): RemoteSocket;
   deletion?: Pick<SessionDeletionDependencies, 'service' | 'runtime' | 'reconcileStop'>;
   security?: { available(): Promise<void>; commit<T>(operationId: string, operation: unknown, apply: () => T): Promise<T> };
@@ -291,7 +293,7 @@ export class RemoteBridge {
           || this.syncPaused() || !sameOwner(connection.owner, deps.getOwner()) || connection.environment !== this.remoteEnvironment() || !this.settings().enabled || this.stopped) throw new Error('FILE_WRITER_STALE');
         const response = await deps.request(connection.owner, `/api/remote/v1${pathname}`, { ...init, headers: { ...init.headers,
           ...remoteSyncTargetHeaders(this.registration.syncTarget ?? null),
-          'X-Remote-Device-Credential': `${connection.deviceId}.${deps.identity.deviceKey}`, 'X-Remote-Connection-Generation': connection.generation,
+          'X-Remote-Device-Credential': `${connection.deviceId}.${this.registrationIdentity().deviceKey}`, 'X-Remote-Connection-Generation': connection.generation,
           'X-Remote-Projection-Version': String(this.projectionVersion) } });
         if (epoch !== this.accountGeneration || route !== deps.getApiBaseUrl()) throw new Error('FILE_WRITER_STALE');
         return response;
@@ -443,6 +445,27 @@ export class RemoteBridge {
   async configure(changes: SettingsChanges): Promise<RemoteSettingsState> {
     this.ensureAccount();
     if (!this.owner) throw new Error('Sign in before enabling remote control');
+    if (changes.reregister) {
+      if (this.errorCode !== REMOTE_DEVICE_RETIRED_CODE || !this.deps.registrationIdentities) throw new Error('Device registration recovery is unavailable');
+      const previousTarget = this.targets.active(this.owner);
+      // Registration may fail before targetId is restored after an application restart.
+      const previousSettings = previousTarget && stableJson(previousTarget.syncTarget) === stableJson(this.discoveredTarget)
+        ? this.deps.store.get<LocalSettings>(`settings:${previousTarget.targetId}:${this.owner.userId}:${this.owner.scopeKey}`) : null;
+      const settings = previousSettings ?? this.settings();
+      // Persist intent before the credential swap. A crash retries the same saved identity.
+      this.deps.store.put(this.pendingConfigurationKey(), { route: this.accountRoute,
+        changes: [{ enabled: settings.enabled, name: settings.name }] });
+      this.deps.store.put(`registrationSettings:${this.owner.userId}:${this.owner.scopeKey}`, {
+        route: this.accountRoute, previousInstallationId: this.registrationIdentity().installationId, settings,
+      });
+      const previousIdentity = this.registrationIdentity().installationId;
+      try { this.deps.registrationIdentities.replace(this.owner, this.registrationIdentityScope()); }
+      finally {
+        // A rename may have committed even if directory fsync failed. Never keep using the old device ID with its new key.
+        if (this.registrationIdentity().installationId !== previousIdentity) { this.accountRoute = ''; this.ensureAccount(); this.schedule(0); }
+      }
+      return this.state();
+    }
     if (changes.retrySessionId) {
       const id = changes.retrySessionId, context = this.taskContext();
       if (!context || !sameOwner(this.deps.store.owner(id), context.owner) || !this.sessionAdmitted(id)) throw new Error('Task synchronization identity is not verified');
@@ -505,6 +528,13 @@ export class RemoteBridge {
     this.deps.store.remove(key);
     await this.pollAccess(); this.changed();
     return this.state();
+  }
+  private registrationIdentityScope(): string {
+    const target = this.registration?.syncTarget ?? this.discoveredTarget;
+    return target ? JSON.stringify([target.dataSpaceId, target.dataGeneration]) : this.accountRoute;
+  }
+  private registrationIdentity(): RemoteRegistrationIdentity {
+    return this.owner ? this.deps.registrationIdentities?.get(this.owner, this.registrationIdentityScope()) ?? this.deps.identity : this.deps.identity;
   }
   private ensureAccount(): void {
     const current = this.deps.getOwner();
@@ -871,7 +901,7 @@ export class RemoteBridge {
         headers['X-Remote-Connection-Generation'] = this.generation;
       if (registrationRequired) {
         if (!this.registration) throw new Error('Device is not registered');
-        headers['X-Remote-Device-Credential'] = `${this.registration.deviceId}.${this.deps.identity.deviceKey}`;
+        headers['X-Remote-Device-Credential'] = `${this.registration.deviceId}.${this.registrationIdentity().deviceKey}`;
       }
       const encoded = encodedBody ?? (body === undefined ? undefined : stableJson(body));
       // This is the transport submission time; the worker/auth layer may still queue the request.
@@ -911,6 +941,12 @@ export class RemoteBridge {
       if (error instanceof RemoteApiError && error.code === RemoteSyncTarget.ChangedCode && accountGeneration === this.accountGeneration) {
         this.accountRoute = '';
         this.ensureAccount();
+      }
+      const addressedDevice = /^\/devices\/([^/]+)\//u.exec(pathname)?.[1];
+      if ((!addressedDevice || addressedDevice === encodeURIComponent(this.registration?.deviceId ?? ''))
+        && accountGeneration === this.accountGeneration && environment === this.remoteEnvironment() && sameOwner(owner, this.owner)
+        && error instanceof RemoteApiError && error.code === REMOTE_DEVICE_RETIRED_CODE) {
+        this.recordConnectionFailure(error); this.disconnect(); this.changed();
       }
       if (accountGeneration === this.accountGeneration && environment === this.remoteEnvironment() && sameOwner(owner, this.owner) && error instanceof RemoteApiError
         && (error.code === CONNECTION_REMOVED_CODE || error.data?.reason === RemoteConnectionReasonCode.Removed)) {
@@ -1037,7 +1073,7 @@ export class RemoteBridge {
     const epoch = this.accountGeneration;
     await this.refreshCapabilities();
     const result: Registration = await this.api('/devices/register', 'POST', { ...this.deps.metadata, name: this.settings().name,
-      installationId: this.deps.identity.installationId, deviceKey: this.deps.identity.deviceKey,
+      installationId: this.registrationIdentity().installationId, deviceKey: this.registrationIdentity().deviceKey,
       kind: 'desktop', protocolVersion: REMOTE_PROTOCOL_VERSION, capabilities: this.advertisedCapabilities() }, false, this.connectionManagement ? 2 : 1);
     if (!sameOwner(this.owner, result)) throw new Error('Registration owner does not match the authenticated account');
     const target = parseRemoteSyncTarget(result.syncTarget);
@@ -1046,7 +1082,7 @@ export class RemoteBridge {
     this.registration = result;
     try {
       const active = this.targets.active(this.owner!);
-      const sameTarget = target && active?.syncTarget && stableJson(target) === stableJson(active.syncTarget);
+      const sameTarget = target && active?.syncTarget && active.deviceId === result.deviceId && stableJson(target) === stableJson(active.syncTarget);
       if (!sameTarget) await this.deps.store.pauseSyncTargetProjection();
       const current = (): boolean => epoch === this.accountGeneration && this.accountRoute === this.deps.getApiBaseUrl()
         && sameOwner(this.owner, this.deps.getOwner()) && this.registration === result;
@@ -1056,9 +1092,17 @@ export class RemoteBridge {
       const legacyStates: RetentionState[] = [];
       if (!current()) throw new Error('Account changed during target negotiation');
       const activated = target ? this.targets.activate({ owner: this.owner!, deviceId: result.deviceId,
-        syncTarget: target, bootstrap: distinct, legacyStates, allowPartialLegacy: true })
-        : this.targets.activateLegacy({ owner: this.owner!, deviceId: result.deviceId, legacyStates, allowPartialLegacy: true });
+        syncTarget: target, registrationScope: this.registrationIdentity().registrationScope, bootstrap: distinct, legacyStates, allowPartialLegacy: true })
+        : this.targets.activateLegacy({ owner: this.owner!, deviceId: result.deviceId, registrationScope: this.registrationIdentity().registrationScope, legacyStates, allowPartialLegacy: true });
       this.targetId = activated.targetId;
+      const recoveryKey = `registrationSettings:${this.owner!.userId}:${this.owner!.scopeKey}`;
+      const recovery = this.deps.store.get<{ route: string; previousInstallationId: string; settings: LocalSettings }>(recoveryKey);
+      if (recovery?.route === this.accountRoute && recovery.previousInstallationId !== this.registrationIdentity().installationId) {
+        this.deps.store.transaction(() => {
+          this.deps.store.put(this.settingsKey(), { ...recovery.settings, settingsVersion: '0' });
+          this.deps.store.remove(recoveryKey);
+        });
+      }
       this.admissionDeferred = false;
       const pendingKey = this.pendingConfigurationKey(), pending = this.deps.store.get<PendingConfiguration>(pendingKey);
       if (pending?.route === this.accountRoute) {
@@ -1104,7 +1148,7 @@ export class RemoteBridge {
     const current = (): boolean => epoch === this.accountGeneration && this.registration === registration
       && this.accountRoute === this.deps.getApiBaseUrl() && sameOwner(owner, this.deps.getOwner()) && this.settings().enabled;
     try {
-      const activated = this.targets.resumeAdmission({ owner, deviceId: registration.deviceId, syncTarget: registration.syncTarget || null });
+      const activated = this.targets.resumeAdmission({ owner, deviceId: registration.deviceId, syncTarget: registration.syncTarget || null, registrationScope: this.registrationIdentity().registrationScope });
       this.admissionRetryAt = Date.now() + 100;
       if (!activated || !current()) return;
       this.targetId = activated.targetId;
@@ -2239,7 +2283,7 @@ export class RemoteBridge {
           const result = await this.deps.request(owner,
           `/api/remote/v1/input-assets/${encodeURIComponent(assetId)}/content?preparationId=${encodeURIComponent(claim.preparationId)}`, {
             method: 'GET', redirect: 'error', signal: AbortSignal.timeout(120000), headers: { ...targetHeaders,
-              'X-Remote-Device-Credential': `${deviceId}.${this.deps.identity.deviceKey}`,
+              'X-Remote-Device-Credential': `${deviceId}.${this.registrationIdentity().deviceKey}`,
               'X-Remote-Input-Claim-Id': claim.claimId, 'X-Remote-Input-Claim-Token': claim.claimToken,
               'X-Remote-Connection-Generation': generation, [REMOTE_SYNC_REQUEST_ID_HEADER]: requestId,
             },

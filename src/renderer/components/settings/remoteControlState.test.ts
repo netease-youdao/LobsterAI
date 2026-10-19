@@ -147,7 +147,7 @@ describe('connection failure feedback', () => {
     const failed = { ...connected, connected: false, errorCode: 47013, connectionReason: RemoteConnectionReason.Reconnecting, error: 'private device credential' };
     expect(remoteConnectionDescription(failed)).toBe('remoteCredentialInvalid');
     expect(remoteConnectionFailure(failed)).toBe('remoteCredentialInvalid');
-    expect(remoteConnectionFailure({ ...failed, errorCode: 47023 })).toBe('remoteDeviceUnavailable');
+    expect(remoteConnectionFailure({ ...failed, errorCode: 47023 })).toBe('remoteDeviceRetired');
   });
 
   test('network failures remain explicit until recovery while a genuine reconnect can show progress', () => {

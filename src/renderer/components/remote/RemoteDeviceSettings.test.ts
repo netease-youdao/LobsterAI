@@ -307,3 +307,21 @@ describe('current remote device settings', () => {
   });
 
 });
+
+
+test.each([true, false])('offers explicit registration recovery for retired devices (enabled=%s), never resume', enabled => {
+  harness.snapshot.state = { ...connected, enabled, connected: false, errorCode: 47023, connectionReason: RemoteConnectionReason.Removed };
+  const { html, button } = render();
+  expect(html).toContain(i18nService.t('remoteDeviceRetired'));
+  expect(html).toContain(i18nService.t('remoteReregisterHelp'));
+  expect(button('remoteReconnect')).toBeUndefined();
+  click(button('remoteReregister'));
+  expect(harness.submit.mock.calls).toEqual([[{ reregister: true }]]);
+  expect(harness.resume).not.toHaveBeenCalled();
+});
+
+test('disables registration recovery while a settings operation is pending', () => {
+  harness.snapshot.state = { ...connected, connected: false, errorCode: 47023 };
+  harness.snapshot.busy = true;
+  expect(render().button('remoteReregister')?.disabled).toBe(true);
+});

@@ -1,4 +1,4 @@
-import { type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
+import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
 
 export function remoteOwnerKey(state: RemoteSettingsState | null): string {
   return state?.owner ? JSON.stringify([state.owner.userId, state.owner.scopeKey]) : '';
@@ -22,6 +22,7 @@ export function needsRemoteSignIn(state: RemoteSettingsState | null): boolean {
 export function remoteConnectionDescription(state: RemoteSettingsState | null): string {
   if (!state) return 'remoteLoading';
   if (!state.owner) return 'remoteSignedOut';
+  if (state.errorCode === REMOTE_DEVICE_RETIRED_CODE) return 'remoteDeviceRetired';
   if (!state.enabled) return 'remoteDisabled';
   if (state.connectionReason === RemoteConnectionReason.Removed || state.errorCode === 47121) return 'remoteConnectionRemoved';
   if (state.connectionReason === RemoteConnectionReason.QuotaBlocked || state.errorCode === 47022) return 'remoteWaitingForConnection';
@@ -56,7 +57,7 @@ export function remoteConnectionFailure(state: RemoteSettingsState | null): stri
   if (!state?.owner || !state.enabled) return null;
   if (needsRemoteSignIn(state)) return 'remoteLoginExpired';
   if (state.errorCode === 47013) return 'remoteCredentialInvalid';
-  if (state.errorCode === 47023) return 'remoteDeviceUnavailable';
+  if (state.errorCode === REMOTE_DEVICE_RETIRED_CODE) return 'remoteDeviceRetired';
   if (state.errorCode === 47022 || state.errorCode === 47121
     || state.connectionReason === RemoteConnectionReason.QuotaBlocked || state.connectionReason === RemoteConnectionReason.Removed) return null;
   if (state.errorCode === 47021) return 'remoteRegistrationLimit';
