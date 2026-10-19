@@ -1,0 +1,17 @@
+{
+  "id": "lobster-model-routing",
+  "name": "LobsterModelRouting",
+  "description": "Resolve virtual models using persistent server session bindings.",
+  "activation": {
+    "onCapabilities": ["hook"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "proxyUrl": { "type": "string" },
+      "token": { "type": "string" }
+    },
+    "required": ["proxyUrl", "token"]
+  }
+}

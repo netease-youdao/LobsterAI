@@ -6,6 +6,8 @@ import {
 import { useMemo } from 'react';
 import { useSelector } from 'react-redux';
 
+import type { ModelPresetId } from '../../../shared/modelPresets/constants';
+import { modelPresetToModel } from '../../services/modelPresets';
 import type { RootState } from '../../store';
 import { isSameModelIdentity, type Model, selectAgentSelectedModel } from '../../store/slices/modelSlice';
 import type { CoworkAgentEngine } from '../../types/cowork';
@@ -18,6 +20,7 @@ import {
 
 type ResolveAgentModelSelectionInput = {
   sessionModel?: string;
+  sessionPresetId?: ModelPresetId | null;
   agentModel: string;
   availableModels: Model[];
   fallbackModel: Model | null;
@@ -31,11 +34,11 @@ type ResolveAgentModelSelectionResult = {
 };
 
 export function resolveModelThinkingLevel(
-  model: Pick<Model, 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
+  model: Pick<Model, 'presetId' | 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
   persistedLevel: ModelThinkingLevel | '' | null | undefined,
 ): ModelThinkingLevel | undefined {
   const config = model?.thinkingConfig;
-  if (!config || !supportsLobsterAIRequestOptionsV1(model.requestCapabilities)) return undefined;
+  if (model?.presetId || !config || !supportsLobsterAIRequestOptionsV1(model.requestCapabilities)) return undefined;
   if (persistedLevel && getModelThinkingLevels(config).includes(persistedLevel)) {
     return persistedLevel;
   }
@@ -67,6 +70,7 @@ export function resolveEffectiveModel({
 
 export function resolveAgentModelSelection({
   sessionModel,
+  sessionPresetId,
   agentModel,
   availableModels,
   fallbackModel,
@@ -75,12 +79,20 @@ export function resolveAgentModelSelection({
   if (normalizedSessionModel) {
     const explicitSessionModel = resolveOpenClawModelRef(normalizedSessionModel, availableModels) ?? null;
     if (explicitSessionModel) {
+      if (sessionPresetId) {
+        const preset = availableModels.find(model => model.presetId === sessionPresetId);
+        return { selectedModel: modelPresetToModel({
+          presetId: sessionPresetId, costMultiplier: preset?.costMultiplier ?? 0,
+          accessible: explicitSessionModel.accessible !== false, supportsImage: !!explicitSessionModel.supportsImage,
+        }, explicitSessionModel), usesFallback: false, hasInvalidExplicitModel: explicitSessionModel.accessible === false };
+      }
       return { selectedModel: explicitSessionModel, usesFallback: false, hasInvalidExplicitModel: false };
     }
 
     return { selectedModel: fallbackModel, usesFallback: true, hasInvalidExplicitModel: true };
   }
 
+  if (fallbackModel?.presetId) return { selectedModel: fallbackModel, usesFallback: false, hasInvalidExplicitModel: false };
   const normalizedAgentModel = agentModel.trim();
   if (normalizedAgentModel) {
     const explicitModel = resolveOpenClawModelRef(normalizedAgentModel, availableModels) ?? null;
@@ -118,6 +130,7 @@ export function resolveAgentStartModel({
   availableModels: Model[];
   selectedModel: Model | null;
 }): AgentStartModelResult {
+  if (selectedModel?.presetId) return { model: selectedModel, unavailableModelRef: null, crossesBillingSide: false };
   const agentModelRef = agentModel.trim();
   if (!agentModelRef) return { model: selectedModel, unavailableModelRef: null, crossesBillingSide: false };
 
@@ -150,10 +163,17 @@ export function resolveAgentStartModel({
  * Shared by CoworkView (header) and CoworkPromptInput (prompt area) to avoid
  * duplicating the per-agent model resolution logic.
  */
-export function useAgentSelectedModel(agentId: string, agentModelRef: string): Model {
+export function useAgentSelectedModel(agentId: string, agentModelRef: string, allowPresets = true): Model {
   const modelState = useSelector((state: RootState) => state.model);
   return useMemo(
-    () => selectAgentSelectedModel(modelState, agentId, agentModelRef),
-    [modelState, agentId, agentModelRef],
+    () => {
+      if (!allowPresets && modelState.selectedModelByAgent[agentId]?.presetId) {
+        const selectedModelByAgent = { ...modelState.selectedModelByAgent };
+        delete selectedModelByAgent[agentId];
+        return selectAgentSelectedModel({ ...modelState, selectedModelByAgent }, agentId, agentModelRef);
+      }
+      return selectAgentSelectedModel(modelState, agentId, agentModelRef);
+    },
+    [modelState, agentId, agentModelRef, allowPresets],
   );
 }

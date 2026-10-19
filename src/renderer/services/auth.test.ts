@@ -1,5 +1,4 @@
 import {
-  type AuthSessionChangedEvent,
   AuthSessionChangeReason,
   AuthSessionStatus,
 } from '@shared/auth/constants';
@@ -930,6 +929,106 @@ describe('auth state restoration', () => {
     creditsRemaining: 900,
   };
 
+  test('restores a secondary window after another window signs in without exchanging the code again', async () => {
+    const exchange = vi.fn();
+    const getModels = vi.fn().mockResolvedValue({
+      success: true,
+      models: [{ modelId: 'signed-in-model', modelName: 'Signed-in Model', accessible: true }],
+    });
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          exchange,
+          getModels,
+          getUser: vi.fn().mockResolvedValue({ success: true, user, quota, enterpriseContext: null }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+
+    await authService.handleSessionChanged({
+      status: AuthSessionStatus.Authenticated,
+      reason: AuthSessionChangeReason.UserLogin,
+    });
+
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: true,
+      sessionStatus: AuthSessionStatus.Authenticated,
+      user,
+      quota,
+    });
+    expect(getModels).toHaveBeenCalledOnce();
+    expect(store.getState().model.availableModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'signed-in-model', accessible: true }),
+    ]));
+    expect(exchange).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])('logout clears the window and rejects a pending restore (initially signed in: %s)', async initiallySignedIn => {
+    const response = { success: true, user, quota, enterpriseContext: null };
+    let resolveUser!: (value: typeof response) => void;
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal('window', {
+      dispatchEvent,
+      electron: {
+        auth: {
+          getUser: vi.fn(() => new Promise<typeof response>(resolve => { resolveUser = resolve; })),
+          getPricingCatalog: vi.fn().mockResolvedValue({ success: true, textModels: [] }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+    if (initiallySignedIn) {
+      store.dispatch(setLoggedIn({ user, quota, ownerAccountKey: 'personal:user@example.com' }));
+    }
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    const logout = authService.handleSessionChanged({
+      status: AuthSessionStatus.Unauthenticated,
+      reason: AuthSessionChangeReason.UserLogout,
+    });
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    resolveUser(response);
+    await Promise.all([refresh, logout]);
+
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: false,
+      sessionStatus: AuthSessionStatus.Unauthenticated,
+      user: null,
+      quota: null,
+    });
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  test('a newer login event supersedes a pending restore in a signed-out window', async () => {
+    const oldResponse = { success: true, user, quota, enterpriseContext: null };
+    let resolveUser!: (value: typeof oldResponse) => void;
+    const nextUser = { ...user, yid: 'next@example.com' };
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          getModels: vi.fn().mockResolvedValue({ success: true, models: [] }),
+          getUser: vi.fn()
+            .mockImplementationOnce(() => new Promise<typeof oldResponse>(resolve => { resolveUser = resolve; }))
+            .mockResolvedValue({ ...oldResponse, user: nextUser }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    const login = authService.handleSessionChanged({
+      status: AuthSessionStatus.Authenticated,
+      reason: AuthSessionChangeReason.UserLogin,
+    });
+    resolveUser(oldResponse);
+    await Promise.all([refresh, login]);
+
+    expect(store.getState().auth.user).toEqual(nextUser);
+  });
+
   test('preserves the current login snapshot for a temporary verification failure', async () => {
     store.dispatch(setLoggedIn({
       user,
@@ -1013,10 +1112,7 @@ describe('auth state restoration', () => {
       },
     });
 
-    const serviceWithSessionHandler = authService as unknown as {
-      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
-    };
-    await serviceWithSessionHandler.handleSessionChanged({
+    await authService.handleSessionChanged({
       status: AuthSessionStatus.Expired,
       reason: AuthSessionChangeReason.RefreshRejected,
     });
@@ -1048,10 +1144,7 @@ describe('auth state restoration', () => {
       },
     });
 
-    const serviceWithSessionHandler = authService as unknown as {
-      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
-    };
-    await serviceWithSessionHandler.handleSessionChanged({
+    await authService.handleSessionChanged({
       status: AuthSessionStatus.Expired,
       reason: AuthSessionChangeReason.EnterpriseMembershipRevoked,
     });

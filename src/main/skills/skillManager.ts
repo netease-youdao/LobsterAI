@@ -16,6 +16,7 @@ import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
 import { mergeReports,scanMultipleSkillDirs } from '../libs/skillSecurity/skillSecurityScanner';
 import type { SecurityReportAction,SkillSecurityReport } from '../libs/skillSecurity/skillSecurityTypes';
 import { SqliteStore } from '../sqliteStore';
+import { removeRetiredBundledSkills, removeRetiredSkillEntries, RETIRED_BUNDLED_SKILL_IDS } from './retiredBundledSkills';
 import {
   createSkillChangeBatch,
   type SkillChangeBatch,
@@ -1656,6 +1657,7 @@ export class SkillManager {
         if (!stat.isDirectory()) continue;
 
         const originalName = entry.replace(/\.upgrading$/, '');
+        if (RETIRED_BUNDLED_SKILL_IDS.has(originalName)) continue;
         const originalDir = path.join(root, originalName);
 
         try {
@@ -1683,6 +1685,9 @@ export class SkillManager {
   syncBundledSkillsToUserData(): void {
     console.log('[skills] syncBundledSkillsToUserData: start', { packaged: app.isPackaged });
     const userRoot = this.ensureSkillsRoot();
+    removeRetiredBundledSkills(userRoot, path.join(userRoot, SKILLS_CONFIG_FILE));
+    const state = this.loadSkillStateMap();
+    if (removeRetiredSkillEntries(state)) this.saveSkillStateMap(state);
     console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);
     const bundledRoot = this.getBundledSkillsRoot();
     console.log('[skills] syncBundledSkillsToUserData: bundledRoot =', bundledRoot);
@@ -1714,6 +1719,7 @@ export class SkillManager {
       console.log('[skills] syncBundledSkillsToUserData: found', bundledSkillDirs.length, 'bundled skills');
       bundledSkillDirs.forEach((dir) => {
         const id = path.basename(dir);
+        if (RETIRED_BUNDLED_SKILL_IDS.has(id)) return;
         if (bundledIds && !bundledIds.has(id)) {
           console.log(`[skills] syncBundledSkillsToUserData: skipping non-bundled "${id}"`);
           return;
@@ -1879,6 +1885,7 @@ export class SkillManager {
       const skillDirs = listSkillDirs(root);
       skillDirs.forEach(dir => {
         const skillId = path.basename(dir);
+        if (root !== primaryRoot && RETIRED_BUNDLED_SKILL_IDS.has(skillId)) return;
         if (skillId === ComputerUseSkillId.BuiltIn && !isComputerUseKitInstalled(this.getStore())) {
           return;
         }

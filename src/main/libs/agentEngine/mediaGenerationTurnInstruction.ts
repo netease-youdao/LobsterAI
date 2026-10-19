@@ -1,4 +1,9 @@
 import {
+  MediaPreferenceMode,
+  MediaSelectionMode,
+  MediaSelectionSource,
+} from '../../../shared/media/defaultPolicy';
+import {
   SkinAssetSlot,
   SkinWorkflowKind,
   type SkinWorkflowKind as SkinWorkflowKindValue,
@@ -53,6 +58,10 @@ export const buildMediaGenerationTurnInstruction = (
   workflowKind?: SkinWorkflowKindValue,
 ): string => {
   if (workflowKind === SkinWorkflowKind.SkinPack) {
+    if (selection?.imagePreference === MediaPreferenceMode.Off
+      || (selection?.mode === MediaSelectionMode.None && selection.preferencesRevision === undefined)) {
+      return 'Image generation is disabled by the user. Do not generate skin assets or fall back to a different paid tool. Ask the user to enable image generation first.';
+    }
     return buildSkinPackInstruction(selection);
   }
 
@@ -66,6 +75,36 @@ export const buildMediaGenerationTurnInstruction = (
       ].join('\n');
     }
     return '';
+  }
+
+  const usesDefaults = selection.imageSource === MediaSelectionSource.Default
+    || selection.videoSource === MediaSelectionSource.Default;
+  if (usesDefaults) {
+    const rules = [
+      '[LobsterAI media availability]',
+      'System defaults make media generation available; they are NOT user authorization to generate or spend credits.',
+      'Generate only when the user requests a new image/video or image editing as a deliverable. Do not add decorative media to an unrelated task.',
+      'Use deterministic charts, Mermaid/SVG, document tools or application code for data charts, mind maps, diagrams, annotations and editable interfaces.',
+      'Writing a video script/storyboard, analyzing an image/video, editing existing footage, and rendering a Remotion animation do not request generative video.',
+      'For ambiguous requests, clarify the intended deliverable before invoking a paid media tool.',
+      'Default image calls produce one image. Extra attempts (including retries) share the root turn budget and require confirmation. Do not bypass this with subagents or another tool.',
+      'Every video submission requires explicit user confirmation, enforced by the native tool before it submits a paid request. Call the requested video tool to present that confirmation; do not add a separate ask_user confirmation. Cancellation is final for that attempt; do not retry automatically.',
+    ];
+    if (selection.imageModelId) {
+      rules.push(
+        `For an image generation request, use lobsterai_image_generate with model "${selection.imageModelId}".`,
+        `Image model source: ${selection.imageSource}. Do not silently switch to seedream or another image provider.`,
+      );
+    }
+    if (selection.videoModelId) {
+      rules.push(
+        `For a generative video request, use lobsterai_video_generate with model "${selection.videoModelId}".`,
+        `Video model source: ${selection.videoSource}. Do not silently switch to seedance or another video provider.`,
+      );
+    }
+    if (selection.imageDefault) rules.push(`Default image parameters: ${JSON.stringify(selection.imageDefault.params)}.`);
+    if (selection.videoDefault) rules.push(`Default video parameters: ${JSON.stringify(selection.videoDefault.params)}.`);
+    return rules.join('\n');
   }
 
   const lines = [

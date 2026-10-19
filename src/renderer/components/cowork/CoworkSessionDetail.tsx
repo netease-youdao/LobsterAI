@@ -43,6 +43,7 @@ import {
   type CoworkSelectedTextValidationError,
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
+import { isChatPresetSession } from '../../../shared/modelPresets/constants';
 import { classifyWaitingNotificationKind, WaitingNotificationKind } from '../../../shared/notifications/constants';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
 import { resolveArtifactAutoPreviewEnabled } from '../../config';
@@ -192,6 +193,7 @@ import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInpu
 import QuestionDock from './interactions/QuestionDock';
 import { isQuestionDockRequest } from './interactions/questionDockModel';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
+import { buildMediaTaskPresentations } from './mediaTaskPresentation';
 import {
   buildConversationTurns,
   buildDisplayItems,
@@ -231,6 +233,7 @@ interface CoworkSessionDetailProps {
     browserAnnotations?: import('@shared/cowork/browserAnnotations').CoworkBrowserAnnotationMessageBatch[],
     collaborationMode?: CoworkCollaborationModeType,
     localInput?: CoworkLocalInput,
+    titleInput?: string,
   ) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
   isSidebarCollapsed?: boolean;
@@ -1406,6 +1409,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
+  const [modelSwitchNotice, setModelSwitchNotice] = useState<{ sessionId: string; messageId: string } | null>(null);
+  useEffect(() => {
+    if (!modelSwitchNotice) return;
+    if (modelSwitchNotice.sessionId !== currentSession?.id) {
+      setModelSwitchNotice(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setModelSwitchNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [modelSwitchNotice, currentSession?.id]);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
@@ -1425,6 +1438,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const currentAgentSelectedModel = useAgentSelectedModel(
     currentAgentId,
     currentAgent?.model ?? '',
+    !currentSession || isChatPresetSession(currentSession),
   );
   const selectedDraftSnippets = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.draftSelectedTextSnippets[currentSession.id] ?? [] : []
@@ -5141,12 +5155,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     () => buildConversationTurns(displayItems, { leadingTurnStartTimestamp, leadingTurnUsage }),
     [displayItems, leadingTurnStartTimestamp, leadingTurnUsage],
   );
+  const mediaTaskPresentations = useMemo(() => buildMediaTaskPresentations(turns), [turns]);
   const enterpriseQuotaSignal = useMemo(
     () => findCurrentEnterpriseQuotaSignal(currentSession, currentMessagesWithDetachedTail),
     [currentMessagesWithDetachedTail, currentSession],
   );
   const sessionModelSelection = useMemo(() => resolveAgentModelSelection({
     sessionModel: currentSession?.modelOverride,
+    sessionPresetId: currentSession?.modelPresetId,
     agentModel: currentAgent?.model ?? '',
     availableModels,
     fallbackModel: currentAgentSelectedModel,
@@ -5157,6 +5173,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentAgent?.model,
     currentAgentSelectedModel,
     currentSession?.modelOverride,
+    currentSession?.modelPresetId,
   ]);
   const activeEnterpriseQuotaSignal = useMemo(
     () => resolveActiveEnterpriseQuotaSignal(
@@ -6070,6 +6087,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             >
               <AssistantTurnBlock
                 turn={turn}
+                mediaTaskPresentations={mediaTaskPresentations}
                 artifacts={turnArtifacts}
                 resolveLocalFilePath={resolveLocalFilePath}
                 mapDisplayText={mapDisplayText}
@@ -6095,6 +6113,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 awaitingRunStart={isAwaitingRunStart}
                 showCopyButtons={!isStreaming || !isLastTurn}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
+                modelSwitchNoticeMessageId={
+                  !isExportingImage && modelSwitchNotice?.sessionId === currentSession.id
+                    ? modelSwitchNotice.messageId
+                    : null
+                }
+                onDismissModelSwitchNotice={() => setModelSwitchNotice(null)}
                 completedGoal={
                   isLastTurn && currentSession.goal?.status === CoworkGoalStatus.Complete
                     ? currentSession.goal
@@ -6941,6 +6965,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             onManageSkills={remoteManaged ? undefined : onManageSkills}
             onManageKits={remoteManaged ? undefined : onManageKits}
             showModelSelector={true}
+            onModelSwitch={(noticeSessionId, messageId) => setModelSwitchNotice({ sessionId: noticeSessionId, messageId })}
             showReadOnlyContext={!isArtifactPanelExpanded}
             showNewUserWelcomeLoginOverlay={isNewUserWelcomeSession}
             readOnlyContextTrailingText={isArtifactPanelExpanded ? undefined : i18nService.t('aiGeneratedDisclaimer')}

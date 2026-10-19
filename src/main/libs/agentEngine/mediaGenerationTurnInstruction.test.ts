@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
+import { MediaPreferenceMode, MediaSelectionSource } from '../../../shared/media/defaultPolicy';
 import { SkinAssetSlot, SkinWorkflowKind } from '../../../shared/skin/constants';
 import { buildMediaGenerationTurnInstruction } from './mediaGenerationTurnInstruction';
 
@@ -71,4 +72,25 @@ describe('buildMediaGenerationTurnInstruction', () => {
     expect(instruction).toContain('LobsterAI media generation tools - NOT AVAILABLE');
     expect(instruction).toContain('You may use it');
   });
+});
+
+
+test('system defaults do not claim user authorization or route charts and editing into generation', () => {
+  const instruction = buildMediaGenerationTurnInstruction({
+    mode: 'auto', imageModelId: 'image', videoModelId: 'video',
+    imageSource: MediaSelectionSource.Default, videoSource: MediaSelectionSource.Default,
+  });
+  expect(instruction).toContain('NOT user authorization');
+  expect(instruction).toContain('mind maps');
+  expect(instruction).toContain('editing existing footage');
+  expect(instruction).toContain('explicit user confirmation');
+  expect(instruction).not.toContain('The user selected');
+});
+
+test('a skin workflow cannot bypass a persistent image off preference', () => {
+  const instruction = buildMediaGenerationTurnInstruction(
+    { mode: 'none', imagePreference: MediaPreferenceMode.Off, preferencesRevision: 1 }, false, SkinWorkflowKind.SkinPack,
+  );
+  expect(instruction).toContain('disabled by the user');
+  expect(instruction).not.toContain('locked to the OpenClaw-native');
 });

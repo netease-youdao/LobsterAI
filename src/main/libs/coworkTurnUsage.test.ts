@@ -293,6 +293,27 @@ describe('CoworkTurnUsageService', () => {
     expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
   });
 
+  test('media-only usage includes task ids and keeps the access fence during an empty-ledger retry', async () => {
+    let allowed = true;
+    const harness = createHarness({ captureSessionAccess: () => () => allowed });
+    harness.stats = null;
+    harness.service.recordMediaTask(SESSION_ID, MESSAGE_ID, '123');
+    harness.updateMessage.mockClear();
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: {
+      ...summary(0, 0), models: [], uncachedInputTokens: 0, cacheReadTokens: 0, outputTokens: 0,
+    } }));
+    harness.sleep.mockImplementationOnce(async () => { allowed = false; });
+
+    await harness.service.settleLatestTurn(SESSION_ID);
+
+    expect(new URL(harness.fetchWithAuth.mock.calls[0][0]).searchParams.get('mediaTaskIds')).toBe('123');
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
+    harness.service.recordMediaTask(SESSION_ID, MESSAGE_ID, '456');
+    expect(harness.message.metadata?.turnMediaTaskIds).toEqual(['123']);
+  });
+
   test('reentry after an account change does not share or remove a newer in-flight request', async () => {
     let epoch = 0;
     const harness = createHarness({ captureSessionAccess: () => {

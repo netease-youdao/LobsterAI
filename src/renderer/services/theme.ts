@@ -1,6 +1,7 @@
 import type { SkinPreferredAppearance } from '../../shared/skin/constants';
 import type { ThemeDefinition } from '../theme';
 import { allThemes, ThemeManager } from '../theme';
+import { THEME_ID_STORAGE_KEY } from '../theme/engine/theme-manager';
 import { configService } from './config';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -19,7 +20,6 @@ export const ThemeServiceEvent = {
 
 export type ThemeDefaultChangedDetail = ThemeSelection;
 
-const THEME_ID_STORAGE_KEY = 'lobster-theme-id';
 const DEFAULT_THEME_ID = 'classic-light';
 
 const isThemeMode = (value: string): value is ThemeMode => (

@@ -37,6 +37,44 @@ export interface CoworkLlmTrace {
   startedAt: number;
 }
 
+export const TurnUsageModelType = {
+  Text: 'text',
+  Image: 'image',
+  Video: 'video',
+} as const;
+export type TurnUsageModelType = typeof TurnUsageModelType[keyof typeof TurnUsageModelType];
+
+export const TurnUsagePricingPeriod = {
+  Peak: 'peak',
+  OffPeak: 'off_peak',
+  Mixed: 'mixed',
+} as const;
+export type TurnUsagePricingPeriod = typeof TurnUsagePricingPeriod[keyof typeof TurnUsagePricingPeriod];
+
+export interface TurnTokenCreditEstimate {
+  uncachedInput: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  /** Theoretical uncached input/output cost minus actual text ledger charges; may be negative. */
+  cacheSavings: number;
+  pricingPeriod?: TurnUsagePricingPeriod;
+}
+
+export interface TurnModelUsage {
+  type: TurnUsageModelType;
+  model: string;
+  count: number;
+  creditsUsed: number;
+  /** Sum of individually rounded ledger entries, when provided by the server. */
+  displayCreditsUsed?: number;
+  uncachedInputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  tokenCreditEstimate?: TurnTokenCreditEstimate;
+}
+
 /** Stored on the turn's user message once the turn has finished. */
 export interface CoworkTurnUsage {
   traceId: string;
@@ -46,6 +84,11 @@ export interface CoworkTurnUsage {
   failedRequestCount: number;
   models: string[];
   creditsUsed: number;
+  /** Display total from per-entry rounding; does not replace actual ledger charges. */
+  displayCreditsUsed?: number;
+  /** Absent for summaries saved by older clients/servers. */
+  modelUsage?: TurnModelUsage[];
+  mediaPending?: boolean;
   uncachedInputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -108,9 +151,48 @@ const toCount = (value: unknown): number => (
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 );
 
-const toCredits = (value: unknown): number => {
+const toSignedCredits = (value: unknown): number => {
   const parsed = typeof value === 'string' ? Number(value) : value;
-  return typeof parsed === 'number' && Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : 0;
+};
+
+const toCredits = (value: unknown): number => Math.max(0, toSignedCredits(value));
+
+const toOptionalCredits = (value: unknown): number | undefined => {
+  const parsed = typeof value === 'string' && value.trim() ? Number(value) : value;
+  return typeof parsed === 'number' && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+};
+
+const parseModelUsage = (value: unknown): TurnModelUsage[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((entry): TurnModelUsage[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    const row = entry as Record<string, unknown>;
+    if (!Object.values(TurnUsageModelType).includes(row.type as TurnUsageModelType)) return [];
+    const estimate = row.tokenCreditEstimate && typeof row.tokenCreditEstimate === 'object'
+      ? row.tokenCreditEstimate as Record<string, unknown> : null;
+    const displayCreditsUsed = toOptionalCredits(row.displayCreditsUsed);
+    return [{
+      type: row.type as TurnUsageModelType,
+      model: typeof row.model === 'string' ? row.model : '',
+      count: toCount(row.count),
+      creditsUsed: toCredits(row.creditsUsed),
+      ...(displayCreditsUsed !== undefined ? { displayCreditsUsed } : {}),
+      uncachedInputTokens: toCount(row.uncachedInputTokens),
+      cacheReadTokens: toCount(row.cacheReadTokens),
+      cacheWriteTokens: toCount(row.cacheWriteTokens),
+      outputTokens: toCount(row.outputTokens),
+      ...(estimate ? { tokenCreditEstimate: {
+        uncachedInput: toCredits(estimate.uncachedInput),
+        cacheRead: toCredits(estimate.cacheRead),
+        cacheWrite: toCredits(estimate.cacheWrite),
+        output: toCredits(estimate.output),
+        cacheSavings: toSignedCredits(estimate.cacheSavings),
+        ...(Object.values(TurnUsagePricingPeriod).includes(estimate.pricingPeriod as TurnUsagePricingPeriod)
+          ? { pricingPeriod: estimate.pricingPeriod as TurnUsagePricingPeriod } : {}),
+      } } : {}),
+    }];
+  });
 };
 
 /**
@@ -131,13 +213,14 @@ export const buildCoworkTurnUsage = (
   const cacheWriteTokens = toCount(raw.cacheWriteTokens);
   const inputTokens = uncachedInputTokens + cacheReadTokens + cacheWriteTokens;
   const outputTokens = toCount(raw.outputTokens);
+  const displayCreditsUsed = toOptionalCredits(raw.displayCreditsUsed);
   const observed = options.observedCompletedRequests;
   const billingScope = raw.billingScope === CoworkTurnUsageBillingScope.Enterprise
     ? CoworkTurnUsageBillingScope.Enterprise
     : CoworkTurnUsageBillingScope.Personal;
   return {
     traceId: options.traceId,
-    status: typeof observed === 'number' && requestCount < observed
+    status: raw.mediaPending === true || (typeof observed === 'number' && requestCount < observed)
       ? CoworkTurnUsageStatus.Partial
       : CoworkTurnUsageStatus.Settled,
     billingScope,
@@ -147,6 +230,9 @@ export const buildCoworkTurnUsage = (
       ? raw.models.filter((model): model is string => typeof model === 'string' && model.trim().length > 0)
       : [],
     creditsUsed: toCredits(raw.creditsUsed),
+    ...(displayCreditsUsed !== undefined ? { displayCreditsUsed } : {}),
+    ...(Array.isArray(raw.modelUsage) ? { modelUsage: parseModelUsage(raw.modelUsage) } : {}),
+    ...(raw.mediaPending === true ? { mediaPending: true } : {}),
     uncachedInputTokens,
     cacheReadTokens,
     cacheWriteTokens,

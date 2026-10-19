@@ -28,6 +28,15 @@ const nativePermission = (questions: unknown[], overrides: Record<string, unknow
 const options = [{ label: 'A (Recommended)' }, { label: 'B', description: 'second' }];
 
 describe('permissionDockRequest', () => {
+  test('preserves a pricing subtitle without changing the question answer key', () => {
+    const request = permissionDockRequest(pluginPermission([
+      { question: 'Confirm video?', subtitle: '50 credits per second', options },
+    ]))!;
+    expect(request.questions[0].subtitle).toBe('50 credits per second');
+    expect(permissionDockAnswer(request, { ...emptyQuestionDraft(), answers: { 'question-1': ['B'] } }))
+      .toMatchObject({ behavior: 'allow', updatedInput: { answers: { 'Confirm video?': 'B' } } });
+  });
+
   test('maps plugin questions with positional ids, explicit ids and free text', () => {
     const request = permissionDockRequest(pluginPermission([
       { question: 'Which?', options },

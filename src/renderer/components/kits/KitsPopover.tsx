@@ -8,6 +8,7 @@ import { resolveLocalizedText } from '../../services/skill';
 import { RootState } from '../../store';
 import { setInstalledKits, setMarketplaceKits } from '../../store/slices/kitSlice';
 import type { MarketplaceKit } from '../../types/kit';
+import { PROMPT_SUBMENU_POSITION_CLASS, PromptSubmenuSide } from '../common/promptSubmenu';
 import SearchIcon from '../icons/SearchIcon';
 import ExpertKitsEmptyIcon from './ExpertKitsEmptyIcon';
 import KitIcon from './KitIcon';
@@ -20,6 +21,9 @@ interface KitsPopoverProps {
   onSelectKit: (kitId: string) => void;
   onManageKits: () => void;
   anchorRef: React.RefObject<HTMLElement>;
+  /** Opens beside the prompt's add menu on `side` instead of above the toolbar button. */
+  asSubmenu?: boolean;
+  side?: PromptSubmenuSide;
 }
 
 const KitsPopover: React.FC<KitsPopoverProps> = ({
@@ -28,6 +32,8 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
   onSelectKit,
   onManageKits,
   anchorRef,
+  asSubmenu = false,
+  side = PromptSubmenuSide.Right,
 }) => {
   const dispatch = useDispatch();
   const [searchQuery, setSearchQuery] = useState('');
@@ -85,18 +91,20 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
     if (isOpen) {
       if (anchorRef.current) {
         const anchorRect = anchorRef.current.getBoundingClientRect();
-        // Reserve room above the popover plus the search bar and footer chrome
-        const availableHeight = anchorRect.top - 120 - 104;
+        // Reserve room above the popover plus the search bar and footer chrome; a
+        // submenu grows up from the bottom of the add menu, just below its row.
+        const availableHeight = asSubmenu ? anchorRect.bottom - 72 - 86 : anchorRect.top - 120 - 104;
         setMaxListHeight(Math.max(120, Math.min(300, availableHeight)));
       }
-      if (shouldShowSearch && searchInputRef.current) {
+      // A submenu opens on hover, so it leaves the caret in the prompt.
+      if (shouldShowSearch && !asSubmenu && searchInputRef.current) {
         setTimeout(() => searchInputRef.current?.focus(), 0);
       }
     }
     if (!isOpen) {
       setSearchQuery('');
     }
-  }, [isOpen, anchorRef, shouldShowSearch]);
+  }, [isOpen, anchorRef, asSubmenu, shouldShowSearch]);
 
   useEffect(() => {
     if (!shouldShowSearch && searchQuery) {
@@ -153,7 +161,7 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
   return (
     <div
       ref={popoverRef}
-      className={`absolute bottom-full left-0 z-50 mb-1 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover ${
+      className={`${asSubmenu ? `${PROMPT_SUBMENU_POSITION_CLASS[side]} z-[60]` : 'absolute bottom-full left-0 z-50 mb-1'} max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover ${
         shouldShowInstallGuide ? 'w-60' : 'w-80'
       }`}
       role="menu"

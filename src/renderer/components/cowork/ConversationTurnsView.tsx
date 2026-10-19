@@ -11,6 +11,7 @@ import type { MarketplaceKit } from '../../types/kit';
 import type { Skill } from '../../types/skill';
 import AssistantTurnBlock from './AssistantTurnBlock';
 import LazyRenderTurn from './LazyRenderTurn';
+import { buildMediaTaskPresentations } from './mediaTaskPresentation';
 import {
   buildConversationTurns,
   buildDisplayItems,
@@ -61,6 +62,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
 }) => {
   const displayItems = useMemo(() => buildDisplayItems(messages), [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+  const mediaTaskPresentations = useMemo(() => buildMediaTaskPresentations(turns), [turns]);
 
   if (turns.length === 0) {
     if (!isStreaming) return null;
@@ -121,6 +123,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
               <div data-export-role="assistant-block" className={isLastTurn ? 'animate-message-in' : undefined}>
                 <AssistantTurnBlock
                   turn={turn}
+                  mediaTaskPresentations={mediaTaskPresentations}
                   artifacts={turnArtifacts}
                   resolveLocalFilePath={resolveLocalFilePath}
                   mapDisplayText={mapDisplayText}

@@ -5,13 +5,18 @@ import path from 'path';
 import { expect, it, vi } from 'vitest';
 import vm from 'vm';
 
+import { CoworkIpcChannel } from '../../shared/cowork/constants';
 import { remoteNetworkBinaryDownload } from './remoteNetworkProtocol';
 import { currentRemoteExecution, SessionCommandService } from './sessionCommandService';
 
 it('wires the real desktop IPC through its actor-aware service when every optional remote initializer fails', async () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf8');
   const initializers = source.slice(source.indexOf('  const initializeSessionExecutionCore ='), source.indexOf('  registerOwnershipHandlers'));
-  const submissions = source.slice(source.indexOf('  const submitStart ='), source.indexOf("  ipcMain.handle('cowork:session:continue'"));
+  const submissionsStart = source.indexOf('  const submitStart =');
+  const submissionsEnd = source.indexOf('  ipcMain.handle(CoworkIpcChannel.SubmitBtw,', submissionsStart);
+  expect(submissionsStart).toBeGreaterThan(-1);
+  expect(submissionsEnd).toBeGreaterThan(submissionsStart);
+  const submissions = source.slice(submissionsStart, submissionsEnd);
   const owner = { userId: 'owner', scopeKey: 'personal' };
   const handlers = new Map<string, (...args: any[]) => any>();
   const authObservers = new Map<string, () => void>();
@@ -33,7 +38,8 @@ it('wires the real desktop IPC through its actor-aware service when every option
     RemoteSettingsController: class { constructor() { failures[2](); } }, initializeRemoteBridge: failures[3],
     remoteDiagnosticLog: vi.fn(), readRemoteState: () => ({}), getRemoteAccountEpoch: () => 'epoch',
     setPreventSleepBlockerEnabled: vi.fn(),
-    startCoworkSession: async () => ({ owner: currentRemoteExecution()?.owner }), continueCoworkSession: vi.fn(),
+    startCoworkSession: async (_options: unknown, senderId?: number) => ({ owner: currentRemoteExecution()?.owner, senderId }),
+    continueCoworkSession: vi.fn(), CoworkIpcChannel,
     ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => handlers.set(channel, handler) },
   };
   const script = `let remoteSessionCommands=null, ownershipAssociations=null, remoteTelemetryRuntime=null, remoteLocalGc=null,
@@ -44,7 +50,9 @@ it('wires the real desktop IPC through its actor-aware service when every option
   vm.runInNewContext(transformSync(script, { loader: 'ts', format: 'cjs' }).code, sandbox);
   expect(failures.every(failure => failure.mock.calls.length === 1)).toBe(true);
   expect(authObservers.size).toBe(3);
-  await expect(handlers.get('cowork:session:start')!(null, {})).resolves.toEqual({ owner });
+  expect(handlers.has(CoworkIpcChannel.SessionContinue)).toBe(true);
+  await expect(handlers.get(CoworkIpcChannel.SessionStart)!({ sender: { id: 42 } }, {}))
+    .resolves.toEqual({ owner, senderId: 42 });
   expect(localStore.assertAgentAccess).toHaveBeenCalledWith('main', owner);
 });
 

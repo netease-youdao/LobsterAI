@@ -14,6 +14,8 @@ import {
   reportConversationBlockAction,
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
+import MediaTaskCard from './MediaTaskCard';
+import type { MediaTaskPresentation } from './mediaTaskPresentation';
 import {
   type ConsolidatedItem,
   formatElapsedDuration,
@@ -67,6 +69,7 @@ const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimesta
 
 const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
+  mediaTaskPresentation?: MediaTaskPresentation;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
   retainedMediaPollCounts?: Map<string, number>;
@@ -81,6 +84,7 @@ const ToolCallGroup: React.FC<{
   isLive?: boolean;
 }> = ({
   group,
+  mediaTaskPresentation,
   isLastInSequence = true,
   mapDisplayText,
   retainedMediaPollCounts,
@@ -89,7 +93,10 @@ const ToolCallGroup: React.FC<{
   isLive,
 }) => {
   const { toolUse, toolResult } = group;
-  const shouldExpandByDefault = isMediaStatusPoll(group);
+  const shouldExpandByDefault = isMediaStatusPoll(group) && !mediaTaskPresentation;
+  const mediaCallLabel = mediaTaskPresentation && !mediaTaskPresentation.showCard
+    ? i18nService.t('mediaTaskCallDetails').replace('{taskId}', String(mediaTaskPresentation.details.taskId))
+    : null;
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
   const toolName = getToolDisplayName(rawToolName);
@@ -178,7 +185,7 @@ const ToolCallGroup: React.FC<{
     setIsExpanded(nextExpanded);
   };
 
-  const renderMediaRunningIndicators = (containerClass: string) => (
+  const renderMediaRunningIndicators = (containerClass: string) => mediaTaskPresentation ? null : (
     <>
       {isMediaGenerateRunning(group) && isSessionStreaming && (() => {
         const streamingInfo = parseMediaStreamingInfo(group);
@@ -339,6 +346,10 @@ const ToolCallGroup: React.FC<{
     </>
   );
 
+  if (mediaTaskPresentation?.showCard) {
+    return <MediaTaskCard details={mediaTaskPresentation.details} startedAt={mediaTaskPresentation.startedAt} />;
+  }
+
   if (variant === ActivityEntryVariant.Row) {
     const stepItem: ConsolidatedItem = { type: 'tool_group', group };
     const isRowLive = isLive ?? isRunning;
@@ -354,7 +365,7 @@ const ToolCallGroup: React.FC<{
       <div>
         <ActivityStepLine
           kind={stepKind}
-          label={mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
+          label={mediaCallLabel ?? mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
           isLive={isRowLive}
           hasError={isToolError}
           isExpanded={isExpanded}
@@ -412,7 +423,7 @@ const ToolCallGroup: React.FC<{
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-sm font-medium text-secondary ${isRunning ? 'shimmer-text' : ''}`}>
-              {toolName}
+              {mediaCallLabel ?? toolName}
             </span>
             {toolInputSummary && (
               <code className="text-code text-muted font-mono truncate max-w-full">

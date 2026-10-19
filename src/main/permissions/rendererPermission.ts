@@ -1,11 +1,12 @@
 import { systemPreferences } from 'electron';
 
+import { RendererMediaType, RendererPermission } from './constants';
 import type { RendererPermissionHandlerOptions } from './types';
 
 // The async Clipboard API asks for these: plain/HTML writes need
 // `clipboard-sanitized-write`, while reads and writes carrying custom formats
 // need `clipboard-read`. The Office editors (Univer) copy, cut and paste with it.
-const CLIPBOARD_PERMISSIONS: ReadonlySet<string> = new Set(['clipboard-read', 'clipboard-sanitized-write']);
+const CLIPBOARD_PERMISSIONS: ReadonlySet<string> = new Set([RendererPermission.ClipboardRead, RendererPermission.ClipboardWrite]);
 
 const isLocalhost = (hostname: string): boolean =>
   hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
@@ -65,6 +66,7 @@ function getPermissionMediaTypes(details: unknown): string[] {
 export function registerRendererPermissionHandler({
   session,
   getMainWindow,
+  isAdditionalVoiceInputWebContents,
   isDev,
   startUrl,
 }: RendererPermissionHandlerOptions): void {
@@ -83,18 +85,22 @@ export function registerRendererPermissionHandler({
       return;
     }
 
-    if (permission !== 'media') {
+    if (permission !== RendererPermission.Media) {
       callback(false);
       return;
     }
 
     const mediaTypes = getPermissionMediaTypes(details);
-    if (!mediaTypes.includes('audio')) {
+    if (mediaTypes.length !== 1 || mediaTypes[0] !== RendererMediaType.Audio) {
       callback(false);
       return;
     }
 
-    if (!isTrustedMainWindowRequest()) {
+    // The quick composer shares voice input with the main window. Trust its
+    // live webContents explicitly, never a URL match or an embedded preview.
+    const isVoiceInputWindow = getMainWindow()?.webContents === webContents
+      || isAdditionalVoiceInputWebContents?.(webContents) === true;
+    if (!details.isMainFrame || !isVoiceInputWindow || !isTrustedRendererUrl(requestingUrl, isDev, startUrl)) {
       console.warn(`[VoiceInput] blocked microphone permission request from ${requestingUrl || 'unknown origin'}`);
       callback(false);
       return;

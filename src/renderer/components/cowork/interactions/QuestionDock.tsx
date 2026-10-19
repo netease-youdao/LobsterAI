@@ -363,6 +363,7 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
         </nav>
       </header>
       <div className="cowork-question-page" key={question.id}>
+        {question.subtitle && <p className="cowork-question-hint">{question.subtitle}</p>}
         {question.multiSelect && <p className="cowork-question-hint">{t('coworkQuestionWizardMultiSelectHint')}</p>}
         <div role="group" aria-label={question.title}>
           {question.options.map((option, optionIndex) => {

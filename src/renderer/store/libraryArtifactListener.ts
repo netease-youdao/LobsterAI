@@ -53,6 +53,8 @@ const recordCandidates = async (
 libraryArtifactListener.startListening({
   actionCreator: addArtifact,
   effect: async action => {
+    const { reportArtifactDiscovery } = await import('../services/usageAnalytics');
+    reportArtifactDiscovery(action.payload.artifact);
     await recordCandidates([
       toCandidate(action.payload.sessionId, action.payload.artifact),
     ]);
@@ -63,6 +65,8 @@ libraryArtifactListener.startListening({
   actionCreator: setSessionArtifacts,
   effect: async action => {
     const { sessionId, artifacts } = action.payload;
+    const { reportArtifactDiscovery } = await import('../services/usageAnalytics');
+    artifacts.forEach(reportArtifactDiscovery);
     await recordCandidates(artifacts.map(artifact => toCandidate(sessionId, artifact)));
   },
 });

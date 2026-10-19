@@ -908,7 +908,7 @@ export const LogReporterActionPrefix = {
 - 触发时机：用户从首页初始输入框或历史对话输入框成功发起一次任务/继续对话后发送。发送前被拦截、模型权限弹窗、附件校验失败、父层提交返回 `false` 时不发送本事件，而发送 `lobsterai_prompt_control_action` 的 `submit_blocked`。
 - 事件含义：统计核心 prompt 提交漏斗，区分新建任务和历史对话续聊。
 - 业务参数：
-  - `surface`：string，输入框所在场景。当前取值为 `home` 或 `conversation`。
+  - `surface`：string，输入框所在场景。当前取值为 `home`、`conversation` 或 `desktop_companion`。
   - `conversationState`：string，对话状态。当前取值为 `new_task` 或 `continue_session`。
   - `submitMethod`：string，提交方式。当前取值包括 `button`、`keyboard`、`voice`。
   - `promptLength`：number，用户输入正文长度。不包含自动拼接的本地附件路径。
@@ -960,7 +960,7 @@ export const LogReporterActionPrefix = {
 - 触发时机：用户操作输入框附近控件或提交前被阻断时发送。
 - 事件含义：统计输入框周边能力入口使用情况，覆盖首页初始状态和历史对话续聊状态。
 - 业务参数：
-  - `surface`：string，输入框所在场景。当前取值为 `home` 或 `conversation`。
+  - `surface`：string，输入框所在场景。当前取值为 `home`、`conversation` 或 `desktop_companion`。
   - `conversationState`：string，对话状态。当前取值为 `new_task` 或 `continue_session`。
   - `controlType`：string，控件动作类型。当前取值包括 `input_focus`、`draft_started`、`submit_blocked`、`add_menu_open`、`add_menu_close`、`attach_file_click`、`attachment_add_success`、`attachment_add_failed`、`attachment_add_cancelled`、`attachment_add_blocked`、`attachment_remove`、`skill_menu_open`、`skill_toggle`、`manage_skills_click`、`kit_menu_open`、`kit_menu_close`、`kit_toggle`、`manage_kits_click`、`plan_mode_enabled`、`plan_mode_disabled`、`agent_selector_open`、`agent_selector_close`、`agent_selected`、`working_directory_selector_open`、`working_directory_selector_close`、`working_directory_selected`、`working_directory_open`、`voice_record_start`、`voice_record_stop`、`voice_record_blocked`、`stop_streaming`。
   - `blockedReason`：string，阻断原因。当前取值包括 `working_directory_required`、`voice_recognition_failed`、`streaming`、`empty`、`disabled`、`model_patching`、`model_access_required`、`image_attachment_too_large`、`image_preview_failed`、`submit_rejected`、`quota_exhausted`、`login_required`、`voice_input_active`、`adding_file`。
@@ -1196,6 +1196,78 @@ export const LogReporterActionPrefix = {
   - 本地调试日志只记录动作类型，不记录完整事件参数。
   - 新人任务流式动画只在开始和结束时发送事件，不按字符、分片或动画帧上报。
 - 隐私边界：不上传引导输入文案、新人任务欢迎正文、用户回复内容、会话 ID、用户 ID、文件名、本地路径、URL、token、API Key 或错误详情；`charCount` 只表示消息长度，不包含正文。
+
+#### 2.4.45 `lobsterai_desktop_companion_setting_changed`
+
+- 状态：已实现。
+- 触发时机：悬浮球偏好保存成功且值实际变化后，每个变更项上报一次；初始化、重复保存相同值、快捷键冲突不计入。
+- 业务参数：
+  - `source`：`settings` / `context_menu` / `selection` / `tray`，表示设置页、悬浮球右键菜单、划词菜单或系统托盘。
+  - `setting`：`enabled`、`shortcut`、`skin`、`selectionToolbar`、`dragAssist`、`contextHints`、`selectionExcludedApps`、`selectionToolbarOrder`。
+  - 开关项携带 `enabled`；快捷键仅携带 `hasShortcut`；形象携带内置 `skin` ID；排除应用仅携带 `excludedAppCount`。工具栏排序仅记录发生了修改。
+- 用途：分析悬浮球开启/关闭、功能开关偏好和个性化设置使用情况。不上传快捷键内容或排除应用名称。
+
+#### 2.4.46 `lobsterai_desktop_companion_action`
+
+- 状态：已实现。
+- 触发时机与参数：
+
+| `source` | `interactionType` | 含义 / 附加参数 |
+| --- | --- | --- |
+| `system` | `open` | 悬浮球原生窗口显示，`surface=mascot`、内置 `skin` ID |
+| `orb` | `click` / `context_menu` | 激活悬浮球 / 打开右键菜单；拖动、悬停和指针移动不计入 |
+| `orb` / `shortcut` / `tray` / `context_menu` / `hint` / `file_drop` / `selection` / `system` | `open` | 快捷输入面板从关闭变为打开请求，`surface=panel`、`enabled`；重复打开、尺寸更新不重复计数。`enabled=false` 时仍可用快捷键打开面板 |
+| `context_menu` / `panel` / `selection` / `language_tools` / `result` | `open_main` | 跳转主窗口，`hasSession` 表示是否指定任务；不上传会话 ID |
+| `panel` | `open_skills` / `open_kits` / `login_shown` | 管理技能、管理专家入口 / 登录提示由隐藏变为显示 |
+| `context_menu` / `selection` | `open_settings` | 打开悬浮球设置 |
+| `context_menu` / `selection` | `pause` | 暂时隐藏悬浮球或暂停划词；悬浮球携带 `snoozeMode` |
+| `settings` | `permission` | 主动请求辅助功能权限；不代表授权成功 |
+| `selection` | `open` | 划词工具栏原生窗口显示一次，`stage=shown`、`surface=selection` |
+| `selection` | `run` | 选中划词工具，`tool` 为 `translate` / `tts` / `summarize` / `explain` / `ask` 等内置动作 |
+| `selection` | `more` / `exclude_app` / `pin` | 展开更多菜单 / 在当前应用禁用 / 固定回答卡片；固定携带 `pinned` |
+| `selection` / `language_tools` / `result` | `copy` | 复制操作结果，`outcome=success/failed`，不含复制内容 |
+| `language_tools` | `pause` / `resume` / `stop` | 经主进程语音控制入口发出的朗读命令，`tool=tts` |
+| `result` | `open` | 任务通知窗口显示，`stage=shown`、`recentTaskCount`；后台刷新不计入 |
+| `result` | `dismiss` / `stop` | 移除任务通知 / 停止任务；停止携带 `outcome=success/failed` |
+
+- 用途：分析入口使用、划词工具使用、通知到主窗口的转化，以及登录和权限触达。
+- `open + surface=panel` 表示接受打开请求，并携带本次打开的随机分析 `journeyId`；`stage=shown` 表示调用了原生窗口显示方法。二者不能合并解释为内容已完成渲染。
+
+#### 2.4.47 `lobsterai_desktop_companion_task`
+
+- 状态：已实现。
+- 触发时机：快捷输入框、文件拖放快捷动作、结果卡片追问提交时上报 `stage=submit`；创建/续聊 API 返回后上报一次 `stage=result`。
+- 业务参数：`source=panel/file_drop/result`、`isFollowUp`；结果携带 `outcome=success/failed` 和 `durationMs`（从提交到创建/续聊返回，单位毫秒）。前置检查失败与异常也计为失败；重复点击被防重锁拦截时不计入。
+- 关联参数：每次提交的随机 `callId` 连接 `submit/result`；`journeyId` 连接本次面板打开和提交。主进程在实际派发任务时捕获 `taskId/turnId`，成功结果携带这两个分析 ID；没有对应新轮次时不发送。文件快捷任务和追问使用本次提交独立的 `journeyId`。
+- **统计口径**：成功表示任务创建/续聊被接受，不代表 Agent 执行完成。通过 `taskId + turnId` 连接已有 `lobsterai_task_lifecycle`，查看执行结果；本事件不携带本地会话 ID。关联边界和媒体 v2 口径见 `2026-10-14-usage-funnel-design.md` 第 8 节。
+- 快捷输入框继续复用 `lobsterai_prompt_submit` 和 `lobsterai_prompt_control_action`，但 `surface=desktop_companion`，`conversationState=new_task`，不再计入首页输入。两类提交事件描述同一次操作的不同层级，不能相加作为总提交数。
+
+#### 2.4.48 `lobsterai_desktop_companion_tool`
+
+- 状态：已实现。
+- 覆盖：划词快速问答、翻译、朗读生成、悬浮球右键截图。
+- 业务参数：`source=selection/language_tools/context_menu`、内置 `tool`、`stage=submit/result`；快速问答携带 `isFollowUp`。
+- 结果参数：`outcome=success/failed/cancelled/blocked`、`durationMs`；失败/前置阻断原因仅使用 `reason=login_required/no_model/invalid_input/unavailable/limit/upstream` 枚举，不上传服务端错误正文或任意错误码。
+- 一次请求最多产生一个结果。主动取消后迟到的流式完成/错误不重复计数；不采集 token、SSE 分片或音频块。配额查询和刷新不产生使用事件。
+- **统计口径**：翻译/朗读成功表示服务端生成完成，朗读不代表用户听完；截图成功表示已获得截图附件，取消截图记为 `cancelled`。前置参数格式不合法的语言请求、截图附件已满而未启动捕获的请求不计入工具提交。
+
+#### 2.4.49 `lobsterai_desktop_companion_hint`
+
+- 状态：已实现。
+- 触发时机：提示气泡原生窗口显示时发送 `stage=shown`；用户接受、关闭、屏蔽或超时后发送 `stage=result`。
+- 业务参数：`source=hint`、`topic`（`welcome` 或内置应用类别），结果携带 `outcome=accepted/dismissed/muted/ignored`。
+- 不上传前台应用名称、窗口标题或屏幕内容；提示被其他面板替换不算用户关闭或超时。
+
+#### 2.4.50 `lobsterai_desktop_companion_file_drop`
+
+- 状态：已实现。
+- 触发时机：文件拖放操作条显示时发送 `stage=shown`；用户实际放下文件触发动作时发送 `stage=submit`；附件交接/创建任务返回或失败时发送一次 `stage=result`。
+- 业务参数：`source=file_drop`；显示阶段可携带内置类型集合 `fileKinds`；提交/结果携带 `dropAction`（见 `CompanionDropAction`）；结果携带 `attachmentCount`、`outcome=success/failed`。
+- `ask` 的成功表示附件交给快捷输入框；其他动作的成功表示任务创建成功，不能解释为任务执行完成。悬停、拖拽进度和离开后的延时隐藏不产生提交事件。
+
+以上悬浮球事件的常量及参数白名单位于 `src/shared/desktopCompanion/analytics.ts`，统一通过 `src/main/desktopCompanion/companionAnalytics.ts` 接入 `MainLogReporter`。Renderer 仅通过已验证调用窗口和主 frame 的 `desktop-companion:report-analytics` 提交其负责的任务、拖放和停止操作；来源由主进程确认。主进程直接负责偏好、原生窗口、菜单、划词和工具生命周期，避免跨窗口重复计数。
+
+每次发送读取主进程当前登录态、渠道和 `usageAnalyticsEnabled`；关闭“帮助改进 LobsterAI”后，所有这些独立事件停止发送。上报不等待网络返回，失败不阻断原功能。业务参数不包含 prompt、选区/翻译/回答正文、截图内容、音频、文件名、完整路径、URL、应用标识、会话 ID 或服务请求 ID；沿用现有公共用户/安装标识，不新增用户标识。
 
 ### 2.5 请求流程
 

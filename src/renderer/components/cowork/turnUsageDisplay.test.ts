@@ -4,8 +4,11 @@ import {
   type CoworkTurnUsage,
   CoworkTurnUsageBillingScope,
   CoworkTurnUsageStatus,
+  type TurnModelUsage,
+  TurnUsageModelType,
 } from '../../../shared/cowork/llmTurnUsage';
 import {
+  buildTurnModelTokenRows,
   buildTurnUsageTokenRows,
   formatTurnCacheHitRate,
   formatTurnCredits,
@@ -13,6 +16,7 @@ import {
   formatTurnUsageCredits,
   getTurnCacheHitRate,
   getTurnCreditsLabelKey,
+  getTurnModelUsage,
   getTurnUsageChipState,
   shortenTraceId,
   TurnUsageChipState,
@@ -91,6 +95,75 @@ describe('turn usage rows', () => {
     expect(rows.map(row => row.key)).toContain(TurnUsageTokenRowKey.CacheWrite);
     const total = rows.pop();
     expect(rows.reduce((sum, row) => sum + row.tokens, 0)).toBe(total?.tokens);
+  });
+});
+
+describe('turn ledger display totals', () => {
+  const model = (overrides: Partial<TurnModelUsage> = {}): TurnModelUsage => ({
+    type: TurnUsageModelType.Text,
+    model: 'deepseek-flash',
+    count: 3,
+    creditsUsed: 7.203752,
+    uncachedInputTokens: 67050,
+    cacheReadTokens: 139776,
+    cacheWriteTokens: 0,
+    outputTokens: 548,
+    tokenCreditEstimate: {
+      uncachedInput: 6.705,
+      cacheRead: 0.279552,
+      cacheWrite: 0,
+      output: 0.2192,
+      cacheSavings: 13.698048,
+    },
+    ...overrides,
+  });
+
+  test('uses the sum of individually rounded ledger charges for the reported video turn', () => {
+    const source = model({ displayCreditsUsed: 7.21 });
+    const snapshot = structuredClone(source);
+    const summary = usage({
+      creditsUsed: 607.203752,
+      displayCreditsUsed: 607.21,
+      modelUsage: [source, model({
+        type: TurnUsageModelType.Video, model: 'HappyHorse-1.1', creditsUsed: 600,
+        displayCreditsUsed: 600, tokenCreditEstimate: undefined,
+      })],
+    });
+    const rows = buildTurnModelTokenRows(source);
+
+    expect(formatTurnUsageCredits(summary, true)).toBe('607.21');
+    expect(formatTurnUsageCredits(summary)).toBe('607.21');
+    expect(getTurnModelUsage(summary).map(item => formatTurnCredits(item.displayCreditsUsed ?? item.creditsUsed, true)))
+      .toEqual(['600.00', '7.21']);
+    expect(rows.map(row => formatTurnCredits(row.credits!, true))).toEqual(['6.71', '0.28', '0.22']);
+    expect(rows.map(row => row.credits)).toEqual([6.705, 0.279552, 0.2192]);
+    expect(source).toEqual(snapshot);
+    expect(summary.creditsUsed).toBe(607.203752);
+  });
+
+  test('keeps server display totals even when token-price estimates differ', () => {
+    const summary = usage({ creditsUsed: 7.203752, displayCreditsUsed: 8.02, modelUsage: [model({ displayCreditsUsed: 8.02 })] });
+    expect(formatTurnUsageCredits(summary, true)).toBe('8.02');
+    expect(getTurnModelUsage(summary)[0].displayCreditsUsed).toBe(8.02);
+    expect(buildTurnModelTokenRows(model()).map(row => row.credits)).toEqual([6.705, 0.279552, 0.2192]);
+  });
+
+  test('marks partial display totals and preserves a valid zero display total', () => {
+    expect(formatTurnUsageCredits(usage({
+      creditsUsed: 7.203752, displayCreditsUsed: 7.21, status: CoworkTurnUsageStatus.Partial,
+    }), true)).toBe('≥7.21');
+    expect(formatTurnUsageCredits(usage({ creditsUsed: 0.004, displayCreditsUsed: 0 }), true)).toBe('0.00');
+  });
+
+  test('keeps legacy ledger totals until the server supplies per-entry display totals', () => {
+    expect(formatTurnUsageCredits(usage({ creditsUsed: 7.203752 }), true)).toBe('7.20');
+    expect(getTurnModelUsage(usage({ creditsUsed: 7.203752 }))[0].displayCreditsUsed).toBeUndefined();
+    expect(getTurnModelUsage(usage({ creditsUsed: 7.203752, displayCreditsUsed: 7.21 }))[0].displayCreditsUsed).toBe(7.21);
+  });
+
+  test('does not invent charges when token estimates are absent', () => {
+    expect(buildTurnModelTokenRows(model({ tokenCreditEstimate: undefined }))
+      .every(row => row.credits === undefined)).toBe(true);
   });
 });
 

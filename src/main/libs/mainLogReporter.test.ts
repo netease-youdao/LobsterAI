@@ -51,6 +51,16 @@ describe('MainLogReporter', () => {
     expect(result.searchParams.get('log_Usid')).toBe('user-1');
     expect(result.searchParams.get('user_id')).toBe('user-1');
     expect(result.searchParams.get('uts')).toBe('1234');
+    expect(result.searchParams.get('eventId')).toMatch(/^[\da-f-]{36}$/i);
+    expect(result.searchParams.get('environment')).toBe('production');
+  });
+
+  test('classifies test-mode events independently of the installed build environment', async () => {
+    const store = createStore({ [LogReporterStoreKey.AppConfig]: { app: { testMode: true } } });
+    const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const reporter = new MainLogReporter({ store, fetch, appVersion: 'test-version', environment: 'production' });
+    await reporter.report({ action: LogReporterAction.TaskLifecycle, environment: 'production' });
+    expect(new URL(fetch.mock.calls[0][0]).searchParams.get('environment')).toBe('test');
   });
 
   test('skips sending without creating an installation id when analytics is disabled', async () => {
@@ -209,7 +219,16 @@ describe('frozen main-process telemetry transport', () => {
     local.userId = 'user-b'; local.timestamp = 2000;
     expect(new URL(event.url).searchParams.get('user_id')).toBe('user-a');
     expect(new URL(event.url).searchParams.get('uts')).toBe('1000');
+    expect(new URL(event.url).searchParams.get('eventId')).toBe('event');
     expect(freezeMainLogEvent({ action: 'lobsterai_remote_runtime', tooLong: 'x'.repeat(3000) }, context)).toBeNull();
+  });
+  test('preserves an explicit event id across retry encoding and generates ids for new occurrences', () => {
+    const params = { action: LogReporterAction.TaskLifecycle, eventId: 'persisted-occurrence' };
+    const first = buildMainLogUrl(params, context);
+    expect(new URL(first).searchParams.get('eventId')).toBe(params.eventId);
+    expect(buildMainLogUrl(params, context)).toBe(first);
+    const newOccurrence = { action: LogReporterAction.TaskLifecycle };
+    expect(buildMainLogUrl(newOccurrence, context)).not.toBe(buildMainLogUrl(newOccurrence, context));
   });
   test('hard timeout settles even when an injected transport ignores cancellation', async () => {
     vi.useFakeTimers();

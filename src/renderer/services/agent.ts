@@ -18,6 +18,8 @@ import { clearAgentSelectedModel } from '../store/slices/modelSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
 import { accountBoundRequest } from './accountBoundRequest';
+import { i18nService } from './i18n';
+import { resetDraftAnalytics } from './usageAnalytics';
 
 const syncActiveSkillsForCurrentAgent = (agentId: string, skillIds: string[]): void => {
   if (store.getState().agent.currentAgentId !== agentId) {
@@ -36,7 +38,14 @@ interface SwitchAgentOptions {
 }
 
 class AgentService {
+  private watchingExternalChanges = false;
+
   async loadAgents(): Promise<void> {
+    if (!this.watchingExternalChanges) {
+      // Agents edited in another window (e.g. the desktop companion's composer) reload here too.
+      this.watchingExternalChanges = true;
+      window.electron?.agents?.onChanged?.(() => { void this.loadAgents(); });
+    }
     store.dispatch(setLoading(true));
     try {
       const agents = await accountBoundRequest(async () => window.electron?.agents?.list());
@@ -46,6 +55,7 @@ class AgentService {
           name: a.name,
           description: a.description,
           icon: a.icon,
+          iconCustomized: a.iconCustomized,
           model: a.model ?? '',
           thinkingLevel: a.thinkingLevel ?? '',
           workingDirectory: a.workingDirectory ?? '',
@@ -55,6 +65,7 @@ class AgentService {
           sortOrder: a.sortOrder ?? null,
           isDefault: a.isDefault,
           source: a.source,
+          presetId: a.presetId,
           skillIds: a.skillIds ?? [],
           subagentAllowAgentIds: a.subagentAllowAgentIds ?? [],
         }));
@@ -87,6 +98,7 @@ class AgentService {
           name: agent.name,
           description: agent.description,
           icon: agent.icon,
+          iconCustomized: agent.iconCustomized,
           model: agent.model ?? '',
           thinkingLevel: agent.thinkingLevel ?? '',
           workingDirectory: agent.workingDirectory ?? '',
@@ -96,6 +108,7 @@ class AgentService {
           sortOrder: agent.sortOrder ?? null,
           isDefault: agent.isDefault,
           source: agent.source,
+          presetId: agent.presetId,
           skillIds: agent.skillIds ?? [],
           subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
         }));
@@ -126,6 +139,12 @@ class AgentService {
     try {
       const agent = await accountBoundRequest(async () => window.electron?.agents?.update(id, updates));
       if (agent) {
+        if (updates.model !== undefined) {
+          // Agent.model is now authoritative for virtual models too.
+          const cleared = await accountBoundRequest(() => window.electron.modelPresets.setPreference(id, null));
+          if (!cleared.success) throw new Error(cleared.error || i18nService.t('agentSaveFailed'));
+          store.dispatch(clearAgentSelectedModel(id));
+        }
         const skillIds = agent.skillIds ?? [];
         store.dispatch(updateAgentAction({
           id: agent.id,
@@ -133,6 +152,7 @@ class AgentService {
             name: agent.name,
             description: agent.description,
             icon: agent.icon,
+            iconCustomized: agent.iconCustomized,
             model: agent.model ?? '',
             thinkingLevel: agent.thinkingLevel ?? '',
             workingDirectory: agent.workingDirectory ?? '',
@@ -168,6 +188,7 @@ class AgentService {
         name: agent.name,
         description: agent.description,
         icon: agent.icon,
+        iconCustomized: agent.iconCustomized,
         model: agent.model ?? '',
         thinkingLevel: agent.thinkingLevel ?? '',
         workingDirectory: agent.workingDirectory ?? '',
@@ -177,6 +198,7 @@ class AgentService {
         sortOrder: agent.sortOrder ?? null,
         isDefault: agent.isDefault,
         source: agent.source,
+        presetId: agent.presetId,
         skillIds: agent.skillIds ?? [],
         subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
       }));
@@ -257,6 +279,7 @@ class AgentService {
           name: agent.name,
           description: agent.description,
           icon: agent.icon,
+          iconCustomized: agent.iconCustomized,
           model: agent.model ?? '',
           thinkingLevel: agent.thinkingLevel ?? '',
           workingDirectory: agent.workingDirectory ?? '',
@@ -266,6 +289,7 @@ class AgentService {
           sortOrder: agent.sortOrder ?? null,
           isDefault: agent.isDefault,
           source: agent.source,
+          presetId: agent.presetId,
           skillIds: agent.skillIds ?? [],
           subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
         }));
@@ -280,6 +304,7 @@ class AgentService {
 
   switchAgent(agentId: string, options: SwitchAgentOptions = {}): void {
     if (agentId !== AgentId.Main && !store.getState().agent.agents.some(agent => agent.id === agentId)) return;
+    resetDraftAnalytics();
     store.dispatch(setCurrentAgentId(agentId));
     store.dispatch(clearCurrentSession(options.targetSessionId
       ? { sessionNavigationTargetId: options.targetSessionId }

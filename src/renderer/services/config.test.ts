@@ -323,6 +323,26 @@ describe('configService artifact auto-preview persistence', () => {
 });
 
 describe('configService shortcut migrations', () => {
+  test('leaves voice input unbound for existing configurations without it', async () => {
+    const { [ShortcutAction.VoiceInput]: _voiceInput, ...legacyShortcuts } = defaultConfig.shortcuts!;
+    const { configService } = await loadConfigServiceWithStoredConfig({
+      ...defaultConfig,
+      shortcuts: legacyShortcuts as AppConfig['shortcuts'],
+    });
+    await configService.init();
+    expect(configService.getConfig().shortcuts?.[ShortcutAction.VoiceInput]).toBe('');
+  });
+
+  test.each(['Ctrl+Shift+V', ''])('preserves a configured or cleared voice shortcut: %j', async shortcut => {
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig({
+      ...defaultConfig,
+      shortcuts: { ...defaultConfig.shortcuts!, [ShortcutAction.VoiceInput]: shortcut },
+    });
+    await configService.init();
+    expect(configService.getConfig().shortcuts?.[ShortcutAction.VoiceInput]).toBe(shortcut);
+    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).shortcuts?.[ShortcutAction.VoiceInput]).toBe(shortcut);
+  });
+
   test('normalizes prior agent default shortcuts to unset', async () => {
     const storedConfig: AppConfig = {
       ...defaultConfig,

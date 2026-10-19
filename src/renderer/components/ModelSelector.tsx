@@ -3,6 +3,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
+  GiftIcon,
   LockClosedIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -18,9 +19,12 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { getProviderIcon, ProviderIconId } from '../providers/uiRegistry';
 import { authService } from '../services/auth';
+import { getPortalPricingUrl } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
+import { modelPresetName } from '../services/modelPresets';
 import {
   readRememberedModelThinkingLevel,
   rememberModelThinkingLevel,
@@ -30,13 +34,21 @@ import type { Model } from '../store/slices/modelSlice';
 import { getModelIdentityKey, isSameModelIdentity, setSelectedModel } from '../store/slices/modelSlice';
 import Modal from './common/Modal';
 import { resolvePopoverPlacement } from './cowork/popoverPlacement';
+import BalancedModelIcon from './icons/BalancedModelIcon';
+import BusyModelIcon from './icons/BusyModelIcon';
+import { CustomProviderIcon } from './icons/providers';
+import UltimateModelIcon from './icons/UltimateModelIcon';
+import VipDiamondLineIcon from './icons/VipDiamondLineIcon';
+import ModelAccessPromptPopover from './modelSelector/ModelAccessPromptPopover';
 import ModelThinkingMenu, {
   getModelThinkingLevelLabel,
 } from './modelSelector/ModelThinkingMenu';
 import { useModelPurchaseOffer } from './modelSelector/useModelPurchaseOffer';
 import PurchaseOfferCountdown from './PurchaseOfferCountdown';
+import Tooltip, { TooltipPosition } from './ui/Tooltip';
 
 interface ModelSelectorProps {
+  allowPresets?: boolean;
   dropdownDirection?: 'up' | 'down' | 'auto';
   /**
    * Controlled mode: the currently selected Model (or `null` for "default").
@@ -45,12 +57,18 @@ interface ModelSelectorProps {
   value?: Model | null;
   /** Controlled mode callback. `null` means the user picked "default". */
   onChange?: (model: Model | null, meta: ModelSelectorChangeMeta) => void;
+  /** Reuse the host composer's login flow when a plan model requires sign-in. */
+  onLoginRequired?: () => void;
   /** Show a "default" option at the top of the dropdown (controlled mode only). */
   defaultLabel?: string;
   /** Disable interaction while the selected model is being persisted. */
   disabled?: boolean;
   /** Use a denser trigger for compact toolbars. */
   compact?: boolean;
+  /** Show just the provider avatar, with the full model name in its tooltip. */
+  iconOnly?: boolean;
+  /** Keep access prompts beside the selector in transparent companion windows. */
+  anchorAccessPrompt?: boolean;
   /** Render the dropdown outside the local stacking context. */
   portal?: boolean;
   /** Align the dropdown's trailing edge with the trigger's trailing edge. */
@@ -62,8 +80,8 @@ interface ModelSelectorProps {
 }
 
 const DROPDOWN_MAX_HEIGHT = 380; // list max-h-72 plus the tab area and current-model footer
-// Wide enough for the longest plan model name plus its tag, thinking level,
-// multiplier and check columns, so names stay readable instead of truncating.
+// Compact rows reserve separate columns for names, tags, multipliers and status.
+// Long names truncate consistently instead of pushing the other columns around.
 const DROPDOWN_WIDTH = 360;
 const MODEL_ITEM_HEIGHT = 36; // py-2 row with a 20px line
 const LIST_VERTICAL_PADDING = 8; // scroll container py-1
@@ -82,8 +100,6 @@ const THINKING_MENU_WIDTH = 210;
 // look disconnected, and no overlap that makes the panels look stacked.
 const CASCADE_OVERLAP = 0;
 const MODEL_ICON_CLASS_NAME = 'h-[18px] w-[18px]';
-// Foreground-tinted so the tag stays visible on the gray hover/selected row.
-const MODEL_TAG_CLASS_NAME = 'shrink-0 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] font-medium leading-none text-secondary';
 export const CascadeSide = {
   Left: 'left',
   Right: 'right',
@@ -141,8 +157,10 @@ export interface ModelSelectorChangeMeta {
 
 export const ModelAccessPromptKind = {
   AgenticNotReady: 'agentic_not_ready',
+  Busy: 'busy',
   Login: 'login',
   Subscribe: 'subscribe',
+  SubscriptionPriority: 'subscription_priority',
 } as const;
 export type ModelAccessPromptKind = typeof ModelAccessPromptKind[keyof typeof ModelAccessPromptKind];
 
@@ -153,6 +171,8 @@ interface ModelAccessPromptModalProps {
   descriptionKey?: string;
   primaryButtonKey?: string;
   showLearnMore?: boolean;
+  anchorRef?: React.RefObject<HTMLElement>;
+  onChooseModel?: () => void;
 }
 
 export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
@@ -162,28 +182,33 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
   descriptionKey,
   primaryButtonKey,
   showLearnMore = true,
+  anchorRef,
+  onChooseModel,
 }) => {
+  const busyPrompt = promptKind === ModelAccessPromptKind.Busy;
   const agenticNotReadyPrompt = promptKind === ModelAccessPromptKind.AgenticNotReady;
   const loginPrompt = promptKind === ModelAccessPromptKind.Login;
   const purchaseOffer = useModelPurchaseOffer(promptKind === ModelAccessPromptKind.Subscribe, onClose);
   const resolvedTitleKey = titleKey ?? (
-    agenticNotReadyPrompt
+    busyPrompt ? 'modelBusyBadge' : agenticNotReadyPrompt
       ? 'modelSelectorAgenticNotReadyTitle'
       : loginPrompt ? 'modelSelectorLoginTitle' : 'modelSelectorSubscribeTitle'
   );
   const resolvedDescriptionKey = descriptionKey ?? (
-    agenticNotReadyPrompt
+    busyPrompt ? 'modelBusyHint' : agenticNotReadyPrompt
       ? 'serverModelAgenticNotReady'
-      : loginPrompt ? 'modelSelectorLoginDesc' : 'modelSelectorSubscribeDesc'
+      : loginPrompt ? 'modelSelectorLoginDesc'
+        : promptKind === ModelAccessPromptKind.SubscriptionPriority ? 'modelSubscriptionPriorityHint' : 'modelSelectorSubscribeDesc'
   );
   const resolvedPrimaryButtonKey = primaryButtonKey ?? (
-    agenticNotReadyPrompt
+    busyPrompt ? 'close' : agenticNotReadyPrompt
       ? 'modelSelectorAgenticNotReadyBtn'
       : loginPrompt ? 'modelSelectorLoginBtn' : 'modelSelectorSubscribeBtn'
   );
 
   const openSubscriptionPage = async () => {
-    const pricingUrl = purchaseOffer.getPricingUrl();
+    const pricingUrl = promptKind === ModelAccessPromptKind.SubscriptionPriority
+      ? getPortalPricingUrl(undefined, { tab: 'subscription' }) : purchaseOffer.getPricingUrl();
     if (!pricingUrl) return;
     onClose();
     await window.electron.shell.openExternal(pricingUrl);
@@ -195,12 +220,34 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
       await authService.login();
       return;
     }
-    if (promptKind === ModelAccessPromptKind.AgenticNotReady) {
+    if (busyPrompt || promptKind === ModelAccessPromptKind.AgenticNotReady) {
       onClose();
       return;
     }
     await openSubscriptionPage();
   };
+
+  if (anchorRef) {
+    const subscriptionPriority = promptKind === ModelAccessPromptKind.SubscriptionPriority;
+    const purchase = subscriptionPriority || promptKind === ModelAccessPromptKind.Subscribe;
+    return (
+      <ModelAccessPromptPopover
+        anchorRef={anchorRef}
+        title={i18nService.t(subscriptionPriority ? 'modelSelectorSubscriptionRequiredTitle' : resolvedTitleKey)}
+        description={purchaseOffer.description ?? i18nService.t(subscriptionPriority ? 'modelSelectorSubscriptionRequiredDesc' : resolvedDescriptionKey)}
+        primaryLabel={i18nService.t(subscriptionPriority ? 'modelSelectorViewSubscription' : resolvedPrimaryButtonKey)}
+        purchase={purchase}
+        pending={purchaseOffer.isRefreshing}
+        onPrimary={() => { void handlePrimary(); }}
+        onClose={onClose}
+        onChooseModel={onChooseModel}
+      >
+        {purchaseOffer.offer?.expiresAtEpochMs != null && (
+          <div className="mt-3"><PurchaseOfferCountdown offer={purchaseOffer.offer} /></div>
+        )}
+      </ModelAccessPromptPopover>
+    );
+  }
 
   return (
     <Modal
@@ -374,23 +421,28 @@ export function canConfigureModelThinking(
   model: Pick<
     Model,
     | 'accessible'
+    | 'busy'
     | 'agenticReady'
     | 'isServerModel'
+    | 'presetId'
     | 'requestCapabilities'
     | 'runtimeProfile'
     | 'thinkingConfig'
   > | null | undefined,
 ): boolean {
   return !!model?.thinkingConfig
+    && !model.presetId
     && supportsLobsterAIRequestOptionsV1(model.requestCapabilities)
     && model.accessible !== false
+    && model.busy !== true
     && !isModelAgenticBlocked(model);
 }
 
 export function supportsConfigurableModelThinkingProtocol(
-  model: Pick<Model, 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
+  model: Pick<Model, 'presetId' | 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
 ): boolean {
   return !!model?.thinkingConfig
+    && !model.presetId
     && supportsLobsterAIRequestOptionsV1(model.requestCapabilities);
 }
 
@@ -406,9 +458,13 @@ export function hasModelHoverDetails(
     | 'supportsImage'
     | 'supportsThinking'
     | 'thinkingConfig'
+    | 'subscriptionPriority'
+    | 'busy'
   >,
 ): boolean {
-  return !!model.description
+  return !!model.busy
+    || !!model.subscriptionPriority
+    || !!model.description
     || !!model.costMultiplier
     || !!model.supportsImage
     || !!model.supportsThinking
@@ -433,13 +489,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   dropdownDirection = 'auto',
   value,
   onChange,
+  onLoginRequired,
   defaultLabel,
   disabled = false,
   compact = false,
+  iconOnly = false,
+  anchorAccessPrompt = false,
   portal = false,
   alignDropdownToTriggerEnd = false,
   triggerMaxWidthClassName,
   thinkingLevel,
+  allowPresets = true,
 }) => {
   const dispatch = useDispatch();
   const [isOpen, setIsOpen] = React.useState(false);
@@ -475,10 +535,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const globalSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
-  const selectedModel = controlled ? value ?? null : globalSelectedModel;
-  const selectedModelKey = selectedModel ? getModelIdentityKey(selectedModel) : '';
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
-  const serverModels = availableModels.filter(m => m.isServerModel);
+  const selectedValue = controlled ? value ?? null : globalSelectedModel;
+  const currentModelMetadata = selectedValue
+    ? availableModels.find(model => isSameModelIdentity(model, selectedValue)) : undefined;
+  const selectedModel = React.useMemo(() => selectedValue && currentModelMetadata
+    ? { ...selectedValue, busy: currentModelMetadata.busy, accessible: currentModelMetadata.accessible }
+    : selectedValue, [selectedValue, currentModelMetadata]);
+  const isCustomModelSelected = Boolean(selectedModel?.providerKey
+    && !selectedModel.isServerModel
+    && selectedModel.providerKey !== ProviderName.LobsteraiServer);
+  const selectedModelKey = selectedModel ? getModelIdentityKey(selectedModel) : '';
+  const serverModels = availableModels.filter(m => m.isServerModel && (allowPresets || !m.presetId))
+    .map(model => model.presetId && model.presetId === selectedModel?.presetId
+      ? { ...selectedModel, costMultiplier: model.costMultiplier } : model);
   const userModels = availableModels.filter(m => !m.isServerModel);
   const modelGroups = [
     ...(serverModels.length > 0
@@ -525,10 +595,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     ? `${selectedModel.providerKey ?? ''}:${selectedModel.id}`
     : '';
   const selectedModelUnavailableFallbackLogKeyRef = React.useRef('');
-  const triggerMaxWidthClass = triggerMaxWidthClassName ?? (compact ? 'max-w-[220px]' : 'max-w-[280px]');
-  const triggerClassName = compact
-    ? `space-x-1.5 px-2 py-1 rounded-lg ${triggerMaxWidthClass}`
-    : `space-x-2 px-3 py-1.5 rounded-xl ${triggerMaxWidthClass}`;
+  const triggerMaxWidthClass = triggerMaxWidthClassName
+    ?? (compact ? (isCustomModelSelected ? 'max-w-[260px]' : 'max-w-[220px]') : 'max-w-[280px]');
+  const triggerClassName = iconOnly
+    ? 'relative h-8 w-8 shrink-0 justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30'
+    : compact
+      ? `space-x-1.5 px-2 py-1 rounded-lg ${triggerMaxWidthClass}`
+      : `space-x-2 px-3 py-1.5 rounded-xl ${triggerMaxWidthClass}`;
+  const triggerLabel = selectedModel?.presetId
+    ? modelPresetName(selectedModel.presetId)
+    : selectedModel?.name ?? defaultLabel ?? i18nService.t('selectModel');
   const triggerTextClassName = compact
     ? 'font-normal text-[13px] leading-5'
     : 'font-medium text-sm';
@@ -537,12 +613,18 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const providerKey = model.providerKey?.trim();
     if (providerKey && providerKey !== ProviderName.LobsteraiServer) return providerKey;
 
-    const searchableText = `${model.name} ${model.id}`;
+    const searchableText = `${model.presetId ? modelPresetName(model.presetId) : model.name} ${model.id}`;
     return MODEL_ICON_PROVIDER_HINTS.find(({ pattern }) => pattern.test(searchableText))?.providerName
       ?? providerKey
       ?? '';
   };
   const renderProviderIcon = (model: Model): React.ReactNode => {
+    if (model.presetId === ModelPresetId.Balanced) return (
+      <BalancedModelIcon className={MODEL_ICON_CLASS_NAME} />
+    );
+    if (model.presetId === ModelPresetId.Ultimate) return (
+      <UltimateModelIcon className={MODEL_ICON_CLASS_NAME} />
+    );
     const icon = getProviderIcon(resolveModelIconProviderKey(model));
     if (!React.isValidElement<{ className?: string }>(icon)) return icon;
 
@@ -551,6 +633,26 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       className: `${existingClassName}${MODEL_ICON_CLASS_NAME}`,
     });
   };
+
+  // Refresh access and campaign metadata whenever the picker opens.
+  React.useEffect(() => {
+    if (isOpen && isLoggedIn) void authService.refreshServerModels();
+  }, [isOpen, isLoggedIn]);
+
+  // Refresh at campaign boundaries while the picker remains open.
+  React.useEffect(() => {
+    if (!isOpen || !isLoggedIn) return;
+    const now = Date.now();
+    const nextBoundary = availableModels.flatMap(model => model.limitedFree
+      ? [model.limitedFreeStartAt, model.limitedFreeEndAt] : [])
+      .map(value => value ? Date.parse(value) : NaN)
+      .filter(value => Number.isFinite(value) && value > now)
+      .sort((a, b) => a - b)[0];
+    if (nextBoundary == null) return;
+    const timer = window.setTimeout(() => { void authService.refreshServerModels(); },
+      Math.min(nextBoundary - now + 100, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [availableModels, isOpen, isLoggedIn]);
 
   // 点击外部区域关闭下拉框
   React.useEffect(() => {
@@ -744,26 +846,57 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     return resolvePickerThinkingLevel({
       config,
       requestedLevel,
-      selectedModelLevel: isSelected(model) ? thinkingLevel : undefined,
-      rememberedLevel: readRememberedModelThinkingLevel(getModelIdentityKey(model)),
+      selectedModelLevel: isSelected(model) ? thinkingLevel : model.presetThinkingLevel,
+      rememberedLevel: model.presetId ? undefined : readRememberedModelThinkingLevel(getModelIdentityKey(model)),
     });
+  };
+
+  const presetUsesDefaultThinking = (model: Model): boolean => !!model.presetId && !model.thinkingConfig
+    && !(isSelected(model) ? selectedModel?.presetThinkingLevel : model.presetThinkingLevel);
+  const thinkingLabelForModel = (model: Model): string | null => {
+    if (presetUsesDefaultThinking(model)) return i18nService.t('modelPresetThinkingDefault');
+    const level = resolveThinkingLevel(model) ?? model.thinkingConfig?.defaultLevel;
+    return level ? getModelThinkingLevelLabel(level) : null;
+  };
+
+  const handleLoginRequired = () => {
+    if (onLoginRequired) {
+      onLoginRequired();
+      return;
+    }
+    setRestrictedPrompt(ModelAccessPromptKind.Login);
   };
 
   const handleModelSelect = (model: Model | null) => {
     if (disabled) return;
+    if (model?.busy) {
+      setRestrictedPrompt(ModelAccessPromptKind.Busy);
+      setHoveredModel(null);
+      setIsOpen(false);
+      return;
+    }
     if (isModelAgenticBlocked(model)) {
       setRestrictedPrompt(ModelAccessPromptKind.AgenticNotReady);
       setHoveredModel(null);
       setIsOpen(false);
       return;
     }
+    if (model?.presetId && model.accessible === false) {
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: model.restrictionHint || i18nService.t('agentModelInvalidHint') }));
+      return;
+    }
     if (model && model.accessible === false) {
-      setRestrictedPrompt(isLoggedIn ? ModelAccessPromptKind.Subscribe : ModelAccessPromptKind.Login);
+      if (isLoggedIn) {
+        setRestrictedPrompt(model.subscriptionPriority
+          ? ModelAccessPromptKind.SubscriptionPriority : ModelAccessPromptKind.Subscribe);
+      } else {
+        handleLoginRequired();
+      }
       setHoveredModel(null);
       setIsOpen(false);
       return;
     }
-    const resolvedThinkingLevel = model ? resolveThinkingLevel(model) : undefined;
+    const resolvedThinkingLevel = model && !presetUsesDefaultThinking(model) ? resolveThinkingLevel(model) : undefined;
     if (controlled) {
       onChange(model, {
         group: getModelGroup(model) ?? visibleGroup,
@@ -788,7 +921,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
     // Each model keeps its own level, so picking one here must not be lost when
     // the user switches to another model and back.
-    rememberModelThinkingLevel(getModelIdentityKey(model), resolvedThinkingLevel);
+    if (!model.presetId) rememberModelThinkingLevel(getModelIdentityKey(model), resolvedThinkingLevel);
     onChange(model, {
       group: getModelGroup(model) ?? visibleGroup,
       thinkingLevel: resolvedThinkingLevel,
@@ -883,18 +1016,21 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (showSelectedModelUnavailableFallback) {
       return (
         <div ref={containerRef} className="relative cursor-wait">
-          <button
-            type="button"
-            disabled
-            aria-disabled="true"
-            className={`flex min-w-0 items-center overflow-hidden text-foreground transition-colors disabled:cursor-wait disabled:opacity-70 ${triggerClassName}`}
-          >
-            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
-              {renderProviderIcon(selectedModel)}
-            </span>
-            <span className={`${triggerTextClassName} min-w-0 truncate`}>{selectedModel.name}</span>
-            <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />
-          </button>
+          <Tooltip content={triggerLabel} position={TooltipPosition.Top} delay={300} multiline disabled={!iconOnly}>
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              aria-label={iconOnly ? triggerLabel : undefined}
+              className={`flex min-w-0 items-center overflow-hidden text-foreground transition-colors disabled:cursor-wait disabled:opacity-70 ${triggerClassName}`}
+            >
+              <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
+                {renderProviderIcon(selectedModel)}
+              </span>
+              <span className={iconOnly ? 'sr-only' : `${triggerTextClassName} min-w-0 truncate`}>{triggerLabel}</span>
+              {!iconOnly && <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />}
+            </button>
+          </Tooltip>
         </div>
       );
     }
@@ -902,17 +1038,25 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (shouldRenderPlanModelLoginPrompt(availableModels.length, isLoggedIn)) {
       return (
         <div ref={containerRef} className="relative">
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => setRestrictedPrompt(ModelAccessPromptKind.Login)}
-            className={`flex min-w-0 items-center overflow-hidden text-secondary transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-wait disabled:opacity-70 ${triggerClassName}`}
+          <Tooltip
+            content={i18nService.t('modelSelectorLoginForPlanModels')}
+            position={TooltipPosition.Top}
+            delay={300}
+            multiline
+            disabled={!iconOnly || Boolean(restrictedPrompt)}
           >
-            <LockClosedIcon className={`${triggerIconClassName} shrink-0`} />
-            <span className={`${triggerTextClassName} min-w-0 truncate`}>
-              {i18nService.t('modelSelectorLoginForPlanModels')}
-            </span>
-          </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={handleLoginRequired}
+              className={`flex min-w-0 items-center overflow-hidden text-secondary transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-wait disabled:opacity-70 ${triggerClassName}`}
+            >
+              <LockClosedIcon className={`${triggerIconClassName} shrink-0`} />
+              <span className={iconOnly ? 'sr-only' : `${triggerTextClassName} min-w-0 truncate`}>
+                {i18nService.t('modelSelectorLoginForPlanModels')}
+              </span>
+            </button>
+          </Tooltip>
           {restrictedPrompt && (
             <ModelAccessPromptModal
               promptKind={restrictedPrompt}
@@ -924,9 +1068,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
 
     return (
-      <div className="px-3 py-1.5 rounded-xl bg-surface text-secondary text-sm">
-        {i18nService.t('modelSelectorNoModels')}
-      </div>
+      <Tooltip content={i18nService.t('modelSelectorNoModels')} position={TooltipPosition.Top} delay={300} multiline disabled={!iconOnly}>
+        <div
+          className={iconOnly ? 'flex h-8 w-8 items-center justify-center rounded-lg text-secondary' : 'px-3 py-1.5 rounded-xl bg-surface text-secondary text-sm'}
+        >
+          {iconOnly && <CustomProviderIcon className={MODEL_ICON_CLASS_NAME} />}
+          <span className={iconOnly ? 'sr-only' : undefined}>{i18nService.t('modelSelectorNoModels')}</span>
+        </div>
+      </Tooltip>
     );
   }
 
@@ -1029,17 +1178,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const selected = isSelected(model);
     const agenticBlocked = isModelAgenticBlocked(model);
     const restricted = model.accessible === false;
-    const blocked = restricted || agenticBlocked;
+    const busy = model.busy === true;
+    const blocked = restricted || agenticBlocked || busy;
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(model);
 
-    const thinkingLevelLabel = hasThinkingProtocol && model.thinkingConfig
-      ? getModelThinkingLevelLabel(resolveThinkingLevel(model) ?? model.thinkingConfig.defaultLevel)
-      : null;
-    const showCostMultiplier = model.costMultiplier != null && model.costMultiplier > 0;
+    const showCostMultiplier = model.costMultiplier != null && (model.costMultiplier > 0 || !!model.presetId || model.limitedFreeActive === true);
+    const costMultiplierLabel = showCostMultiplier
+      ? `x${model.costMultiplier?.toFixed(2)}`
+      : undefined;
 
-    // Layout: the name (with its tags) takes all remaining width; the thinking
-    // level and multiplier sit in a right-aligned column next to a fixed status
-    // slot, so every row lines up and only extreme names ever truncate.
+    // Keep names, tags and multipliers in fixed columns. Tags and multipliers
+    // align to their column starts so spare width cannot create leading gaps.
     return (
       <button
         ref={selected ? selectedItemRef : undefined}
@@ -1052,46 +1201,53 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onBlur={handleModelHoverEnd}
         aria-disabled={blocked}
         aria-haspopup={thinkingSelectionEnabled && hasThinkingProtocol ? 'menu' : undefined}
-        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
-          blocked
-            ? 'cursor-pointer opacity-60 hover:bg-surface-raised'
+        className={`grid w-full grid-cols-[20px_minmax(0,1fr)_72px_40px_16px] items-center gap-x-1 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+          busy
+            ? 'cursor-not-allowed'
+            : blocked
+              ? 'cursor-pointer opacity-60 hover:bg-surface-raised'
             : selected
               ? 'bg-surface-raised'
               : 'hover:bg-surface-raised'
         }`}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-secondary">
+        <span className={`flex h-5 w-5 shrink-0 items-center justify-center text-secondary ${busy ? 'opacity-50 grayscale' : ''}`}>
           {renderProviderIcon(model)}
         </span>
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span
-            className={`min-w-0 truncate text-[13px] leading-5 ${selected ? 'font-medium' : 'font-normal'}`}
-            title={hasModelHoverDetails(model) ? undefined : model.name}
-          >
-            {model.name}
-          </span>
-          {model.supportsImage && (
-            <span className={MODEL_TAG_CLASS_NAME}>
-              {i18nService.t('modelSupportsImageInputBadge')}
+        <span
+          className={`min-w-0 truncate text-[13px] leading-5 ${selected ? 'font-medium' : 'font-normal'} ${busy ? 'text-secondary opacity-50' : ''}`}
+          title={hasModelHoverDetails(model) ? undefined : model.name}
+        >
+          {model.presetId ? modelPresetName(model.presetId) : model.name}
+        </span>
+        <span className="flex min-w-0 flex-col items-start gap-1">
+          {model.presetId && restricted && model.restrictionHint && (
+            <span className="max-w-full truncate text-[10px] text-secondary" title={model.restrictionHint}>{model.restrictionHint}</span>
+          )}
+          {!model.presetId && model.limitedFreeActive && (
+            <span className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] leading-none text-red-600 dark:text-red-400" title={i18nService.t('modelLimitedFreeBadge')}>
+              <GiftIcon className="h-3 w-3 shrink-0" strokeWidth={1.8} aria-hidden="true" />
+              <span className="truncate">{i18nService.t('modelLimitedFreeBadge')}</span>
             </span>
           )}
-          {agenticBlocked && (
-            <span className="flex shrink-0 items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300">
-              <ClockIcon className="h-3 w-3" />
-              {i18nService.t('modelSelectorAgenticVerifyingBadge')}
+          {model.subscriptionPriority && (
+            <span className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" title={i18nService.t('modelSubscriptionPriorityHint')}>
+              <VipDiamondLineIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{i18nService.t('modelSubscriptionPriorityBadge')}</span>
+            </span>
+          )}
+          {!busy && agenticBlocked && (
+            <span className="flex max-w-full items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300" title={i18nService.t('modelSelectorAgenticVerifyingBadge')}>
+              <ClockIcon className="h-3 w-3 shrink-0" />
+              <span className="truncate">{i18nService.t('modelSelectorAgenticVerifyingBadge')}</span>
             </span>
           )}
         </span>
-        {(thinkingLevelLabel || showCostMultiplier) && (
-          <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-4 text-secondary">
-            {thinkingLevelLabel && <span className="font-medium">{thinkingLevelLabel}</span>}
-            {showCostMultiplier && (
-              <span className="min-w-[34px] text-right tabular-nums">x{model.costMultiplier}</span>
-            )}
-          </span>
-        )}
+        <span className={`min-w-0 truncate text-left text-[11px] leading-4 tabular-nums text-secondary ${busy ? 'opacity-50' : ''}`} title={costMultiplierLabel}>
+          {costMultiplierLabel}
+        </span>
         <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-          {restricted && !agenticBlocked && (
+          {restricted && !agenticBlocked && !busy && (
             <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />
           )}
           {selected && !blocked && (
@@ -1102,18 +1258,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   };
 
-  const renderModelRows = (models: Model[]) => {
-    const accessibleModels = models.filter(model => model.accessible !== false);
-    const restrictedModels = models.filter(model => model.accessible === false);
-    return (
-      <>
-        {accessibleModels.map(renderModelItem)}
-        {restrictedModels.length > 0 && (
-          <div>{restrictedModels.map(renderModelItem)}</div>
-        )}
-      </>
-    );
-  };
+  // The server orders models by entitlement before applying busy availability.
+  // Preserve that order so a service outage cannot move a model to the bottom.
+  const renderModelRows = (models: Model[]) => models.map(renderModelItem);
 
   const renderMoreModelsSection = () => {
     if (visibleSections.moreModels.length === 0) return null;
@@ -1146,6 +1293,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (!hoveredModel) return null;
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(hoveredModel);
     const thinkingConfigurable = thinkingSelectionEnabled && canConfigureModelThinking(hoveredModel);
+    const showThinkingBadge = !!hoveredModel.presetId || hoveredModel.supportsThinking;
     const card = (
       <div
         ref={hoverCardRef}
@@ -1156,7 +1304,21 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onBlur={handleModelHoverEnd}
         className="w-[220px] rounded-xl border border-border bg-surface p-3 shadow-popover pointer-events-auto"
       >
-        <div className="text-[13px] font-semibold text-foreground leading-5">{hoveredModel.name}</div>
+        <div className="text-[13px] font-semibold text-foreground leading-5">{hoveredModel.presetId ? modelPresetName(hoveredModel.presetId) : hoveredModel.name}</div>
+        {hoveredModel.busy && (
+          <div className="mt-2 border-t border-border pt-2">
+            <p className="flex items-start gap-1.5 text-[11px] leading-4 text-red-600 dark:text-red-400">
+              <BusyModelIcon className="h-4 w-4 shrink-0" />
+              <span>{i18nService.t('modelBusyHint')}</span>
+            </p>
+          </div>
+        )}
+        {!hoveredModel.busy && hoveredModel.subscriptionPriority && (
+          <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-300 leading-4">{i18nService.t('modelSubscriptionPriorityHint')}</div>
+        )}
+        {hoveredModel.presetId && hoveredModel.accessible === false && hoveredModel.restrictionHint && (
+          <div className="mt-1 text-[11px] text-secondary leading-4">{hoveredModel.restrictionHint}</div>
+        )}
         {hoveredModel.description && (
           <div className="mt-1 text-[11px] text-secondary leading-4">{hoveredModel.description}</div>
         )}
@@ -1167,10 +1329,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         )}
         {hoveredModel.costMultiplier != null && hoveredModel.costMultiplier > 0 && (
           <div className="mt-2 text-[11px] text-secondary">
-            ({i18nService.t('modelCostMultiplierLabel')} x{hoveredModel.costMultiplier})
+            ({i18nService.t('modelCostMultiplierLabel')} x{hoveredModel.costMultiplier.toFixed(2)})
           </div>
         )}
-        {(hoveredModel.supportsImage || hoveredModel.supportsThinking) && (
+        {(hoveredModel.supportsImage || showThinkingBadge) && (
           <div className="mt-1.5 flex items-center gap-3 text-[11px] text-emerald-600">
             {hoveredModel.supportsImage && (
               <span className="flex items-center gap-1">
@@ -1178,7 +1340,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                 <span>{i18nService.t('modelSupportsImageInputBadge')}</span>
               </span>
             )}
-            {hoveredModel.supportsThinking && (
+            {showThinkingBadge && (
               <span className="flex items-center gap-1">
                 <span>✓</span>
                 <span>{i18nService.t('modelSupportsThinkingBadge')}</span>
@@ -1207,14 +1369,18 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           >
             <span>{i18nService.t('modelThinkingStrength')}</span>
             <span className="flex items-center gap-1 font-medium">
-              {getModelThinkingLevelLabel(
-                resolveThinkingLevel(hoveredModel) ?? hoveredModel.thinkingConfig.defaultLevel,
-              )}
+              {thinkingLabelForModel(hoveredModel)}
               {thinkingConfigurable
                 ? <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
                 : <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />}
             </span>
           </button>
+        )}
+        {!thinkingSelectionEnabled && hasThinkingProtocol && hoveredModel.thinkingConfig && (
+          <div className="mt-1.5 flex items-center justify-between py-2 text-[12px] text-foreground">
+            <span>{i18nService.t('modelThinkingStrength')}</span>
+            <span className="font-medium">{thinkingLabelForModel(hoveredModel)}</span>
+          </div>
         )}
       </div>
     );
@@ -1225,7 +1391,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const config = hoveredModel?.thinkingConfig;
     if (!thinkingSelectionEnabled || !hoveredModel || !config || !isThinkingMenuOpen
       || !canConfigureModelThinking(hoveredModel)) return null;
-    const selectedLevel = resolveThinkingLevel(hoveredModel) ?? config.defaultLevel;
+    const selectedLevel = presetUsesDefaultThinking(hoveredModel)
+      ? undefined : resolveThinkingLevel(hoveredModel) ?? config.defaultLevel;
     return createPortal(
       <div
         ref={thinkingMenuRef}
@@ -1290,7 +1457,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           {i18nService.t('modelSelectorCurrentModel')}
         </span>
         <span className="min-w-0 truncate text-[12px] font-medium leading-4 text-foreground">
-          {selectedModel.name}
+          {selectedModel.presetId ? modelPresetName(selectedModel.presetId) : selectedModel.name}
         </span>
         {inOtherGroup && <ChevronRightIcon className="ml-auto h-3 w-3 shrink-0 text-secondary" />}
       </button>
@@ -1303,6 +1470,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       <ModelAccessPromptModal
         promptKind={restrictedPrompt}
         onClose={() => setRestrictedPrompt(null)}
+        anchorRef={anchorAccessPrompt ? containerRef : undefined}
+        onChooseModel={anchorAccessPrompt ? () => {
+          setRestrictedPrompt(null);
+          toggleOpen();
+        } : undefined}
       />
     );
   };
@@ -1343,26 +1515,41 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   return (
     <div ref={containerRef} className={`relative ${disabled ? 'cursor-wait' : 'cursor-pointer'}`}>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={toggleOpen}
-        className={`flex min-w-0 items-center overflow-hidden hover:bg-surface-raised text-foreground transition-colors disabled:opacity-70 disabled:cursor-wait ${triggerClassName} ${isOpen ? 'bg-surface-raised' : ''}`}
-      >
-        {selectedModel?.isServerModel && (
-          <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
-            {renderProviderIcon(selectedModel)}
-          </span>
-        )}
-        <span className={`${triggerTextClassName} min-w-0 truncate`}>{selectedModel?.name ?? defaultLabel ?? ''}</span>
-        {isModelAgenticBlocked(selectedModel) && (
-          <ClockIcon
-            className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-300"
-            aria-label={i18nService.t('serverModelAgenticNotReady')}
-          />
-        )}
-        <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />
-      </button>
+      <Tooltip content={triggerLabel} position={TooltipPosition.Top} delay={300} multiline disabled={!iconOnly || isOpen || Boolean(restrictedPrompt)}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={toggleOpen}
+          aria-label={iconOnly ? `${i18nService.t('model')}: ${triggerLabel}` : undefined}
+          aria-expanded={isOpen}
+          className={`flex min-w-0 items-center overflow-hidden hover:bg-surface-raised text-foreground transition-colors disabled:opacity-70 disabled:cursor-wait ${triggerClassName} ${selectedModel?.busy ? 'text-secondary opacity-60 grayscale' : ''} ${isOpen ? 'bg-surface-raised' : ''}`}
+        >
+          {(iconOnly || selectedModel?.isServerModel) && (
+            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary">
+              {selectedModel ? renderProviderIcon(selectedModel) : <CustomProviderIcon className={MODEL_ICON_CLASS_NAME} />}
+            </span>
+          )}
+          {!iconOnly && isCustomModelSelected && (
+            <span
+              className="inline-flex h-5 shrink-0 items-center gap-1 rounded-md bg-emerald-600/[0.07] px-1.5 text-[11px] font-medium leading-none text-emerald-800 ring-1 ring-inset ring-emerald-700/[0.08] dark:bg-emerald-400/[0.08] dark:text-emerald-200 dark:ring-emerald-300/[0.12]"
+              title={i18nService.t('modelGroupUser')}
+            >
+              <span className="flex shrink-0 items-center" aria-hidden="true">
+                <CustomProviderIcon className="h-3 w-3" />
+              </span>
+              <span>{i18nService.t('modelSourceCustom')}</span>
+            </span>
+          )}
+          <span className={iconOnly ? 'sr-only' : `${triggerTextClassName} min-w-0 truncate`}>{selectedModel?.name ?? defaultLabel ?? ''}</span>
+          {isModelAgenticBlocked(selectedModel) && (
+            <ClockIcon
+              className={`${iconOnly ? 'absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-surface' : 'h-3.5 w-3.5 shrink-0'} text-amber-600 dark:text-amber-300`}
+              aria-label={i18nService.t('serverModelAgenticNotReady')}
+            />
+          )}
+          {!iconOnly && <ChevronDownIcon className={`${triggerIconClassName} shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary`} />}
+        </button>
+      </Tooltip>
 
       {portal && dropdown ? createPortal(dropdown, document.body) : dropdown}
       {renderHoverCard()}

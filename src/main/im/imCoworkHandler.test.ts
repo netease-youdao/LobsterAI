@@ -1,7 +1,9 @@
 import EventEmitter from 'node:events';
 
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 
+import type { RemoteOwner } from '../../shared/remote/constants';
+import type { CreateCoworkSessionOptions } from '../coworkStore';
 import { IMCoworkHandler } from './imCoworkHandler';
 
 class FakeRuntime extends EventEmitter {
@@ -31,6 +33,11 @@ class FakeCoworkStore {
     agentEngine: 'openclaw',
   };
   sessions = new Map<string, Record<string, unknown>>();
+  sourceOwners = new Map<string, RemoteOwner>();
+  sessionCreationOptions = new Map<string, CreateCoworkSessionOptions>();
+  remote = {
+    sourceOwner: vi.fn((sourceId: string) => this.sourceOwners.get(sourceId) ?? null),
+  };
   sessionCounter = 0;
   messageCounter = 0;
 
@@ -42,7 +49,16 @@ class FakeCoworkStore {
     return null;
   }
 
-  createSession(title: string, cwd: string, systemPrompt: string, executionMode: string) {
+  createSession(
+    title: string,
+    cwd: string,
+    systemPrompt: string,
+    executionMode: string,
+    activeSkillIds: string[] = [],
+    agentId = 'main',
+    modelOverride = '',
+    options: CreateCoworkSessionOptions = {},
+  ) {
     const id = `session-${++this.sessionCounter}`;
     const session = {
       id,
@@ -50,11 +66,15 @@ class FakeCoworkStore {
       cwd,
       systemPrompt,
       executionMode,
+      activeSkillIds,
+      agentId,
+      modelOverride,
       claudeSessionId: null,
       status: 'idle',
       messages: [] as Array<Record<string, unknown>>,
     };
     this.sessions.set(id, session);
+    this.sessionCreationOptions.set(id, options);
     return session;
   }
 
@@ -149,6 +169,8 @@ test('IM scheduled-task requests bypass agent execution and create a real cron.a
   const runtime = new FakeRuntime();
   const coworkStore = new FakeCoworkStore();
   const imStore = new FakeIMStore();
+  const sourceOwner = { userId: 'source-user', scopeKey: 'source-account' };
+  coworkStore.sourceOwners.set('im:nim:default', sourceOwner);
   let createdParams: Record<string, unknown> | null = null;
 
   const handler = new IMCoworkHandler({
@@ -190,6 +212,11 @@ test('IM scheduled-task requests bypass agent execution and create a real cron.a
   expect((createdParams!.request as Record<string, unknown>).payloadText).toBe('⏰ 提醒：喝水');
 
   const [session] = [...coworkStore.sessions.values()];
+  expect(coworkStore.remote.sourceOwner).toHaveBeenCalledExactlyOnceWith('im:nim:default');
+  expect(coworkStore.sessionCreationOptions.get(session.id as string)).toEqual({
+    owner: sourceOwner,
+    ownershipSource: 'bound_automation',
+  });
   expect(session).toBeTruthy();
   expect(
     (session.messages as Array<Record<string, unknown>>).map((message) => message.type),
@@ -334,6 +361,11 @@ test('falls back to normal agent execution when detector does not recognize a sc
 
   expect(runtime.startCalls.length).toBe(1);
   expect(runtime.startCalls[0].prompt).toBe('帮我总结一下今天的会议纪要');
+  expect(coworkStore.remote.sourceOwner).toHaveBeenCalledExactlyOnceWith('im:nim:default');
+  expect(coworkStore.sessionCreationOptions.get(runtime.startCalls[0].sessionId)).toEqual({
+    owner: null,
+    ownershipSource: 'bound_automation',
+  });
 
   runtime.emit('message', 'session-1', {
     id: 'assistant-1',
@@ -605,4 +637,28 @@ test('does not relay thinking content for raw async reminder replies', async () 
   ]);
 
   handler.destroy();
+});
+
+test('destroy tolerates background accumulators without rejection callbacks', () => {
+  const runtime = new FakeRuntime();
+  const coworkStore = new FakeCoworkStore();
+  const imStore = new FakeIMStore();
+  const session = coworkStore.createSession('Background session', process.cwd(), '', 'auto');
+  imStore.createSessionMapping('conv-background', 'nim', session.id as string);
+
+  const handler = new IMCoworkHandler({
+    coworkRuntime: runtime,
+    coworkStore,
+    imStore,
+  });
+
+  runtime.emit('message', session.id, {
+    id: 'background-message',
+    type: 'assistant',
+    content: 'Background reply',
+    timestamp: Date.now(),
+    metadata: {},
+  });
+
+  expect(() => handler.destroy()).not.toThrow();
 });

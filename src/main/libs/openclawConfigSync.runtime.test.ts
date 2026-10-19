@@ -231,6 +231,32 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
   });
 
+  test('activates virtual-model routing hooks and preserves the grant across config syncs', async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(), 'openclaw-extensions/lobster-model-routing/openclaw.plugin.json',
+    ), 'utf8'));
+    expect(manifest.activation.onCapabilities).toContain('hook');
+    mockRuntimeState.proxyPort = 4121;
+    const sync = await createSync();
+    expect(sync.sync('model-routing-bootstrap')).toMatchObject({ ok: true });
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(read().plugins.allow).toContain(manifest.id);
+    expect(read().plugins.entries[manifest.id]).toEqual({
+      enabled: true,
+      hooks: { allowConversationAccess: true },
+      config: { proxyUrl: 'http://127.0.0.1:4121', token: '${LOBSTER_PROXY_TOKEN}' },
+    });
+    mockRuntimeState.proxyPort = 4122;
+    expect(sync.sync('model-routing-proxy-rebound')).toMatchObject({ ok: true });
+    expect(read().plugins.entries[manifest.id]).toMatchObject({
+      hooks: { allowConversationAccess: true },
+      config: { proxyUrl: 'http://127.0.0.1:4122' },
+    });
+    mockRuntimeState.proxyPort = null;
+    expect(sync.sync('model-routing-proxy-unavailable')).toMatchObject({ ok: true });
+    expect(read().plugins.entries[manifest.id]).toEqual({ enabled: false });
+  });
+
   test('enables channel scheduling without promoting IM senders to global owners', async () => {
     fs.writeFileSync(configPath, JSON.stringify({
       commands: { ownerAllowFrom: ['gateway-client', '*'] },

@@ -61,6 +61,7 @@ test('registered native questions use one durable arbiter through the runtime an
     remote: {
       entries: () => [], get: (key: string) => structuredClone(values.get(key) ?? null),
       put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
+      activeDecisionRun: () => ({ runId: 'run-1', status: 'running' }),
       run: () => ({ runId: 'run-1', status: 'running' }), owner: () => ({ userId: 'user-1', scopeKey: 'personal' }), updateQuestion,
       transaction: <T>(operation: () => T): T => operation(),
     },

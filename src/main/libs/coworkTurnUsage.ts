@@ -66,13 +66,28 @@ export class CoworkTurnUsageService {
     const trace = getCoworkLlmTrace(message?.metadata);
     if (!message || !trace) return;
     const stats = this.deps.getTraceStats(trace.traceId);
-    if (!stats || stats.requests === 0) {
+    if ((!stats || stats.requests === 0) && !message.metadata?.turnMediaTaskIds?.length) {
       console.debug(
         `[TurnUsage] skipped session ${sessionId}: trace ${trace.traceId} made no LobsterAI model requests.`,
       );
       return;
     }
     await this.settle(sessionId, message.id, { afterTurn: true });
+  }
+
+  /** Bind a generated task to the user message captured before the async tool request. */
+  recordMediaTask(sessionId: string, userMessageId: string, taskId: unknown): void {
+    const isCurrent = this.deps.captureSessionAccess?.(sessionId) ?? (() => true);
+    if (!isCurrent()) return;
+    const id = String(taskId ?? '');
+    if (!/^[1-9]\d*$/.test(id)) return;
+    const store = this.deps.getStore();
+    const message = store.getMessage(sessionId, userMessageId);
+    if (!message || message.type !== 'user') return;
+    const ids = [...new Set([...(message.metadata?.turnMediaTaskIds ?? []), id])];
+    store.updateMessage(sessionId, userMessageId, {
+      metadata: { ...message.metadata, turnMediaTaskIds: ids },
+    });
   }
 
   /** Renderer-triggered refresh, e.g. retrying a failed or partial summary. */
@@ -101,7 +116,8 @@ export class CoworkTurnUsageService {
     if (!message || message.type !== 'user' || !trace) return null;
 
     const previous = getCoworkTurnUsage(message.metadata);
-    const observedCompletedRequests = this.deps.getTraceStats(trace.traceId)?.completed;
+    const observedCompletedRequests = this.deps.getTraceStats(trace.traceId)?.completed
+      ?? previous?.observedCompletedRequests;
     if (!isCurrent()) return null;
     if (mode.afterTurn && !previous) {
       this.deps.emitTurnUsage({
@@ -111,18 +127,22 @@ export class CoworkTurnUsageService {
       });
     }
 
-    let usage = await this.fetchUsage(trace, observedCompletedRequests, isCurrent);
+    const mediaTaskIds = message.metadata?.turnMediaTaskIds ?? [];
+    let usage = await this.fetchUsage(trace, observedCompletedRequests, mediaTaskIds, isCurrent);
     if (!isCurrent()) return null;
-    if (mode.afterTurn && usage?.status === CoworkTurnUsageStatus.Partial) {
+    if (mode.afterTurn && (!usage || usage.status === CoworkTurnUsageStatus.Partial)) {
       await this.sleep(PARTIAL_RETRY_DELAY_MS);
       if (!isCurrent()) return null;
-      usage = await this.fetchUsage(trace, observedCompletedRequests, isCurrent) ?? usage;
+      usage = await this.fetchUsage(trace, observedCompletedRequests, mediaTaskIds, isCurrent) ?? usage;
       if (!isCurrent()) return null;
     }
 
-    // A failed refresh keeps a summary that was already fetched.
+    // Account switches and ledger delays must not replace a saved summary with fewer requests.
     const hasPreviousSummary = previous && previous.status !== CoworkTurnUsageStatus.Failed
       && previous.status !== CoworkTurnUsageStatus.Pending;
+    if (hasPreviousSummary && usage && usage.requestCount < previous.requestCount) {
+      usage = null;
+    }
     const result = usage
       ?? (hasPreviousSummary ? previous : this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Failed, observedCompletedRequests));
     if (!isCurrent()) return null;
@@ -146,6 +166,7 @@ export class CoworkTurnUsageService {
   private async fetchUsage(
     trace: CoworkLlmTrace,
     observedCompletedRequests: number | undefined,
+    mediaTaskIds: string[],
     isCurrent: () => boolean,
   ): Promise<CoworkTurnUsage | null> {
     if (!isCurrent()) return null;
@@ -153,9 +174,9 @@ export class CoworkTurnUsageService {
       console.warn(`[TurnUsage] cannot fetch trace ${trace.traceId}: not signed in.`);
       return null;
     }
-    const url = this.deps.buildServerUrl(
-      `${LLM_TRACE_USAGE_API_PATH}/${trace.traceId}?since=${Math.floor(trace.startedAt)}`,
-    );
+    const params = new URLSearchParams({ since: String(Math.floor(trace.startedAt)) });
+    if (mediaTaskIds.length > 0) params.set('mediaTaskIds', mediaTaskIds.join(','));
+    const url = this.deps.buildServerUrl(`${LLM_TRACE_USAGE_API_PATH}/${trace.traceId}?${params}`);
     try {
       const response = await this.deps.fetchWithAuth(url, {
         method: 'GET',
@@ -177,6 +198,13 @@ export class CoworkTurnUsageService {
       });
       if (!usage) {
         console.warn(`[TurnUsage] summary response for trace ${trace.traceId} was not usable.`);
+      }
+      // An empty ledger can belong to a different signed-in account. It is not
+      // evidence that this local turn cost zero; keep its persisted snapshot.
+      // Zero-credit requests and media-only summaries still contain ledger rows.
+      if (usage && usage.requestCount === 0 && usage.creditsUsed === 0 && usage.totalTokens === 0
+        && !usage.modelUsage?.length && !usage.mediaPending) {
+        return null;
       }
       return usage;
     } catch (error) {

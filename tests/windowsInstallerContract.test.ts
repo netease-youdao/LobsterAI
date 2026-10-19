@@ -1660,3 +1660,79 @@ describe('Windows installer hardening contracts', () => {
     expect(appBuilderPatch).toContain('defines.APP_PACKAGE_URL_IS_INCOMPLETE = null;');
   });
 });
+
+describe('Windows installer Explorer "Open with" contracts', () => {
+  const openWithStart = installerInclude.indexOf('; -- Explorer "Open with" --');
+  const openWith = installerInclude.slice(
+    openWithStart,
+    installerInclude.indexOf('; Standard post-registry electron-builder hook', openWithStart),
+  );
+  const macroBody = (name: string): string => {
+    // Windows checkouts may use CRLF.
+    const start = installerInclude.search(new RegExp(`!macro ${name}\\r?\\n`));
+    return installerInclude.slice(start, installerInclude.indexOf('!macroend', start));
+  };
+  const extensions = [...openWith.matchAll(/!insertmacro \$\{OP\} "([^"]+)"/g)].map(match => match[1]);
+
+  test('lists each extension once, lowercase and without a dot', () => {
+    expect(openWithStart).toBeGreaterThan(-1);
+    expect(extensions.length).toBeGreaterThan(40);
+    expect(new Set(extensions).size).toBe(extensions.length);
+    for (const extension of extensions) {
+      expect(extension).toMatch(/^[a-z0-9]+$/);
+    }
+    expect(extensions).toEqual(
+      expect.arrayContaining(['pdf', 'docx', 'xlsx', 'pptx', 'csv', 'txt', 'md', 'html', 'png', 'jpg', 'mp3']),
+    );
+  });
+
+  test('adds only an OpenWithList entry, never a default app candidate', () => {
+    expect(macroBody('LobsterOpenWithAddExtension EXT')).toContain(
+      'WriteRegStr SHELL_CONTEXT "Software\\Classes\\.${EXT}\\OpenWithList\\${APP_EXECUTABLE_FILENAME}" "" ""',
+    );
+    // Writing the default value of .<ext> is what takes over an association.
+    expect(openWith).not.toMatch(/WriteRegStr SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}" ""/);
+    expect(openWith).not.toContain('APP_ASSOCIATE');
+    // A ProgID under OpenWithProgids becomes the default of a type that has
+    // none, and re-prompts for a type whose default the user never picked.
+    expect(openWith).not.toMatch(/WriteReg\w+ [^\n]*OpenWithProgids/);
+  });
+
+  test('launches the installed exe with the quoted path', () => {
+    const register = macroBody('LobsterRegisterOpenWith');
+    // The OpenWithList entries name the exe; Explorer resolves them here.
+    expect(register).toContain(
+      'WriteRegStr SHELL_CONTEXT "Software\\Classes\\Applications\\${APP_EXECUTABLE_FILENAME}\\shell\\open\\command" "" \'"$appExe" "%1"\'',
+    );
+    expect(register).toContain(
+      'WriteRegStr SHELL_CONTEXT "Software\\Classes\\Applications\\${APP_EXECUTABLE_FILENAME}" "FriendlyAppName" "${PRODUCT_NAME}"',
+    );
+    expect(register).toContain('!insertmacro LobsterOpenWithExtensions LobsterOpenWithAddExtension');
+    expect(register).toContain('SHChangeNotify');
+  });
+
+  test('uninstall removes only what the installer added', () => {
+    expect(macroBody('LobsterOpenWithRemoveExtension EXT')).toContain(
+      'DeleteRegKey SHELL_CONTEXT "Software\\Classes\\.${EXT}\\OpenWithList\\${APP_EXECUTABLE_FILENAME}"',
+    );
+    // Extension keys and their OpenWithList are shared with other apps; only
+    // LobsterAI's own entry goes.
+    expect(openWith).not.toMatch(/DeleteRegKey[^\n]*\.\$\{EXT\}(\\OpenWithList)?"/);
+    const unregister = macroBody('LobsterUnregisterOpenWith');
+    expect(unregister).toContain('!insertmacro LobsterOpenWithExtensions LobsterOpenWithRemoveExtension');
+    expect(unregister).toContain('DeleteRegKey SHELL_CONTEXT "Software\\Classes\\Applications\\${APP_EXECUTABLE_FILENAME}"');
+    expect(macroBody('customUnInstall')).toContain('!insertmacro LobsterUnregisterOpenWith');
+  });
+
+  test('registers only after the install is committed, after old uninstallers ran', () => {
+    const finalize = macroBody('customInstall');
+    expect(finalize.indexOf('!insertmacro LobsterRegisterOpenWith')).toBeGreaterThan(
+      finalize.indexOf('InstallFinalizeComplete:'),
+    );
+    // When an update does run the old version's uninstaller, it removes the
+    // entries; the template must run it before customInstall writes them again.
+    expect(installSection.indexOf('customUninstallOldVersion SHELL_CONTEXT')).toBeLessThan(
+      installSection.indexOf('!insertmacro customInstall'),
+    );
+  });
+});

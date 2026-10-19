@@ -1,5 +1,7 @@
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { DefaultAgentAvatarIcon } from '@shared/agent/avatar';
+import { ExpertUiEvent } from '@shared/agent/presets';
+import { ENABLE_EXPERT_PLAZA_UI } from '@shared/featureFlags';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import { ProviderName } from '@shared/providers';
@@ -14,14 +16,12 @@ import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter'
 import { resolveThinkingLevelForModel } from '../../services/modelThinkingLevelMemory';
 import type { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
-import type { PresetAgent } from '../../types/agent';
 import type { DingTalkInstanceConfig, DiscordInstanceConfig, FeishuInstanceConfig, IMGatewayConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from '../../types/im';
 import type { Skill } from '../../types/skill';
 import { getAgentDisplayName, getAgentDisplayNameById } from '../../utils/agentDisplay';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
-import AgentAvatarIcon from './AgentAvatarIcon';
 import AgentAvatarPicker from './AgentAvatarPicker';
 import AgentConfirmDialog from './AgentConfirmDialog';
 import AgentDetailToolbar from './AgentDetailToolbar';
@@ -40,9 +40,7 @@ type AgentCreateAnalyticsSource = 'home_agent_sidebar' | 'home_agent_sidebar_emp
 type AgentCreateActionType =
   | 'open'
   | 'close'
-  | 'open_template_picker'
-  | 'close_template_picker'
-  | 'template_selected'
+  | 'open_expert_plaza'
   | 'tab_change'
   | 'create_submit'
   | 'create_success'
@@ -101,9 +99,6 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
-  const [presetTemplates, setPresetTemplates] = useState<PresetAgent[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(false);
-  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [activeTab, setActiveTab] = useState<AgentDetailTab>(AgentDetailTab.Identity);
   const globalSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const agents = useSelector((state: RootState) => state.agent.agents);
@@ -111,15 +106,11 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const [showUnsavedConfirm, setShowUnsavedConfirm] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<{
-    id: string;
-    name: string;
-    skillCount: number;
-  } | null>(null);
   const initialWorkingDirectoryRef = useRef('');
   const initialModelRef = useRef('');
   const initialUserInfoRef = useRef('');
   const initializedOpenRef = useRef(false);
+  const openPlazaOnCloseRef = useRef(false);
 
   // IM binding state — keys are platform names or `platform:<instanceId>` for multi-instance platforms.
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
@@ -172,17 +163,11 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
       isDirty?: boolean;
       result?: 'success' | 'failed';
       targetTab?: AgentDetailTab;
-      template?: {
-        id: string;
-        name: string;
-        skillCount: number;
-      } | null;
     } = {},
   ): void => {
     const changedFields = options.changedFields ?? [];
     const selectedSkills = options.includeConfigDetails ? getSelectedSkills() : [];
     const imPlatforms = options.includeConfigDetails ? getImPlatformsForAnalytics() : [];
-    const template = options.template === undefined ? selectedTemplate : options.template;
     console.debug(`[AgentCreateModal] reporting analytics action ${actionType}`);
     void reportYdAnalyzer({
       action: LogReporterAction.AgentCreateAction,
@@ -190,13 +175,10 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
       actionType,
       activeTab: options.activeTab ?? activeTab,
       targetTab: options.targetTab,
-      creationMode: template ? 'template' : 'blank',
+      creationMode: 'blank',
       isDirty: options.isDirty,
       changedFieldCount: changedFields.length,
       changedFields: changedFields.length > 0 ? changedFields.join(',') : undefined,
-      templateId: template?.id,
-      templateName: template?.name,
-      templateSkillCount: template?.skillCount,
       skillCount: skillIds.length,
       imBindingCount: boundKeys.size,
       hasModel: Boolean(model),
@@ -225,7 +207,6 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     getImPlatformsForAnalytics,
     getSelectedSkills,
     model,
-    selectedTemplate,
     skillIds.length,
     source,
     workingDirectory,
@@ -238,6 +219,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     }
     if (initializedOpenRef.current) return;
     initializedOpenRef.current = true;
+    openPlazaOnCloseRef.current = false;
     setName('');
     setDescription('');
     setSystemPrompt('');
@@ -255,21 +237,14 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     setSubagentAllowAgentIds([]);
     setActiveTab(AgentDetailTab.Identity);
     setShowUnsavedConfirm(false);
-    setShowTemplatePicker(false);
-    setSelectedTemplate(null);
     setBoundKeys(new Set());
     reportAgentCreateAction('open', {
       activeTab: AgentDetailTab.Identity,
       isDirty: false,
-      template: null,
     });
     imService.loadConfig().then((cfg) => {
       if (cfg) setImConfig(cfg);
     });
-    setTemplatesLoading(true);
-    agentService.getPresetTemplates()
-      .then(setPresetTemplates)
-      .finally(() => setTemplatesLoading(false));
   }, [agents, coworkConfig.workingDirectory, currentAgentId, globalSelectedModel, isOpen, reportAgentCreateAction]);
 
   useEffect(() => {
@@ -295,33 +270,14 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     setSkillIds([]);
     setSubagentAllowAgentIds([]);
     setActiveTab(AgentDetailTab.Identity);
-    setShowTemplatePicker(false);
-    setSelectedTemplate(null);
     setBoundKeys(new Set());
   };
 
-  const handleApplyTemplate = (preset: PresetAgent) => {
-    const isEn = i18nService.getLanguage() === 'en';
-    const templateName = isEn && preset.nameEn ? preset.nameEn : preset.name;
-    const template = {
-      id: preset.id,
-      name: templateName,
-      skillCount: preset.skillIds?.length ?? 0,
-    };
-    setName(templateName);
-    setDescription(isEn && preset.descriptionEn ? preset.descriptionEn : preset.description);
-    setSystemPrompt(isEn && preset.systemPromptEn ? preset.systemPromptEn : preset.systemPrompt);
-    setIdentity(isEn && preset.identityEn ? preset.identityEn : preset.identity);
-    setIcon(preset.icon?.trim() || DefaultAgentAvatarIcon);
-    setSkillIds(preset.skillIds ?? []);
-    setSelectedTemplate(template);
-    reportAgentCreateAction('template_selected', {
-      activeTab: AgentDetailTab.Identity,
-      isDirty: true,
-      template,
-    });
-    setActiveTab(AgentDetailTab.Identity);
-    setShowTemplatePicker(false);
+  const closeEditor = () => {
+    onClose();
+    if (openPlazaOnCloseRef.current) {
+      window.dispatchEvent(new Event(ExpertUiEvent.OpenPlaza));
+    }
   };
 
   const handleClose = () => {
@@ -334,7 +290,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
       setShowUnsavedConfirm(true);
     } else {
       reportAgentCreateAction('close', { isDirty: false });
-      onClose();
+      closeEditor();
     }
   };
 
@@ -344,10 +300,11 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
       isDirty: true,
     });
     setShowUnsavedConfirm(false);
-    onClose();
+    closeEditor();
   };
 
   const handleCancelDiscard = () => {
+    openPlazaOnCloseRef.current = false;
     reportAgentCreateAction('discard_confirm_cancel', {
       changedFields: getChangedFields(),
       isDirty: true,
@@ -607,18 +564,21 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
           </div>
         </div>
         <div className="mt-1 flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              reportAgentCreateAction('open_template_picker', {
-                isDirty: isDirty(),
-              });
-              setShowTemplatePicker(true);
-            }}
-            className="h-8 rounded-lg border border-border bg-surface px-3 text-sm font-medium text-foreground hover:bg-surface-raised transition-colors"
-          >
-            {i18nService.t('agentUseTemplate')}
-          </button>
+          {ENABLE_EXPERT_PLAZA_UI && (
+            <button
+              type="button"
+              onClick={() => {
+                reportAgentCreateAction('open_expert_plaza', {
+                  isDirty: isDirty(),
+                });
+                openPlazaOnCloseRef.current = true;
+                handleClose();
+              }}
+              className="h-8 rounded-lg border border-border bg-surface px-3 text-sm font-medium text-foreground hover:bg-surface-raised transition-colors"
+            >
+              {i18nService.t('expertChooseFromPlaza')}
+            </button>
+          )}
           <button type="button" onClick={handleClose} className="p-2 rounded-lg hover:bg-surface-raised transition-colors">
             <XMarkIcon className="h-5 w-5 text-secondary" />
           </button>
@@ -835,37 +795,20 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
     </>
   );
 
-  const closeTemplatePicker = () => {
-    reportAgentCreateAction('close_template_picker', {
-      isDirty: isDirty(),
-    });
-    setShowTemplatePicker(false);
-  };
-
-  const content = showTemplatePicker ? (
-    <AgentTemplatePickerContent
-      presets={presetTemplates}
-      loading={templatesLoading}
-      onClose={closeTemplatePicker}
-      onNew={closeTemplatePicker}
-      onSelect={handleApplyTemplate}
-    />
-  ) : editorContent;
-
   return (
     <>
       {presentation === 'page' ? (
         <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-sm">
-          {content}
+          {editorContent}
         </div>
       ) : (
         <Modal
           isOpen={isOpen}
-          onClose={showTemplatePicker ? closeTemplatePicker : handleClose}
+          onClose={handleClose}
           overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/10 dark:bg-black/50"
           className="w-[calc(100vw-56px)] max-w-[854px] h-[82vh] max-h-[664px] rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.16)] bg-surface border border-surface flex flex-col overflow-hidden"
         >
-          {content}
+          {editorContent}
         </Modal>
       )}
 
@@ -880,80 +823,6 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
           onConfirm={handleConfirmDiscard}
         />
       )}
-    </>
-  );
-};
-
-const AgentTemplatePickerContent: React.FC<{
-  presets: PresetAgent[];
-  loading: boolean;
-  onClose: () => void;
-  onNew: () => void;
-  onSelect: (preset: PresetAgent) => void;
-}> = ({ presets, loading, onClose, onNew, onSelect }) => {
-  const isEn = i18nService.getLanguage() === 'en';
-
-  return (
-    <>
-      <div className="flex shrink-0 items-center justify-between gap-3 px-7 py-5">
-        <h2 className="text-lg font-semibold text-foreground">
-          {i18nService.t('agentTemplateTitle')}
-        </h2>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onNew}
-            className="h-8 rounded-lg border border-border bg-surface px-3 text-sm font-medium text-foreground hover:bg-surface-raised transition-colors"
-          >
-            {i18nService.t('agentTemplateNew')}
-          </button>
-          <button type="button" onClick={onClose} className="p-2 rounded-lg hover:bg-surface-raised transition-colors">
-            <XMarkIcon className="h-5 w-5 text-secondary" />
-          </button>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-7 pb-7">
-        {loading ? (
-          <div className="flex h-40 items-center justify-center text-sm text-secondary">
-            {i18nService.t('loading')}
-          </div>
-        ) : presets.length === 0 ? (
-          <div className="flex h-40 items-center justify-center text-sm text-secondary">
-            {i18nService.t('agentTemplateEmpty')}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {presets.map((preset) => {
-              const name = isEn && preset.nameEn ? preset.nameEn : preset.name;
-              const description = isEn && preset.descriptionEn ? preset.descriptionEn : preset.description;
-
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => onSelect(preset)}
-                  className="group flex min-h-[132px] flex-col items-start rounded-xl border border-border bg-surface p-4 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
-                >
-                  <div className="flex w-full items-center gap-3">
-                    <AgentAvatarIcon
-                      value={preset.icon}
-                      className="h-8 w-8"
-                      iconClassName="h-5 w-5"
-                    />
-                    <div className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-                      {name}
-                    </div>
-                  </div>
-                  <div className="mt-3 text-sm leading-6 text-foreground/90 line-clamp-3">
-                    {description}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
     </>
   );
 };

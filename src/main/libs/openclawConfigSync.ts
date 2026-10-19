@@ -70,6 +70,7 @@ import {
   getCoworkOpenAICompatProxyToken,
 } from './coworkOpenAICompatProxy';
 import type { LobsterBrowserMcpStdioLaunch } from './lobsterBrowserMcpServer';
+import { buildPresetContextWindows } from './modelPresetContext';
 import {
   buildAgentEntry,
   buildManagedAgentEntries,
@@ -747,6 +748,8 @@ type OpenClawProviderSelection = {
         cacheWrite: number;
       };
       contextWindow?: number;
+      contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
+      contextWindowDefault?: string;
       maxTokens?: number;
       compat?: OpenClawModelCompat;
     }>;
@@ -2344,6 +2347,11 @@ export class OpenClawConfigSync {
               thinkingConfig: sm.thinkingConfig,
             });
             collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
+            const serverModel = serverSel.providerConfig.models[0];
+            Object.assign(serverModel, buildPresetContextWindows({
+              contextWindow: serverModel.contextWindow,
+              presetContextWindows: sm.presetContextWindows,
+            }));
             collectThinkingProfile(
               candidateThinkingProfiles,
               serverSel,
@@ -2421,6 +2429,7 @@ export class OpenClawConfigSync {
     );
     const hasAskUserPlugin = isBundledPluginAvailable('ask-user-question');
     const hasMediaGenPlugin = isBundledPluginAvailable('lobster-media-generation');
+    const hasModelRoutingPlugin = isBundledPluginAvailable('lobster-model-routing');
     const hasDecisionPlugin = isBundledPluginAvailable(DECISION_MODEL_PLUGIN_ID);
     // Runtime-bundled xai extension (dist/extensions/xai): provides the Grok
     // model compat hooks (e.g. only grok-4.3 accepts reasoningEffort) plus the
@@ -2676,6 +2685,17 @@ export class OpenClawConfigSync {
             : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
           ...(hasMediaGenPlugin ? { 'lobster-media-generation': { enabled: true } } : {}),
+          ...(hasModelRoutingPlugin ? {
+            'lobster-model-routing': getOpenClawTokenProxyPort() ? {
+              enabled: true,
+              // Config-path plugins need this grant to register model-selection hooks.
+              hooks: { allowConversationAccess: true },
+              config: {
+                proxyUrl: `http://127.0.0.1:${getOpenClawTokenProxyPort()}`,
+                token: '${LOBSTER_PROXY_TOKEN}',
+              },
+            } : { enabled: false },
+          } : {}),
           // Experimental; enabled below only once the user turns it on.
           ...(hasDecisionPlugin ? { [DECISION_MODEL_PLUGIN_ID]: { enabled: false } } : {}),
           ...(hasModelCompatConfig
@@ -2725,6 +2745,7 @@ export class OpenClawConfigSync {
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
+          ...(hasModelRoutingPlugin ? ['lobster-model-routing'] : []),
           ...(hasModelCompatConfig
             ? [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]
             : []),

@@ -6,6 +6,7 @@ import { agentService } from '../../services/agent';
 import { i18nService } from '../../services/i18n';
 import type { RootState } from '../../store';
 import type { PresetAgent } from '../../types/agent';
+import { usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import AgentAvatarIcon from './AgentAvatarIcon';
@@ -107,6 +108,7 @@ const AgentsView: React.FC<AgentsViewProps> = ({
                 {presetAgents.map((agent) => (
                   <AgentCard
                     key={agent.id}
+                    expertFallback={usesManagedPresetAvatar(agent)}
                     icon={agent.icon}
                     name={agent.name}
                     description={agent.description}
@@ -184,11 +186,12 @@ const AgentsView: React.FC<AgentsViewProps> = ({
 
 const AgentCard: React.FC<{
   icon: string;
+  expertFallback?: boolean;
   name: string;
   description: string;
   isActive: boolean;
   onClick: () => void;
-}> = ({ icon, name, description, isActive, onClick }) => (
+}> = ({ icon, expertFallback, name, description, isActive, onClick }) => (
   <button
     type="button"
     onClick={onClick}
@@ -200,6 +203,7 @@ const AgentCard: React.FC<{
   >
     <AgentAvatarIcon
       value={icon}
+      expertFallback={expertFallback}
       className="h-11 w-11"
       iconClassName="h-[22px] w-[22px]"
     />
@@ -228,6 +232,7 @@ const UninstalledPresetCard: React.FC<{
   <div className="flex flex-col items-start gap-2 p-4 rounded-xl border-2 border-dashed border-border opacity-60 hover:opacity-80 transition-opacity min-h-[140px]">
     <AgentAvatarIcon
       value={icon}
+      expertFallback
       className="h-11 w-11"
       iconClassName="h-[22px] w-[22px]"
     />

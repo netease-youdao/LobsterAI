@@ -7,9 +7,19 @@ import {
   encodeAgentAvatarIcon,
   normalizeAgentAvatarIcon,
   parseAgentAvatarIcon,
+  parseAgentAvatarImageUrl,
 } from './avatar';
 
 describe('agent avatar icon encoding', () => {
+  test('preserves CDN avatars across storage normalization and rejects unsafe URLs', () => {
+    const url = 'https://ydhardwarecommon.nosdn.127.net/avatar.webp';
+    expect(normalizeAgentAvatarIcon(url)).toBe(url);
+    expect(parseAgentAvatarImageUrl(url)).toBe(url);
+    for (const value of ['javascript:alert(1)', 'file:///avatar.png', 'https://localhost/avatar.png', 'https://ydhardwarecommon.nosdn.127.net/avatar.svg', 'http://ydhardwarecommon.nosdn.127.net/avatar.png']) {
+      expect(parseAgentAvatarImageUrl(value)).toBeNull();
+      expect(normalizeAgentAvatarIcon(value)).toBe(DefaultAgentAvatarIcon);
+    }
+  });
   test('round-trips svg avatar selections', () => {
     const value = encodeAgentAvatarIcon({
       svg: AgentAvatarSvg.Code,

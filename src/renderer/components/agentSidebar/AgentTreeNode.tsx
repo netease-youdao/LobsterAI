@@ -3,7 +3,7 @@ import { OwnershipTargetKind } from '@shared/ownership/constants';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
-import { getAgentDisplayName, isDefaultAgentId, shouldUseDefaultAgentIcon } from '../../utils/agentDisplay';
+import { getAgentDisplayName, isDefaultAgentId, shouldUseDefaultAgentIcon, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
 import AgentConfirmDialog from '../agent/AgentConfirmDialog';
 import { AgentConfirmDialogVariant } from '../agent/constants';
@@ -75,6 +75,7 @@ const AgentAvatar: React.FC<{ agent: AgentSidebarAgentNode }> = ({ agent }) => {
   return (
     <AgentAvatarIcon
       value={agent.icon}
+      expertFallback={usesManagedPresetAvatar(agent)}
       className="h-[18px] w-[18px]"
       iconClassName="h-[18px] w-[18px]"
     />

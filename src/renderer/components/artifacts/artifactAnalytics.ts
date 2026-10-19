@@ -1,6 +1,8 @@
 import { LogReporterAction, reportYdAnalyzer } from '@/services/logReporter';
 import type { Artifact } from '@/types/artifact';
 
+import { getArtifactUsageParams } from '../../services/usageAnalytics';
+
 type ArtifactAnalyticsValue = string | number | boolean | null | undefined;
 
 export const ArtifactPreviewActionSource = {
@@ -112,6 +114,7 @@ export const reportArtifactPreviewAction = (options: ReportArtifactPreviewAction
     source: options.source,
     actionType: options.actionType,
     ...getArtifactAnalyticsParams(options.artifact),
+    ...getArtifactUsageParams(options.artifact),
     ...options.params,
   });
 };

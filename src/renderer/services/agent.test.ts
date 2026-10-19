@@ -106,6 +106,9 @@ describe('agentService.updateAgent', () => {
             skillIds: [],
           })),
         },
+        modelPresets: {
+          setPreference: vi.fn().mockResolvedValue({ success: true }),
+        },
       },
     };
 

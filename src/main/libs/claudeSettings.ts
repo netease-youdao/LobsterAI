@@ -1,3 +1,4 @@
+import type { ModelPresetId } from '../../shared/modelPresets/constants';
 import { type ApiFormat,type ProviderConfig, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import {
   type LobsterAIRequestCapability,
@@ -82,6 +83,7 @@ export type ServerModelMetadata = {
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
+  presetContextWindows?: Partial<Record<ModelPresetId, number | null>>;
   maxTokens?: number;
   explicitContextCache?: boolean;
   accessible?: boolean;
@@ -196,6 +198,7 @@ const serializeServerModelMetadata = (
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
+      presetContextWindows: model.presetContextWindows,
       maxTokens: model.maxTokens,
       explicitContextCache: model.explicitContextCache,
       accessible: model.accessible,
@@ -219,6 +222,7 @@ const getComparableServerModelMetadata = (
   supportsToolCalling: meta.supportsToolCalling,
   agenticReady: meta.agenticReady,
   contextWindow: meta.contextWindow,
+  presetContextWindows: meta.presetContextWindows,
   maxTokens: meta.maxTokens,
   explicitContextCache: meta.explicitContextCache,
   accessible: meta.accessible,
@@ -271,6 +275,7 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: runtimeMetadata.contextWindow,
+      presetContextWindows: model.presetContextWindows,
       maxTokens: runtimeMetadata.maxTokens,
       explicitContextCache: model.explicitContextCache,
       accessible: model.accessible,
@@ -300,6 +305,7 @@ export function getAllServerModelMetadata(): ServerModelMetadata[] {
     supportsToolCalling: meta.supportsToolCalling,
     agenticReady: meta.agenticReady,
     contextWindow: meta.contextWindow,
+    presetContextWindows: meta.presetContextWindows,
     maxTokens: meta.maxTokens,
     explicitContextCache: meta.explicitContextCache,
     accessible: meta.accessible,
@@ -325,6 +331,7 @@ export function getServerModelMetadata(modelId: string): ServerModelMetadata | n
     supportsToolCalling: metadata.supportsToolCalling,
     agenticReady: metadata.agenticReady,
     contextWindow: metadata.contextWindow,
+    presetContextWindows: metadata.presetContextWindows,
     maxTokens: metadata.maxTokens,
     explicitContextCache: metadata.explicitContextCache,
     accessible: metadata.accessible,

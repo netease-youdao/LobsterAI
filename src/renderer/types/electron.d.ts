@@ -2,6 +2,7 @@ import type { SubscriptionManagement } from '@shared/auth/subscription';
 import type { OwnershipApi } from '@shared/ownership/types';
 
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
+import type { GenerateSessionTitleRequest } from '../../common/sessionTitle';
 import type {
   ActivityActionResponse,
   ActivityContextResponse,
@@ -11,6 +12,8 @@ import type {
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
+import type { ExpertCatalog } from '../../shared/agent/presets';
+import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
@@ -85,6 +88,7 @@ import type {
   DecisionModelConfigView,
   DecisionModelTestResult,
 } from '../../shared/decisionModel/constants';
+import type { DesktopCompanionBridge } from '../../shared/desktopCompanion/constants';
 import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
@@ -137,6 +141,13 @@ import type {
   LocalWebService,
 } from '../../shared/localWebServices/constants';
 import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
+import type {
+  MediaPreference,
+  MediaPreferenceResult,
+  MediaSelection,
+  MediaType,
+} from '../../shared/media/defaultPolicy';
+import type { AvailableModelPreset, ModelPresetId, ModelPresetPreference } from '../../shared/modelPresets/constants';
 import type { OfficeBridges } from '../../shared/office/editors';
 import type {
   OpenClawEngineErrorCode,
@@ -145,6 +156,7 @@ import type {
   OpenClawLoopbackRepairOutcome,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
+import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
   PublishingQuotaErrorData,
@@ -689,6 +701,7 @@ interface HtmlShareResult {
 interface IElectronAPI {
   ownership: OwnershipApi;
   remote: RemoteSettingsApi;
+  desktopCompanion: DesktopCompanionBridge;
   platform: string;
   arch: string;
   store: {
@@ -864,7 +877,10 @@ interface IElectronAPI {
     delete: (id: string) => Promise<boolean>;
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
+    expertCatalog: () => Promise<ExpertCatalog>;
     addPreset: (presetId: string) => Promise<Agent>;
+    /** Another window changed agents; reload them. */
+    onChanged?: (callback: () => void) => () => void;
   };
   api: {
     fetch: (options: {
@@ -891,7 +907,7 @@ interface IElectronAPI {
     probeModel?: boolean;
   }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
   saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
-  generateSessionTitle: (userInput: string | null) => Promise<string>;
+  generateSessionTitle: (request: GenerateSessionTitleRequest) => Promise<string | null>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
   dsh: {
     getState: () => Promise<{
@@ -1002,11 +1018,13 @@ interface IElectronAPI {
   };
   cowork: {
     startSession: (options: {
+      analytics?: UsageContext;
       prompt: string;
       cwd?: string;
       systemPrompt?: string;
       title?: string;
       activeSkillIds?: string[];
+      inheritedSkillIds?: string[];
       runtimeSkillIds?: string[];
       kitIds?: string[];
       kitReferences?: KitReference[];
@@ -1015,10 +1033,11 @@ interface IElectronAPI {
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
+      modelPresetId?: ModelPresetId;
       thinkingLevel?: string;
       localInput?: import('../../shared/cowork/inputAttachments').CoworkLocalInput;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
-      mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+      mediaSelection?: MediaSelection;
       mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => Promise<{
       success: boolean;
@@ -1028,10 +1047,12 @@ interface IElectronAPI {
       engineStatus?: OpenClawEngineStatus;
     }>;
     continueSession: (options: {
+      analytics?: UsageContext;
       sessionId: string;
       prompt: string;
       systemPrompt?: string;
       activeSkillIds?: string[];
+      inheritedSkillIds?: string[];
       runtimeSkillIds?: string[];
       kitIds?: string[];
       kitReferences?: KitReference[];
@@ -1040,7 +1061,7 @@ interface IElectronAPI {
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       localInput?: import('../../shared/cowork/inputAttachments').CoworkLocalInput;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
-      mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+      mediaSelection?: MediaSelection;
       mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => Promise<{
       success: boolean;
@@ -1690,6 +1711,11 @@ interface IElectronAPI {
     relaunch: () => Promise<void>;
     openSystemNotificationSettings: () => Promise<{ success: boolean; error?: string }>;
   };
+  /** Files and folders macOS asked LobsterAI to open (Finder "Open With", Dock drops). */
+  openWith: {
+    consumePaths: () => Promise<string[]>;
+    onPathsAvailable: (callback: () => void) => () => void;
+  };
   appUpdate: {
     getState: () => Promise<AppUpdateRuntimeState>;
     checkNow: (options?: {
@@ -2074,6 +2100,12 @@ interface IElectronAPI {
       input: ActivityHostExecuteActionInput,
     ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
+  modelPresets: {
+    available: () => Promise<{ success: boolean; data?: AvailableModelPreset[]; error?: string }>;
+    getPreferences: () => Promise<{ success: boolean; data?: Record<string, ModelPresetPreference>; error?: string }>;
+    setPreference: (agentId: string, presetId: ModelPresetId | null, thinkingLevel?: ModelThinkingLevel) => Promise<{ success: boolean; error?: string }>;
+    selectSession: (sessionId: string, presetId: ModelPresetId, thinkingLevel?: ModelThinkingLevel) => Promise<{ success: boolean; data?: CoworkSession; error?: string }>;
+  };
   auth: {
     login: (loginUrl?: string) => Promise<AuthLoginResult>;
     exchange: (
@@ -2129,6 +2161,12 @@ interface IElectronAPI {
         explicitContextCache?: boolean;
         costMultiplier?: number;
         description?: string;
+        limitedFree?: boolean;
+        limitedFreeActive?: boolean;
+        limitedFreeStartAt?: string | null;
+        limitedFreeEndAt?: string | null;
+        subscriptionPriority?: boolean;
+        busy?: boolean;
         moreModel?: boolean;
         accessible?: boolean;
         restrictionHint?: string;
@@ -2148,6 +2186,7 @@ interface IElectronAPI {
         contextWindow?: number | null;
         costMultiplier?: number;
         moreModel?: boolean;
+        busy?: boolean;
       }>;
       imageModels?: Array<{
         modelId: string;
@@ -2194,6 +2233,8 @@ interface IElectronAPI {
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
   };
   media: {
+    getPreferences: (owner: string) => Promise<MediaPreferenceResult>;
+    setPreference: (owner: string, type: MediaType, preference: MediaPreference) => Promise<MediaPreferenceResult>;
     getModels: (type: 'image' | 'video') => Promise<{ success: boolean; models?: Array<{ modelId: string; displayName: string; provider: string; mediaType: string; generationTimeout: number; pricing: Record<string, unknown> }>; error?: string }>;
     getTaskStatus: (taskId: number, type: 'image' | 'video') => Promise<{ success: boolean; task?: Record<string, unknown>; error?: string }>;
   };

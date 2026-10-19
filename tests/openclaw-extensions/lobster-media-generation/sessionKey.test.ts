@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { isLobsterAiDesktopSessionKey } from '../../../openclaw-extensions/lobster-media-generation/sessionKey';
+import { isLobsterAiDesktopSessionKey, isLobsterAiMediaSessionKey } from '../../../openclaw-extensions/lobster-media-generation/sessionKey';
 
 describe('lobster-media-generation session key gating', () => {
   test('allows main agent desktop sessions', () => {
@@ -26,4 +26,19 @@ describe('lobster-media-generation session key gating', () => {
     expect(isLobsterAiDesktopSessionKey('agent:creative-agent:lobsterai:')).toBe(false);
     expect(isLobsterAiDesktopSessionKey('agent:creative-agent')).toBe(false);
   });
+});
+
+test.each([
+  'agent:main:feishu:direct:user-1',
+  'agent:creative-agent:dingtalk-connector:direct:user-1',
+  'agent:main:cron:job-1:run:execution-1',
+  'agent:main:main',
+  'cron:job-1',
+])('allows media tools in native session %s without enabling desktop-only skin tools', sessionKey => {
+  expect(isLobsterAiMediaSessionKey(sessionKey)).toBe(true);
+  expect(isLobsterAiDesktopSessionKey(sessionKey)).toBe(false);
+});
+
+test.each(['', 'agent::main', 'agent:main:', 'agent:main', 'cron:'])('rejects malformed media session %s', sessionKey => {
+  expect(isLobsterAiMediaSessionKey(sessionKey)).toBe(false);
 });

@@ -123,7 +123,8 @@ export const matchesShortcut = (event: KeyboardEvent, shortcut?: string): boolea
   if (!parsed) return false;
   if (event.getModifierState?.('AltGraph')) return false;
 
-  const key = normalizeKey(event.key);
+  // Option+letter produces a symbol on macOS; bindings refer to the physical letter.
+  const key = normalizeKey(event.altKey && /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : event.key);
   if (key !== parsed.key) return false;
 
   if (event.altKey !== parsed.alt) return false;

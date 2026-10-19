@@ -1,14 +1,21 @@
 import { randomUUID } from 'crypto';
 
-import { AgentAccessErrorCode, AgentId, AgentOwnerKind } from '../shared/agent/constants';
+import { parseAgentAvatarImageUrl } from '../shared/agent/avatar';
+import { AgentAccessErrorCode, AgentId, AgentOwnerKind, AgentSource } from '../shared/agent/constants';
+import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
+import type { ExpertCatalog, PresetAgent } from '../shared/agent/presets';
 import type { RemoteOwner } from '../shared/remote/constants';
 import { AgentAccessError, sameAgentOwner } from './agentOwnership';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from './coworkStore';
-import { PRESET_AGENTS, type PresetAgent, presetToCreateRequest } from './presetAgents';
+import { presetToCreateRequest } from './presetAgents';
 
 /** Renderer-facing CRUD; internal runtime consumers continue to use raw CoworkStore reads. */
 export class AgentManager {
-  constructor(private readonly store: CoworkStore, private readonly getOwner: () => RemoteOwner | null = () => null) {}
+  constructor(
+    private readonly store: CoworkStore,
+    private readonly loadCatalog: () => Promise<ExpertCatalog>,
+    private readonly getOwner: () => RemoteOwner | null = () => null,
+  ) {}
 
   captureOwner(): RemoteOwner | null {
     const owner = this.getOwner();
@@ -73,26 +80,55 @@ export class AgentManager {
     const owner = this.getOwner();
     return this.listAgents().filter(agent => {
       const ownership = this.store.agentOwnership.get(agent.id);
-      return agent.source === 'preset' && ownership && (owner
+      return agent.source === AgentSource.Preset && ownership && (owner
         ? ownership.ownerKind === AgentOwnerKind.Owned && sameAgentOwner(ownership.owner, owner)
         : ownership.ownerKind === AgentOwnerKind.Anonymous);
     });
   }
 
-  getPresetAgents(): PresetAgent[] {
+  async getPresetAgents(): Promise<PresetAgent[]> {
+    const owner = this.captureOwner();
+    const presets = await this.getAllPresetAgents();
+    this.assertCurrentOwner(owner);
     const installed = new Set(this.installedPresets().map(agent => agent.presetId));
-    return PRESET_AGENTS.filter(preset => !installed.has(preset.id));
+    return presets.filter(preset => !installed.has(preset.id));
   }
 
-  getAllPresetAgents(): PresetAgent[] {
-    return PRESET_AGENTS;
+  async getExpertCatalog(): Promise<ExpertCatalog> {
+    const owner = this.captureOwner();
+    const catalog = await this.loadCatalog();
+    this.assertCurrentOwner(owner);
+    const presets = new Map(catalog.experts.map(preset => [preset.id, preset]));
+    for (const agent of this.installedPresets()) {
+      const icon = presets.get(agent.presetId)?.icon;
+      if (icon && parseAgentAvatarImageUrl(icon) && usesManagedPresetAvatar(agent) && agent.icon !== icon) {
+        try {
+          this.store.updatePresetAgentAvatar(agent.id, icon, owner);
+        } catch (error) {
+          console.warn('[AgentManager] Failed to refresh preset avatar:', agent.id, error);
+        }
+      }
+    }
+    return catalog;
   }
 
-  addPresetAgent(presetId: string, defaultModel?: string): Agent | null {
-    const preset = PRESET_AGENTS.find(item => item.id === presetId);
+  async getAllPresetAgents(): Promise<PresetAgent[]> {
+    return (await this.getExpertCatalog()).experts;
+  }
+
+  async addPresetAgent(presetId: string, defaultModel?: string): Promise<Agent | null> {
+    const owner = this.captureOwner();
+    // Reuse only this owner's instance, preserving edits and offline availability.
+    const findExisting = () => this.installedPresets().find(agent => agent.presetId === presetId);
+    const existing = findExisting();
+    if (existing) return existing.enabled ? existing : this.updateAgent(existing.id, { enabled: true });
+
+    const preset = (await this.getAllPresetAgents()).find(item => item.id === presetId);
+    this.assertCurrentOwner(owner);
     if (!preset) return null;
-    const existing = this.installedPresets().find(agent => agent.presetId === presetId);
-    if (existing) return existing;
+    // Concurrent catalog requests may have installed this owner's preset already.
+    const createdMeanwhile = findExisting();
+    if (createdMeanwhile) return createdMeanwhile.enabled ? createdMeanwhile : this.updateAgent(createdMeanwhile.id, { enabled: true });
     return this.createAgent({ ...presetToCreateRequest(preset), workingDirectory: '' }, defaultModel);
   }
 }

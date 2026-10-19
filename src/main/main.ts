@@ -27,6 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { buildGoalSettingMessageMetadata } from '../common/goalCommandDisplay';
 import type { OpenClawSessionPatch } from '../common/openclawSession';
+import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { buildSessionTitleFromInput } from '../common/sessionTitle';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
 import {
@@ -40,8 +41,10 @@ import {
   LogReporterAction,
   LogReporterSource,
   LogReporterStoreKey,
+  PromptAnalyticsConversationState,
 } from '../shared/analytics/constants';
-import { AppIpcChannel } from '../shared/app/constants';
+import { UsageAnalytics, type UsageContext, UsageOrigin, UsageOutcome, UsageStage } from '../shared/analytics/usage';
+import { AppIpcChannel, type OpenSettingsRequest, OpenSettingsTab } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
@@ -139,6 +142,8 @@ import {
   type DataMigrationLastRestoreResult,
   DataMigrationRestoreStatus,
 } from '../shared/dataMigration/constants';
+import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
+import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
 import {
   EnterpriseAccountIpcChannel,
@@ -179,7 +184,10 @@ import {
   type LocalWebService,
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
+import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
+import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
+import { type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
 import {
   normalizeNotificationSettings,
   type NotificationSettings,
@@ -238,6 +246,9 @@ import { WorkspaceReviewSourceStore } from './conversation/reviewSource';
 import { isScopedReview, ScopedReviewStore } from './conversation/scopedReview';
 import { type CoworkPermissionSubmission,submitCoworkPermission } from './coworkPermissionIpc';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
+import { DesktopCompanionManager } from './desktopCompanion/desktopCompanionManager';
+import { CompanionLanguageClient } from './desktopCompanion/languageToolClient';
+import { CompanionQuickAnswerService } from './desktopCompanion/quickAnswerService';
 import {
   buildEnterpriseAccountRequestHeaders,
   clearEnterpriseAccountContext,
@@ -337,6 +348,7 @@ import {
 } from './libs/authSessionManager';
 import type { BrowserAnnotationAssetIdentity, SaveBrowserAnnotationAssetInput } from './libs/browserAnnotationAssetStore';
 import { BrowserAnnotationAssetStore } from './libs/browserAnnotationAssetStore';
+import { getResourceAnalyticsSalt } from './libs/capabilityUsage';
 import {
   clearServerModelMetadata,
   evaluateServerModelRunGate,
@@ -378,7 +390,6 @@ import {
 import { CoworkTurnUsageService } from './libs/coworkTurnUsage';
 import {
   ensureElectronNodeShim,
-  generateSessionTitle,
   getElectronNodeRuntimePath,
   probeCoworkModelReadiness,
 } from './libs/coworkUtil';
@@ -394,6 +405,12 @@ import {
 } from './libs/dataMigration/dataMigrationService';
 import { DesktopNotificationManager } from './libs/desktopNotificationManager';
 import {
+  buildDevelopmentProtocolArgs,
+  DevelopmentProtocolSwitch,
+  resolveDevelopmentLaunchContext,
+} from './libs/developmentProtocolContext';
+import {
+  getExpertStoreUrl,
   getHtmlSharePublicBaseUrl,
   getKitStoreUrl,
   getPortalTasksUrl,
@@ -406,6 +423,7 @@ import {
   resolveEnterpriseConfigPath,
   syncEnterpriseConfig,
 } from './libs/enterpriseConfigSync';
+import { ExpertStore } from './libs/expertStore';
 import {
   createOfficePreviewSession,
   createPreviewSession,
@@ -446,6 +464,7 @@ import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyf
 import { LibraryThumbnailRenderer } from './libs/libraryThumbnailRenderer';
 import { LibraryThumbnailService } from './libs/libraryThumbnailService';
 import { shouldRejectNativeLibraryThumbnail } from './libs/libraryThumbnailValidation';
+import { configureUsageTitleReporter, getMediaUsageContext, reportUsageSessionTitle } from './libs/llmUsageContext';
 import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
@@ -458,6 +477,11 @@ import {
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
+import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
+import { MediaTaskStore, type MediaTaskTracker as PersistedMediaTaskTracker } from './libs/mediaTaskStore';
+import { MediaUsageAnalytics } from './libs/mediaUsageAnalytics';
+import { MediaUsageStore } from './libs/mediaUsageStore';
+import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -553,8 +577,11 @@ import {
 } from './libs/openclawTokenProxy';
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
+import { collectOpenWithArgv, OpenWithPathQueue } from './libs/openWithPathQueue';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
+import { recordSessionModelChange } from './libs/sessionModelChange';
+import { SessionTitleGenerator } from './libs/sessionTitleGenerator';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
 import {
   analyzeNodeServiceProjectDirectory,
@@ -588,6 +615,8 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { TaskUsageAnalytics } from './libs/usageAnalytics';
+import { type UsageTitleOutbox, UsageTitleSync } from './libs/usageTitleSync';
 import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
@@ -609,9 +638,13 @@ import {
   resolveAccountBoundValue,
   shouldRemoveMediaTaskAfterPoll,
 } from './mediaAccountIsolation';
+import { applyMediaDefaultParameters, MediaDefaultImageBudget } from './mediaDefaultExecution';
+import { MediaDefaultPolicyManager } from './mediaDefaultPolicyManager';
+import { isMediaGenerationConfirmed } from './mediaGenerationConfirmation';
 import {
   MediaGenerationGateReason,
   MediaGenerationTool,
+  MediaSelectionMode,
   type MediaSelectionState,
   resolveMediaGenerationGate,
 } from './mediaGenerationPolicy';
@@ -621,6 +654,7 @@ import {
   MediaGenerationRequestType,
   summarizeMediaGenerationParamsForLog,
 } from './mediaGenerationReferences';
+import { MediaRunAccountScopes, MediaRunLifecycle } from './mediaRunAccountScopes';
 import { MAIN_OFFICE_FORMATS } from './office/formats';
 import { OfficeEditing } from './office/officeEditing';
 import { OpenClawSessionIpc } from './openclawSession/constants';
@@ -708,7 +742,8 @@ const gwDiagTs = (): string => {
 app.name = APP_NAME;
 app.setName(APP_NAME);
 if (process.platform === 'win32') {
-  app.setAppUserModelId(APP_USER_MODEL_ID);
+  // Electron creates a Start Menu shortcut for notifications, so dev must not share the installed app's identity.
+  app.setAppUserModelId(app.isPackaged ? APP_USER_MODEL_ID : `${APP_USER_MODEL_ID}.dev`);
 }
 
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
@@ -2028,15 +2063,16 @@ const savePngWithDialog = async (
   return { success: true, canceled: false, path: outputPath };
 };
 
-/** Development builds only: automated end-to-end runs use a throwaway profile. */
-const DEV_USER_DATA_DIR_ENV = 'LOBSTERAI_DEV_USER_DATA_DIR';
+const developmentLaunchContext = resolveDevelopmentLaunchContext({
+  isPackaged: app.isPackaged,
+  environment: process.env,
+  userDataDirArgument: app.commandLine.getSwitchValue(DevelopmentProtocolSwitch.UserDataDir),
+  startUrlArgument: app.commandLine.getSwitchValue(DevelopmentProtocolSwitch.StartUrl),
+});
 
 const configureUserDataPath = (): void => {
   const appDataPath = app.getPath('appData');
-  const devUserDataPath = app.isPackaged ? undefined : process.env[DEV_USER_DATA_DIR_ENV]?.trim();
-  const preferredUserDataPath = devUserDataPath && path.isAbsolute(devUserDataPath)
-    ? devUserDataPath
-    : path.join(appDataPath, APP_NAME);
+  const preferredUserDataPath = developmentLaunchContext.userDataDir || path.join(appDataPath, APP_NAME);
   const currentUserDataPath = app.getPath('userData');
 
   if (currentUserDataPath !== preferredUserDataPath) {
@@ -2061,11 +2097,11 @@ if (startupDataMigrationRestoreResult) {
   console.log(`[DataMigration] pending restore finished with status ${status}`);
 }
 
-const isDev = process.env.NODE_ENV === 'development';
+const isDev = developmentLaunchContext.isDev;
 const isLinux = process.platform === 'linux';
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
-const DEV_SERVER_URL = process.env.ELECTRON_START_URL || 'http://localhost:5175';
+const DEV_SERVER_URL = developmentLaunchContext.serverUrl;
 const shouldOpenDevTools =
   isDev && (
     process.env.ELECTRON_OPEN_DEVTOOLS === '1'
@@ -2376,6 +2412,7 @@ const getMainLogReporter = (): MainLogReporter => {
   if (!mainLogReporter) {
     mainLogReporter = new MainLogReporter({
       appVersion: app.getVersion(),
+      environment: app.isPackaged ? 'production' : 'development',
       fetch: async (url, signal) => {
         const response = await session.defaultSession.fetch(url, { method: 'GET', signal });
         const result = { ok: response.ok, status: response.status };
@@ -2604,7 +2641,13 @@ const getCoworkStore = () => {
 let agentManager: AgentManager | null = null;
 const getAgentManager = () => {
   if (!agentManager) {
-    agentManager = new AgentManager(getCoworkStore(), () => getCoworkStore().remoteCreationOwner());
+    const expertStore = new ExpertStore({
+      getEndpoint: getExpertStoreUrl,
+      cacheDirectory: path.join(app.getPath('userData'), 'expert-store'),
+      onLoad: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
+        schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.CatalogRefresh, ...fields }); },
+    });
+    agentManager = new AgentManager(getCoworkStore(), () => expertStore.getCatalog(), () => getCoworkStore().remoteCreationOwner());
   }
   return agentManager;
 };
@@ -4085,6 +4128,24 @@ const bindCoworkRuntimeForwarder = (): void => {
   coworkRuntimeForwarderBound = true;
 };
 
+let taskUsageAnalytics: TaskUsageAnalytics | undefined;
+const getTaskUsageAnalytics = (): TaskUsageAnalytics => {
+  taskUsageAnalytics ??= new TaskUsageAnalytics({
+    report: event => { void getMainLogReporter().report(event); },
+    getOwner: () => {
+      if (getStore().get<{ usageAnalyticsEnabled?: boolean }>('app_config')?.usageAnalyticsEnabled === false) return null;
+      const user = getStore().get<{ yid?: string; userId?: string }>('auth_user');
+      return user?.yid?.trim() || user?.userId?.trim() || '';
+    },
+    getSession: id => getCoworkStore().getSession(id),
+    getSkills: () => getSkillManager().listSkills(),
+    getResourceSalt: () => getResourceAnalyticsSalt(getStore()),
+    getAgent: id => getAgentManager().getAgent(id),
+    updateMessage: (sessionId, id, metadata) => { getCoworkStore().updateMessage(sessionId, id, { metadata }); },
+  });
+  return taskUsageAnalytics;
+};
+
 const getCoworkEngineRouter = () => {
   if (!coworkEngineRouter) {
     if (!openClawRuntimeAdapter) {
@@ -4096,7 +4157,9 @@ const getCoworkEngineRouter = () => {
           beforeExecutionDispatch: (sessionId, runId) => { assertRemoteExecutionPermit(); if (runId) getCoworkStore().remote.markExecutionDispatch(sessionId, runId); markRemoteExecutionDispatched(); },
           prepareDeliverableSync: async (sessionId, cwd) => { await prepareRemoteFileRun?.(sessionId, cwd); },
           normalizeModelRef: normalizeOpenClawModelRef,
-          onChannelPromptSubmit: event => {
+          onChannelPromptSubmit: (event, sessionId) => {
+            getTaskUsageAnalytics().begin(sessionId, {},
+              event.conversationState === PromptAnalyticsConversationState.ContinueSession, UsageOrigin.Im);
             void getMainLogReporter().report({
               action: LogReporterAction.ImPromptSubmit,
               source: LogReporterSource.OpenClawChannel,
@@ -4143,6 +4206,7 @@ const getCoworkEngineRouter = () => {
       getCurrentEngine: resolveCoworkAgentEngine,
       openclawRuntime: openClawRuntimeAdapter,
       assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, currentRemoteExecution()?.owner ?? getCoworkStore().remoteCreationOwner()),
+      analytics: getTaskUsageAnalytics(),
     });
   }
   return coworkEngineRouter;
@@ -4594,6 +4658,7 @@ let mainWindow: BrowserWindow | null = null;
 let showStartupRecovery: (() => void) | null = null;
 let dataMigrationRestoreWindow: BrowserWindow | null = null;
 let desktopNotificationManager: DesktopNotificationManager | null = null;
+let desktopCompanionManager: DesktopCompanionManager | null = null;
 let ensureMainWindowForReason: ((reason: string) => BrowserWindow | null) | null = null;
 let isOpenSessionFromNotificationReady = false;
 let pendingOpenSessionFromNotificationId: string | null = null;
@@ -4687,6 +4752,7 @@ const activeStreamControllers = new Map<string, AbortController>();
 // Media generation selection and authenticated owner per session turn.
 const mediaSelectionBySession = new Map<string, AccountBoundValue<MediaSelectionState>>();
 const mediaTurnAccountScopeBySession = new Map<string, MediaAccountScope>();
+const mediaRunAccountScopes = new MediaRunAccountScopes();
 let resolveCurrentMediaAccountScope = (): MediaAccountScope | null => null;
 
 // Media attachment references per session (for @ mentions, FR-9)
@@ -4702,17 +4768,8 @@ const resolveGeneratedMediaAssetMimeType = (mediaType: 'image' | 'video', url: s
 };
 
 // Async video task polling (FR-8)
-interface MediaTaskTracker {
-  taskId: string;
-  sessionId: string;
-  mediaType: 'image' | 'video';
-  model: string;
-  ownerAccountKey: string;
-  accountGeneration: number;
-  startedAt: number;
-  pollCount: number;
-  timeoutMs: number;
-  lastPollAt?: number;
+interface MediaTaskTracker extends PersistedMediaTaskTracker {
+  userMessageId?: string;
 }
 const pendingMediaTasks = new Map<string, MediaTaskTracker>();
 const mediaTaskOwnerById = new Map<string, string>();
@@ -4728,7 +4785,13 @@ const MEDIA_POLL_FAST_COUNT = 6;
 const MEDIA_POLL_SLOW_COUNT = 18;
 const MEDIA_POLL_MEDIUM_COUNT = 10;
 const MEDIA_TASK_DEFAULT_TIMEOUT_MS = 172_800_000;
-const TERMINAL_MEDIA_TASK_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+const getMediaTaskStore = () => new MediaTaskStore(getStore());
+const getOwnedDurableMediaTask = (taskId: string): MediaTaskTracker | undefined => {
+  const scope = resolveCurrentMediaAccountScope();
+  return scope ? getMediaTaskStore().findOwnedTask(taskId, scope.ownerAccountKey, getServerApiBaseUrl()) : undefined;
+};
+const isDurableMediaTask = (taskId: string): boolean => pendingMediaTasks.get(taskId)?.protocolVersion === MediaProtocol.Durable
+  || getOwnedDurableMediaTask(taskId)?.protocolVersion === MediaProtocol.Durable;
 
 const rememberMediaTaskOwnership = (
   ownerAccountKey: string,
@@ -4741,7 +4804,8 @@ const resolveMediaTaskOwner = (taskId: unknown): string | undefined => {
   const normalizedTaskId = String(taskId ?? '').trim();
   if (!normalizedTaskId) return undefined;
   return pendingMediaTasks.get(normalizedTaskId)?.ownerAccountKey
-    ?? mediaTaskOwnerById.get(normalizedTaskId);
+    ?? mediaTaskOwnerById.get(normalizedTaskId)
+    ?? getOwnedDurableMediaTask(normalizedTaskId)?.ownerAccountKey;
 };
 
 const normalizeOptionalMediaModelId = (modelId: string | undefined): string | undefined => {
@@ -4776,7 +4840,7 @@ const resolveMediaSelectionForSession = (sessionId: string | null): MediaSelecti
       mediaSelectionBySession.get(current),
       resolveCurrentMediaAccountScope(),
     ));
-    if (selection && selection.mode !== 'none') {
+    if (selection) {
       return selection;
     }
 
@@ -5039,11 +5103,20 @@ const markMediaTaskHandledByStatusPolling = (
   ownerAccountKey: string,
   taskId: string,
 ): void => {
+  if (isDurableMediaTask(taskId)) return;
   mediaTasksHandledByStatusPolling.add(getMediaStatusPollKey(sessionId, ownerAccountKey, taskId));
   const tracker = pendingMediaTasks.get(taskId);
   if (tracker?.ownerAccountKey === ownerAccountKey) {
+    refreshMediaTaskTurnUsage(tracker);
     pendingMediaTasks.delete(taskId);
   }
+};
+
+const refreshMediaTaskTurnUsage = (tracker: MediaTaskTracker): void => {
+  if (!tracker.userMessageId) return;
+  void coworkTurnUsageService?.refresh(tracker.sessionId, tracker.userMessageId).catch((error) => {
+    console.warn('[TurnUsage] failed to refresh completed media task usage.', error);
+  });
 };
 
 const isMediaTaskHandledByStatusPolling = (
@@ -5248,11 +5321,14 @@ if (!gotTheLock) {
 } else {
   // Register custom protocol for OAuth callback
   if (!app.isPackaged) {
-    // In dev mode, setAsDefaultProtocolClient needs the electron exe path
-    // and the app entry point as extra args so the OS can relaunch correctly
-    app.setAsDefaultProtocolClient('lobsterai', process.execPath, [
-      path.resolve(process.argv[1]),
-    ]);
+    // The OS does not inherit our shell environment. Replay the profile before
+    // acquiring the single-instance lock, and the renderer URL for cold launches.
+    app.setAsDefaultProtocolClient('lobsterai', process.execPath, buildDevelopmentProtocolArgs({
+      entryPoint: path.resolve(process.argv[1]),
+      userDataDir: app.getPath('userData'),
+      isDev,
+      serverUrl: DEV_SERVER_URL,
+    }));
   } else {
     app.setAsDefaultProtocolClient('lobsterai');
   }
@@ -5340,6 +5416,75 @@ if (!gotTheLock) {
     handleDeepLink(url);
   });
 
+  // macOS: Finder "Open With" and drops on the Dock icon. electron-builder.json
+  // declares public.content/public.archive/public.folder for the Open With
+  // menu, which ignores the public.data wildcard (that one only widens Dock
+  // drops). Cold starts deliver this before `ready`, so paths wait in the
+  // queue until the renderer takes them.
+  const openWithPathQueue = new OpenWithPathQueue({
+    getTarget: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+  });
+
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    if (isDataMigrationRestoreInProgress) {
+      console.log('[OpenWith] ignored open-file while data restore is in progress.');
+      return;
+    }
+    console.debug('[OpenWith] queued a path from macOS open-file');
+    // A multi-selection arrives as one event per item; focus the window once.
+    if (!openWithPathQueue.enqueue(filePath)) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      focusMainWindow('open with');
+    } else if (hasRenderedFirstFrame) {
+      // The window was closed after startup; recreate it as a Dock click would.
+      focusMainWindowForReason('open with');
+    }
+  });
+
+  // Windows: Explorer "Open with" (registered by scripts/nsis-installer.nsh)
+  // starts LobsterAI.exe "<path>"; a running instance gets that command line
+  // in second-instance below.
+  const collectWindowsOpenWithArgv = (argv: string[], cwd: string) => (
+    process.platform === 'win32'
+      ? collectOpenWithArgv(argv, {
+        cwd,
+        appPath: process.defaultApp ? app.getAppPath() : undefined,
+        isExistingPath: fs.existsSync,
+      })
+      : []
+  );
+
+  const launchOpenWithArgs = new Set<string>();
+  for (const entry of collectWindowsOpenWithArgv(process.argv, process.cwd())) {
+    launchOpenWithArgs.add(entry.arg);
+    openWithPathQueue.enqueue(entry.path);
+  }
+  if (launchOpenWithArgs.size > 0) {
+    console.log(`[OpenWith] launched with ${launchOpenWithArgs.size} path(s) from Explorer`);
+  }
+
+  // app.relaunch() reuses the launch command line; leave out the paths
+  // Explorer passed so a relaunch does not open them again.
+  const relaunchApp = (): void => {
+    if (launchOpenWithArgs.size === 0) {
+      app.relaunch();
+      return;
+    }
+    app.relaunch({ args: process.argv.slice(1).filter(arg => !launchOpenWithArgs.has(arg)) });
+  };
+
+  ipcMain.handle(AppIpcChannel.ConsumeOpenWithPaths, event => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+      return [];
+    }
+    const paths = openWithPathQueue.consume();
+    if (paths.length > 0) {
+      console.log(`[OpenWith] renderer took ${paths.length} queued path(s)`);
+    }
+    return paths;
+  });
+
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
     console.debug('[Main] second-instance event', { commandLine, workingDirectory });
     if (isDataMigrationRestoreInProgress) {
@@ -5351,6 +5496,11 @@ if (!gotTheLock) {
     const deepLink = commandLine.find(arg => arg.startsWith('lobsterai://'));
     if (deepLink) {
       handleDeepLink(deepLink);
+    }
+
+    for (const entry of collectWindowsOpenWithArgv(commandLine, workingDirectory)) {
+      console.debug('[OpenWith] queued a path from a second instance');
+      openWithPathQueue.enqueue(entry.path);
     }
 
     focusMainWindow('second instance activation');
@@ -5414,6 +5564,7 @@ if (!gotTheLock) {
       refreshEndpointsTestMode(getStore());
       if (previousServerBaseUrl !== getServerApiBaseUrl()) {
         ownershipAccountEpoch++;
+        desktopCompanionManager?.resetForAccountChange();
         revalidateArtifactPreviews();
         remoteBridge?.accountChanged();
         remoteSettingsController?.notify();
@@ -5610,7 +5761,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('app:relaunch', () => {
     console.log('[Main] app:relaunch requested, scheduling restart...');
-    app.relaunch();
+    relaunchApp();
     quitAppWithoutConfirmation('app:relaunch');
   });
 
@@ -5841,6 +5992,7 @@ if (!gotTheLock) {
     authExchangeIntentSequence += 1;
     activeAuthExchangeIntent = null;
     authAccountGeneration += 1;
+    desktopCompanionManager?.resetForAccountChange();
     revalidateArtifactPreviews();
     const quotaGateChanged = (
       cachedSubscriptionStatus !== AuthSubscriptionStatus.Free
@@ -5971,9 +6123,10 @@ if (!gotTheLock) {
     }
   };
 
-  const emitAuthSessionChanged = (event: AuthSessionChangedEvent): void => {
+  const emitAuthSessionChanged = (event: AuthSessionChangedEvent, excludedWebContentsId?: number): void => {
+    desktopCompanionManager?.resetForAccountChange();
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) {
+      if (!window.isDestroyed() && window.webContents.id !== excludedWebContentsId) {
         window.webContents.send(AuthIpcChannel.SessionChanged, event);
       }
     }
@@ -6333,6 +6486,7 @@ if (!gotTheLock) {
         const next = getCurrentRemoteOwner();
         if (!(previousRemoteOwner === null && next === null) && !sameOwner(previousRemoteOwner, next)) {
           ownershipAccountEpoch++;
+          desktopCompanionManager?.resetForAccountChange();
         }
         const previous = previousRemoteOwner;
         const changed = !(previous === null && next === null) && !sameOwner(previous, next);
@@ -6413,8 +6567,21 @@ if (!gotTheLock) {
     },
   });
 
+  const modelPresetClient = createModelPresetClient({
+    fetchWithAuth,
+    serverBaseUrl: getServerApiBaseUrl,
+    headers: () => buildServerModelCapabilityHeaders(app.getVersion()),
+    isAccountCurrent: () => {
+      const generation = authAccountGeneration;
+      const scope = getCurrentMediaAccountScope();
+      return () => generation === authAccountGeneration
+        && isMediaAccountScopeSnapshotCurrent(scope, getCurrentMediaAccountScope());
+    },
+  });
+
   type AvailableServerModel = ServerModelMetadataInput & {
     modelId: string;
+    presetId?: ModelPresetId;
     modelName: string;
     provider: string;
     apiFormat: string;
@@ -6467,7 +6634,12 @@ if (!gotTheLock) {
       throw new Error(data.message || 'Server model response is invalid.');
     }
 
-    const serverModelsChanged = updateServerModelMetadata(data.data);
+    const presetContextWindows = Object.fromEntries(data.data
+      .filter(model => model.presetId)
+      .map(model => [model.presetId!, model.contextWindow]));
+    const serverModelsChanged = updateServerModelMetadata(data.data.map(model => ({
+      ...model, presetContextWindows,
+    })));
     const serverModelIds = data.data.map(model => model.modelId);
     const serverModelsMissingFromConfig = !openClawConfigHasServerModels(serverModelIds);
     const configSyncOptions = {
@@ -6800,12 +6972,47 @@ if (!gotTheLock) {
   /**
    * Handle media generation tool callbacks from the OpenClaw plugin.
    */
+  const mediaDefaults = new MediaDefaultPolicyManager({
+    get: key => getStore().get(key),
+    set: (key, value) => getStore().set(key, value),
+    remove: key => getStore().delete(key),
+    scope: getCurrentMediaAccountScope,
+    entitled: () => cachedMediaGenerationEntitled,
+    server: getServerApiBaseUrl,
+    fetch: fetchWithAuth,
+  });
+  const defaultImageBudget = new MediaDefaultImageBudget();
+
+  const mediaUsage = new MediaUsageAnalytics({
+    store: new MediaUsageStore({ get: key => getStore().get(key), set: (key, value) => getStore().set(key, value) }),
+    getScope: () => JSON.stringify([getCurrentMediaAccountScope()?.ownerAccountKey, getServerApiBaseUrl()]),
+    getOwner: () => {
+      if (getStore().get<{ usageAnalyticsEnabled?: boolean }>('app_config')?.usageAnalyticsEnabled === false) return null;
+      const scope = getCurrentMediaAccountScope();
+      return scope ? String(scope.ownerAccountKey) + ':' + scope.accountGeneration : '';
+    },
+    context: sessionId => getTaskUsageAnalytics().context(sessionId),
+    report: event => { void getMainLogReporter().report(event); },
+  });
+
   const handleMediaGenerationCallback = async (request: {
     tool: string;
     args: Record<string, unknown>;
-    context: { sessionKey: string; toolCallId: string };
+    context: { sessionKey: string; toolCallId: string; runId?: string };
   }): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean; details?: Record<string, unknown> }> => {
     const { tool, args } = request;
+    if (tool === MediaRunLifecycle.Tool) {
+      if (args.action === MediaRunLifecycle.End) {
+        mediaRunAccountScopes.end(request.context);
+        return { content: [] };
+      }
+      if (args.action !== MediaRunLifecycle.Begin || !request.context.runId) {
+        return { content: [], isError: true };
+      }
+      mediaRunAccountScopes.begin(request.context, getCurrentMediaAccountScope());
+      const scope = mediaRunAccountScopes.resolve(request.context, getCurrentMediaAccountScope());
+      return { content: [], isError: scope === null };
+    }
     const skinRuntime = getSkinRuntimeController();
     if (skinRuntime.handlesTool(tool)) {
       return skinRuntime.handleToolRequest(request);
@@ -6813,7 +7020,15 @@ if (!gotTheLock) {
     const action = (args.action as string) || 'generate';
     const serverBaseUrl = getServerApiBaseUrl();
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
-    const requestAccountScope = resolveMediaTurnAccountScopeForSession(sessionId);
+    // Native runs must not inherit the latest desktop user's usage/selection.
+    const nativeRun = Boolean(request.context.runId);
+    const turnUserMessage = !nativeRun && sessionId && action === 'generate'
+      ? getCoworkStore().getLatestUserMessage(sessionId) : undefined;
+    const turnUserMessageId = turnUserMessage?.id;
+    const usageContext = getMediaUsageContext(sessionId, turnUserMessage);
+    const requestAccountScope = nativeRun
+      ? mediaRunAccountScopes.resolve(request.context, getCurrentMediaAccountScope())
+      : resolveMediaTurnAccountScopeForSession(sessionId);
     const isRequestAccountCurrent = (): boolean => (
       requestAccountScope !== null
       && isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())
@@ -6832,7 +7047,9 @@ if (!gotTheLock) {
     ) {
       return staleAccountResult();
     }
-    const selection = resolveMediaSelectionForSession(sessionId);
+    const selection: MediaSelectionState | undefined = nativeRun
+      ? { mode: MediaSelectionMode.Auto }
+      : resolveMediaSelectionForSession(sessionId);
     const prompt = typeof args.prompt === 'string' ? args.prompt : '';
     const explicitModel = canonicalizeMediaModelId(typeof args.model === 'string' ? args.model : '');
     const resolvedModelFromSelection = tool === MediaGenerationTool.Image
@@ -6851,7 +7068,7 @@ if (!gotTheLock) {
     }
 
     if (action === 'generate' && resolvedModelFromSelection && explicitModel && explicitModel !== resolvedModelFromSelection) {
-      console.warn(`[MediaGeneration] overriding LLM model choice "${explicitModel}" with user selection "${resolvedModelFromSelection}"`);
+      console.warn(`[MediaGeneration] overriding LLM model choice "${explicitModel}" with effective selection "${resolvedModelFromSelection}"`);
       selectedModel = resolvedModelFromSelection;
       selectedModelSource = 'selection-override';
     }
@@ -6922,7 +7139,7 @@ if (!gotTheLock) {
             }).join('\n\n')}`
           : `No ${mediaType} models available.`;
         if (resolvedModelFromSelection) {
-          text += `\n\n---\n**Note:** The user has already selected model "${resolvedModelFromSelection}" for this session. You MUST use this model for the generate action. Do NOT choose a different model.`;
+          text += `\n\n---\n**Note:** The effective model for this session is "${resolvedModelFromSelection}". You MUST use this model for the generate action. Do NOT choose a different model.`;
         }
         return { content: [{ type: 'text', text }], details: { status: 'succeeded', models } };
       }
@@ -6946,7 +7163,9 @@ if (!gotTheLock) {
         const mediaType = tool === MediaGenerationTool.Image ? 'images' : 'videos';
         const statusMediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
         console.log(`[MediaGeneration] checking ${mediaType} task status for task ${taskId}.`);
-        const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/${mediaType}/tasks/${taskId}`);
+        const taskPath = isDurableMediaTask(taskId) ? `${MEDIA_V2_TASKS_PATH}/${encodeURIComponent(taskId)}`
+          : `/api/media/${mediaType}/tasks/${encodeURIComponent(taskId)}`;
+        const resp = await fetchWithAuth(`${serverBaseUrl}${taskPath}`, { signal: AbortSignal.timeout(30_000) });
         console.log(`[MediaGeneration] server returned HTTP ${resp.status} for ${mediaType} task status.`);
         const body = await resp.json() as { code: number; data?: Record<string, unknown>; message?: string };
         if (!isRequestAccountCurrent()) return staleAccountResult();
@@ -6970,8 +7189,9 @@ if (!gotTheLock) {
           task.taskId,
           task.upstreamTaskId,
         );
-        const status = task.status as string;
+        let status = task.status as string;
         const resultUrls = (task.resultUrls as string[]) || [];
+        mediaUsage.observe(taskId, status, resultUrls.length);
         const outputModel = mediaModelIdForOutput(task.model);
         const upstreamModel = typeof task.upstreamModel === 'string' && task.upstreamModel.trim()
           ? task.upstreamModel.trim()
@@ -6995,10 +7215,13 @@ if (!gotTheLock) {
 
         let resultLines: string[];
         let detailsAssets: unknown[] = assets;
+        let savedCount = 0;
         if (status === 'succeeded' && statusMediaType === 'image' && sessionId) {
           const persistResult = await persistGeneratedImages(sessionId, assets);
           if (!isRequestAccountCurrent()) return staleAccountResult();
+          mediaUsage.save(String(args.taskId), persistResult?.saved.length ?? 0, assets.length);
           if (persistResult && persistResult.saved.length > 0) {
+            savedCount = persistResult.saved.length;
             detailsAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
               `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
@@ -7009,7 +7232,9 @@ if (!gotTheLock) {
         } else if (status === 'succeeded' && statusMediaType === 'video' && sessionId) {
           const persistResult = await persistGeneratedVideos(sessionId, assets);
           if (!isRequestAccountCurrent()) return staleAccountResult();
+          mediaUsage.save(String(args.taskId), persistResult?.saved.length ?? 0, assets.length);
           if (persistResult && persistResult.saved.length > 0) {
+            savedCount = persistResult.saved.length;
             detailsAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
               `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
@@ -7023,20 +7248,37 @@ if (!gotTheLock) {
             : resultUrls.map(url => `  - ${url}`);
         }
 
+        const deliveryPending = task.protocolVersion === MediaProtocol.Durable && status === MediaTaskStatus.Succeeded
+          && (assets.length === 0 || savedCount !== assets.length);
+        if (deliveryPending) status = MediaTaskStatus.Processing;
         const lines = [
-          `Task ID: ${task.upstreamTaskId || task.taskId}`,
+          `Task ID: ${task.protocolVersion === MediaProtocol.Durable ? task.taskId : task.upstreamTaskId || task.taskId}`,
           `Model: ${outputModel}`,
           ...(upstreamModel ? [`Selected model: ${upstreamModel}`] : []),
           ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
           `Status: ${status}`,
+          ...(task.protocolVersion === MediaProtocol.Durable && !TERMINAL_MEDIA_TASK_STATUSES.has(status) ? ['This task continues in the background. Do not regenerate. Dependent steps must wait for a saved result.'] : []),
           ...(task.progress ? [`Progress: ${task.progress}%`] : []),
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
           ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
         ];
         const details = {
           taskId: String(task.taskId),
+          protocolVersion: task.protocolVersion,
+          createdAt: task.createdAt,
+          deadlineAt: task.deadlineAt,
+          phase: task.phase,
+          slow: task.slow,
+          canCancel: task.canCancel,
+          error: task.error,
           ...(task.upstreamTaskId ? { upstreamTaskId: String(task.upstreamTaskId) } : {}),
           status,
+          generationStatus: task.status,
+          billingStatus: task.billingStatus,
+          errorMessage: task.errorMessage,
+          ...(deliveryPending ? { phase: MediaTaskPhase.Fetching, deliveryStatus: MediaDeliveryStatus.Retrying } : {}),
+          ...(task.protocolVersion === MediaProtocol.Durable && status === MediaTaskStatus.Succeeded
+            ? { deliveryStatus: MediaDeliveryStatus.Saved } : {}),
           ...(pollCount > 1 ? { pollCount } : {}),
           model: outputModel,
           ...(upstreamModel ? { upstreamModel } : {}),
@@ -7045,6 +7287,12 @@ if (!gotTheLock) {
           ...(detailsAssets.length > 0 ? { assets: detailsAssets } : {}),
           ...(task.quotaRemaining != null ? { billing: { quotaRemaining: task.quotaRemaining } } : {}),
         };
+        if (task.protocolVersion === MediaProtocol.Durable && sessionId) {
+          const tracker = getMediaTaskStore().tasks().find(candidate => candidate.taskId === String(task.taskId)
+            && candidate.sessionId === sessionId && candidate.ownerAccountKey === requestAccountScope.ownerAccountKey
+            && candidate.serverBaseUrl === serverBaseUrl);
+          if (tracker) persistMediaTaskCard(tracker, details);
+        }
         if (sessionId) {
           emitMediaStatusPollUpdate({
             sessionId,
@@ -7071,7 +7319,9 @@ if (!gotTheLock) {
           return staleAccountResult();
         }
         console.log(`[MediaGeneration] cancelling video task ${taskId}.`);
-        const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/videos/tasks/${taskId}/cancel`, { method: 'POST' });
+        const cancelPath = isDurableMediaTask(taskId) ? `${MEDIA_V2_TASKS_PATH}/${encodeURIComponent(taskId)}/cancel`
+          : `/api/media/videos/tasks/${encodeURIComponent(taskId)}/cancel`;
+        const resp = await fetchWithAuth(`${serverBaseUrl}${cancelPath}`, { method: 'POST', signal: AbortSignal.timeout(30_000) });
         console.log(`[MediaGeneration] server returned HTTP ${resp.status} for video task cancel.`);
         const body = await resp.json() as { code: number; message?: string };
         if (!isRequestAccountCurrent()) return staleAccountResult();
@@ -7093,50 +7343,17 @@ if (!gotTheLock) {
 
       // action === 'generate'
       const mediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
-      const endpoint = mediaType === 'image' ? '/api/media/images/generate' : '/api/media/videos/generate';
-
-      // Video generation confirmation: inform user about cost and duration
-      if (mediaType === 'video') {
-        const durationSec = typeof args.durationSeconds === 'number' ? args.durationSeconds : null;
-        const costPoints = durationSec ? durationSec * 100 : null;
-        const portalTasksUrl = getPortalTasksUrl();
-        const subtitle = costPoints
-          ? `本次生成大约预计消耗 **${costPoints}** 积分`
-          : '费用约为 **100** 积分/秒';
-        const questionText = [
-          '请确认当前描述无误，提交后将无法取消。',
-          '视频生成任务耗时较长，请耐心等待。',
-          '',
-          `生成后请妥善保存视频，若误删可在[「个人主页-用量详情-生成任务」](${portalTasksUrl})中下载`,
-          '~~（链接有时效性，请尽快下载）~~',
-        ].join('\n');
-        const confirmResponse = await getMcpRuntime().askUserInternal(
-          [{
-            question: questionText,
-            title: '确认生成视频？',
-            subtitle,
-            options: [
-              { label: '确认生成', description: '开始视频生成任务' },
-              { label: '取消', description: '暂不生成' },
-            ],
-          }],
-          undefined,
-          { sessionKey: request.context.sessionKey },
-        );
-
-        const userCancelled = confirmResponse?.behavior === 'deny'
-          || confirmResponse?.answers?.[questionText] === '取消';
-
-        if (!isRequestAccountCurrent()) return staleAccountResult();
-        if (userCancelled) {
-          console.log('[MediaGeneration] user cancelled video generation confirmation.');
-          return {
-            content: [{ type: 'text', text: 'Video generation cancelled by user.' }],
-            isError: true,
-            details: { status: 'cancelled', reason: 'USER_CANCELLED' },
-          };
-        }
+      const modelResponse = await fetchWithAuth(`${serverBaseUrl}/api/media/${mediaType === 'image' ? 'images' : 'videos'}/models`, { signal: AbortSignal.timeout(15_000) });
+      const modelBody = await modelResponse.json() as { code: number; data?: Array<{ modelId: string; protocolVersions?: number[]; pricingDescription?: string }> };
+      if (modelBody.code !== 0 || !isRequestAccountCurrent()) return staleAccountResult();
+      const modelCapability = modelBody.data?.find(model => canonicalizeMediaModelId(model.modelId) === canonicalizeMediaModelId(selectedModel));
+      if (!modelCapability) {
+        return { content: [{ type: 'text', text: t('mediaSelectedModelUnavailable') }], isError: true,
+          details: { status: 'failed', warnings: ['MEDIA_MODEL_UNAVAILABLE'] } };
       }
+      const useDurableTasks = modelCapability.protocolVersions?.includes(MediaProtocol.Durable) === true;
+      const endpoint = useDurableTasks ? MEDIA_V2_TASKS_PATH
+        : mediaType === 'image' ? '/api/media/images/generate' : '/api/media/videos/generate';
 
       let params: Record<string, unknown> = {};
       if (args.image) {
@@ -7187,7 +7404,9 @@ if (!gotTheLock) {
         }
       }
 
-      const refs = sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
+      const automaticDefault = mediaType === MediaType.Image ? selection?.imageDefault : selection?.videoDefault;
+      params = applyMediaDefaultParameters(params, automaticDefault, mediaType);
+      const refs = !nativeRun && sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
       params = applyMediaReferencesToGenerationParams({
         mediaType: mediaType === MediaGenerationRequestType.Video
           ? MediaGenerationRequestType.Video
@@ -7205,8 +7424,18 @@ if (!gotTheLock) {
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
         const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
-        const buf = await fs.promises.readFile(filePath);
         const mime = MEDIA_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+        if (selectedModel.toLowerCase().includes('seedance') && mime.startsWith('video/')) {
+          throw new Error(t('mediaTaskVideoUrlRequired'));
+        }
+        const stat = await fs.promises.stat(filePath);
+        if (stat.size > (mime.startsWith('image/') ? 20 : 50) * 1024 * 1024) throw new Error(t('mediaTaskInputTooLarge'));
+        const buf = await fs.promises.readFile(filePath);
+        if (mime.startsWith('image/')) {
+          const dimensions = nativeImage.createFromBuffer(buf).getSize();
+          const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
+          if (dimensions.width < minimum || dimensions.height < minimum) throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
+        }
         return `data:${mime};base64,${buf.toString('base64')}`;
       };
       const resolveStringParam = async (name: string) => {
@@ -7286,6 +7515,7 @@ if (!gotTheLock) {
         ? resolveHappyHorse11Selection(selectedModel, params)
         : null;
       const generateReq = {
+        usageContext,
         model: selectedModel,
         type: mediaType === 'video'
           ? (happyHorse11Selection?.type ?? inferVideoGenerationType())
@@ -7293,6 +7523,65 @@ if (!gotTheLock) {
         prompt,
         params,
       };
+
+      if (mediaType === MediaType.Image
+        && defaultImageBudget.needsConfirmation(selection?.imageDefault, request.context.toolCallId)) {
+        const question = t('mediaExtraImageConfirmDescription');
+        const response = await getMcpRuntime().askUserInternal([{
+          question, title: t('mediaExtraImageConfirmTitle'),
+          subtitle: modelCapability.pricingDescription?.trim() || t('mediaVideoConfirmCostUnknown'),
+          options: [
+            { label: t('mediaVideoConfirmAccept'), description: t('mediaVideoConfirmStart') },
+            { label: t('mediaVideoConfirmCancel'), description: t('mediaVideoConfirmLater') },
+          ],
+        }], undefined, { sessionKey: request.context.sessionKey });
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        if (!isMediaGenerationConfirmed(response, question, t('mediaVideoConfirmAccept'))) {
+          return { content: [{ type: 'text', text: t('mediaExtraImageDeclined') }], isError: true,
+            details: { status: 'cancelled', reason: 'USER_CANCELLED' } };
+        }
+      }
+
+      // Video generation confirmation: inform user about cost and duration
+      if (mediaType === 'video') {
+        const subtitle = modelCapability?.pricingDescription?.trim() || t('mediaVideoConfirmCostUnknown');
+        const questionText = t('mediaVideoConfirmDescription').replace('{url}', getPortalTasksUrl())
+          + '\n\n' + t('mediaVideoConfirmRequest', {
+            model: selectedModel,
+            resolution: String(params.resolution ?? '-'),
+            duration: String(params.durationSeconds ?? '-'),
+            prompt: prompt.slice(0, 500),
+          });
+        mediaUsage.confirmation(request.context.toolCallId, UsageOutcome.Requested, selectedModel);
+        const confirmResponse = await getMcpRuntime().askUserInternal(
+          [{
+            question: questionText,
+            title: t('mediaVideoConfirmTitle'),
+            subtitle,
+            options: [
+              { label: t('mediaVideoConfirmAccept'), description: t('mediaVideoConfirmStart') },
+              { label: t('mediaVideoConfirmCancel'), description: t('mediaVideoConfirmLater') },
+            ],
+          }],
+          undefined,
+          { sessionKey: request.context.sessionKey },
+        );
+
+        const userCancelled = !isMediaGenerationConfirmed(
+          confirmResponse, questionText, t('mediaVideoConfirmAccept'),
+        );
+
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        mediaUsage.confirmation(request.context.toolCallId, userCancelled ? UsageOutcome.Denied : UsageOutcome.Allowed);
+        if (userCancelled) {
+          console.log('[MediaGeneration] user cancelled video generation confirmation.');
+          return {
+            content: [{ type: 'text', text: 'Video generation cancelled by user.' }],
+            isError: true,
+            details: { status: 'cancelled', reason: 'USER_CANCELLED' },
+          };
+        }
+      }
 
       console.log('[MediaGeneration] sending generate request to server:', serializeForLog({
         endpoint,
@@ -7309,17 +7598,28 @@ if (!gotTheLock) {
         params: summarizeMediaGenerationParamsForLog(params),
       }));
       if (!isRequestAccountCurrent()) return staleAccountResult();
-      const idempotencyKey = crypto.randomUUID();
+      const intent = useDurableTasks && sessionId ? getMediaTaskStore().beginIntent({
+        callKey: `${sessionId}:${request.context.toolCallId}`,
+        ownerAccountKey: requestAccountScope.ownerAccountKey,
+        serverBaseUrl, sessionId, mediaType, model: selectedModel, toolCallId: request.context.toolCallId,
+        requestBody: JSON.stringify({ ...generateReq, mediaType }),
+      }) : undefined;
+      mediaUsage.submitting(request.context.toolCallId, useDurableTasks ? MediaProtocol.Durable : MediaProtocol.Legacy, selectedModel);
+      const idempotencyKey = intent?.key ?? crypto.randomUUID();
+      if (intent) getMediaTaskStore().saveIntent({ ...intent, lastAttemptAt: Date.now() });
       const resp = await fetchWithAuth(`${serverBaseUrl}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey,
         },
-        body: JSON.stringify(generateReq),
+        body: intent?.requestBody ?? JSON.stringify({ ...generateReq, ...(useDurableTasks ? { mediaType } : {}) }),
+        signal: AbortSignal.timeout(useDurableTasks ? 30_000 : 150_000),
       });
       console.log(`[MediaGeneration] server returned HTTP ${resp.status} for ${mediaType} generate request.`);
       const body = await resp.json() as { code: number; data?: Record<string, unknown>; message?: string };
+      if (intent && body.code !== 0 && resp.status < 500) getMediaTaskStore().saveIntent({ ...intent, rejected: true });
+      if (intent && body.code === 0 && body.data?.taskId != null) getMediaTaskStore().saveIntent({ ...intent, taskId: String(body.data.taskId) });
       if (!isRequestAccountCurrent()) return staleAccountResult();
       if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
         return {
@@ -7378,7 +7678,8 @@ if (!gotTheLock) {
         return {
           content: [{ type: 'text', text: body.message || 'Media generation request failed.' }],
           isError: true,
-          details: { status: 'failed', warnings: [body.message || 'Unknown error'] },
+          details: { status: MediaTaskStatus.Failed, error: body.data?.error, warnings: [body.message || 'Unknown error'],
+            submissionUnknown: Boolean(intent && resp.status >= 500) },
         };
       }
 
@@ -7390,6 +7691,7 @@ if (!gotTheLock) {
       );
       const status = task.status as string;
       const resultUrls = (task.resultUrls as string[]) || [];
+      mediaUsage.accept(request.context.toolCallId, task);
       const outputModel = mediaModelIdForOutput(task.model, selectedModel);
       const upstreamModel = typeof task.upstreamModel === 'string' && task.upstreamModel.trim()
         ? task.upstreamModel.trim()
@@ -7397,6 +7699,9 @@ if (!gotTheLock) {
       const modelSelectionReason = typeof task.modelSelectionReason === 'string' && task.modelSelectionReason.trim()
         ? task.modelSelectionReason.trim()
         : happyHorse11Selection?.reason;
+      if (sessionId && turnUserMessageId && isRequestAccountCurrent()) {
+        coworkTurnUsageService?.recordMediaTask(sessionId, turnUserMessageId, task.taskId);
+      }
       console.log('[MediaGeneration] server accepted generate request:', serializeForLog({
         mediaType,
         taskId: task.taskId,
@@ -7427,7 +7732,7 @@ if (!gotTheLock) {
 
       const lines = [
         `${mediaType === 'image' ? 'Image' : 'Video'} generation task created.`,
-        `Task ID: ${task.upstreamTaskId || task.taskId}`,
+        `Task ID: ${useDurableTasks ? task.taskId : task.upstreamTaskId || task.taskId}`,
         `Model: ${outputModel}`,
         ...(upstreamModel ? [`Selected model: ${upstreamModel}`] : []),
         ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
@@ -7438,6 +7743,7 @@ if (!gotTheLock) {
       if (status === 'succeeded' && mediaType === 'image' && sessionId) {
         const persistResult = await persistGeneratedImages(sessionId, assets);
         if (!isRequestAccountCurrent()) return staleAccountResult();
+          mediaUsage.save(request.context.toolCallId, persistResult?.saved.length ?? 0, assets.length);
         if (persistResult && persistResult.saved.length > 0) {
           detailsAssets = persistResult.saved;
           const fileLines = persistResult.saved.map(asset =>
@@ -7451,6 +7757,7 @@ if (!gotTheLock) {
       } else if (status === 'succeeded' && mediaType === 'video' && sessionId) {
         const persistResult = await persistGeneratedVideos(sessionId, assets);
         if (!isRequestAccountCurrent()) return staleAccountResult();
+          mediaUsage.save(request.context.toolCallId, persistResult?.saved.length ?? 0, assets.length);
         if (persistResult && persistResult.saved.length > 0) {
           detailsAssets = persistResult.saved;
           const fileLines = persistResult.saved.map(asset =>
@@ -7467,7 +7774,7 @@ if (!gotTheLock) {
       }
 
       // Register async media tasks for background polling if not already completed.
-      if (status !== 'succeeded' && status !== 'failed' && status !== 'cancelled') {
+      if (!TERMINAL_MEDIA_TASK_STATUSES.has(status)) {
         if (sessionId && requestAccountScope && isRequestAccountCurrent()) {
           const metadata = task.metadata as Record<string, unknown> | undefined;
           const expiresAfterSec = metadata?.execution_expires_after ?? task.execution_expires_after;
@@ -7476,7 +7783,10 @@ if (!gotTheLock) {
             : MEDIA_TASK_DEFAULT_TIMEOUT_MS;
           registerMediaTaskForPolling({
             taskId: String(task.taskId),
+            protocolVersion: useDurableTasks ? MediaProtocol.Durable : MediaProtocol.Legacy,
+            serverBaseUrl, toolCallId: request.context.toolCallId,
             sessionId,
+            userMessageId: turnUserMessageId,
             mediaType,
             model: upstreamModel || outputModel,
             ownerAccountKey: requestAccountScope.ownerAccountKey,
@@ -7493,6 +7803,13 @@ if (!gotTheLock) {
         content: [{ type: 'text', text: lines.join('\n') }],
         details: {
           taskId: String(task.taskId),
+          protocolVersion: task.protocolVersion,
+          createdAt: task.createdAt,
+          deadlineAt: task.deadlineAt,
+          phase: task.phase,
+          slow: task.slow,
+          canCancel: task.canCancel,
+          error: task.error,
           ...(task.upstreamTaskId ? { upstreamTaskId: String(task.upstreamTaskId) } : {}),
           status,
           model: outputModel,
@@ -7510,16 +7827,43 @@ if (!gotTheLock) {
         console.warn('[MediaGeneration] blocked media generation because the user is not logged in.');
         return { content: [{ type: 'text', text: t('authLoginRequired') }], isError: true };
       }
+      const unacknowledgedIntent = action === 'generate' && sessionId
+        ? getMediaTaskStore().findUnacknowledgedIntent(`${sessionId}:${request.context.toolCallId}`, requestAccountScope.ownerAccountKey, serverBaseUrl)
+        : undefined;
+      if (unacknowledgedIntent) {
+        console.warn('[MediaGeneration] Submission acknowledgement is unconfirmed; recovering the original intent:', error);
+        return {
+          content: [{ type: 'text', text: t('mediaGenerationSubmissionUnconfirmed') }],
+          details: { status: MediaTaskStatus.Pending, phase: MediaTaskPhase.Verifying,
+            submissionUnknown: true,
+            protocolVersion: MediaProtocol.Durable, model: unacknowledgedIntent.model,
+            mediaType: unacknowledgedIntent.mediaType, canCancel: false },
+        };
+      }
       console.error('[MediaGeneration] media generation request failed:', error);
       return { content: [{ type: 'text', text: `Media generation error: ${msg}` }], isError: true };
     }
   };
 
-  getMcpRuntime().setMediaGenerationHandler(handleMediaGenerationCallback);
+  getMcpRuntime().setMediaGenerationHandler(request => {
+    if (request.tool !== MediaGenerationTool.Image && request.tool !== MediaGenerationTool.Video) {
+      return handleMediaGenerationCallback(request);
+    }
+    const sessionId = extractSessionIdFromKey(request.context.sessionKey);
+    const selection = request.context.runId ? undefined : resolveMediaSelectionForSession(sessionId);
+    return mediaUsage.run({ sessionId: request.context.runId ? null : sessionId,
+      selectionSource: request.tool === MediaGenerationTool.Image ? selection?.imageSource : selection?.videoSource,
+      policyVersion: selection?.policyVersion,
+      mediaType: request.tool === MediaGenerationTool.Image ? 'image' : 'video',
+      action: typeof request.args.action === 'string' ? request.args.action : 'generate',
+      taskId: request.args.taskId, callId: request.context.toolCallId,
+    }, () => handleMediaGenerationCallback(request));
+  });
 
   const registerMediaTaskForPolling = (tracker: MediaTaskTracker) => {
     rememberMediaTaskOwnership(tracker.ownerAccountKey, tracker.taskId);
     pendingMediaTasks.set(tracker.taskId, tracker);
+    getMediaTaskStore().save(tracker);
     ensureMediaPollTimerRunning();
   };
 
@@ -7571,6 +7915,11 @@ if (!gotTheLock) {
         accountGeneration: tracker.accountGeneration,
       };
 
+      if (getMediaTaskStore().delivered(tracker)) {
+        tasksToRemove.set(taskId, tracker);
+        continue;
+      }
+      if (tracker.deliveryRetryAt && now < tracker.deliveryRetryAt) continue;
       if (isMediaTaskHandledByStatusPolling(
         tracker.sessionId,
         tracker.ownerAccountKey,
@@ -7580,13 +7929,14 @@ if (!gotTheLock) {
         continue;
       }
 
-      if (now - tracker.startedAt > tracker.timeoutMs) {
+      if (tracker.protocolVersion !== MediaProtocol.Durable && now - tracker.startedAt > tracker.timeoutMs) {
+        mediaUsage.observe(taskId, 'timeout', 0);
         tasksToRemove.set(taskId, tracker);
         emitMediaTaskMessage(tracker.sessionId, `${tracker.mediaType === 'video' ? 'Video' : 'Image'} generation timed out.\nTask ID: ${taskId}\nStatus: timeout`);
         continue;
       }
 
-      if (tracker.pollCount >= MEDIA_POLL_FAST_COUNT) {
+      if (tracker.protocolVersion !== MediaProtocol.Durable && tracker.pollCount >= MEDIA_POLL_FAST_COUNT) {
         const lastPollTime = tracker.lastPollAt ?? tracker.startedAt;
         const sinceLast = now - lastPollTime;
         const totalSlowAndMedium = MEDIA_POLL_FAST_COUNT + MEDIA_POLL_SLOW_COUNT;
@@ -7605,7 +7955,10 @@ if (!gotTheLock) {
 
       try {
         const endpoint = tracker.mediaType === 'video' ? 'videos' : 'images';
-        const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/${endpoint}/tasks/${taskId}`);
+        if (tracker.serverBaseUrl && tracker.serverBaseUrl !== serverBaseUrl) continue;
+        const taskPath = tracker.protocolVersion === MediaProtocol.Durable ? `${MEDIA_V2_TASKS_PATH}/${encodeURIComponent(taskId)}`
+          : `/api/media/${endpoint}/tasks/${encodeURIComponent(taskId)}`;
+        const resp = await fetchWithAuth(`${serverBaseUrl}${taskPath}`, { signal: AbortSignal.timeout(30_000) });
         const body = await resp.json() as { code: number; data?: Record<string, unknown>; message?: string };
 
         if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) {
@@ -7614,6 +7967,11 @@ if (!gotTheLock) {
         if (handleEnterpriseAccountContextMismatch(body.code, trackerAccountScope)) continue;
         if (body.code !== 0) continue;
         const task = body.data!;
+        if (tracker.protocolVersion === MediaProtocol.Durable && tracker.toolCallId) {
+          const details = { ...task, ...(task.status === MediaTaskStatus.Succeeded ? { deliveryStatus: MediaDeliveryStatus.Pending } : {}), isMediaStatusPolling: true, taskId, mediaType: tracker.mediaType, pollCount: tracker.pollCount };
+          emitMediaStatusPollUpdate({ sessionId: tracker.sessionId, toolCallId: tracker.toolCallId, details });
+          persistMediaTaskCard(tracker, details);
+        }
         rememberMediaTaskOwnership(
           tracker.ownerAccountKey,
           task.taskId,
@@ -7631,6 +7989,7 @@ if (!gotTheLock) {
 
         if (TERMINAL_MEDIA_TASK_STATUSES.has(status)) {
           const resultUrls = (task.resultUrls as string[]) || [];
+          mediaUsage.observe(taskId, status, resultUrls.length);
           const outputModel = mediaModelIdForOutput(task.model, tracker.model);
           const upstreamModel = typeof task.upstreamModel === 'string' && task.upstreamModel.trim()
             ? task.upstreamModel.trim()
@@ -7645,11 +8004,43 @@ if (!gotTheLock) {
             outputIndex,
             mimeType: resolveGeneratedMediaAssetMimeType(tracker.mediaType, url),
           }));
+          if (tracker.protocolVersion === MediaProtocol.Durable) {
+            const saved = status === MediaTaskStatus.Succeeded
+              ? await (tracker.mediaType === 'image' ? persistGeneratedImages : persistGeneratedVideos)(tracker.sessionId, assets)
+              : null;
+            if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) continue;
+            tracker.savedAssets = saved?.saved ?? tracker.savedAssets;
+            const ready = status !== MediaTaskStatus.Succeeded || (assets.length > 0 && saved?.saved.length === assets.length);
+            const details = { ...task, taskId, mediaType: tracker.mediaType,
+              ...(status === MediaTaskStatus.Succeeded ? {
+                deliveryStatus: ready ? MediaDeliveryStatus.Saved : MediaDeliveryStatus.Retrying,
+                assets: tracker.savedAssets ?? [],
+              } : {}),
+            };
+            persistMediaTaskCard(tracker, details);
+            if (tracker.toolCallId) emitMediaStatusPollUpdate({ sessionId: tracker.sessionId, toolCallId: tracker.toolCallId, details });
+            if (status === MediaTaskStatus.Succeeded) mediaUsage.save(taskId, saved?.saved.length ?? 0, assets.length);
+            if (!ready) {
+              tracker.deliveryRetryAt = Date.now() + 60_000;
+              getMediaTaskStore().save(tracker);
+              continue;
+            }
+            const content = status === MediaTaskStatus.Succeeded
+              ? (saved?.saved ?? []).map(asset => `[${asset.filename}](${pathToFileURL(asset.filePath).toString()})`).join('\n')
+              : String(task.errorMessage || t(status === MediaTaskStatus.Timeout ? 'mediaTaskTimedOut'
+                : status === MediaTaskStatus.Cancelled ? 'mediaTaskCancelled' : 'mediaTaskFailed'));
+            emitMediaTaskMessage(tracker.sessionId, content, { toolResultDetails: details }, tracker);
+            tasksToRemove.set(taskId, tracker);
+            refreshMediaTaskTurnUsage(tracker);
+            notifyAuthQuotaChanged();
+            continue;
+          }
           if (status === 'succeeded' && tracker.mediaType === 'image') {
             const persistResult = await persistGeneratedImages(tracker.sessionId, assets);
             if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) {
               continue;
             }
+            mediaUsage.save(taskId, persistResult?.saved.length ?? 0, assets.length);
             if (persistResult && persistResult.saved.length > 0) {
               const fileLines = persistResult.saved.map(asset => `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`);
               emitMediaTaskMessage(
@@ -7680,6 +8071,7 @@ if (!gotTheLock) {
             if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) {
               continue;
             }
+            mediaUsage.save(taskId, persistResult?.saved.length ?? 0, assets.length);
             if (persistResult && persistResult.saved.length > 0) {
               const fileLines = persistResult.saved.map(asset => `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`);
               emitMediaTaskMessage(
@@ -7744,7 +8136,10 @@ if (!gotTheLock) {
           )) {
             continue;
           }
+          tracker.delivered = true;
+          getMediaTaskStore().save(tracker);
           tasksToRemove.set(taskId, tracker);
+          refreshMediaTaskTurnUsage(tracker);
           notifyAuthQuotaChanged();
         }
       } catch (error) {
@@ -7770,7 +8165,74 @@ if (!gotTheLock) {
     }
   };
 
-  const emitMediaTaskMessage = (sessionId: string, content: string, metadata?: Record<string, unknown>) => {
+  const persistMediaTaskCard = (tracker: MediaTaskTracker, details: Record<string, unknown>) => {
+    if (!tracker.toolCallId) return;
+    const db = getStore().getDatabase();
+    const rows = db.prepare(`SELECT id, metadata FROM cowork_messages WHERE session_id = ? AND type IN ('tool_use', 'tool_result') AND (
+      json_extract(metadata, '$.toolUseId') = ? OR CAST(json_extract(metadata, '$.toolInput.taskId') AS TEXT) = ?
+      OR CAST(json_extract(metadata, '$.toolResultDetails.taskId') AS TEXT) = ?
+      OR CAST(json_extract(metadata, '$.mediaStatusDetails.taskId') AS TEXT) = ?)`)
+      .all(tracker.sessionId, tracker.toolCallId, tracker.taskId, tracker.taskId, tracker.taskId) as Array<{ id: string; metadata: string }>;
+    for (const row of rows) {
+      const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+      getCoworkStore().updateMessage(tracker.sessionId, row.id, { metadata: { ...metadata, mediaStatusDetails: details,
+        toolResultDetails: { ...(metadata.toolResultDetails as Record<string, unknown> ?? {}), ...details } } });
+      if (typeof metadata.toolUseId === 'string' && metadata.toolUseId !== tracker.toolCallId) {
+        emitMediaStatusPollUpdate({ sessionId: tracker.sessionId, toolCallId: metadata.toolUseId, details });
+      }
+    }
+  };
+
+  const recoverMediaTasks = async () => {
+    const scope = getCurrentMediaAccountScope();
+    if (!scope) return;
+    const serverBaseUrl = getServerApiBaseUrl();
+    for (const tracker of getMediaTaskStore().tasks()) {
+      if (tracker.ownerAccountKey !== scope.ownerAccountKey || tracker.serverBaseUrl !== serverBaseUrl) continue;
+      for (const asset of tracker.savedAssets ?? []) {
+        if (fs.existsSync(asset.filePath)) (tracker.mediaType === 'image' ? persistedGeneratedImageAssetsByUrl : persistedGeneratedVideoAssetsByUrl)
+          .set(`${tracker.sessionId}:${asset.originalUrl || asset.url}`, asset);
+      }
+      if (!tracker.delivered && !pendingMediaTasks.has(tracker.taskId) && getCoworkStore().getSession(tracker.sessionId)) {
+        registerMediaTaskForPolling({ ...tracker, accountGeneration: scope.accountGeneration });
+      }
+    }
+    for (const intent of getMediaTaskStore().intents()) {
+      if (intent.rejected || intent.ownerAccountKey !== scope.ownerAccountKey || intent.serverBaseUrl !== serverBaseUrl
+        || !getCoworkStore().getSession(intent.sessionId)) continue;
+      if (intent.taskId) {
+        mediaUsage.accept(intent.toolCallId, { taskId: intent.taskId, protocolVersion: MediaProtocol.Durable });
+        const exists = getMediaTaskStore().tasks().some(task => task.taskId === intent.taskId && task.serverBaseUrl === serverBaseUrl);
+        if (!exists && getCoworkStore().getSession(intent.sessionId)) registerMediaTaskForPolling({
+          taskId: intent.taskId, sessionId: intent.sessionId, mediaType: intent.mediaType, model: intent.model,
+          ownerAccountKey: intent.ownerAccountKey, accountGeneration: scope.accountGeneration,
+          startedAt: intent.createdAt, pollCount: 0, timeoutMs: MEDIA_TASK_DEFAULT_TIMEOUT_MS,
+          protocolVersion: MediaProtocol.Durable, serverBaseUrl, toolCallId: intent.toolCallId,
+        });
+        continue;
+      }
+      if (Date.now() - (intent.lastAttemptAt ?? intent.createdAt) < 30_000 || Date.now() - intent.createdAt > 86_400_000) continue;
+      getMediaTaskStore().saveIntent({ ...intent, lastAttemptAt: Date.now() });
+      try {
+        const response = await fetchWithAuth(`${serverBaseUrl}${MEDIA_V2_TASKS_PATH}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': intent.key },
+          body: intent.requestBody, signal: AbortSignal.timeout(30_000),
+        });
+        const body = await response.json() as { code: number; data?: { taskId?: string | number }; message?: string };
+        if (!isMediaAccountScopeCurrent(scope, getCurrentMediaAccountScope())) return;
+        if (body.code === 0 && body.data?.taskId != null) {
+          getMediaTaskStore().saveIntent({ ...intent, taskId: String(body.data.taskId) });
+          mediaUsage.accept(intent.toolCallId, { ...body.data, model: intent.model, protocolVersion: MediaProtocol.Durable });
+        }
+        else if (response.status < 500) {
+          getMediaTaskStore().saveIntent({ ...intent, rejected: true });
+          mediaUsage.reject(intent.toolCallId, String(body.code) + ' ' + (body.message ?? ''));
+          emitMediaTaskMessage(intent.sessionId, body.message || t('mediaGenerationRecoveryFailed'));
+        }
+      } catch (error) { console.debug('[MediaGeneration] Intent recovery deferred:', error); }
+    }
+  };
+  const emitMediaTaskMessage = (sessionId: string, content: string, metadata?: Record<string, unknown>, tracker?: MediaTaskTracker) => {
     let message: CoworkMessage = {
       id: `media-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       type: 'system' as const,
@@ -7778,8 +8240,17 @@ if (!gotTheLock) {
       timestamp: Date.now(),
       ...(metadata ? { metadata } : {}),
     };
+    if (tracker) {
+      if (getMediaTaskStore().delivered(tracker)) return;
+      message = getCoworkStore().runSessionTransaction(() => {
+        const persisted = getCoworkStore().addMessage(sessionId, { type: 'system', content, metadata });
+        getMediaTaskStore().save({ ...tracker, delivered: true });
+        return persisted;
+      });
+      tracker.delivered = true;
+    }
     try {
-      message = getCoworkStore().addMessage(sessionId, {
+      if (!tracker) message = getCoworkStore().addMessage(sessionId, {
         type: 'system',
         content,
         ...(metadata ? { metadata } : {}),
@@ -7788,6 +8259,8 @@ if (!gotTheLock) {
       // Session may have been deleted
     }
     if (!canViewCoworkSession(sessionId)) return;
+    const mediaAttribution = mediaUsage.attribution((metadata?.toolResultDetails as Record<string, unknown> | undefined)?.taskId);
+    if (mediaAttribution) getTaskUsageAnalytics().attachDelivery(sessionId, message, mediaAttribution.context, mediaAttribution.mediaJobId);
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) {
         win.webContents.send(CoworkIpcChannel.StreamMessage, { sessionId, message });
@@ -7795,7 +8268,14 @@ if (!gotTheLock) {
     });
   };
 
-  const persistGeneratedImages = async (
+  const mediaDownloads = new MediaDownloadCoordinator<PersistGeneratedImageAssetsResult | null>();
+  const persistGeneratedImages = (sessionId: string, assets: RemoteGeneratedMediaAsset[]) => mediaDownloads.run(
+    `${sessionId}:image:${JSON.stringify(assets.map(asset => asset.url))}`, () => persistGeneratedImagesImpl(sessionId, assets),
+  );
+  const persistGeneratedVideos = (sessionId: string, assets: RemoteGeneratedMediaAsset[]) => mediaDownloads.run(
+    `${sessionId}:video:${JSON.stringify(assets.map(asset => asset.url))}`, () => persistGeneratedVideosImpl(sessionId, assets),
+  );
+  const persistGeneratedImagesImpl = async (
     sessionId: string,
     assets: RemoteGeneratedMediaAsset[],
   ): Promise<PersistGeneratedImageAssetsResult | null> => {
@@ -7827,7 +8307,7 @@ if (!gotTheLock) {
       const result = await persistGeneratedImageAssets({
         cwd,
         assets: pendingAssets,
-        fetchAsset: url => session.defaultSession.fetch(url),
+        fetchAsset: url => session.defaultSession.fetch(url, { signal: AbortSignal.timeout(120_000) }),
       });
       for (const saved of result.saved) {
         persistedGeneratedImageAssetsByUrl.set(`${sessionId}:${saved.originalUrl || saved.url}`, saved);
@@ -7845,7 +8325,7 @@ if (!gotTheLock) {
     }
   };
 
-  const persistGeneratedVideos = async (
+  const persistGeneratedVideosImpl = async (
     sessionId: string,
     assets: RemoteGeneratedMediaAsset[],
   ): Promise<PersistGeneratedImageAssetsResult | null> => {
@@ -7877,7 +8357,7 @@ if (!gotTheLock) {
       const result = await persistGeneratedVideoAssets({
         cwd,
         assets: pendingAssets,
-        fetchAsset: url => session.defaultSession.fetch(url),
+        fetchAsset: url => session.defaultSession.fetch(url, { signal: AbortSignal.timeout(120_000) }),
       });
       for (const saved of result.saved) {
         persistedGeneratedVideoAssetsByUrl.set(`${sessionId}:${saved.originalUrl || saved.url}`, saved);
@@ -7937,6 +8417,7 @@ if (!gotTheLock) {
     authExchangeIntentSequence += 1;
     activeAuthExchangeIntent = null;
     authAccountGeneration += 1;
+    desktopCompanionManager?.resetForAccountChange();
     revalidateArtifactPreviews();
     mediaSelectionBySession.clear();
     mediaTurnAccountScopeBySession.clear();
@@ -7969,15 +8450,18 @@ if (!gotTheLock) {
     }
 
     if (options.notifyRenderer) {
+      const isUserLogout = options.reason === AuthSessionChangeReason.UserLogout;
       emitAuthSessionChanged({
-        status: AuthSessionStatus.Expired,
+        status: isUserLogout ? AuthSessionStatus.Unauthenticated : AuthSessionStatus.Expired,
         reason: options.reason,
       });
-      emitAuthLifecycleEvent({
-        eventType: AuthLifecycleEventType.TerminalExpired,
-        outcome: AuthSessionStatus.Expired,
-        reason: options.reason,
-      });
+      if (!isUserLogout) {
+        emitAuthLifecycleEvent({
+          eventType: AuthLifecycleEventType.TerminalExpired,
+          outcome: AuthSessionStatus.Expired,
+          reason: options.reason,
+        });
+      }
     }
   };
 
@@ -8133,6 +8617,7 @@ if (!gotTheLock) {
       activeAuthExchangeIntent = null;
       authAccountGeneration += 1;
       revalidateArtifactPreviews();
+      desktopCompanionManager?.resetForAccountChange();
       const exchangeAccountGeneration = authAccountGeneration;
       clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
@@ -8178,6 +8663,12 @@ if (!gotTheLock) {
         return { success: false, error: t('authAccountChanged') };
       }
       syncOpenClawConfigIfAuthQuotaGateChanged(startingQuotaGateState);
+      // The initiating renderer applies the exchange result; other windows
+      // must refresh their own auth stores without consuming the OAuth code.
+      emitAuthSessionChanged({
+        status: AuthSessionStatus.Authenticated,
+        reason: AuthSessionChangeReason.UserLogin,
+      }, _event.sender.id);
       return {
         success: true,
         user: body.data.user,
@@ -8192,6 +8683,7 @@ if (!gotTheLock) {
         && authExchangeIntentSequence === exchangeIntent.intentId
       ) {
         authAccountGeneration += 1;
+        desktopCompanionManager?.resetForAccountChange();
         revalidateArtifactPreviews();
         if (startingTokens) {
           saveAuthTokens(startingTokens.accessToken, startingTokens.refreshToken);
@@ -8565,7 +9057,7 @@ if (!gotTheLock) {
     const logoutBody = JSON.stringify(withKeyfromBody({}));
     clearLocalAuthSession({
       reason: AuthSessionChangeReason.UserLogout,
-      notifyRenderer: false,
+      notifyRenderer: true,
     });
     console.log('[Auth] cleared local login state and scheduled server model config refresh');
 
@@ -8655,6 +9147,22 @@ if (!gotTheLock) {
     } finally {
       clearTimeout(timeout);
     }
+  });
+
+  const modelPresetSelection = registerModelPresetIpc({
+    ipcMain, client: modelPresetClient, getStore, getSessions: getCoworkStore,
+    getRuntime: getCoworkEngineRouter,
+    assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, currentRemoteExecution()?.owner ?? getCurrentRemoteOwner()),
+    patchSession: (sessionId, patch) => remoteSessionCommands!.patchConfiguration(sessionId, patch),
+    ownerAccountKey: () => getCurrentMediaAccountScope()?.ownerAccountKey ?? null,
+    ensureModelsReady: () => loadAvailableServerModels({ reason: 'chat-model-preset', awaitConfigSync: true }),
+    isAccountCurrent: () => {
+      const generation = authAccountGeneration;
+      const scope = getCurrentMediaAccountScope();
+      return () => generation === authAccountGeneration
+        && isMediaAccountScopeSnapshotCurrent(scope, getCurrentMediaAccountScope());
+    },
+    t,
   });
 
   ipcMain.handle(AuthIpcChannel.GetModels, async () => {
@@ -9410,6 +9918,24 @@ if (!gotTheLock) {
   });
 
   // Media generation IPC handlers
+  ipcMain.handle(CoworkIpcChannel.GetMediaPreferences, async (_event, owner: string) => {
+    try {
+      return { success: true, state: await mediaDefaults.state(owner) };
+    } catch (error) {
+      console.warn('[MediaDefaults] Cannot resolve preferences.', error);
+      return { success: false, error: t('mediaPreferencesUnavailable') };
+    }
+  });
+  ipcMain.handle(CoworkIpcChannel.SetMediaPreference, async (
+    _event, owner: string, type: MediaType, preference: MediaPreference,
+  ) => {
+    try {
+      return { success: true, state: await mediaDefaults.update(owner, type, preference) };
+    } catch (error) {
+      console.warn('[MediaDefaults] Cannot update preference.', error);
+      return { success: false, error: t('mediaPreferencesUnavailable') };
+    }
+  });
   ipcMain.handle(CoworkIpcChannel.GetMediaModels, async (_event, type: 'image' | 'video') => {
     try {
       if (type !== 'image' && type !== 'video') {
@@ -9743,7 +10269,7 @@ if (!gotTheLock) {
       }
       if (rendererReleased) {
         setTimeout(() => {
-          app.relaunch();
+          relaunchApp();
           app.exit(0);
         }, 100);
       }
@@ -9760,7 +10286,7 @@ if (!gotTheLock) {
       if (rendererReleased) {
         dialog.showErrorBox(t('dataMigrationRestoreDialogTitle'), message);
         setTimeout(() => {
-          app.relaunch();
+          relaunchApp();
           app.exit(0);
         }, 100);
       } else {
@@ -10176,7 +10702,6 @@ if (!gotTheLock) {
     getWorkbenchTitle: () => t('dshWorkbenchTitle'),
   });
 
-
   // Cowork IPC handlers
   const recordDesktopInput = async (sessionId: string, options: { prompt: string; localInput?: CoworkLocalInput; imageAttachments?: CoworkImageAttachmentMain[] }, selectedFileCaptureDeadline: number): Promise<void> => {
     if (currentRemoteExecution()?.commandId) return;
@@ -10207,13 +10732,33 @@ if (!gotTheLock) {
     }
   };
 
+  const sessionTitleGenerator = new SessionTitleGenerator({
+    getAuth: () => {
+      const tokens = getAuthTokens();
+      const sessionKey = getAuthSessionKey();
+      return tokens && sessionKey
+        ? { sessionKey, accessToken: tokens.accessToken, headers: getEnterpriseAccountHeaders() }
+        : null;
+    },
+    getBaseUrl: getServerApiBaseUrl,
+    fetch: (url, options) => net.fetch(url, options),
+    getSession: sessionId => canViewCoworkSession(sessionId) ? getCoworkStore().getSession(sessionId) : null,
+    setTitle: (sessionId, title) => {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      getCoworkStore().updateSession(sessionId, { title }, { touchUpdatedAt: false });
+      reportUsageSessionTitle(sessionId);
+    },
+  });
+
   const startCoworkSession = async (
       options: {
+        analytics?: UsageContext;
         prompt: string;
         cwd?: string;
         systemPrompt?: string;
         title?: string;
         activeSkillIds?: string[];
+        inheritedSkillIds?: string[];
         runtimeSkillIds?: string[];
         kitIds?: string[];
         kitReferences?: KitReference[];
@@ -10222,47 +10767,50 @@ if (!gotTheLock) {
         localInput?: CoworkLocalInput;
         agentId?: string;
         modelOverride?: string;
+        modelPresetId?: ModelPresetId;
         thinkingLevel?: string;
-        mediaSelection?: {
-          mode: 'auto' | 'image' | 'video' | 'none';
-          modelId?: string;
-          modelName?: string;
-          imageModelId?: string;
-          videoModelId?: string;
-        };
+        mediaSelection?: MediaSelectionState;
         mediaReferences?: MediaAttachmentRefMain[];
         selectedTextSnippets?: CoworkSelectedTextSnippet[];
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       },
+      senderId?: number,
     ) => {
       let localReservation: { sessionId: string; runId: string } | undefined;
       try {
         assertRemoteExecutionPermit();
         const ipcStartedAtMs = Date.now();
+        const captureCompanionTask = senderId === undefined ? undefined : desktopCompanionManager?.captureTaskAnalytics(senderId);
         const requestAccountScope = getCurrentMediaAccountScope();
+        const requestAccountEpoch = `${ownershipAccountEpoch}:${authAccountGeneration}`;
         console.log(
           '[CoworkFirstResponseTiming] start IPC received.',
           `Prompt length ${options.prompt.length}.`,
           `Image attachments ${options.imageAttachments?.length ?? 0}.`,
           `Agent ${options.agentId || 'main'}.`,
         );
-        const modelRunGate = await ensureServerModelReadyForRun(
-          resolveCoworkRunModelRef({
-            modelOverride: options.modelOverride,
-            agentId: options.agentId,
-          }),
-        );
-        if (modelRunGate.allowed === false) {
-          return { success: false, error: modelRunGate.error };
+        if (options.modelPresetId !== undefined && !parseModelPresetId(options.modelPresetId)) {
+          return { success: false, error: t('modelPresetInvalidSession') };
         }
-        const engineStatus = await ensureOpenClawRunningForCowork({
-          taskModelRef: resolveCoworkTurnModelRef({
-            modelOverride: options.modelOverride,
-            agentId: options.agentId,
-          }),
-        });
-        if (engineStatus.phase !== 'running') {
-          return getEngineNotReadyResponse(engineStatus);
+        if (!options.modelPresetId) {
+          const modelRunGate = await ensureServerModelReadyForRun(
+            resolveCoworkRunModelRef({
+              modelOverride: options.modelOverride,
+              agentId: options.agentId,
+            }),
+          );
+          if (modelRunGate.allowed === false) {
+            return { success: false, error: modelRunGate.error };
+          }
+          const engineStatus = await ensureOpenClawRunningForCowork({
+            taskModelRef: resolveCoworkTurnModelRef({
+              modelOverride: options.modelOverride,
+              agentId: options.agentId,
+            }),
+          });
+          if (engineStatus.phase !== 'running') {
+            return getEngineNotReadyResponse(engineStatus);
+          }
         }
         if (!isMediaAccountScopeSnapshotCurrent(
           requestAccountScope,
@@ -10324,19 +10872,55 @@ if (!gotTheLock) {
           );
         }
 
+        const turnIsPlan = containsPlanModePrompt(systemPrompt);
+        const turnMediaSelection = await mediaDefaults.turn({
+          selection: normalizeMediaSelectionState(options.mediaSelection),
+          isPlan: turnIsPlan,
+          explicitSkillIds: options.activeSkillIds,
+          inheritedSkillIds: options.inheritedSkillIds,
+        });
+        if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
+          return { success: false, error: t('authAccountChanged') };
+        }
         const execution = currentRemoteExecution();
         assertRemoteExecutionPermit();
         if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
-        const session = (execution?.preparedSessionId ? coworkStoreInstance.getSession(execution.preparedSessionId, 0) : null) || coworkStoreInstance.createSession(
+        let session = (execution?.preparedSessionId ? coworkStoreInstance.getSession(execution.preparedSessionId, 0) : null) || coworkStoreInstance.createSession(
           title,
           taskWorkingDirectory,
           persistedSystemPrompt,
           config.executionMode || 'local',
           runtimeSkillIds || [],
           options.agentId || 'main',
-          options.modelOverride || '',
+          options.modelPresetId ? '' : options.modelOverride || '',
           { thinkingLevel: thinkingLevel || '', owner: execution?.owner ?? null },
         );
+
+        if (options.modelPresetId !== undefined) {
+          const presetId = parseModelPresetId(options.modelPresetId);
+          if (!presetId) throw new Error(t('modelPresetInvalidSession'));
+          try {
+            session = await modelPresetSelection.choose(session.id, presetId, Boolean(options.imageAttachments?.length), true);
+            const modelRunGate = await ensureServerModelReadyForRun(session.modelOverride);
+            if (modelRunGate.allowed === false) throw new Error(modelRunGate.error);
+            // Admission must inspect the resolved model, not the agent's default.
+            const engineStatus = await ensureOpenClawRunningForCowork({ taskModelRef: session.modelOverride });
+            assertRemoteExecutionPermit();
+            coworkStoreInstance.remote.assertActor(session.id, execution?.owner ?? null);
+            if (engineStatus.phase !== 'running') {
+              coworkStoreInstance.updateSession(session.id, { status: 'error' });
+              return getEngineNotReadyResponse(engineStatus);
+            }
+            if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
+              throw new Error(t('authAccountChanged'));
+            }
+          } catch (error) {
+            if (requestAccountEpoch === `${ownershipAccountEpoch}:${authAccountGeneration}` && canViewCoworkSession(session.id)) {
+              coworkStoreInstance.updateSession(session.id, { status: 'error' });
+            }
+            throw error;
+          }
+        }
 
         if (options.modelOverride) {
           console.log(
@@ -10346,10 +10930,11 @@ if (!gotTheLock) {
           );
         }
 
-        const skinTurn = getSkinRuntimeController().prepareTurn({
+        assertRemoteExecutionPermit();
+        const skinTurn = turnIsPlan ? { mediaSelection: turnMediaSelection } : getSkinRuntimeController().prepareTurn({
           sessionId: session.id,
           kitIds: options.kitIds,
-          mediaSelection: normalizeMediaSelectionState(options.mediaSelection),
+          mediaSelection: turnMediaSelection,
           mediaGenerationEntitled: cachedMediaGenerationEntitled,
         });
         const { workflowKind, mediaSelection: normalizedMediaSelection } = skinTurn;
@@ -10361,7 +10946,6 @@ if (!gotTheLock) {
         if (
           requestAccountScope
           && normalizedMediaSelection
-          && normalizedMediaSelection.mode !== 'none'
         ) {
           mediaSelectionBySession.set(
             session.id,
@@ -10437,6 +11021,7 @@ if (!gotTheLock) {
         coworkStoreInstance.remote.markRunDispatched(session.id);
         runtime
           .startSession(session.id, prompt, {
+            analytics: options.analytics,
             skipInitialUserMessage: true,
             systemPrompt,
             skillIds: runtimeSkillIds,
@@ -10481,6 +11066,7 @@ if (!gotTheLock) {
             }
           });
 
+        captureCompanionTask?.(getTaskUsageAnalytics().context(session.id));
         const sessionWithMessages = coworkStoreInstance.getSession(session.id) || {
           ...session,
           status: 'running' as const,
@@ -10500,32 +11086,30 @@ if (!gotTheLock) {
 
   const continueCoworkSession = async (
       options: {
+        analytics?: UsageContext;
         sessionId: string;
         prompt: string;
         systemPrompt?: string;
         activeSkillIds?: string[];
+        inheritedSkillIds?: string[];
         runtimeSkillIds?: string[];
         kitIds?: string[];
         kitReferences?: KitReference[];
         resolvedKitCapabilities?: ResolvedKitCapabilities;
         imageAttachments?: CoworkImageAttachmentMain[];
         localInput?: CoworkLocalInput;
-        mediaSelection?: {
-          mode: 'auto' | 'image' | 'video' | 'none';
-          modelId?: string;
-          modelName?: string;
-          imageModelId?: string;
-          videoModelId?: string;
-        };
+        mediaSelection?: MediaSelectionState;
         mediaReferences?: MediaAttachmentRefMain[];
         selectedTextSnippets?: CoworkSelectedTextSnippet[];
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       },
+      senderId?: number,
     ) => {
       let localReservation: { sessionId: string; runId: string } | undefined;
       try {
         assertRemoteExecutionPermit();
         const ipcStartedAtMs = Date.now();
+        const captureCompanionTask = senderId === undefined ? undefined : desktopCompanionManager?.captureTaskAnalytics(senderId);
         const requestAccountScope = getCurrentMediaAccountScope();
         console.log(
           '[CoworkFirstResponseTiming] continue IPC received.',
@@ -10571,7 +11155,7 @@ if (!gotTheLock) {
         const inputCaptureRun = coworkStoreInstance.remote.run(options.sessionId);
         await waitForDesktopInputCapture(deadline => recordDesktopInput(options.sessionId, options, deadline)
           .catch(error => console.warn('[RemoteFiles] Input synchronization deferred', error)), desktopInputCaptureEnabled(() => remoteBridge?.canCaptureRemoteFiles() === true));
-        assertDesktopInputDispatchCurrent(coworkStoreInstance.remote, options.sessionId, inputCaptureRun, !execution?.runId && !execution?.commandId, () => {
+        const assertDispatchCurrent = (): void => assertDesktopInputDispatchCurrent(coworkStoreInstance.remote, options.sessionId, inputCaptureRun, !execution?.runId && !execution?.commandId, () => {
           if (inputCaptureEpoch !== `${ownershipAccountEpoch}:${authAccountGeneration}`
             || !isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())
             || !coworkStoreInstance.getSession(options.sessionId, 0) || !canViewCoworkSession(options.sessionId)
@@ -10582,6 +11166,7 @@ if (!gotTheLock) {
           coworkStoreInstance.remote.assertNoDeletionEffect(options.sessionId);
           assertRemoteExecutionPermit();
         });
+        assertDispatchCurrent();
         const config = coworkStoreInstance.getConfig();
         const hasLegacyPersistedPlanMode = containsPlanModePrompt(existingSession?.systemPrompt);
         const continuationSystemPrompt = mergeCoworkSystemPrompt(
@@ -10612,10 +11197,18 @@ if (!gotTheLock) {
           };
         }
 
-        const skinTurn = getSkinRuntimeController().prepareTurn({
+        const turnIsPlan = containsPlanModePrompt(continuationSystemPrompt);
+        const turnMediaSelection = await mediaDefaults.turn({
+          selection: normalizeMediaSelectionState(options.mediaSelection),
+          isPlan: turnIsPlan,
+          explicitSkillIds: options.activeSkillIds,
+          inheritedSkillIds: options.inheritedSkillIds,
+        });
+        assertDispatchCurrent();
+        const skinTurn = turnIsPlan ? { mediaSelection: turnMediaSelection } : getSkinRuntimeController().prepareTurn({
           sessionId: options.sessionId,
           kitIds: options.kitIds,
-          mediaSelection: normalizeMediaSelectionState(options.mediaSelection),
+          mediaSelection: turnMediaSelection,
           mediaGenerationEntitled: cachedMediaGenerationEntitled,
         });
         const { workflowKind, mediaSelection: normalizedMediaSelection } = skinTurn;
@@ -10627,7 +11220,6 @@ if (!gotTheLock) {
         if (
           requestAccountScope
           && normalizedMediaSelection
-          && normalizedMediaSelection.mode !== 'none'
         ) {
           mediaSelectionBySession.set(
             options.sessionId,
@@ -10662,8 +11254,10 @@ if (!gotTheLock) {
         );
         assertRemoteExecutionPermit();
         coworkStoreInstance.remote.markRunDispatched(options.sessionId);
+        const previousUsage = getTaskUsageAnalytics().context(options.sessionId);
         runtime
           .continueSession(options.sessionId, options.prompt, {
+            analytics: options.analytics,
             systemPrompt: continuationSystemPrompt,
             skillIds: options.runtimeSkillIds ?? options.activeSkillIds,
             messageSkillIds: options.activeSkillIds,
@@ -10704,6 +11298,8 @@ if (!gotTheLock) {
             }
           });
 
+        const currentUsage = getTaskUsageAnalytics().context(options.sessionId);
+        captureCompanionTask?.(currentUsage?.turnId !== previousUsage?.turnId ? currentUsage : undefined);
         const session = getCoworkStore().getSession(options.sessionId);
         return { success: true, session };
       } catch (error) {
@@ -10718,10 +11314,10 @@ if (!gotTheLock) {
       }
     };
 
-  const submitStart = (options: Parameters<typeof startCoworkSession>[0]) => remoteSessionCommands!.submit(options, true, startCoworkSession);
-  const submitContinue = (options: Parameters<typeof continueCoworkSession>[0]) => remoteSessionCommands!.submit(options, false, continueCoworkSession);
-  ipcMain.handle('cowork:session:start', (_event, options) => submitStart(options));
-  ipcMain.handle('cowork:session:continue', (_event, options) => submitContinue(options));
+  const submitStart = (options: Parameters<typeof startCoworkSession>[0], senderId?: number) => remoteSessionCommands!.submit(options, true, input => startCoworkSession(input, senderId));
+  const submitContinue = (options: Parameters<typeof continueCoworkSession>[0], senderId?: number) => remoteSessionCommands!.submit(options, false, input => continueCoworkSession(input, senderId));
+  ipcMain.handle(CoworkIpcChannel.SessionStart, (event, options) => submitStart(options, event.sender.id));
+  ipcMain.handle(CoworkIpcChannel.SessionContinue, (event, options) => submitContinue(options, event.sender.id));
 
   ipcMain.handle(CoworkIpcChannel.SubmitBtw, async (
     _event,
@@ -11069,10 +11665,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(CoworkIpcChannel.MarkSessionViewed, async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.MarkSessionViewed, async (event, sessionId: string) => {
     try {
       getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       getDesktopNotificationManager().markSessionViewed(sessionId);
+      if (event.sender.id === mainWindow?.webContents.id) desktopCompanionManager?.markSessionViewed(sessionId);
       return { success: true };
     } catch (error) {
       console.warn(`[DesktopNotification] failed to mark session ${sessionId} viewed:`, error);
@@ -11237,7 +11834,7 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
-    'cowork:session:rename',
+    CoworkIpcChannel.RenameSession,
     async (_event, options: { sessionId: string; title: string }) => {
       try {
         const title = options.title.trim();
@@ -11246,7 +11843,9 @@ if (!gotTheLock) {
         }
         const coworkStoreInstance = getCoworkStore();
         coworkStoreInstance.remote.assertActor(options.sessionId, getCurrentRemoteOwner());
+        sessionTitleGenerator.cancel(options.sessionId);
         coworkStoreInstance.updateSession(options.sessionId, { title }, { touchUpdatedAt: false });
+        reportUsageSessionTitle(options.sessionId);
         return { success: true };
       } catch (error) {
         return {
@@ -11350,11 +11949,6 @@ if (!gotTheLock) {
         console.log(
           `[CoworkIPC] loaded session ${sessionId}; returned ${session.messages.length} of ${session.totalMessages} messages from offset ${session.messagesOffset}.`,
         );
-        if (session.messagesOffset > 0) {
-          const leadingTurn = store.getTurnContextAt(sessionId, session.messagesOffset);
-          session.leadingTurnStartTimestamp = leadingTurn.startTimestamp;
-          session.leadingTurnUsage = leadingTurn.usageAnchor;
-        }
       } else {
         console.warn(`[CoworkIPC] session ${sessionId} was not found during load.`);
       }
@@ -11562,6 +12156,8 @@ if (!gotTheLock) {
   };
 
   registerAgentHandlers({
+    reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
+      schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },
     getAgentManager,
     getCoworkStore,
     getCoworkEngineRouter,
@@ -11755,7 +12351,9 @@ if (!gotTheLock) {
         return { success: false, message: t('mediaTaskAccountMismatch') };
       }
       const serverBaseUrl = getServerApiBaseUrl();
-      const resp = await fetchWithAuth(`${serverBaseUrl}/api/media/videos/tasks/${taskId}/cancel`, { method: 'POST' });
+      const cancelPath = isDurableMediaTask(taskId) ? `${MEDIA_V2_TASKS_PATH}/${encodeURIComponent(taskId)}/cancel`
+        : `/api/media/videos/tasks/${encodeURIComponent(taskId)}/cancel`;
+      const resp = await fetchWithAuth(`${serverBaseUrl}${cancelPath}`, { method: 'POST', signal: AbortSignal.timeout(30_000) });
       const body = await resp.json() as { code: number; message?: string };
       if (!isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
         return { success: false, message: t('authAccountChanged') };
@@ -11914,15 +12512,21 @@ if (!gotTheLock) {
       if (patch.model) {
         patch.model = normalizeOpenClawModelRef(patch.model);
       }
+      const previousSession = getCoworkStore().getSession(sessionId);
+      if (patch.model !== undefined && previousSession?.modelPresetId) {
+        patch.contextWindow = null;
+      }
       const patchResult = await remoteSessionCommands!.patchConfiguration(sessionId, patch);
       getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
 
       if (patch.model !== undefined || patch.thinkingLevel !== undefined) {
         const sessionUpdates: {
           modelOverride?: string;
+          modelPresetId?: ModelPresetId | null;
           thinkingLevel?: ReturnType<typeof parseModelThinkingLevel> | '';
         } = {};
         if (patch.model !== undefined) {
+          sessionUpdates.modelPresetId = null;
           sessionUpdates.modelOverride =
             patchResult && typeof patchResult.modelOverride === 'string'
               ? patchResult.modelOverride
@@ -11943,7 +12547,9 @@ if (!gotTheLock) {
 
       return {
         success: true,
-        session,
+        session: patch.model !== undefined
+          ? recordSessionModelChange(getCoworkStore(), previousSession, session)
+          : session,
       };
     } catch (error) {
       return {
@@ -13702,8 +14308,9 @@ if (!gotTheLock) {
     return getXaiOAuthStatus();
   });
 
-  ipcMain.handle('generate-session-title', async (_event, userInput: string | null) => {
-    return generateSessionTitle(userInput, t('coworkDefaultSessionTitle'));
+  ipcMain.handle(CoworkIpcChannel.GenerateSessionTitle, async (event, request: GenerateSessionTitleRequest) => {
+    if (event.sender !== mainWindow?.webContents) return null;
+    return sessionTitleGenerator.generate(request);
   });
 
   ipcMain.handle('get-recent-cwds', async (_event, limit?: number) => {
@@ -14389,6 +14996,12 @@ if (!gotTheLock) {
     getAuthTokens,
     fetchWithAuth,
     getServerApiBaseUrl,
+  });
+
+  const desktopLanguageClient = new CompanionLanguageClient({
+    reportAnalytics: event => getMainLogReporter().report(event),
+    fetchWithAuth, fetchAnonymous: (url, options) => net.fetch(url, options),
+    getInstallationId: getOrCreateInstallationId, getServerApiBaseUrl, getSessionKey: getAuthSessionKey,
   });
 
   registerSiteIpcHandlers({
@@ -15250,6 +15863,12 @@ if (!gotTheLock) {
           getOwner: getCurrentRemoteOwner, getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}`,
           showLogs: () => shell.showItemInFolder(getLogFilePath()),
         }).catch(error => console.warn('[Recovery] Unable to open task recovery', error));
+      }, {
+        isEnabled: () => desktopCompanionManager?.getState().preferences.enabled ?? false,
+        toggleEnabled: () => desktopCompanionManager?.setPreferences({
+          enabled: !desktopCompanionManager.getState().preferences.enabled,
+        }, CompanionAnalyticsSource.Tray),
+        openPanel: () => desktopCompanionManager?.togglePanel(),
       });
 
       // Start cron polling after the window is ready.
@@ -15475,6 +16094,10 @@ if (!gotTheLock) {
     void remoteTelemetryRuntime?.dispose();
     remoteNetworkTransport.dispose();
     remoteSettingsController?.dispose();
+    // Tear down companion windows, shortcut and monitors before the first await
+    // so nothing re-shows a window that hideAppWindowsForQuit() just hid.
+    desktopCompanionManager?.dispose();
+    desktopCompanionManager = null;
     skillManager?.stopWatching();
     stopMediaPollTimer();
     pendingMediaTasks.clear();
@@ -15742,6 +16365,44 @@ if (!gotTheLock) {
     refreshEndpointsTestMode(store);
     initializeSessionExecutionCore();
     initializeRemoteControl();
+
+    // Background persistence services require the initialized store and restored endpoints.
+    const usageTitleSync = new UsageTitleSync({
+      load: () => getStore().get<UsageTitleOutbox>('usage_title_outbox_v1'),
+      save: state => getStore().set('usage_title_outbox_v1', state),
+      getOwner: () => {
+        const owner = getCurrentMediaAccountScope()?.ownerAccountKey;
+        return owner ? JSON.stringify([getServerApiBaseUrl(), owner]) : null;
+      },
+      send: ({ sessionId, title, revision }) => {
+        getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+        return fetchWithAuth(`${getServerApiBaseUrl()}/api/usage/session-metadata`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, title, revision }),
+          signal: AbortSignal.timeout(10_000),
+        });
+      },
+    });
+    usageTitleSync.start();
+    app.once('before-quit', () => usageTitleSync.stop());
+    configureUsageTitleReporter(sessionId => {
+      if (!canViewCoworkSession(sessionId)) return;
+      const session = getCoworkStore().getSession(sessionId);
+      if (!session) return;
+      try { usageTitleSync.enqueue(sessionId, session.title); }
+      catch { console.warn('[UsageTitle] could not persist pending title.'); }
+    });
+
+    let mediaRecoveryInFlight = false;
+    const mediaRecoveryTimer = setInterval(() => {
+      if (mediaRecoveryInFlight) return;
+      mediaRecoveryInFlight = true;
+      void recoverMediaTasks().catch(error => console.warn('[MediaGeneration] Recovery failed:', error))
+        .finally(() => { mediaRecoveryInFlight = false; });
+    }, 15_000);
+    app.once('before-quit', () => clearInterval(mediaRecoveryTimer));
+
     sqliteBackupManager = new SqliteBackupManager(app.getPath('userData'));
 
     const startSqliteBackupLoop = async (): Promise<void> => {
@@ -16083,6 +16744,7 @@ if (!gotTheLock) {
     registerRendererPermissionHandler({
       session: session.defaultSession,
       getMainWindow: () => mainWindow,
+      isAdditionalVoiceInputWebContents: webContents => desktopCompanionManager?.isComposerWebContents(webContents) ?? false,
       isDev,
       startUrl: process.env.ELECTRON_START_URL,
     });
@@ -16091,6 +16753,37 @@ if (!gotTheLock) {
     console.log('[Main] initApp: creating window');
     createWindow();
     profiler.measure('createWindow');
+    desktopCompanionManager = new DesktopCompanionManager({
+      reportAnalytics: event => getMainLogReporter().report(event),
+      getAnalyticsOwner: () => getStore().get<AppConfigSettings>('app_config')?.usageAnalyticsEnabled === false ? null : getAuthSessionKey() ?? '',
+      getTaskInfo: sessionId => {
+        if (!canViewCoworkSession(sessionId)) return null;
+        const task = getCoworkStore().getSession(sessionId, 1);
+        return task ? { ...task, preview: getCompanionTaskPreview(task.messages.at(-1)) } : null;
+      },
+      services: {
+        languageClient: desktopLanguageClient,
+        quickAnswer: new CompanionQuickAnswerService({ getSessionKey: getAuthSessionKey,
+          reportAnalytics: event => getMainLogReporter().report(event) }),
+      },
+      store: getStore(),
+      preloadPath: PRELOAD_PATH,
+      rendererDirectory: path.join(__dirname, '../dist'),
+      devServerUrl: isDev ? DEV_SERVER_URL : undefined,
+      getMainWindow: () => mainWindow,
+      onPreferencesChanged: () => updateTrayMenu(() => isQuitting ? null : mainWindow),
+      openMain: sessionId => {
+        if (sessionId && !canViewCoworkSession(sessionId)) return;
+        if (sessionId) pendingOpenSessionFromNotificationId = sessionId;
+        focusMainWindowForReason('desktop companion');
+        flushOpenSessionFromNotification();
+      },
+      openSettings: () => {
+        focusMainWindowForReason('desktop companion settings');
+        const request: OpenSettingsRequest = { tab: OpenSettingsTab.DesktopCompanion };
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(AppIpcChannel.OpenSettings, request);
+      },
+    });
     console.log('[Main] initApp: window created');
 
     // ── Step 2-4: Skill bootstrap (non-blocking) ────────────────────
@@ -16245,6 +16938,10 @@ if (!gotTheLock) {
       getStore().get<AppConfigSettings>('app_config'),
     );
     getStore().onDidChange<AppConfigSettings>('app_config', (newConfig, oldConfig) => {
+      if (newConfig?.usageAnalyticsEnabled === false) {
+        mediaUsage.clear();
+        desktopCompanionManager?.clearTaskAnalytics();
+      }
       updateTitleBarOverlay();
       // 仅在语言变更时刷新托盘菜单文本
       const currentLanguage = newConfig?.language;
@@ -16303,9 +17000,8 @@ if (!gotTheLock) {
         if (!mainWindow.isFocused()) mainWindow.focus();
         return;
       }
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
+      // Companion windows can remain alive after the main window closes.
+      createWindow();
     });
   };
 

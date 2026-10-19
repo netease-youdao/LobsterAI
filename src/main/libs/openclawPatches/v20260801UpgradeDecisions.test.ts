@@ -36,6 +36,8 @@ const RETAINED_PATCHES = [
   'openclaw-malformed-tool-call-continuation.patch',
   'openclaw-managed-npm-junction-cleanup.patch',
   'openclaw-memory-sidecar-archive-generations.patch',
+  'openclaw-model-preset-context-windows.patch',
+  'openclaw-model-preset-window-metadata.patch',
   'openclaw-omit-default-model-from-system-prompt.patch',
   'openclaw-openai-compatible-cache-control.patch',
   'openclaw-openai-completions-output-budget.patch',

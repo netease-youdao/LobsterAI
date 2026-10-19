@@ -24,6 +24,7 @@ import {
 } from '../../shared/providers/modelRuntimeProfiles';
 import type { EnterpriseAuthSessionSnapshot } from '../enterpriseAccount/membershipRevocation';
 import { createLlmSpanId, createLlmTraceId } from './llmTrace';
+import { clearLlmUsageContexts, getLlmUsageHeaders } from './llmUsageContext';
 import { listenOnLoopback } from './loopbackListen';
 
 const PROXY_BIND_HOST = '127.0.0.1';
@@ -174,6 +175,7 @@ export function stopOpenClawTokenProxy(): void {
   proxyPort = null;
   recentQuotaError = null;
   traceStatsById.clear();
+  clearLlmUsageContexts();
   tokenGetter = null;
   tokenRefresher = null;
   serverBaseUrlGetter = null;
@@ -418,7 +420,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
     // Build upstream URL: serverBaseUrl + request path
     // OpenClaw sends to /v1/chat/completions, upstream is /api/proxy/v1/chat/completions
-    const upstreamPath = `/api/proxy${req.url || '/'}`;
+    // Only the two virtual-model resolution routes share this authenticated loopback transport.
+    const resolutionPath = /^\/models\/(yd-fast|yd-ultra)\/resolve$/.test(req.url ?? '');
+    const upstreamPath = resolutionPath ? `/api${req.url}` : `/api/proxy${req.url || '/'}`;
     const upstreamUrl = `${serverBaseUrl}${upstreamPath}`;
 
     if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter) || !tokenGetter?.()) {
@@ -1057,12 +1061,19 @@ async function forwardRequest(
   } catch (error) {
     console.warn('[OpenClawTokenProxy] failed to read account context headers; forwarding with token only:', error);
   }
+  let requestModel: unknown;
+  try {
+    requestModel = (JSON.parse(body.toString('utf8')) as { model?: unknown } | null)?.model;
+  } catch {
+    // Invalid/non-JSON bodies are forwarded unchanged and receive no mode label.
+  }
   const headers = buildUpstreamRequestHeaders(
     accessToken,
     incomingHeaders,
     clientVersion,
     accountContextHeaders,
     traceparent,
+    requestModel,
   );
 
   const resp = await net.fetch(url, {
@@ -1103,6 +1114,7 @@ function buildUpstreamRequestHeaders(
   clientVersion: string,
   accountContextHeaders: Record<string, string> = {},
   traceparent?: string,
+  requestModel?: unknown,
 ): Record<string, string> {
   const headers: Record<string, string> = {
     ...accountContextHeaders,
@@ -1111,6 +1123,7 @@ function buildUpstreamRequestHeaders(
     [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
     [LOBSTERAI_CLIENT_VERSION_HEADER]: clientVersion,
     ...(traceparent ? { [LLM_TRACEPARENT_HEADER]: traceparent } : {}),
+    ...getLlmUsageHeaders(traceparent, requestModel),
   };
 
   // Forward accept header for SSE streaming

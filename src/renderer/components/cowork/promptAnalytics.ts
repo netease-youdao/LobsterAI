@@ -17,8 +17,8 @@ export const PromptAnalyticsSurface = SharedPromptAnalyticsSurface;
 export type PromptAnalyticsConversationState = PromptAnalyticsConversationStateValue;
 export type PromptAnalyticsSurface = PromptAnalyticsSurfaceValue;
 
-export const getPromptAnalyticsSurface = (sessionId?: string): PromptAnalyticsSurface =>
-  sessionId ? PromptAnalyticsSurface.Conversation : PromptAnalyticsSurface.Home;
+export const getPromptAnalyticsSurface = (sessionId?: string, surface?: PromptAnalyticsSurface): PromptAnalyticsSurface =>
+  surface ?? (sessionId ? PromptAnalyticsSurface.Conversation : PromptAnalyticsSurface.Home);
 
 export const getPromptAnalyticsConversationState = (sessionId?: string): PromptAnalyticsConversationState =>
   sessionId ? PromptAnalyticsConversationState.ContinueSession : PromptAnalyticsConversationState.NewTask;
@@ -196,6 +196,10 @@ export interface PromptSubmitAnalyticsOptions {
   agentId: string;
   isMainAgent: boolean;
   agentSource?: string;
+  presetId?: string;
+  journeyId?: string;
+  catalogVersion?: string;
+  entry?: string;
   agentSkillCount?: number;
   sessionMessageCount?: number;
   sessionCreatedAt?: number;
@@ -216,6 +220,10 @@ export const reportPromptSubmit = (options: PromptSubmitAnalyticsOptions): void 
     agentId: options.agentId,
     isMainAgent: options.isMainAgent,
     agentSource: options.agentSource,
+    presetId: options.presetId,
+    journeyId: options.journeyId,
+    catalogVersion: options.catalogVersion,
+    entry: options.entry,
     agentSkillCount: options.agentSkillCount,
     hasSession: options.conversationState === PromptAnalyticsConversationState.ContinueSession,
     sessionMessageCountBucket: options.sessionMessageCount === undefined

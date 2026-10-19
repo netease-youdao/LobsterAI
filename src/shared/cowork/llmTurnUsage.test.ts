@@ -9,6 +9,7 @@ import {
   getCoworkTurnUsage,
   isValidLlmTraceId,
   parseLlmTraceparent,
+  TurnUsageModelType,
 } from './llmTurnUsage';
 
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
@@ -131,5 +132,44 @@ describe('buildCoworkTurnUsage', () => {
       now: 1,
     })).toBeNull();
     expect(buildCoworkTurnUsage(null, { traceId: TRACE_ID, now: 1 })).toBeNull();
+  });
+
+  test('keeps rounded display totals separate from original ledger charges', () => {
+    const result = buildCoworkTurnUsage({
+      ...summary,
+      creditsUsed: '607.203752',
+      displayCreditsUsed: '607.21',
+      modelUsage: [{
+        type: TurnUsageModelType.Text, model: 'deepseek-flash', count: 3,
+        creditsUsed: '7.203752', displayCreditsUsed: '7.21',
+      }, {
+        type: TurnUsageModelType.Video, model: 'HappyHorse-1.1', count: 1,
+        creditsUsed: '600', displayCreditsUsed: '600.00',
+      }],
+    }, { traceId: TRACE_ID, now: 1 });
+    expect(result?.creditsUsed).toBe(607.203752);
+    expect(result?.displayCreditsUsed).toBe(607.21);
+    expect(result?.modelUsage?.map(model => model.creditsUsed)).toEqual([7.203752, 600]);
+    expect(result?.modelUsage?.map(model => model.displayCreditsUsed)).toEqual([7.21, 600]);
+  });
+
+  test.each([undefined, null, '', ' ', 'invalid', -1, Number.NaN, Infinity])(
+    'ignores absent or invalid display totals: %s', (displayCreditsUsed) => {
+      const result = buildCoworkTurnUsage({
+        ...summary, displayCreditsUsed,
+        modelUsage: [{ type: TurnUsageModelType.Text, creditsUsed: 12.5, displayCreditsUsed }],
+      }, { traceId: TRACE_ID, now: 1 });
+      expect(result?.displayCreditsUsed).toBeUndefined();
+      expect(result?.modelUsage?.[0].displayCreditsUsed).toBeUndefined();
+      expect(result?.creditsUsed).toBe(12.5);
+    },
+  );
+
+  test('preserves zero as an explicitly supplied display total', () => {
+    const result = buildCoworkTurnUsage({ ...summary, creditsUsed: 0.004, displayCreditsUsed: 0 }, {
+      traceId: TRACE_ID, now: 1,
+    });
+    expect(result?.displayCreditsUsed).toBe(0);
+    expect(result?.creditsUsed).toBe(0.004);
   });
 });

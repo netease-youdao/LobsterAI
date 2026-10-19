@@ -786,7 +786,7 @@ async function fetchIcons(apps: AppInfo[]): Promise<void> {
 // Rendered at up to ~18px CSS (36px retina); 64px keeps payloads small and crisp.
 const ICON_RASTER_SIZE = '64';
 
-async function extractIcon(appInfo: AppInfo): Promise<string | null> {
+export async function extractIcon(appInfo: AppInfo): Promise<string | null> {
   // macOS: use sips to convert .icns → PNG → data URL
   const macOSIconPath = process.platform === 'darwin'
     ? appInfo.iconPath || findMacOSAppIconPath(appInfo.path)

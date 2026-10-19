@@ -1,3 +1,5 @@
+import { isExpertAssetUrl } from './expertAssets';
+
 export const AgentAvatarIconFormat = {
   Svg: 'agent-avatar-svg',
 } as const;
@@ -84,7 +86,15 @@ export const parseAgentAvatarIcon = (value: string | null | undefined): Designed
 
 export const normalizeAgentAvatarIcon = (value: string | null | undefined): string => {
   const normalized = value?.trim() ?? '';
+  const imageUrl = parseAgentAvatarImageUrl(normalized);
+  if (imageUrl) return imageUrl;
   const avatar = parseAgentAvatarIcon(normalized);
   if (avatar) return encodeAgentAvatarIcon(avatar);
   return DefaultAgentAvatarIcon;
 };
+
+export function parseAgentAvatarImageUrl(value: string | null | undefined): string | null {
+  const normalized = value?.trim() ?? '';
+  if (normalized.length > 2048 || !isExpertAssetUrl(normalized)) return null;
+  return /\.(webp|png|jpe?g)$/i.test(new URL(normalized).pathname) ? normalized : null;
+}

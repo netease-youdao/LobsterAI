@@ -2,10 +2,9 @@ import {
   type CoworkTurnUsage,
   CoworkTurnUsageBillingScope,
   CoworkTurnUsageStatus,
+  type TurnModelUsage,
+  TurnUsageModelType,
 } from '../../../shared/cowork/llmTurnUsage';
-
-// Hidden until the credits breakdown is reworked; usage is still recorded.
-export const TURN_USAGE_CHIP_ENABLED = false;
 
 export const TurnUsageTokenRowKey = {
   UncachedInput: 'uncachedInput',
@@ -31,17 +30,20 @@ export type TurnUsageChipState = typeof TurnUsageChipState[keyof typeof TurnUsag
 
 const numberFormatter = new Intl.NumberFormat('en-US');
 const creditsFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+const fixedCreditsFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Credits with at most two decimals; a non-zero amount never reads as 0. */
-export const formatTurnCredits = (credits: number): string => {
-  if (!Number.isFinite(credits) || credits <= 0) return '0';
+export const formatTurnCredits = (credits: number, fixedDecimals = false): string => {
+  if (!Number.isFinite(credits) || credits <= 0) return fixedDecimals ? '0.00' : '0';
   if (credits < 0.01) return '<0.01';
-  return creditsFormatter.format(credits);
+  return (fixedDecimals ? fixedCreditsFormatter : creditsFormatter).format(credits);
 };
 
 /** A partial summary is a lower bound: some requests are not in the ledger yet. */
-export const formatTurnUsageCredits = (usage: Pick<CoworkTurnUsage, 'creditsUsed' | 'status'>): string => {
-  const credits = formatTurnCredits(usage.creditsUsed);
+export const formatTurnUsageCredits = (
+  usage: Pick<CoworkTurnUsage, 'creditsUsed' | 'displayCreditsUsed' | 'status'>, fixedDecimals = false,
+): string => {
+  const credits = formatTurnCredits(usage.displayCreditsUsed ?? usage.creditsUsed, fixedDecimals);
   return usage.status === CoworkTurnUsageStatus.Partial ? `≥${credits}` : credits;
 };
 
@@ -99,3 +101,56 @@ export const getTurnCreditsLabelKey = (usage: CoworkTurnUsage): string => (
 export const shortenTraceId = (traceId: string): string => (
   traceId.length > 16 ? `${traceId.slice(0, 8)}…${traceId.slice(-6)}` : traceId
 );
+
+/** Compact token notation for the billing card; full counts remain in diagnostics. */
+export const formatTurnTokenAmount = (tokens: number, language: string): string => {
+  const count = Math.max(0, Math.floor(tokens));
+  const isChinese = language.startsWith('zh');
+  if (isChinese && count >= 10_000) {
+    return `${creditsFormatter.format(count / 10_000)} 万 Token`;
+  }
+  return `${new Intl.NumberFormat(isChinese ? 'zh-CN' : 'en-US', {
+    notation: count >= 10_000 ? 'compact' : 'standard',
+    maximumFractionDigits: 1,
+  }).format(count)} Token`;
+};
+
+export const getTurnModelUsage = (usage: CoworkTurnUsage): TurnModelUsage[] => {
+  const rows = usage.modelUsage;
+  if (rows?.length) {
+    return [...rows].sort((a, b) => modelTypeOrder[a.type] - modelTypeOrder[b.type]);
+  }
+  // Older stored summaries only contain the combined text-model ledger.
+  return [{
+    type: TurnUsageModelType.Text,
+    model: usage.models.join(', '),
+    count: usage.requestCount,
+    creditsUsed: usage.creditsUsed,
+    ...(usage.displayCreditsUsed !== undefined ? { displayCreditsUsed: usage.displayCreditsUsed } : {}),
+    uncachedInputTokens: usage.uncachedInputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    outputTokens: usage.outputTokens,
+  }];
+};
+
+const modelTypeOrder = {
+  [TurnUsageModelType.Image]: 0,
+  [TurnUsageModelType.Video]: 1,
+  [TurnUsageModelType.Text]: 2,
+};
+
+export const turnUsageModelColors = {
+  [TurnUsageModelType.Text]: { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400' },
+  [TurnUsageModelType.Image]: { dot: 'bg-violet-400', text: 'text-violet-600 dark:text-violet-400' },
+  [TurnUsageModelType.Video]: { dot: 'bg-orange-400', text: 'text-orange-600 dark:text-orange-400' },
+};
+
+export const buildTurnModelTokenRows = (model: TurnModelUsage) => [
+  { labelKey: 'coworkTurnUsageNewInput', tokens: model.uncachedInputTokens, credits: model.tokenCreditEstimate?.uncachedInput },
+  { labelKey: 'coworkTurnUsageCacheRead', tokens: model.cacheReadTokens, credits: model.tokenCreditEstimate?.cacheRead },
+  ...(model.cacheWriteTokens > 0 ? [{
+    labelKey: 'coworkTurnUsageCacheWrite', tokens: model.cacheWriteTokens, credits: model.tokenCreditEstimate?.cacheWrite,
+  }] : []),
+  { labelKey: 'coworkTurnUsageOutput', tokens: model.outputTokens, credits: model.tokenCreditEstimate?.output },
+];

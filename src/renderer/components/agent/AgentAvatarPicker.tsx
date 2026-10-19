@@ -14,9 +14,10 @@ import AgentAvatarIcon, {
 interface AgentAvatarPickerProps {
   value: string;
   onChange: (value: string) => void;
+  expertFallback?: boolean;
 }
 
-const AgentAvatarPicker: React.FC<AgentAvatarPickerProps> = ({ value, onChange }) => {
+const AgentAvatarPicker: React.FC<AgentAvatarPickerProps> = ({ value, onChange, expertFallback }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -58,6 +59,7 @@ const AgentAvatarPicker: React.FC<AgentAvatarPickerProps> = ({ value, onChange }
       >
         <AgentAvatarIcon
           value={value}
+          expertFallback={expertFallback}
           className="h-11 w-11"
           iconClassName="h-[22px] w-[22px]"
         />

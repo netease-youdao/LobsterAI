@@ -131,7 +131,7 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     require: (id: string) => modules[id] ?? inert,
     exports: {}, __dirname: fakePath, __filename: path.join(fakePath, 'main.js'),
     console: { log: noop, info: noop, warn: noop, debug: noop, error: (...args: unknown[]) => { errors.push(args); } },
-    process: { platform: 'darwin', env: {}, argv: ['node', fakePath], execPath: 'node', versions: {}, on: noop, once: noop },
+    process: { platform: 'darwin', env: {}, argv: ['node', fakePath], execPath: 'node', cwd: () => fakePath, versions: {}, on: noop, once: noop },
     setTimeout: () => ({ unref: noop }), clearTimeout: noop,
     setInterval: () => ({ unref: noop }), clearInterval: noop,
     Buffer, URL, URLSearchParams, AbortController, TextDecoder, TextEncoder,

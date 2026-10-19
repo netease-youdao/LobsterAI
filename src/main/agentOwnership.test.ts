@@ -2,11 +2,12 @@ import Database from 'better-sqlite3';
 import { afterEach, expect, test, vi } from 'vitest';
 
 import { AgentAccessErrorCode, AgentId, AgentOwnerKind } from '../shared/agent/constants';
+import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
+import type { ExpertCatalog } from '../shared/agent/presets';
 import type { RemoteOwner } from '../shared/remote/constants';
 import { AgentManager } from './agentManager';
 import { AgentOwnerStore } from './agentOwnership';
 import { CoworkStore } from './coworkStore';
-import { PRESET_AGENTS } from './presetAgents';
 
 vi.mock('electron', () => ({ app: { getAppPath: () => '/mock' } }));
 const ownerA = { userId: '1001', scopeKey: 'personal' };
@@ -20,7 +21,7 @@ function fixture() {
   db.exec(`
     CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT DEFAULT '',system_prompt TEXT DEFAULT '',
       identity TEXT DEFAULT '',model TEXT DEFAULT '',thinking_level TEXT DEFAULT '',working_directory TEXT DEFAULT '',
-      icon TEXT DEFAULT '',skill_ids TEXT DEFAULT '[]',subagent_allow_agent_ids TEXT DEFAULT '[]',enabled INTEGER DEFAULT 1,
+      icon TEXT DEFAULT '',icon_customized INTEGER,skill_ids TEXT DEFAULT '[]',subagent_allow_agent_ids TEXT DEFAULT '[]',enabled INTEGER DEFAULT 1,
       pinned INTEGER DEFAULT 0,pin_order INTEGER,sort_order INTEGER,is_default INTEGER DEFAULT 0,source TEXT DEFAULT 'custom',
       preset_id TEXT DEFAULT '',created_at INTEGER DEFAULT 1,updated_at INTEGER DEFAULT 1);
     CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,agent_id TEXT,status TEXT,title TEXT,created_at INTEGER,updated_at INTEGER);
@@ -95,18 +96,18 @@ test('owner assignment, versions and notifications commit atomically and tombsto
   expect(() => db.prepare('INSERT INTO agents(id,name) VALUES(?,?)').run(agent.id, 'Old client reuse')).toThrow();
 });
 
-test('same preset installs independent private UUIDs and does not reuse anonymous legacy instances', () => {
+test('same preset installs independent private UUIDs and does not reuse anonymous legacy instances', async () => {
   const { store, ownership } = fixture();
   let actor: RemoteOwner | null = null;
-  const manager = new AgentManager(store, () => actor);
-  const preset = PRESET_AGENTS[0];
-  const anonymous = manager.addPresetAgent(preset.id)!;
+  const manager = new AgentManager(store, async () => createExpertCatalogFixture(), () => actor);
+  const preset = createExpertCatalogFixture().experts[0];
+  const anonymous = (await manager.addPresetAgent(preset.id))!;
   actor = ownerA;
-  expect(manager.getPresetAgents().some(item => item.id === preset.id)).toBe(true);
-  const a = manager.addPresetAgent(preset.id)!;
-  expect(manager.addPresetAgent(preset.id)?.id).toBe(a.id);
+  expect((await manager.getPresetAgents()).some(item => item.id === preset.id)).toBe(true);
+  const a = (await manager.addPresetAgent(preset.id))!;
+  expect((await manager.addPresetAgent(preset.id))?.id).toBe(a.id);
   actor = ownerB;
-  const b = manager.addPresetAgent(preset.id)!;
+  const b = (await manager.addPresetAgent(preset.id))!;
   expect(new Set([anonymous.id, a.id, b.id]).size).toBe(3);
   expect(a.id).toMatch(/^[0-9a-f-]{36}$/);
   expect(a.presetId).toBe(preset.id);
@@ -117,6 +118,45 @@ test('same preset installs independent private UUIDs and does not reuse anonymou
   const captured = manager.captureOwner();
   actor = ownerA;
   expect(() => manager.assertCurrentOwner(captured)).toThrow();
+});
+
+test('catalog avatar updates retain ownership and leave other accounts unchanged', async () => {
+  const { store, ownership } = fixture();
+  let actor: RemoteOwner | null = ownerA;
+  const catalog = createExpertCatalogFixture();
+  const manager = new AgentManager(store, async () => catalog, () => actor);
+  const a = (await manager.addPresetAgent(ExpertFixtureId.Data))!;
+  actor = ownerB;
+  const b = (await manager.addPresetAgent(ExpertFixtureId.Data))!;
+  actor = ownerA;
+  const icon = 'https://ydhardwarecommon.nosdn.127.net/category-research.webp';
+  catalog.experts[0].icon = icon;
+
+  await manager.getExpertCatalog();
+
+  expect(store.getAgent(a.id)?.icon).toBe(icon);
+  expect(ownership.get(a.id)?.owner).toEqual(ownerA);
+  expect(ownership.get(a.id)?.ownerKind).toBe(AgentOwnerKind.Owned);
+  expect(store.getAgent(b.id)).toEqual(b);
+});
+
+test.each(['catalog', 'installation'])('account changes during %s fetch prevent late writes', async operation => {
+  const { store } = fixture();
+  let actor: RemoteOwner | null = ownerA;
+  const loadCatalog = vi.fn(async () => createExpertCatalogFixture());
+  const manager = new AgentManager(store, loadCatalog, () => actor);
+  await manager.addPresetAgent(ExpertFixtureId.Data);
+  const before = store.listAgents();
+  let resolveCatalog!: (catalog: ExpertCatalog) => void;
+  loadCatalog.mockReturnValueOnce(new Promise(resolve => { resolveCatalog = resolve; }));
+  const result = operation === 'catalog' ? manager.getExpertCatalog() : manager.addPresetAgent(ExpertFixtureId.App);
+  actor = ownerB;
+  const catalog = createExpertCatalogFixture();
+  catalog.experts[0].icon = 'https://ydhardwarecommon.nosdn.127.net/category-research.webp';
+  resolveCatalog(catalog);
+
+  await expect(result).rejects.toMatchObject({ code: AgentAccessErrorCode.AccountChanged });
+  expect(store.listAgents()).toEqual(before);
 });
 
 test('deletion rejects foreign or quarantined sessions before any database mutation', () => {

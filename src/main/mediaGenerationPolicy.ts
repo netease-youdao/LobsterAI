@@ -1,3 +1,6 @@
+import { type MediaSelection, MediaSelectionMode } from '../shared/media/defaultPolicy';
+export { MediaSelectionMode };
+
 export const MediaGenerationTool = {
   Image: 'lobsterai_image_generate',
   Video: 'lobsterai_video_generate',
@@ -9,27 +12,13 @@ export const MediaGenerationAction = {
 } as const;
 export type MediaGenerationAction = typeof MediaGenerationAction[keyof typeof MediaGenerationAction];
 
-export const MediaSelectionMode = {
-  Auto: 'auto',
-  Image: 'image',
-  Video: 'video',
-  None: 'none',
-} as const;
-export type MediaSelectionMode = typeof MediaSelectionMode[keyof typeof MediaSelectionMode];
-
 export const MediaGenerationGateReason = {
   MediaNotEnabled: 'MEDIA_NOT_ENABLED',
   WrongMediaType: 'WRONG_MEDIA_TYPE',
 } as const;
 export type MediaGenerationGateReason = typeof MediaGenerationGateReason[keyof typeof MediaGenerationGateReason];
 
-export type MediaSelectionState = {
-  mode: MediaSelectionMode;
-  modelId?: string;
-  modelName?: string;
-  imageModelId?: string;
-  videoModelId?: string;
-};
+export type MediaSelectionState = MediaSelection;
 
 export type MediaGenerationGateResult =
   | { allowed: true }

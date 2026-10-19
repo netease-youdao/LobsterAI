@@ -18,6 +18,7 @@ import {
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
 
 import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
+import { parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
 import {
   applyEnterpriseAccountContext,
   refreshEnterpriseAccountContext,
@@ -43,6 +44,7 @@ import { clearMediaAccountState } from '../store/slices/coworkSlice';
 import type { Model } from '../store/slices/modelSlice';
 import {
   clearServerModels,
+  setSelectedModel,
   setServerModels,
 } from '../store/slices/modelSlice';
 import { i18nService } from './i18n';
@@ -83,6 +85,12 @@ export interface PricingCatalogBaseModel {
 }
 
 export interface PricingCatalogTextModel extends PricingCatalogBaseModel {
+  limitedFree?: boolean;
+  limitedFreeActive?: boolean;
+  limitedFreeStartAt?: string | null;
+  limitedFreeEndAt?: string | null;
+  subscriptionPriority?: boolean;
+  busy?: boolean;
   supportsImage?: boolean;
   supportsThinking?: boolean;
   thinkingConfig?: ModelThinkingConfig;
@@ -108,6 +116,7 @@ export interface PricingCatalogResponse {
 
 export interface AvailableServerModelEntry {
   modelId: string;
+  presetId?: unknown;
   modelName: string;
   provider: string;
   apiFormat: string;
@@ -127,6 +136,12 @@ export interface AvailableServerModelEntry {
   moreModel?: boolean;
   accessible?: boolean;
   restrictionHint?: string;
+  limitedFree?: boolean;
+  limitedFreeActive?: boolean;
+  limitedFreeStartAt?: string | null;
+  limitedFreeEndAt?: string | null;
+  subscriptionPriority?: boolean;
+  busy?: boolean;
 }
 
 const readString = (value: unknown): string => (
@@ -210,7 +225,7 @@ export function mapPricingCatalogTextModelsToServerModels(
       || readString(model.provider)
       || 'LobsterAI';
     const contextWindow = readPositiveNumber(model.contextWindow);
-    const costMultiplier = readPositiveNumber(model.costMultiplier);
+    const costMultiplier = model.limitedFreeActive ? 0 : readPositiveNumber(model.costMultiplier);
     const thinkingConfig = model.supportsThinking === true
       ? parseModelThinkingConfig(model.thinkingConfig)
       : undefined;
@@ -227,6 +242,12 @@ export function mapPricingCatalogTextModelsToServerModels(
       description: readString(model.description) || undefined,
       costMultiplier,
       contextWindow,
+      limitedFree: model.limitedFree,
+      limitedFreeActive: model.limitedFreeActive,
+      limitedFreeStartAt: model.limitedFreeStartAt,
+      limitedFreeEndAt: model.limitedFreeEndAt,
+      subscriptionPriority: model.subscriptionPriority,
+      busy: model.busy === true,
       moreModel: model.moreModel === true,
       accessible: false,
     }];
@@ -251,6 +272,7 @@ export function mapAvailableServerModelsToModels(
     const requestCapabilities = parseLobsterAIRequestCapabilities(model.requestCapabilities);
     return {
       id: model.modelId,
+      presetId: parseModelPresetId(model.presetId) ?? undefined,
       name: model.modelName,
       provider: model.provider,
       providerKey: ProviderName.LobsteraiServer,
@@ -269,8 +291,14 @@ export function mapAvailableServerModelsToModels(
       explicitContextCache: model.explicitContextCache ?? false,
       description: model.description,
       costMultiplier: model.costMultiplier,
+      limitedFree: model.limitedFree,
+      limitedFreeActive: model.limitedFreeActive,
+      limitedFreeStartAt: model.limitedFreeStartAt,
+      limitedFreeEndAt: model.limitedFreeEndAt,
+      subscriptionPriority: model.subscriptionPriority,
+      busy: model.busy === true,
       moreModel: model.moreModel === true,
-      accessible: model.accessible ?? true,
+      accessible: model.busy !== true && (model.accessible ?? true),
       restrictionHint: model.restrictionHint ?? undefined,
     };
   });
@@ -891,8 +919,19 @@ class AuthService {
     this.unsubWindowState = null;
   }
 
-  private async handleSessionChanged(event: AuthSessionChangedEvent): Promise<void> {
-    if (event.status !== AuthSessionStatus.Expired) return;
+  /** Sync secondary windows without registering another OAuth callback consumer. */
+  async handleSessionChanged(event: AuthSessionChangedEvent): Promise<void> {
+    if (event.status === AuthSessionStatus.TemporarilyUnavailable) return;
+    // Invalidate pending reads even when this window still appears signed out.
+    store.dispatch(invalidateAuthAccountContext());
+    if (event.status === AuthSessionStatus.Authenticated) {
+      await this.refreshAuthState({ clearOnFailure: true });
+      return;
+    }
+    if (event.status === AuthSessionStatus.Unauthenticated) {
+      await this.applyLoggedOutState(false);
+      return;
+    }
     writeAuthRendererLog('warn', `login session expired (${event.reason})`);
     const cleanup = this.applyLoggedOutState(true);
     const toastKey = event.reason === AuthSessionChangeReason.EnterpriseMembershipRevoked
@@ -1104,14 +1143,26 @@ class AuthService {
     requestSnapshot: AuthAccountRequestSnapshot,
   ): Promise<ServerModelLoadOutcome> {
     try {
-      const modelsResult = await window.electron.auth.getModels();
+      const [modelsResult, preferences] = await Promise.all([
+        window.electron.auth.getModels(),
+        window.electron.modelPresets?.getPreferences().catch(() => ({ success: false, data: {} })),
+      ]);
       if (!isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) {
         writeAuthRendererLog('debug', 'discarded stale server model response after auth state changed');
         return ServerModelLoadOutcome.Abandoned;
       }
       if (modelsResult.success && Array.isArray(modelsResult.models)) {
         const serverModels = mapAvailableServerModelsToModels(modelsResult.models);
+        const presetModels = serverModels.filter(model => model.presetId);
         store.dispatch(setServerModels(serverModels));
+        if (preferences?.success) {
+          for (const [agentId, rawPreference] of Object.entries(preferences.data ?? {})) {
+            const preference = parseModelPresetPreference(rawPreference);
+            if (!preference) continue;
+            const model = presetModels.find(item => item.presetId === preference.presetId && item.accessible !== false);
+            if (model) store.dispatch(setSelectedModel({ agentId, model: { ...model, presetThinkingLevel: preference.thinkingLevel } }));
+          }
+        }
         writeAuthRendererLog(
           'debug',
           `loaded ${serverModels.length} server model(s) into renderer state`,

@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { cpRecursiveSync } from '../fsCompat';
+import { applyPythonEncodingDefaults } from './pythonEncodingEnv';
 import { repairPipShims } from './pythonPipShim';
 
 const PYTHON_RUNTIME_DIR_NAME = 'python-win';
@@ -214,6 +215,9 @@ export function appendPythonRuntimeToEnv(env: Record<string, string | undefined>
   if (process.platform !== 'win32') {
     return env;
   }
+
+  // Also applies when exec falls back to a system Python installation.
+  applyPythonEncodingDefaults(env);
 
   const userRoot = getUserPythonRoot();
   const bundledRoot = getBundledPythonRoot();

@@ -2995,6 +2995,114 @@ FunctionEnd
   NewInstallPrevalidateDone:
 !macroend
 
+; -- Explorer "Open with" --
+; Windows lists an app under "Open with" per extension only; no supported key
+; covers every file. Each listed extension gets a
+; Software\Classes\.<ext>\OpenWithList\<exe> key, which Explorer resolves
+; through Applications\<exe>. OpenWithProgids is avoided on purpose: Windows
+; treats a ProgID listed there as a default candidate, so it becomes the default
+; app of a type that has none, and Explorer asks "How do you want to open this
+; file?" again for a type whose default the user never picked. An OpenWithList
+; entry only adds the menu item. The app receives the path as a command-line
+; argument (see src/main/libs/openWithPathQueue.ts).
+
+; The one list of extensions, expanded once to register and once to remove.
+!macro LobsterOpenWithExtensions OP
+  ; Documents
+  !insertmacro ${OP} "pdf"
+  !insertmacro ${OP} "doc"
+  !insertmacro ${OP} "docx"
+  !insertmacro ${OP} "docm"
+  !insertmacro ${OP} "dot"
+  !insertmacro ${OP} "dotx"
+  !insertmacro ${OP} "dotm"
+  !insertmacro ${OP} "wps"
+  !insertmacro ${OP} "wpt"
+  ; Spreadsheets
+  !insertmacro ${OP} "xls"
+  !insertmacro ${OP} "xlsx"
+  !insertmacro ${OP} "xlsm"
+  !insertmacro ${OP} "xlt"
+  !insertmacro ${OP} "xltx"
+  !insertmacro ${OP} "xltm"
+  !insertmacro ${OP} "csv"
+  ; Presentations
+  !insertmacro ${OP} "ppt"
+  !insertmacro ${OP} "pptx"
+  !insertmacro ${OP} "pptm"
+  !insertmacro ${OP} "pps"
+  !insertmacro ${OP} "ppsx"
+  !insertmacro ${OP} "ppsm"
+  !insertmacro ${OP} "pot"
+  !insertmacro ${OP} "potx"
+  !insertmacro ${OP} "potm"
+  ; Text and web pages
+  !insertmacro ${OP} "txt"
+  !insertmacro ${OP} "md"
+  !insertmacro ${OP} "markdown"
+  !insertmacro ${OP} "htm"
+  !insertmacro ${OP} "html"
+  ; Images
+  !insertmacro ${OP} "png"
+  !insertmacro ${OP} "jpg"
+  !insertmacro ${OP} "jpeg"
+  !insertmacro ${OP} "gif"
+  !insertmacro ${OP} "webp"
+  !insertmacro ${OP} "bmp"
+  !insertmacro ${OP} "ico"
+  !insertmacro ${OP} "svg"
+  !insertmacro ${OP} "avif"
+  ; Audio
+  !insertmacro ${OP} "mp3"
+  !insertmacro ${OP} "wav"
+  !insertmacro ${OP} "m4a"
+  !insertmacro ${OP} "aac"
+  !insertmacro ${OP} "flac"
+  !insertmacro ${OP} "ogg"
+  !insertmacro ${OP} "wma"
+!macroend
+
+!macro LobsterOpenWithAddExtension EXT
+  WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithList\${APP_EXECUTABLE_FILENAME}" "" ""
+!macroend
+
+; Removes only LobsterAI's entry; the extension key and the other apps listed
+; under it stay.
+!macro LobsterOpenWithRemoveExtension EXT
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithList\${APP_EXECUTABLE_FILENAME}"
+!macroend
+
+; Installer only ($appExe). SHELL_CONTEXT follows the install mode: HKCU for a
+; per-user install, HKLM for all users.
+!macro LobsterRegisterOpenWith
+  ClearErrors
+  ; The OpenWithList entries resolve to this key; it also backs "Choose another
+  ; app" for types outside the list.
+  WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}" "FriendlyAppName" "${PRODUCT_NAME}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}\shell\open\command" "" '"$appExe" "%1"'
+  !insertmacro LobsterOpenWithExtensions LobsterOpenWithAddExtension
+  StrCpy $0 "registered"
+  IfErrors 0 +2
+    StrCpy $0 "write-failed"
+  ; SHCNE_ASSOCCHANGED: Explorer re-reads the associations.
+  System::Call 'shell32::SHChangeNotify(i, i, i, i) v (0x08000000, 0, 0, 0)'
+  FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
+  FileSeek $2 0 END
+  !insertmacro GetTimestamp $8
+  FileWrite $2 "$8 phase=open-with-registration attempt_id=$lobsterInstallerAttemptId status=$0 app=${APP_EXECUTABLE_FILENAME}$\r$\n"
+  FileClose $2
+!macroend
+
+; Runs for real uninstalls. An update usually skips the old version's
+; uninstaller (its install directory is renamed away instead), so
+; customInstall rewrites the entries in place: they name the exe, and
+; Applications\<exe> gets the current $appExe.
+!macro LobsterUnregisterOpenWith
+  !insertmacro LobsterOpenWithExtensions LobsterOpenWithRemoveExtension
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}"
+  System::Call 'shell32::SHChangeNotify(i, i, i, i) v (0x08000000, 0, 0, 0)'
+!macroend
+
 ; -- Let LobsterAI.exe accept its own loopback connections --
 ; Windows Defender Firewall's "Query user" default drops inbound connections,
 ; 127.0.0.1 included, to programs without an inbound allow rule. The engine
@@ -3041,8 +3149,9 @@ FunctionEnd
 ; Standard post-registry electron-builder hook. All fallible extraction,
 ; restoration, Defender rebalancing and validation completed in
 ; customBeforeRegistryAddInstallInfo. This hook only commits the already
-; prevalidated directory swap, schedules exact-current-backup cleanup and
-; adds the loopback firewall rule for the committed install.
+; prevalidated directory swap, schedules exact-current-backup cleanup,
+; registers the Open With entries and adds the loopback firewall rule for the
+; committed install.
 !macro customInstall
   StrCmp $lobsterNewInstallValidationStatus "success" 0 InstallFinalizeInvariantFailed
   StrCmp $lobsterOldInstallRenameStatus "prevalidated" 0 InstallFinalizeNoRename
@@ -3096,6 +3205,7 @@ FunctionEnd
     Quit
 
   InstallFinalizeComplete:
+  !insertmacro LobsterRegisterOpenWith
   ; After the old uninstallers, which remove the rule, and after the files exist.
   !insertmacro LobsterApplyLoopbackFirewallRule
   FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
@@ -3113,6 +3223,8 @@ FunctionEnd
 ; uninstalls. Merely opening the uninstaller no longer kills the running app.
 
 !macro customUnInstall
+  !insertmacro LobsterUnregisterOpenWith
+
   ; -- Remove Windows Defender Exclusion on uninstall --
   ; Clean up every exclusion any installer version may have added: the
   ; current permanent set, the SKILLs entry from older versions, the

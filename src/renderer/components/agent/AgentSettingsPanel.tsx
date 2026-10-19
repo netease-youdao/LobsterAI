@@ -18,7 +18,7 @@ import type { Model } from '../../store/slices/modelSlice';
 import type { Agent } from '../../types/agent';
 import type { DingTalkInstanceConfig, DiscordInstanceConfig, FeishuInstanceConfig, IMGatewayConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from '../../types/im';
 import type { Skill } from '../../types/skill';
-import { getAgentDisplayName, getAgentDisplayNameById, isDefaultAgentId } from '../../utils/agentDisplay';
+import { getAgentDisplayName, getAgentDisplayNameById, isDefaultAgentId, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import { resolveOpenClawModelRef, toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
@@ -87,7 +87,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const defaultSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const skills = useSelector((state: RootState) => state.skill.skills);
-  const [, setAgent] = useState<Agent | null>(null);
+  const [agent, setAgent] = useState<Agent | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -392,7 +392,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
           ? { thinkingLevel: resolveThinkingLevelForModel(model) }
           : {}),
         workingDirectory: workingDirectory.trim(),
-        icon: icon.trim(),
+        ...(icon.trim() !== initialValuesRef.current.icon ? { icon: icon.trim() } : {}),
         skillIds,
         subagentAllowAgentIds,
       });
@@ -789,7 +789,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       >
         <div className="flex shrink-0 items-start justify-between gap-4 px-7 py-5">
           <div className={AGENT_HEADER_IDENTITY_CLASS}>
-            <AgentAvatarPicker value={icon} onChange={setIcon} />
+            <AgentAvatarPicker value={icon} onChange={setIcon} expertFallback={usesManagedPresetAvatar(agent) && icon === agent?.icon} />
             <div className={AGENT_HEADER_FIELDS_CLASS}>
               <input
                 type="text"

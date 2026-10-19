@@ -3,7 +3,6 @@ import { app } from 'electron';
 import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync, writeFileSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 
-import { buildSessionTitleFromInput } from '../../common/sessionTitle';
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig, resolveRawApiConfig } from './claudeSettings';
 import { coworkLog } from './coworkLogger';
@@ -989,16 +988,6 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       env.LC_ALL = 'C.UTF-8';
     }
 
-    // Force Python to use UTF-8 mode (PEP 540, Python 3.7+).
-    // Without this, Python on Chinese Windows defaults to GBK for stdin/stdout/stderr
-    // and file I/O, causing garbled output when the SDK reads it as UTF-8.
-    if (!env.PYTHONUTF8) {
-      env.PYTHONUTF8 = '1';
-    }
-    if (!env.PYTHONIOENCODING) {
-      env.PYTHONIOENCODING = 'utf-8';
-    }
-
     // Force `less` and `git` pager output to use UTF-8.
     if (!env.LESSCHARSET) {
       env.LESSCHARSET = 'utf-8';
@@ -1418,7 +1407,6 @@ export function ensureCoworkTempDir(cwd: string): string {
   return tempDir;
 }
 
-const SESSION_TITLE_FALLBACK = 'New Chat';
 const COWORK_MODEL_PROBE_TIMEOUT_MS = 20000;
 
 type SessionTitleApiConfig =
@@ -1544,11 +1532,4 @@ export async function probeCoworkModelReadiness(
   } finally {
     clearTimeout(timeoutId);
   }
-}
-
-export async function generateSessionTitle(
-  userIntent: string | null,
-  defaultTitle = SESSION_TITLE_FALLBACK
-): Promise<string> {
-  return buildSessionTitleFromInput(userIntent, defaultTitle);
 }

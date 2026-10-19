@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import { UsageOutcome } from '../../../shared/analytics/usage';
 import type { ApprovalDecisionOptions, ApprovalDecisionOutcome, ApprovalReconcileOptions, ApprovalState, DualApprovalConfiguration } from '../../../shared/cowork/approval';
 import type {
   CoworkBtwAbortResponse,
@@ -13,6 +14,7 @@ import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type { LocalQuestionState, QuestionAnswers, QuestionDecisionOptions, QuestionDecisionOutcome, QuestionStatus } from '../../../shared/remote/questions';
 import { type QuestionRegistration, RemoteQuestionError } from '../../remote/remoteQuestionService';
+import type { TaskUsageAnalytics } from '../usageAnalytics';
 import type {
   CoworkAgentEngine,
   CoworkContextUsage,
@@ -32,6 +34,7 @@ type RouterDeps = {
   getCurrentEngine: () => CoworkAgentEngine;
   assertSessionAccess?: (sessionId: string) => void;
   openclawRuntime: CoworkRuntime;
+  analytics?: TaskUsageAnalytics;
 };
 
 export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
@@ -43,9 +46,12 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   private currentEngine: CoworkAgentEngine;
   private readonly assertSessionAccess: (sessionId: string) => void;
 
+  private readonly analytics?: TaskUsageAnalytics;
+
   constructor(deps: RouterDeps) {
     super();
     this.assertSessionAccess = deps.assertSessionAccess || (() => undefined);
+    this.analytics = deps.analytics;
     this.getCurrentEngine = deps.getCurrentEngine;
     this.runtime = deps.openclawRuntime;
     this.currentEngine = this.safeResolveEngine();
@@ -71,9 +77,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
+    const analyticsStarted = this.analytics?.begin(sessionId, options, false);
     try {
       await this.runtime.startSession(sessionId, prompt, options);
     } catch (error) {
+      if (analyticsStarted) this.analytics?.end(sessionId, UsageOutcome.Failed, error);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       throw error;
@@ -84,9 +92,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     this.assertSessionAccess(sessionId);
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
+    const analyticsStarted = this.analytics?.begin(sessionId, options, true);
     try {
       await this.runtime.continueSession(sessionId, prompt, options);
     } catch (error) {
+      if (analyticsStarted) this.analytics?.end(sessionId, UsageOutcome.Failed, error);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       throw error;
@@ -197,6 +207,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.assertSessionAccess(sessionId);
       await actual.beforeDispatch?.();
       this.assertSessionAccess(sessionId);
+      this.analytics?.permissionResolved(sessionId, requestId, result.behavior);
     } });
   }
 
@@ -211,6 +222,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     const actual = options ?? { submissionId: randomUUID(), source: 'desktop' as const };
     return this.runtime.respondToQuestionConfirmed(id, result, { ...actual, beforeDispatch: async () => {
       this.assertSessionAccess(state.sessionId); await actual.beforeDispatch?.(); this.assertSessionAccess(state.sessionId);
+      this.analytics?.permissionResolved(state.sessionId, state.requestId, result.behavior);
     } });
   }
 
@@ -224,12 +236,14 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   listPendingPermissions(): Array<{ sessionId: string; request: PermissionRequest }> { return this.runtime.listPendingPermissions?.() ?? []; }
 
   stopSession(sessionId: string): void {
+    this.analytics?.end(sessionId, UsageOutcome.Cancelled);
     this.runtime.stopSession(sessionId);
     this.sessionEngine.delete(sessionId);
     this.clearRequestEngineBySession(sessionId);
   }
 
   stopAllSessions(): void {
+    this.analytics?.stopAll();
     this.runtime.stopAllSessions();
     this.sessionEngine.clear();
     this.requestEngine.clear();
@@ -245,6 +259,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
         .find((question) => question.requestId === requestId)?.sessionId ?? this.requestSession.get(requestId);
       if (!sessionId) return;
       this.assertSessionAccess(sessionId);
+      this.analytics?.permissionResolved(sessionId, requestId, result.behavior);
       // Native answers must be acknowledged before the renderer dismisses the question.
       return this.runtime.respondToPermission(requestId, result);
     }
@@ -301,11 +316,13 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
 
   private bindRuntimeEvents(engine: CoworkAgentEngine, runtime: CoworkRuntime): void {
     runtime.on('message', (sessionId, message, beforeMessageId) => {
+      this.analytics?.message(sessionId, message);
       this.sessionEngine.set(sessionId, engine);
       this.emit('message', sessionId, message, beforeMessageId);
     });
 
     runtime.on('messageUpdate', (sessionId, messageId, content, metadata) => {
+      this.analytics?.update(sessionId, messageId, metadata);
       this.sessionEngine.set(sessionId, engine);
       this.emit('messageUpdate', sessionId, messageId, content, metadata);
     });
@@ -333,6 +350,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     });
 
     runtime.on('permissionRequest', (sessionId, request) => {
+      this.analytics?.permission(sessionId, request);
       this.sessionEngine.set(sessionId, engine);
       this.requestEngine.set(request.requestId, engine);
       this.requestSession.set(request.requestId, sessionId);
@@ -342,18 +360,21 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     runtime.on('permissionState', (sessionId, state) => this.emit('permissionState', sessionId, state));
 
     runtime.on('permissionResolved', (sessionId, requestId) => {
+      this.analytics?.permissionResolved(sessionId, requestId);
       this.requestEngine.delete(requestId);
       this.requestSession.delete(requestId);
       this.emit('permissionResolved', sessionId, requestId);
     });
 
     runtime.on('complete', (sessionId, claudeSessionId) => {
+      this.analytics?.end(sessionId, UsageOutcome.Completed);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       this.emit('complete', sessionId, claudeSessionId);
     });
 
     runtime.on('error', (sessionId, error) => {
+      this.analytics?.end(sessionId, UsageOutcome.Failed, error);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       this.emit('error', sessionId, error);
@@ -364,6 +385,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     });
     runtime.on('runTermination', (sessionId, gatewayRunId, status) => this.emit('runTermination', sessionId, gatewayRunId, status));
     runtime.on('sessionStopped', (sessionId) => {
+      this.analytics?.end(sessionId, UsageOutcome.Cancelled);
       this.emit('sessionStopped', sessionId);
     });
   }

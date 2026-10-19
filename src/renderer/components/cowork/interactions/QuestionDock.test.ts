@@ -26,6 +26,13 @@ const renderCard = (permission: CoworkPermissionRequest, props: Record<string, u
   renderToStaticMarkup(createElement(QuestionDockCard, { request: permissionDockRequest(permission)!, ...props }));
 
 describe('QuestionDockCard', () => {
+  test('shows the pricing subtitle in a video confirmation', () => {
+    const html = renderCard({ ...plugin, toolInput: { questions: [{
+      question: 'Confirm video generation?', subtitle: 'Video price depends on model, duration and resolution.', options,
+    }] } });
+    expect(html).toContain('Video price depends on model, duration and resolution.');
+  });
+
   test('renders one plugin question at a time with numbered options, free text and skip', () => {
     const html = renderCard(plugin, { queueCount: 2 });
     expect(html).toContain('<h2>Which?</h2>');

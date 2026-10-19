@@ -4,6 +4,11 @@ import http from 'http';
 import { beforeEach, expect, test, vi } from 'vitest';
 
 import { AuthRefreshOutcome } from '../../shared/auth/constants';
+import {
+  LOBSTERAI_CLIENT_CAPABILITIES,
+  LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
+  LOBSTERAI_CLIENT_VERSION_HEADER,
+} from '../../shared/providers/modelRuntimeProfiles';
 
 vi.mock('electron', () => ({
   net: { fetch: vi.fn() },
@@ -399,8 +404,8 @@ test('adds fixed capability, client version, and enterprise context headers with
     Authorization: 'Bearer access-token',
     Accept: 'text/event-stream',
     'Content-Type': 'application/json',
-    'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1,thinking-level-control-v1',
-    'X-LobsterAI-Client-Version': '2026.7.23',
+    [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
+    [LOBSTERAI_CLIENT_VERSION_HEADER]: '2026.7.23',
     'X-LobsterAI-Account-Mode': 'enterprise',
     'X-LobsterAI-Enterprise-Id': '1001',
   });

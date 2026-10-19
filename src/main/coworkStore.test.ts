@@ -22,12 +22,16 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
+import { AgentId, AgentSource } from '../shared/agent/constants';
 import {
+  COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
   COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES,
   CoworkForkMode,
 } from '../shared/cowork/constants';
+import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
+import { ModelPresetId } from '../shared/modelPresets/constants';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
@@ -57,6 +61,7 @@ function setupDb(): void {
       cwd TEXT NOT NULL,
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
+      model_preset_id TEXT,
       thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,
@@ -133,6 +138,7 @@ function setupDb(): void {
       thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
+      icon_customized INTEGER,
       skill_ids TEXT NOT NULL DEFAULT '[]',
       subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
@@ -836,6 +842,68 @@ test('getTurnStartTimestampAt uses the earliest time when a channel user message
   expect(store.getTurnStartTimestampAt(sid, 0)).toBe(500);
 });
 
+test.each([null, ModelPresetId.Balanced, ModelPresetId.Ultimate])(
+  'getSession retains paged turn usage after a model-change notice (%s)',
+  (presetId) => {
+    const sid = 'sess-model-change-usage';
+    insertSession(sid);
+    const turnUsage = buildCoworkTurnUsage({
+      requestCount: 1,
+      failedRequestCount: 0,
+      models: ['deepseek-v4.1-flash'],
+      creditsUsed: 1.25,
+      uncachedInputTokens: 100,
+      outputTokens: 50,
+    }, { traceId: '4bf92f3577b34da6a3ce929d0e0e4736', now: 40_000 });
+    expect(turnUsage?.status).toBe(CoworkTurnUsageStatus.Settled);
+    insertMessage('user-1', sid, 'user', 'long task', JSON.stringify({ turnUsage }), 1, 1000);
+    for (let index = 2; index <= COWORK_MESSAGE_PAGE_SIZE; index += 1) {
+      insertMessage(`reply-${index}`, sid, 'assistant', 'reply', null, index, index * 1000);
+    }
+    expect(store.getSession(sid)?.messages[0]?.metadata?.turnUsage).toEqual(turnUsage);
+
+    store.updateSession(sid, { modelOverride: 'next-model', modelPresetId: presetId });
+    store.addMessage(sid, {
+      type: 'system',
+      content: '',
+      metadata: {
+        kind: CoworkSystemMessageKind.ModelChanged,
+        modelChange: { previousModelRef: 'deepseek-v4.1-flash', nextModelRef: 'next-model', nextPresetId: presetId },
+      },
+    });
+
+    // The notice pushes the user message, which owns the usage, outside the page.
+    const session = store.getSession(sid);
+    expect(session?.messagesOffset).toBe(1);
+    expect(session?.messages).toHaveLength(COWORK_MESSAGE_PAGE_SIZE);
+    expect(session?.messages.some(message => message.id === 'user-1')).toBe(false);
+    expect(session?.leadingTurnUsage).toEqual({ userMessageId: 'user-1', turnUsage });
+    expect(session?.leadingTurnStartTimestamp).toBe(1000);
+    expect(store.getMessage(sid, 'user-1')?.metadata?.turnUsage).toEqual(turnUsage);
+
+    // Once the user message is loaded, usage comes from its metadata directly.
+    expect(store.getSession(sid, COWORK_MESSAGE_PAGE_SIZE + 1)?.leadingTurnUsage).toBeNull();
+  },
+);
+
+test('getSession does not inherit usage when the page starts with a new user message', () => {
+  const sid = 'sess-usage-new-turn';
+  insertSession(sid);
+  insertMessage('user-1', sid, 'user', 'first task', null, 1, 1000);
+  insertMessage('assistant-1', sid, 'assistant', 'first reply', null, 2, 2000);
+  insertMessage('user-2', sid, 'user', 'next task', null, 3, 3000);
+  insertMessage('assistant-2', sid, 'assistant', 'next reply', null, 4, 4000);
+
+  const session = store.getSession(sid, 2);
+  expect(session?.messagesOffset).toBe(2);
+  expect(session?.leadingTurnUsage).toBeNull();
+  expect(session?.leadingTurnStartTimestamp).toBe(3000);
+
+  const contextSpy = vi.spyOn(store, 'getTurnContextAt');
+  expect(store.getSession(sid, 0)?.messages).toEqual([]);
+  expect(contextSpy).not.toHaveBeenCalled();
+});
+
 test('getSession returns all messages when ALL have corrupt metadata', () => {
   const sid = 'sess-2';
   insertSession(sid);
@@ -921,6 +989,25 @@ test('updateMessage keeps rendered tool details and cannot replace remote attrib
   const row = db.prepare('SELECT metadata FROM cowork_messages WHERE id=?').get('result-patch') as { metadata: string };
   expect(JSON.parse(row.metadata)).toEqual({ toolUseId: 'call', toolName: 'Read', isStreaming: false, isFinal: true,
     remoteRunId: 'run', remoteCommandId: 'command', toolResultDetails: { assets: ['image'], pollCount: 4, status: 'succeeded' } });
+});
+
+test('message patches preserve model preset provenance alongside remote attribution', () => {
+  const sid = 'sess-preset-attribution';
+  insertSession(sid);
+  insertMessage('preset-message', sid, 'assistant', 'partial', JSON.stringify({
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    remoteRunId: 'original-run', remoteCommandId: 'original-command',
+  }), 1);
+
+  store.updateMessage(sid, 'preset-message', { metadata: {
+    modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'replacement-model',
+    remoteRunId: 'replacement-run', remoteCommandId: 'replacement-command', isFinal: true,
+  } });
+
+  expect(store.getMessage(sid, 'preset-message')?.metadata).toEqual({
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    remoteRunId: 'original-run', remoteCommandId: 'original-command', isFinal: true,
+  });
 });
 
 test('addMessage refreshes the session updated time only for user messages', () => {
@@ -1351,6 +1438,55 @@ test('agent CRUD normalizes legacy icons to the default svg avatar', () => {
 
   const updated = store.updateAgent(designedIconAgent.id, { icon: 'legacy-icon' });
   expect(updated?.icon).toBe(DefaultAgentAvatarIcon);
+});
+
+test('preset avatar refresh respects persisted user ownership and leaves other settings unchanged', () => {
+  const agent = store.createAgent({ id: 'office-expert', name: 'My expert', source: AgentSource.Preset,
+    presetId: 'office-expert', systemPrompt: 'Custom instructions' });
+  expect(agent.iconCustomized).toBe(false);
+  const icon = 'https://ydhardwarecommon.nosdn.127.net/category-office.webp';
+  expect(store.updatePresetAgentAvatar(agent.id, icon)).toMatchObject({
+    icon, iconCustomized: false, name: 'My expert', systemPrompt: 'Custom instructions',
+  });
+  expect(store.updateAgent(agent.id, { name: 'Renamed', icon })?.iconCustomized).toBe(false);
+  const chosen = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Heart });
+  expect(store.updateAgent(agent.id, { icon: chosen })?.iconCustomized).toBe(true);
+  expect(store.updatePresetAgentAvatar(agent.id, icon)).toMatchObject({ icon: chosen, iconCustomized: true });
+  store.updateAgent(agent.id, { icon: DefaultAgentAvatarIcon });
+  expect(store.updatePresetAgentAvatar(agent.id, icon)?.icon).toBe(DefaultAgentAvatarIcon);
+});
+
+test('preset avatar refresh keeps agent ownership and rejects another account', () => {
+  const owner = { userId: 'avatar-owner', scopeKey: 'personal' };
+  const other = { userId: 'other-owner', scopeKey: 'personal' };
+  const agent = store.createAgent({ name: 'Preset', source: AgentSource.Preset, presetId: 'office-expert' }, owner);
+  const icon = 'https://ydhardwarecommon.nosdn.127.net/category-office.webp';
+
+  expect(() => store.updatePresetAgentAvatar(agent.id, icon, other)).toThrow();
+  expect(store.getVisibleAgent(agent.id, owner)?.icon).toBe(agent.icon);
+  expect(store.updatePresetAgentAvatar(agent.id, icon, owner)?.icon).toBe(icon);
+  expect(store.getVisibleAgent(agent.id, owner)?.icon).toBe(icon);
+  expect(store.getVisibleAgent(agent.id, other)).toBeNull();
+});
+
+test('legacy defaults migrate conservatively and main/custom agents never receive catalog avatars', () => {
+  const original = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Data });
+  const agent = store.createAgent({ id: 'renamed-preset', name: 'Old expert', source: AgentSource.Preset,
+    presetId: 'data-advisor', icon: original });
+  store.agentOwnership.transaction(() => db.prepare('UPDATE agents SET icon_customized = NULL WHERE id = ?').run(agent.id));
+  expect(store.getAgent(agent.id)?.iconCustomized).toBe(false);
+  const edited = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Creation });
+  store.agentOwnership.transaction(() => db.prepare('UPDATE agents SET icon = ? WHERE id = ?').run(edited, agent.id));
+  expect(store.getAgent(agent.id)?.iconCustomized).toBe(true);
+  const icon = 'https://ydhardwarecommon.nosdn.127.net/category-research.webp';
+  expect(store.updatePresetAgentAvatar(agent.id, icon)?.icon).toBe(edited);
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
+  for (const protectedAgent of [
+    store.getAgent(AgentId.Main)!,
+    store.createAgent({ id: 'user-agent', name: 'User agent', icon: original }),
+  ]) {
+    expect(store.updatePresetAgentAvatar(protectedAgent.id, icon)?.icon).toBe(protectedAgent.icon);
+  }
 });
 
 test('agent pinning stores first-pinned-first order', () => {

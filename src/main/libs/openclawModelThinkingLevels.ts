@@ -7,6 +7,16 @@ import { getServerModelMetadata } from './claudeSettings';
 
 const LOBSTERAI_SERVER_MODEL_PREFIX = `${OpenClawProviderId.LobsteraiServer}/`;
 
+export const resolveModelThinkingLevelForModel = (modelRef: string, productLevel: string) => {
+  const normalizedModelRef = modelRef.trim();
+  if (!normalizedModelRef.startsWith(LOBSTERAI_SERVER_MODEL_PREFIX)) return undefined;
+  const modelId = normalizedModelRef.slice(LOBSTERAI_SERVER_MODEL_PREFIX.length);
+  const config = getServerModelMetadata(modelId)?.thinkingConfig;
+  const level = parseModelThinkingLevel(productLevel);
+  return config && level && config.options.some(option => option.level === level)
+    ? level : config?.defaultLevel;
+};
+
 export const resolveOpenClawThinkingLevelForModel = (
   modelRef: string,
   productLevel: string,

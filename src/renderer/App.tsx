@@ -2,6 +2,8 @@ import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo,useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
+import { ExpertUiEvent } from '../shared/agent/presets';
+import { AppIpcChannel, type OpenSettingsRequest, OpenSettingsTab } from '../shared/app/constants';
 import {
   APP_UPDATE_HEARTBEAT_INTERVAL_MS,
   APP_UPDATE_POLL_INTERVAL_MS,
@@ -12,13 +14,15 @@ import {
 } from '../shared/appUpdate/constants';
 import { BrowserPasskeyUiEvent } from '../shared/browserWebAccess/passkeys';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
+import { DesktopCompanionMainPage } from '../shared/desktopCompanion/constants';
+import { ENABLE_EXPERT_PLAZA_UI } from '../shared/featureFlags';
 import {
   LibraryNavigationEvent,
   LibrarySourceFilter,
 } from '../shared/library/constants';
 import type { LibrarySessionRef } from '../shared/library/types';
 import { OpenClawEnginePhase } from '../shared/openclawEngine/constants';
-import { ProviderAuthType, ProviderName, ProviderRegistry } from '../shared/providers';
+import { ProviderName, ProviderRegistry } from '../shared/providers';
 import { SIDEBAR_TASK_FILTER_ENABLED } from './components/agentSidebar/SidebarTaskFilterButton';
 import { CoworkView } from './components/cowork';
 import {
@@ -36,7 +40,7 @@ import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
-import KitsView from './components/kits/KitsView';
+import ExpertPlazaView from './components/experts/ExpertPlazaView';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import NewUserOnboardingOverlay, {
@@ -70,11 +74,12 @@ import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config'
 import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selectors';
 import { SkinProvider } from './providers/SkinProvider';
 import { agentService } from './services/agent';
-import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
+import { applyAppConfigToStore } from './services/appConfigModels';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
+import { openExpertDraft } from './services/expertOnboarding';
 import { i18nService } from './services/i18n';
 import {
   beginLatestAsyncRequest,
@@ -84,11 +89,11 @@ import {
 import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { installOfficeAgentBridges } from './services/office/officeFormats';
 import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
+import { resolveOpenWithAttachments } from './services/openWith';
 import { remoteSettingsService } from './services/remoteSettings';
 import { scheduledTaskService } from './services/scheduledTask';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
-import { applyTypographyPreferences } from './services/typography';
 import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
@@ -98,6 +103,7 @@ import {
 } from './store/selectors/coworkSelectors';
 import { openArtifactPreviewTab } from './store/slices/artifactSlice';
 import {
+  addDraftAttachment,
   clearDraftAttachments,
   clearDraftSelectedTextSnippets,
   setDraftCollaborationMode,
@@ -106,10 +112,12 @@ import {
   setDraftSkillIds,
 } from './store/slices/coworkSlice';
 import { setActiveKitIds } from './store/slices/kitSlice';
-import { setAvailableModels, setDefaultSelectedModel } from './store/slices/modelSlice';
+import { setAvailableModels } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
 import { setActiveSkillIds } from './store/slices/skillSlice';
+import type { Agent } from './types/agent';
 import { CoworkCollaborationMode, type CoworkPermissionResult } from './types/cowork';
+import { MainView } from './types/navigation';
 
 const AGENT_TASK_SLOT_SHORTCUT_ACTIONS = [
   ShortcutAction.OpenAgentTask1,
@@ -173,6 +181,7 @@ const SETTINGS_TAB_SHORTCUT_ACTIONS: Array<{
 }> = [
   { action: ShortcutAction.OpenSettingsGeneral, initialTab: 'general' },
   { action: ShortcutAction.OpenSettingsAppearance, initialTab: 'appearance' },
+  { action: ShortcutAction.OpenSettingsDesktopCompanion, initialTab: OpenSettingsTab.DesktopCompanion },
   { action: ShortcutAction.OpenSettingsAgentEngine, initialTab: 'coworkAgentEngine' },
   { action: ShortcutAction.OpenSettingsModel, initialTab: 'model' },
   { action: ShortcutAction.OpenSettingsIm, initialTab: 'im' },
@@ -228,7 +237,7 @@ const App: React.FC = () => {
   const [settingsOptions, setSettingsOptions] = useState<Omit<SettingsOpenOptions, 'initialTab'> & { initialTab?: Exclude<SettingsOpenOptions['initialTab'], 'remoteControl'>; requestId: number }>({ requestId: 0 });
   const [remoteControlGeneration, setRemoteControlGeneration] = useState<number | null>(null);
   const [pendingRemoteControlGeneration, setPendingRemoteControlGeneration] = useState<number | null>(null);
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'kits' | 'mcp' | 'library'>('cowork');
+  const [mainView, setMainView] = useState<MainView>(MainView.Cowork);
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
     requestId: number;
@@ -329,7 +338,7 @@ const App: React.FC = () => {
       source: 'first_run_gate',
       step: newUserOnboardingStep,
     });
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
     setIsSidebarCollapsed(false);
   }, [newUserOnboardingStep, shouldShowNewUserOnboarding]);
 
@@ -385,47 +394,7 @@ const App: React.FC = () => {
   );
 
   // 初始化应用
-  const applyConfigToApp = useCallback((log?: (label: string) => void) => {
-    const config = configService.getConfig();
-    applyTypographyPreferences(config);
-    const apiConfig: ApiConfig = {
-      apiKey: config.api.key,
-      baseUrl: config.api.baseUrl,
-    };
-    apiService.setConfig(apiConfig);
-
-    const providerModels: { id: string; name: string; provider?: string; providerKey?: string; openClawProviderId?: string; supportsImage?: boolean }[] = [];
-    if (config.providers) {
-      Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
-        if (providerConfig.enabled && providerConfig.models) {
-          const openClawProviderId = ProviderRegistry.getOpenClawProviderIdForConfig(providerName, providerConfig);
-          if (providerName === ProviderName.Minimax && providerConfig.authType === ProviderAuthType.OAuth) {
-            log?.('MiniMax OAuth provider resolved to OpenClaw minimax-portal');
-          }
-          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-            providerModels.push({
-              id: model.id,
-              name: model.name,
-              provider: getProviderDisplayName(providerName, providerConfig),
-              providerKey: providerName,
-              openClawProviderId,
-              supportsImage: model.supportsImage ?? false,
-            });
-          });
-        }
-      });
-    }
-    dispatch(setAvailableModels(providerModels));
-    if (providerModels.length > 0) {
-      const allModels = store.getState().model.availableModels;
-      const preferredModel = allModels.find(
-        model => model.id === config.model.defaultModel
-          && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
-      ) ?? allModels[0];
-      dispatch(setDefaultSelectedModel(preferredModel));
-    }
-    return providerModels;
-  }, [dispatch]);
+  const applyConfigToApp = useCallback((log?: (label: string) => void) => applyAppConfigToStore(log), []);
 
   const runInitPassRef = useRef<(mode: InitPassMode) => void>(() => {});
 
@@ -790,19 +759,19 @@ const App: React.FC = () => {
   }, [accountGeneration]);
 
   const handleShowSkills = useCallback(() => {
-    setMainView('skills');
+    setMainView(MainView.Skills);
   }, []);
 
   const handleShowCowork = useCallback(() => {
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
   }, []);
 
   const handleShowScheduledTasks = useCallback(() => {
-    setMainView('scheduledTasks');
+    setMainView(MainView.ScheduledTasks);
   }, []);
 
   const handleShowMcp = useCallback(() => {
-    setMainView('mcp');
+    setMainView(MainView.Connectors);
   }, []);
 
   const handleShowLibrary = useCallback(() => {
@@ -810,7 +779,7 @@ const App: React.FC = () => {
       source: LibrarySourceFilter.Local,
       requestId: current.requestId + 1,
     }));
-    setMainView('library');
+    setMainView(MainView.Library);
   }, []);
 
   useEffect(() => {
@@ -819,7 +788,7 @@ const App: React.FC = () => {
         source: LibrarySourceFilter.Cloud,
         requestId: current.requestId + 1,
       }));
-      setMainView('library');
+      setMainView(MainView.Library);
     };
     window.addEventListener(LibraryNavigationEvent.OpenCloud, handleOpenCloudLibrary);
     return () => {
@@ -828,7 +797,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleOpenLibrarySession = useCallback((session: LibrarySessionRef) => {
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
     void coworkService.loadSession(session.sessionId).then(loaded => {
       if (!loaded || !session.sessionArtifactId) return;
       dispatch(openArtifactPreviewTab({
@@ -839,16 +808,38 @@ const App: React.FC = () => {
   }, [dispatch]);
 
   const handleShowKits = useCallback(() => {
-    setMainView('kits');
+    setMainView(MainView.Kits);
+  }, []);
+
+  const handleShowExperts = useCallback(() => {
+    if (!ENABLE_EXPERT_PLAZA_UI) return;
+    setMainView(MainView.Experts);
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+    return () => window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+  }, [handleShowExperts]);
+
+  const handleExpertSummon = useCallback((agent: Agent, prompt: string) => {
+    openExpertDraft(agent, prompt);
+    setMainView(MainView.Cowork);
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
+        detail: { resetCollaborationMode: true, text: prompt },
+      }));
+    }, 0);
   }, []);
 
   const handleSkillsConnectorsSectionChange = useCallback((section: SkillsConnectorsSection) => {
     if (section === SkillsConnectorsSection.Connectors) {
       handleShowMcp();
+    } else if (section === SkillsConnectorsSection.Kits) {
+      handleShowKits();
     } else {
       handleShowSkills();
     }
-  }, [handleShowMcp, handleShowSkills]);
+  }, [handleShowKits, handleShowMcp, handleShowSkills]);
 
   const openHomeWithKit = useCallback((kitId: string, text?: string) => {
     dispatch(setActiveKitIds([kitId]));
@@ -864,7 +855,7 @@ const App: React.FC = () => {
       dispatch(setDraftPrompt({ sessionId: '__home__', draft: text }));
     }
     dispatch(setDraftKitIds({ draftKey: '__home__', kitIds: [kitId] }));
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
         // Without text, keep any existing home draft and just focus with the kit selected
@@ -886,7 +877,7 @@ const App: React.FC = () => {
     coworkService.clearSession({ restoreAgentSkills: true });
     dispatch(clearSelection());
     dispatch(setDraftSkillIds({ draftKey: '__home__', skillIds: [skillId] }));
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
         detail: { clear: false },
@@ -950,14 +941,14 @@ const App: React.FC = () => {
   const handleNewChat = useCallback(() => {
     setTrialTaskCreatedSignal(value => value + 1);
     // Only clear when already on home (no session) — preserve __home__ draft when returning from a session
-    const shouldClearInput = mainView === 'cowork' && !currentSessionId;
+    const shouldClearInput = mainView === MainView.Cowork && !currentSessionId;
     coworkService.clearSession({ restoreAgentSkills: true });
     dispatch(clearSelection());
     dispatch(setDraftCollaborationMode({
       draftKey: '__home__',
       mode: CoworkCollaborationMode.Default,
     }));
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
         detail: { clear: shouldClearInput, resetCollaborationMode: true },
@@ -973,7 +964,7 @@ const App: React.FC = () => {
       draftKey: '__home__',
       mode: CoworkCollaborationMode.Default,
     }));
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
   }, [dispatch]);
 
   const showToast = useCallback((toast: string | ToastEventDetail) => {
@@ -1233,7 +1224,7 @@ const App: React.FC = () => {
   }, [acceptPrivacyAgreement, privacyAgreed]);
 
   const openNewUserWelcomeTask = useCallback((source: string) => {
-    setMainView('cowork');
+    setMainView(MainView.Cowork);
     console.log(`[Onboarding] opening new user welcome task source=${source}`);
     void coworkService.seedNewUserWelcomeTask()
       .then((result) => {
@@ -1632,7 +1623,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.Search)) {
         const shortcutTarget = resolveConversationSearchShortcutTarget({
-          isCoworkView: mainView === 'cowork',
+          isCoworkView: mainView === MainView.Cowork,
           hasCurrentSession: Boolean(currentSessionId),
           isTextEditing,
           isCoworkSearchEligibleEditor: isCoworkSearchEligibleEditorActive(),
@@ -1677,7 +1668,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.FocusPrompt)) {
         event.preventDefault();
-        setMainView('cowork');
+        setMainView(MainView.Cowork);
         window.setTimeout(() => {
           window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
             detail: { clear: false },
@@ -1688,7 +1679,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.StopCurrentTask)) {
         event.preventDefault();
-        if (mainView === 'cowork') {
+        if (mainView === MainView.Cowork) {
           window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutStopSession));
         } else if (currentSessionId) {
           void coworkService.stopSession(currentSessionId);
@@ -1704,7 +1695,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.ToggleArtifacts)) {
         event.preventDefault();
-        setMainView('cowork');
+        setMainView(MainView.Cowork);
         window.setTimeout(() => {
           window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutToggleArtifacts));
         }, 0);
@@ -1713,7 +1704,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.PreviousAgent)) {
         event.preventDefault();
-        setMainView('cowork');
+        setMainView(MainView.Cowork);
         setIsSidebarCollapsed(false);
         window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutSwitchAgent, {
           detail: { direction: CoworkShortcutDirection.Previous },
@@ -1723,7 +1714,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.NextAgent)) {
         event.preventDefault();
-        setMainView('cowork');
+        setMainView(MainView.Cowork);
         setIsSidebarCollapsed(false);
         window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutSwitchAgent, {
           detail: { direction: CoworkShortcutDirection.Next },
@@ -1733,7 +1724,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.ShowCurrentAgentTasks)) {
         event.preventDefault();
-        setMainView('cowork');
+        setMainView(MainView.Cowork);
         setIsSidebarCollapsed(false);
         window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutShowCurrentAgentTasks));
         return;
@@ -1741,7 +1732,7 @@ const App: React.FC = () => {
 
       if (matchesAction(ShortcutAction.CollapseCurrentAgentTasks)) {
         event.preventDefault();
-        setMainView('cowork');
+        setMainView(MainView.Cowork);
         setIsSidebarCollapsed(false);
         window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutCollapseCurrentAgentTasks));
         return;
@@ -1750,7 +1741,7 @@ const App: React.FC = () => {
       const taskSlotIndex = AGENT_TASK_SLOT_SHORTCUT_ACTIONS.findIndex(action => matchesAction(action));
       if (taskSlotIndex >= 0) {
         event.preventDefault();
-        setMainView('cowork');
+        setMainView(MainView.Cowork);
         setIsSidebarCollapsed(false);
         window.dispatchEvent(new CustomEvent(CoworkUiEvent.ShortcutOpenAgentTaskSlot, {
           detail: { slot: taskSlotIndex + 1 },
@@ -1858,7 +1849,7 @@ const App: React.FC = () => {
       dispatch(clearDraftAttachments('__home__'));
       dispatch(clearDraftSelectedTextSnippets('__home__'));
       setShowSettings(false);
-      setMainView('cowork');
+      setMainView(MainView.Cowork);
       if (askAiFocusTimerRef.current !== null) {
         window.clearTimeout(askAiFocusTimerRef.current);
       }
@@ -1887,13 +1878,30 @@ const App: React.FC = () => {
     return () => window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
   }, [handleShowSettings]);
 
-  // 监听托盘菜单打开设置的 IPC 事件
+  // 监听托盘菜单、桌面悬浮球打开设置的 IPC 事件
   useEffect(() => {
-    const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {
-      handleShowSettings();
+    const unsubscribe = window.electron.ipcRenderer.on(AppIpcChannel.OpenSettings, (request?: OpenSettingsRequest) => {
+      const tab = request?.tab;
+      handleShowSettings(tab && Object.values(OpenSettingsTab).includes(tab) ? { initialTab: tab } : undefined);
     });
     return unsubscribe;
   }, [handleShowSettings]);
+
+  useEffect(() => {
+    const companion = window.electron.desktopCompanion;
+    if (!isInitialized || !companion?.consumeMainPage) return;
+    const openRequestedPage = () => {
+      void companion.consumeMainPage().then(page => {
+        if (page === DesktopCompanionMainPage.Kits || page === DesktopCompanionMainPage.Skills) {
+          setShowSettings(false);
+          setMainView(page === DesktopCompanionMainPage.Kits ? MainView.Kits : MainView.Skills);
+        }
+      }).catch(error => console.error('[DesktopCompanion] failed to open the requested page', error));
+    };
+    const unsubscribe = companion.onMainPageRequested(openRequestedPage);
+    openRequestedPage();
+    return unsubscribe;
+  }, [isInitialized]);
 
   // 监听托盘菜单新建任务的 IPC 事件
   useEffect(() => {
@@ -1906,17 +1914,56 @@ const App: React.FC = () => {
   useEffect(() => {
     const unsubscribe = window.electron.cowork.onOpenSessionFromNotification?.(({ sessionId }) => {
       setShowSettings(false);
-      setMainView('cowork');
+      setMainView(MainView.Cowork);
       void coworkService.loadSession(sessionId);
     });
     void window.electron.cowork.notifyOpenSessionFromNotificationReady?.();
     return unsubscribe;
   }, []);
 
+  // macOS Finder "Open With" and Dock drops: start a new task with the items
+  // attached, keeping whatever the home draft already holds.
+  useEffect(() => {
+    const openWith = window.electron.openWith;
+    // A dev renderer can hot-reload ahead of an older preload.
+    if (!isInitialized || !openWith) return;
+    const attachOpenWithPaths = async () => {
+      try {
+        const paths = await openWith.consumePaths();
+        if (paths.length === 0) return;
+        const attachments = await resolveOpenWithAttachments(
+          paths,
+          filePath => window.electron.dialog.statFile(filePath),
+        );
+        if (attachments.length === 0) {
+          console.warn('[OpenWith] none of the opened items could be read.');
+          return;
+        }
+        coworkService.clearSession({ restoreAgentSkills: true });
+        dispatch(clearSelection());
+        setShowSettings(false);
+        setMainView('cowork');
+        attachments.forEach(attachment => {
+          dispatch(addDraftAttachment({ draftKey: '__home__', attachment }));
+        });
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, { detail: { clear: false } }));
+        }, 0);
+      } catch (error) {
+        console.error('[OpenWith] failed to attach opened items:', error);
+      }
+    };
+    const unsubscribe = openWith.onPathsAvailable(() => {
+      void attachOpenWithPaths();
+    });
+    void attachOpenWithPaths();
+    return unsubscribe;
+  }, [dispatch, isInitialized]);
+
   // Tell the main process which session is currently visible so desktop
   // notifications for that session can be suppressed and cleared.
   useEffect(() => {
-    const visibleSessionId = mainView === 'cowork' && !showSettings ? currentSessionId ?? null : null;
+    const visibleSessionId = mainView === MainView.Cowork && !showSettings ? currentSessionId ?? null : null;
     void window.electron.cowork.setActiveSession?.(visibleSessionId)?.catch?.((error: unknown) => {
       console.debug('[App] failed to report active session:', error);
     });
@@ -2078,7 +2125,7 @@ const App: React.FC = () => {
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
       searchLabel={i18nService.t('search')}
-      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === 'cowork'}
+      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === MainView.Cowork}
       filterLabel={i18nService.t('sidebarFilter')}
       isFilterActive={isTaskFilterActive}
       hasFilterNotice={hasUnreadCompletedTasks}
@@ -2191,10 +2238,12 @@ const App: React.FC = () => {
           remoteControlBlocked={isOverlayActive || isEngineStartupOverlayVisible}
           onBatchModeChange={setIsSidebarBatchMode}
           activeView={mainView}
-          onShowSkills={handleShowSkills}
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowKits={handleShowKits}
+          onShowSkills={handleShowSkills}
+          onShowConnectors={handleShowMcp}
+          onShowExperts={handleShowExperts}
           onShowLibrary={handleShowLibrary}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
@@ -2215,43 +2264,44 @@ const App: React.FC = () => {
               two flat planes. */}
           <div
             key={accountGeneration}
-            data-skin-cowork-frame={mainView === 'cowork' ? 'true' : undefined}
-            data-skin-management-frame={mainView !== 'cowork' ? 'true' : undefined}
+            data-skin-cowork-frame={mainView === MainView.Cowork ? 'true' : undefined}
+            data-skin-management-frame={mainView !== MainView.Cowork ? 'true' : undefined}
             className="relative h-full min-h-0 bg-background overflow-hidden"
           >
-            {mainView !== 'cowork' && (
+            {mainView !== MainView.Cowork && (
               <SkinBackdrop variant={SkinBackdropVariant.Management} />
             )}
             <EngineStartupOverlay />
-            {mainView === 'skills' || mainView === 'mcp' ? (
+            {mainView === MainView.Skills || mainView === MainView.Connectors || mainView === MainView.Kits ? (
               <SkillsAndConnectorsView
-                activeSection={mainView === 'mcp' ? SkillsConnectorsSection.Connectors : SkillsConnectorsSection.Skills}
+                activeSection={mainView === MainView.Connectors ? SkillsConnectorsSection.Connectors : mainView === MainView.Kits ? SkillsConnectorsSection.Kits : SkillsConnectorsSection.Skills}
                 onSectionChange={handleSkillsConnectorsSectionChange}
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 onCreateSkillByChat={handleCreateSkillByChat}
                 onUseSkill={handleSkillUse}
+                onTryAsking={handleKitTryAsking}
+                onUseKit={handleKitUse}
                 updateBadge={collapsedHeaderUpdateBadge}
                 skillsReadOnly={enterpriseConfig?.ui?.skills === 'readonly'}
               />
-            ) : mainView === 'scheduledTasks' ? (
+            ) : mainView === MainView.ScheduledTasks ? (
               <ScheduledTasksView
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={collapsedHeaderUpdateBadge}
               />
-            ) : mainView === 'kits' ? (
-              <KitsView
+            ) : ENABLE_EXPERT_PLAZA_UI && mainView === MainView.Experts ? (
+              <ExpertPlazaView
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={collapsedHeaderUpdateBadge}
-                onTryAsking={handleKitTryAsking}
-                onUseKit={handleKitUse}
+                onSummon={handleExpertSummon}
               />
-            ) : mainView === 'library' ? (
+            ) : mainView === MainView.Library ? (
               <LibraryView
                 isAuthenticated={Boolean(authUser)}
                 isSidebarCollapsed={isSidebarCollapsed}

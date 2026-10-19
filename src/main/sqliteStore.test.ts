@@ -168,6 +168,19 @@ test('installs required thinking columns independently from best-effort legacy m
   reopenedStore.close();
 });
 
+test('adds nullable avatar ownership to legacy agents without classifying user data eagerly', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+  const store = await SqliteStore.create(userDataPath);
+  const rows = store.getDatabase().prepare('SELECT icon_customized FROM agents').all();
+  expect(rows.length).toBeGreaterThan(0);
+  expect(rows.every(row => (row as { icon_customized: number | null }).icon_customized === null)).toBe(true);
+  store.close();
+  const reopened = await SqliteStore.create(userDataPath);
+  expect(reopened.getDatabase().prepare('SELECT icon_customized FROM agents').all()).toEqual(rows);
+  reopened.close();
+});
+
 test('creates continuity capsule table during startup migration', async () => {
   const userDataPath = createTempUserDataPath();
   createLegacyDatabase(userDataPath);

@@ -2,7 +2,6 @@
  * Utility functions and types for message display in conversation views.
  * Extracted from CoworkSessionDetail.tsx for reuse by ConversationTurnsView.
  */
-
 import {
   ContextCompactionMode,
   ContextCompactionStatus,
@@ -10,12 +9,17 @@ import {
   isInternalCompactionSystemText,
 } from '../../../common/coworkSystemMessages';
 import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
+import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
+import { parseModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
+import { modelPresetName } from '../../services/modelPresets';
 import type { Artifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import { formatModelDisplayName } from '../../utils/modelDisplayName';
 import { ActivityStepKind } from './constants';
 import type { MediaPollingGroup } from './MediaPollingIndicator';
+import type { MediaTaskPresentations } from './mediaTaskPresentation';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -617,6 +621,11 @@ export const isContextCompactionMessage = (message: CoworkMessage): boolean => (
   message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ContextCompaction
 );
 
+export const isModelChangeMessage = (message: CoworkMessage): boolean => (
+  message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ModelChanged
+  && !!message.metadata.modelChange
+);
+
 export const isForkCompactionSummaryMessage = (message: CoworkMessage): boolean => (
   message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ForkCompactionSummary
 );
@@ -637,6 +646,7 @@ const isRenderableAssistantOrSystemMessage = (message: CoworkMessage): boolean =
   if (isForkCompactionSummaryMessage(message)) {
     return false;
   }
+  if (isModelChangeMessage(message)) return true;
   if (hasText(message.content) || hasText(message.metadata?.error)) {
     return true;
   }
@@ -868,6 +878,12 @@ export const buildConversationTurns = (
     }
 
     const message = item.message;
+    if (isModelChangeMessage(message)) {
+      currentTurn = null;
+      ensureTurn(message.id).assistantItems.push({ type: 'system', message });
+      currentTurn = null;
+      continue;
+    }
     if (isContextCompactionMessage(message) && currentTurn?.assistantItems.length) {
       currentTurn = null;
     }
@@ -916,9 +932,18 @@ export const buildConversationTurns = (
 // ── Metadata helpers ─────────────────────────────────────────────────────────
 
 export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null => {
+  const modelPresetId = parseModelPresetId(metadata?.modelPresetId);
+  const resolved = typeof metadata?.resolvedModelId === 'string' ? metadata.resolvedModelId.trim() : '';
+  if (modelPresetId && resolved && !parseModelPresetModelId(resolved)) {
+    return `${modelPresetName(modelPresetId)}（${formatModelDisplayName(resolved.split('/').pop() || resolved)}）`;
+  }
   const model = typeof metadata?.model === 'string' ? metadata.model.trim() : '';
-  if (!model) return null;
-  return model.includes('/') ? (model.split('/').pop() || model) : model;
+  const actualModel = model && !parseModelPresetModelId(model) ? model
+    : resolved && !parseModelPresetModelId(resolved) ? resolved : '';
+  if (!actualModel) return null;
+  const label = formatModelDisplayName(actualModel.split('/').pop() || actualModel);
+  const presetId = modelPresetId ?? parseModelPresetModelId(model);
+  return presetId ? `${modelPresetName(presetId)}（${label}）` : label;
 };
 
 export const messageMetaClassName = (visible: boolean, align: 'left' | 'right' = 'left'): string => [
@@ -959,7 +984,7 @@ const LOCAL_VIDEO_PATH_DISPLAY_RE = /(?:^|[\s"'`(：:])((?:\/|[A-Za-z]:\/)[^\n"'
 const SAVED_GENERATED_MEDIA_RE = /^Saved generated (?:video|image)s?:/i;
 const GENERATED_MEDIA_SUCCEEDED_RE = /^(?:Video|Image) generation succeeded\./i;
 const GENERATED_VIDEO_TEXT_RE = /(?:视频(?:已生成|生成完成)|video\s+(?:generated|generation\s+succeeded|generation\s+complete))/i;
-const TERMINAL_MEDIA_STATUSES = new Set(['succeeded', 'failed', 'timeout', 'cancelled']);
+const TERMINAL_MEDIA_STATUSES = TERMINAL_MEDIA_TASK_STATUSES;
 
 export type MediaStreamingInfo = {
   taskId?: string;
@@ -1248,12 +1273,16 @@ const extractMediaPollCount = (poll: ToolGroupItem): number | undefined => {
   return getMediaPollCount(poll);
 };
 
-export const consolidateMediaPolling = (items: AssistantTurnItem[]): ConsolidatedItem[] => {
+export const consolidateMediaPolling = (
+  items: AssistantTurnItem[],
+  mediaTaskPresentations?: MediaTaskPresentations,
+): ConsolidatedItem[] => {
   const pollsByTaskId = new Map<string, { toolName: string; indices: number[] }>();
   const mediaPollOrdinals = new Map<number, number>();
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    if (item.type === 'tool_group' && isMediaStatusPoll(item.group)) {
+    if (item.type === 'tool_group' && isMediaStatusPoll(item.group)
+      && !mediaTaskPresentations?.has(item.group.toolUse.id)) {
       const toolName = item.group.toolUse.metadata!.toolName!;
       const input = item.group.toolUse.metadata!.toolInput as Record<string, string>;
       const taskId = input.taskId;
@@ -1296,27 +1325,27 @@ export const consolidateMediaPolling = (items: AssistantTurnItem[]): Consolidate
       });
     }
     const lastPoll = consolidatedPolls[consolidatedPolls.length - 1];
-    const lastStatus = extractMediaPollStatus(lastPoll);
+    let lastStatus = extractMediaPollStatus(lastPoll);
     let isComplete = lastStatus != null && TERMINAL_MEDIA_STATUSES.has(lastStatus);
 
     if (!isComplete) {
+      const escapedTaskId = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const completionPattern = new RegExp(
-        `Task ID: ${taskId}[\\s\\S]*?generation (succeeded|failed|timed out|cancelled)`
-        + `|generation (succeeded|failed|timed out|cancelled)[\\s\\S]*?Task ID: ${taskId}`,
+        `Task ID: ${escapedTaskId}(?=\\s|$)[\\s\\S]*?generation (succeeded|failed|timed out|cancelled)`
+        + `|generation (succeeded|failed|timed out|cancelled)[\\s\\S]*?Task ID: ${escapedTaskId}(?=\\s|$)`,
         'i',
       );
       for (const item of items) {
         if (item.type === 'system' || item.type === 'tool_result') {
-          if (completionPattern.test(item.message.content)) {
+          const completion = completionPattern.exec(item.message.content);
+          if (completion) {
+            lastStatus = (completion[1] || completion[2]).toLowerCase().replace('timed out', MediaTaskStatus.Timeout);
             isComplete = true;
             break;
           }
           const details = item.message.metadata?.toolResultDetails as Record<string, unknown> | undefined;
-          if (details?.status && TERMINAL_MEDIA_STATUSES.has(details.status as string)) {
-            isComplete = true;
-            break;
-          }
-          if (/^Saved generated (video|image)s?:/m.test(item.message.content)) {
+          if (String(details?.taskId) === taskId && details?.status && TERMINAL_MEDIA_STATUSES.has(details.status as string)) {
+            lastStatus = String(details.status);
             isComplete = true;
             break;
           }

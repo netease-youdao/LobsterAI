@@ -4,6 +4,13 @@ export const AgentId = {
 
 export type AgentId = typeof AgentId[keyof typeof AgentId];
 
+export const AgentSource = {
+  Custom: 'custom',
+  Preset: 'preset',
+} as const;
+
+export type AgentSource = typeof AgentSource[keyof typeof AgentSource];
+
 export const AgentIpcChannel = {
   List: 'agents:list',
   Get: 'agents:get',
@@ -14,7 +21,10 @@ export const AgentIpcChannel = {
   CleanupLegacyIdentityBlock: 'agents:cleanupLegacyIdentityBlock',
   Presets: 'agents:presets',
   PresetTemplates: 'agents:presetTemplates',
+  ExpertCatalog: 'agents:expertCatalog',
   AddPreset: 'agents:addPreset',
+  /** Main to renderer: agents were changed by another window. */
+  Changed: 'agents:changed',
 } as const;
 
 export type AgentIpcChannel = typeof AgentIpcChannel[keyof typeof AgentIpcChannel];

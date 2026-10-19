@@ -89,3 +89,9 @@ export const getKitStoreUrl = (): string => (
     ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/kit-store'
     : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/kit-store'
 );
+
+export const getExpertStoreUrl = (): string => (
+  isTestModeEnabled()
+    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/expert-store'
+    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/expert-store'
+);
