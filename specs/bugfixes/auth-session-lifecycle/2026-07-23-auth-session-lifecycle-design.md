@@ -1,5 +1,7 @@
 # LobsterAI 登录凭证生命周期修复设计文档
 
+> 2026-10-20 增量实施（待安装包验收）：[账号切换后的 Gateway 主动恢复](../openclaw-config-hot-reload-delivery/2026-10-20-account-transition-gateway-recovery-design.md)补充登录/退出/企业身份变化的本地提交边界与引擎恢复闭环。同账号正常 Token 刷新仍沿用本篇策略，不增加硬重启。客户端实现与本地回归已完成，真实账号及跨平台发布验收见增量设计 §8。
+
 ## 1. 概述
 
 ### 1.1 问题
@@ -211,3 +213,11 @@ OpenClaw 错误分类结合 provider、HTTP 状态和 failover 元数据：
 5. LobsterAI 套餐路径的 403 不触发 Token 刷新。
 6. 生命周期事件不包含 Token 或任意高基数字段。
 7. 相关 Vitest、Electron TypeScript 编译、renderer 类型检查和改动文件 ESLint 全部通过。
+
+## 8. 2026-10-20 账号提交与 Gateway 恢复增量（已实施，待发布验收）
+
+详见[完整修复设计](../openclaw-config-hot-reload-delivery/2026-10-20-account-transition-gateway-recovery-design.md)。身份首次变化时立即撤销旧执行许可并隔离；token/user/必需企业上下文、额度和旧模型缓存处理完成后，再发布独立的账号提交信号。Exchange intent 清空不代表提交完成；失败回滚必须属于新的、可验证的身份代次。
+
+登录、主动退出、凭证终态失效及企业身份变化，在安全 fence 完成后恢复原有运行意图。退出后恢复的是不含旧账号权限的匿名/本地配置，不自动继续旧任务；原先明确停止或应用正在退出/维护则不拉起。保持认证 IPC 的成功语义，网关恢复失败单独展示，不回滚已成功登录，也不等待远端 logout HTTP 才恢复本地引擎。同账号 Token 续期及临时网络失败继续遵守本文原规则。
+
+认证存储通知、IM/WS 自动启动、手动重启和任务准入须共同遵守当前转换许可；A→B→A 不能只比较 owner 值。完整并发、旧响应与退出场景验收见新设计 G01–G30。本节仅定义后续修复要求，不代表实现或测试已经完成。

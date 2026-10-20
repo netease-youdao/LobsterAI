@@ -363,12 +363,13 @@ describe('gateway terminal startup failures', () => {
     }) as OpenClawEngineManager;
     const internals = manager as unknown as {
       attachGatewayExitHandlers: (process: ChildProcess) => void;
+      doStartGateway: () => Promise<OpenClawEngineStatus>;
       gatewayRestartAttempt: number;
       gatewayRestartTimer: ReturnType<typeof setTimeout> | null;
       gatewayRestartWait: { promise: Promise<boolean>; resolve: (retry: boolean) => void } | null;
     };
     internals.attachGatewayExitHandlers(child);
-    const start = vi.spyOn(manager, 'startGateway').mockResolvedValue({
+    const start = vi.spyOn(internals, 'doStartGateway').mockResolvedValue({
       phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false,
     });
     const statuses: OpenClawEngineStatus[] = [];
@@ -439,14 +440,14 @@ describe('gateway terminal startup failures', () => {
     expect(manager.isGatewayStartupBlocked()).toBe(false);
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Starting });
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(start).toHaveBeenCalledExactlyOnceWith('auto-restart-after-crash');
+    expect(start).toHaveBeenCalledOnce();
   });
   test('retains automatic retries for plugin warnings followed by a transient crash', async () => {
     const { child, manager, start } = makeSupervisor('[config] warnings: plugins.allow: plugin not installed: qqbot\nPlugin download failed: ECONNRESET');
     child.emit('close', 1);
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Starting, canRetry: false });
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(start).toHaveBeenCalledExactlyOnceWith('auto-restart-after-crash');
+    expect(start).toHaveBeenCalledOnce();
   });
 
   test('keeps config-validation text inside a terminal plugin diagnostic in the plugin error', () => {

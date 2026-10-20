@@ -5,6 +5,7 @@ import {
   buildCoworkStartPlan,
   CoworkStartBlock,
   type CoworkStartRequestInput,
+  isOpenClawReadyForSession,
   resolveCoworkStartBlock,
 } from './coworkStartRequest';
 
@@ -104,6 +105,13 @@ describe('cowork start blocks', () => {
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('running'), crossesBillingSide: true }))
       .toBe(CoworkStartBlock.ModelBillingSide);
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('ready'), crossesBillingSide: false })).toBeNull();
+  });
+
+  test.each(['ready', 'running', 'starting', 'error'] as const)('account recovery blocks a new submission even when the process is %s', phase => {
+    const status = { ...engine(phase), accountRecoveryPending: true };
+    expect(isOpenClawReadyForSession(status)).toBe(false);
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: status, crossesBillingSide: false }))
+      .toBe(CoworkStartBlock.EngineNotReady);
   });
 
   test('an unknown engine status lets the request report its own failure', () => {

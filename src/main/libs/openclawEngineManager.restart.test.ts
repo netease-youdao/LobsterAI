@@ -236,6 +236,30 @@ describe('failure-triggered binding recovery', () => {
     expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Ready);
   });
 
+  test('a completed compatibility repair cannot launch for a superseded account', async () => {
+    const { manager, internals, start } = failureHarness();
+    let epoch = 1;
+    manager.setStartPermitProvider(() => {
+      const captured = epoch;
+      return () => captured === epoch;
+    });
+    let finish!: (result: { status: OpenClawStartupMigrationStatus }) => void;
+    const recover = vi.fn(() => new Promise<{ status: OpenClawStartupMigrationStatus }>(resolve => { finish = resolve; }));
+    const original = start.getMockImplementation()!;
+    start.mockImplementation(async () => {
+      const status = await original();
+      internals.startupCompatibilityRunner = recover;
+      return status;
+    });
+    const startup = manager.startGateway('old-account');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(recover).toHaveBeenCalledOnce();
+    epoch += 1;
+    finish({ status: OpenClawStartupMigrationStatus.Migrated });
+    await startup;
+    expect(start).toHaveBeenCalledOnce();
+  });
+
   test('a gateway process schema failure preserves the true cause and bypasses generic crash retries', () => {
     const { manager, internals, child } = makeSupervisor();
     const cause = `SQLite schema is incomplete or noncanonical for ${path.join(internals.stateDir, 'state', 'openclaw.sqlite')}: column definitions differ for current_conversation_bindings`;
@@ -470,7 +494,7 @@ describe('OpenClaw gateway restart supervision', () => {
   test('keeps one startup screen and never starts the replacement before the old process exits', async () => {
     const { manager, internals, child, phases } = makeSupervisor();
     const publishConfig = vi.fn(() => expect(internals.gatewayProcess).toBeNull());
-    const start = vi.spyOn(manager, 'startGateway').mockImplementation(async () => {
+    const start = vi.spyOn(internals, 'doStartGateway').mockImplementation(async () => {
       expect(publishConfig).toHaveBeenCalledOnce();
       expect((await manager.ensureReady()).phase).toBe(OpenClawEnginePhase.Starting);
       internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
@@ -509,7 +533,7 @@ describe('OpenClaw gateway restart supervision', () => {
   test.skipIf(process.platform !== 'win32')('restarts after native exit confirmation and ignores the old delayed close', async () => {
     const { manager, internals, child, phases } = makeSupervisor();
     const replacement = makeChild();
-    const start = vi.spyOn(manager, 'startGateway').mockImplementation(async () => {
+    const start = vi.spyOn(internals, 'doStartGateway').mockImplementation(async () => {
       internals.gatewayProcess = replacement;
       internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
       return manager.getStatus();
@@ -532,7 +556,7 @@ describe('OpenClaw gateway restart supervision', () => {
 
   test('keeps recoverable crashes in starting while waiting for automatic recovery', async () => {
     const { manager, internals, child, phases } = makeSupervisor();
-    const start = vi.spyOn(manager, 'startGateway').mockImplementation(async () => {
+    const start = vi.spyOn(internals, 'doStartGateway').mockImplementation(async () => {
       internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
       return manager.getStatus();
     });
@@ -541,7 +565,7 @@ describe('OpenClaw gateway restart supervision', () => {
 
     expect(phases).toEqual([OpenClawEnginePhase.Starting]);
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(start).toHaveBeenCalledWith('auto-restart-after-crash');
+    expect(start).toHaveBeenCalledOnce();
     expect(phases).toEqual([OpenClawEnginePhase.Starting, OpenClawEnginePhase.Running]);
   });
 

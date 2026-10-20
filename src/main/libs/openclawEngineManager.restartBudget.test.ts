@@ -43,10 +43,10 @@ vi.mock('./openclawCronLegacyMigration', () => ({ migrateLegacyCronStorageWithDo
 vi.mock('./openclawSessionLegacyMigration', () => ({
   migrateLegacySessionStorageWithDoctor: async () => ({ status: 'skipped', reason: 'no-legacy-session-files' }),
 }));
-vi.mock('./openclawMemoryIndexMigration', () => ({ migrateAllFtsOnlyMemoryIndexes: async () => undefined }));
+vi.mock('./openclawMemoryIndexMigration', () => ({ migrateAllFtsOnlyMemoryIndexes: vi.fn(async () => undefined) }));
 vi.mock('./openclawStartupCheckpoint', () => ({
   describeStartupMigrationCheckpoint: () => 'unchanged',
-  readStartupMigrationCheckpointStamp: () => null,
+  readStartupMigrationCheckpointStamp: vi.fn(() => null),
 }));
 vi.mock('./openclawGatewayProcess', async (importOriginal) => {
   const { EventEmitter } = await import('events');
@@ -68,8 +68,11 @@ vi.mock('./openclawGatewayProcess', async (importOriginal) => {
   };
 });
 
+import { OpenClawAccountRecovery } from './openclawAccountRecovery';
 import { OpenClawEngineManager } from './openclawEngineManager';
 import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
+import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
+import { readStartupMigrationCheckpointStamp } from './openclawStartupCheckpoint';
 
 const originalPlatform = process.platform;
 
@@ -77,6 +80,8 @@ interface BudgetInternals {
   gatewayProcess: ChildProcess | null;
   gatewayRecentOutput: WeakMap<ChildProcess, string[]>;
   gatewayRestartAttempt: number;
+  stopGatewayProcess: (child: ChildProcess) => Promise<void>;
+  isGatewayStartupReady: (port: number) => Promise<boolean>;
 }
 
 function makeManager() {
@@ -146,6 +151,8 @@ function makeManager() {
 
 beforeEach(() => {
   spawnState.children.length = 0;
+  vi.mocked(migrateAllFtsOnlyMemoryIndexes).mockReset().mockResolvedValue(undefined);
+  vi.mocked(readStartupMigrationCheckpointStamp).mockReset().mockReturnValue(null);
   vi.useFakeTimers();
   vi.spyOn(console, 'debug').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -322,5 +329,254 @@ describe('OpenClaw gateway spawn config', () => {
     await manager.startGateway('initial-start');
 
     expect(manager.getGatewayProcessConfigRaw()).toBeNull();
+  });
+});
+
+
+describe('gateway account startup permits', () => {
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  function accountPermit(manager: OpenClawEngineManager) {
+    let epoch = 1;
+    const provider = vi.fn(() => {
+      const captured = epoch;
+      return () => captured === epoch;
+    });
+    manager.setStartPermitProvider(provider);
+    return { provider, changeAccount: () => { epoch += 1; } };
+  }
+
+  test('denies direct and manual starts while the account is not prepared, preserving startup blocks', async () => {
+    const { manager } = makeManager();
+    manager.setStartPermitProvider(() => null);
+    Object.assign(manager, {
+      gatewayStartupBlock: { phase: OpenClawEnginePhase.Error, message: 'plugin consent required', canRetry: true },
+      status: { phase: OpenClawEnginePhase.Error, message: 'plugin consent required', canRetry: true },
+    });
+
+    await manager.startGateway('channel-sync-ensure-ready', { retryBlocked: true });
+    await manager.restartGateway('ipc-manual', { retryBlocked: true });
+
+    expect(manager.isGatewayStartupBlocked()).toBe(true);
+    expect(manager.getStatus().message).toBe('plugin consent required');
+    expect(spawnState.children).toHaveLength(0);
+  });
+
+  async function committedAccountPermit(manager: OpenClawEngineManager, recovered: boolean) {
+    const recovery = new OpenClawAccountRecovery({
+      identity: () => 'account-A',
+      canRun: () => true,
+      allowCredentials: () => {},
+      prepare: async () => {},
+      start: async () => {},
+      confirm: async () => {},
+      complete: () => {},
+      changed: () => {},
+      canRetry: () => false,
+    });
+    if (recovered) await recovery.request({ resume: true, fence: async () => {} });
+    manager.setStartPermitProvider(() => recovery.captureStartPermit());
+    return recovery;
+  }
+
+  test.each([false, true])('same-owner profile refresh cannot strand a permitted startup (recovered=%s)', async recovered => {
+    const { manager } = makeManager();
+    const recovery = await committedAccountPermit(manager, recovered);
+    const preparation = deferred();
+    vi.mocked(migrateAllFtsOnlyMemoryIndexes).mockImplementationOnce(() => preparation.promise);
+    const starting = manager.startGateway('committed-account');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
+
+    const revision = recovery.beginAuthMutation();
+    expect(recovery.captureStartPermit()).toBeNull();
+    preparation.resolve();
+    expect((await starting).phase).toBe(OpenClawEnginePhase.Running);
+    recovery.commitAuthMutation(revision);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Running);
+    expect(spawnState.children).toHaveLength(1);
+  });
+
+  test.each([false, true])('same-owner profile refresh preserves an existing crash retry (recovered=%s)', async recovered => {
+    const { manager, crashRunningGateway } = makeManager();
+    const recovery = await committedAccountPermit(manager, recovered);
+    await manager.startGateway('committed-account');
+    crashRunningGateway();
+    const revision = recovery.beginAuthMutation();
+    expect(recovery.captureStartPermit()).toBeNull();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Running);
+    recovery.commitAuthMutation(revision);
+    expect(spawnState.children).toHaveLength(2);
+  });
+
+  test('discards a pending startup even when A switches to B and back to A before preparation finishes', async () => {
+    const { manager } = makeManager();
+    const account = accountPermit(manager);
+    const preparation = deferred();
+    vi.mocked(migrateAllFtsOnlyMemoryIndexes).mockImplementationOnce(() => preparation.promise);
+    const starting = manager.startGateway('account-A');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(migrateAllFtsOnlyMemoryIndexes).toHaveBeenCalledOnce();
+    account.changeAccount();
+    account.changeAccount();
+    preparation.resolve();
+    await starting;
+
+    expect(spawnState.children).toHaveLength(0);
+    await manager.startGateway('latest-account-A');
+    expect(spawnState.children).toHaveLength(1);
+    expect(account.provider).toHaveBeenCalledTimes(2);
+  });
+
+  test('rechecks the permit after the initial config prerequisite resolves', async () => {
+    const { manager } = makeManager();
+    const account = accountPermit(manager);
+    const prerequisite = deferred();
+    manager.setStartupPrerequisite(() => prerequisite.promise);
+    const starting = manager.startGateway('old-config');
+    await vi.advanceTimersByTimeAsync(0);
+    account.changeAccount();
+    prerequisite.resolve();
+    await starting;
+    expect(spawnState.children).toHaveLength(0);
+  });
+
+  test('checks the permit at the actual spawn boundary after reading startup inputs', async () => {
+    const { manager } = makeManager();
+    const account = accountPermit(manager);
+    vi.mocked(readStartupMigrationCheckpointStamp).mockImplementationOnce(() => {
+      account.changeAccount();
+      return null;
+    });
+    await manager.startGateway('last-boundary');
+    expect(spawnState.children).toHaveLength(0);
+  });
+
+  test('ordinary stop still cancels an in-flight preparation without waiting for account recovery', async () => {
+    const { manager } = makeManager();
+    const account = accountPermit(manager);
+    const preparation = deferred();
+    vi.mocked(migrateAllFtsOnlyMemoryIndexes).mockImplementationOnce(() => preparation.promise);
+    const starting = manager.startGateway('old-account');
+    await vi.advanceTimersByTimeAsync(0);
+    account.changeAccount();
+    const stopping = manager.stopGateway();
+    preparation.resolve();
+    await Promise.all([starting, stopping]);
+    expect(spawnState.children).toHaveLength(0);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Ready);
+  });
+
+  test('a restart cannot publish config or replace the process after its original permit expires', async () => {
+    const { manager, internals } = makeManager();
+    const account = accountPermit(manager);
+    await manager.startGateway('account-A');
+    const termination = deferred();
+    const oldChild = internals.gatewayProcess!;
+    vi.spyOn(internals, 'stopGatewayProcess').mockImplementation(async () => {
+      await termination.promise;
+      oldChild.exitCode = 0;
+    });
+    const beforeStart = vi.fn();
+    const restarting = manager.restartGateway('account-A-config', { beforeStart });
+    account.changeAccount();
+    termination.resolve();
+    await restarting;
+
+    expect(beforeStart).not.toHaveBeenCalled();
+    expect(spawnState.children).toHaveLength(1);
+    expect(account.provider).toHaveBeenCalledTimes(2);
+  });
+
+  test('a crash retry keeps the crashed process permit instead of obtaining the next account permit', async () => {
+    const { manager, crashRunningGateway } = makeManager();
+    const account = accountPermit(manager);
+    await manager.startGateway('account-A');
+    crashRunningGateway();
+    account.changeAccount();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(spawnState.children).toHaveLength(1);
+    expect(account.provider).toHaveBeenCalledOnce();
+    await manager.startGateway('account-B');
+    expect(spawnState.children).toHaveLength(2);
+  });
+
+  test('the in-flight startup loop cannot retry a child with a revoked account permit', async () => {
+    const { manager, internals, crashRunningGateway } = makeManager();
+    const account = accountPermit(manager);
+    vi.spyOn(internals, 'isGatewayStartupReady').mockResolvedValue(false);
+    const starting = manager.startGateway('account-A');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnState.children).toHaveLength(1);
+    crashRunningGateway();
+    await vi.advanceTimersByTimeAsync(600);
+    account.changeAccount();
+    await vi.advanceTimersByTimeAsync(2_400);
+    await starting;
+
+    expect(spawnState.children).toHaveLength(1);
+    expect(account.provider).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('readiness from a revoked account cannot report the old process running', async () => {
+    const { manager, internals, crashRunningGateway } = makeManager();
+    const account = accountPermit(manager);
+    const probe = deferred();
+    vi.spyOn(internals, 'isGatewayStartupReady').mockImplementation(async () => {
+      await probe.promise;
+      return true;
+    });
+    const starting = manager.startGateway('account-A');
+    await vi.advanceTimersByTimeAsync(0);
+    account.changeAccount();
+    probe.resolve();
+    await starting;
+
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
+    crashRunningGateway();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('a late old-account exit neither restarts nor replaces the latest failure state', async () => {
+    const { manager, internals, crashRunningGateway } = makeManager();
+    const account = accountPermit(manager);
+    await manager.startGateway('account-A');
+    account.changeAccount();
+    manager.setExternalError('latest account config failure');
+    internals.gatewayRecentOutput.set(internals.gatewayProcess!, ['old account failure']);
+    crashRunningGateway();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(spawnState.children).toHaveLength(1);
+    expect(manager.getStatus().message).toBe('latest account config failure');
+  });
+
+  test('records the startup input revision captured with the real child environment', async () => {
+    const { manager, crashRunningGateway } = makeManager();
+    manager.setGatewayStartupInputRevision('input-A');
+    manager.setSecretEnvVars({ MODEL_TOKEN: 'old' });
+    const preparation = deferred();
+    vi.mocked(migrateAllFtsOnlyMemoryIndexes).mockImplementationOnce(() => preparation.promise);
+    const starting = manager.startGateway('input-A');
+    await vi.advanceTimersByTimeAsync(0);
+    manager.setGatewayStartupInputRevision('input-B');
+    manager.setSecretEnvVars({ MODEL_TOKEN: 'new' });
+    preparation.resolve();
+    await starting;
+
+    expect(manager.getGatewayProcessStartupInputRevision()).toBe('input-A');
+    expect(manager.getGatewayProcessSecretEnvVars()).toEqual({ MODEL_TOKEN: 'old' });
+    crashRunningGateway();
+    expect(manager.getGatewayProcessStartupInputRevision()).toBeNull();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(manager.getGatewayProcessStartupInputRevision()).toBe('input-B');
+    expect(manager.getGatewayProcessSecretEnvVars()).toEqual({ MODEL_TOKEN: 'new' });
   });
 });

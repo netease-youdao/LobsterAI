@@ -517,7 +517,19 @@ type ChannelSessionLifecycleRun = {
   observedAtMs: number;
 };
 
+export class OpenClawAccountTransitionCancelledError extends Error {
+  constructor() {
+    super('OpenClaw operation was cancelled by an account transition.');
+    this.name = 'OpenClawAccountTransitionCancelledError';
+  }
+}
+
+export const isOpenClawAccountTransitionCancelledError = (error: unknown): error is OpenClawAccountTransitionCancelledError =>
+  error instanceof OpenClawAccountTransitionCancelledError;
+
 type OpenClawRuntimeAdapterOptions = {
+  waitForAccountRecovery?: () => Promise<void>;
+  ensureGatewayStarted?: (reason: string) => Promise<OpenClawEngineStatus>;
   beforePreparationDispatch?: (sessionId: string, runId?: string) => void;
   beforeExecutionDispatch?: (sessionId: string, runId?: string) => void;
   prepareDeliverableSync?: (sessionId: string, cwd: string) => Promise<void>;
@@ -2664,6 +2676,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private gatewayReadyReject: ((error: Error) => void) | null = null;
   /** Serializes concurrent calls to ensureGatewayClientReady to prevent duplicate clients. */
   private gatewayClientInitLock: Promise<void> | null = null;
+  private cancelGatewayClientInit: (() => void) | null = null;
+  private connectedGatewayGeneration: number | undefined;
+  private accountRecoveryEpoch = 0;
+  private accountRecoveryActive = false;
+  private accountRecoveryPermit: { token: number; current: () => boolean } | null = null;
+  private deferredGatewayActivation: ((notifyReady: boolean) => void) | null = null;
+  private readonly accountTurnOperations = new Set<{ sessionId: string; cancel: () => void }>();
   private channelSessionSync: OpenClawChannelSessionSync | null = null;
   private readonly knownChannelSessionIds = new Set<string>();
   private readonly fullySyncedSessions = new Set<string>();
@@ -3239,6 +3258,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     timeoutMs?: number;
     inputFenceOperationId?: string;
   }): Promise<OpenClawSessionPatchGatewayResult | undefined> {
+    const epoch = this.accountRecoveryEpoch;
     const { sessionId, sessionKey, patch, source, reason } = options;
     const timeoutMs = options.timeoutMs ?? OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS;
     const patchKeys = Object.entries(patch)
@@ -3276,7 +3296,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         key: sessionKey,
         ...patch,
       }, { timeoutMs });
+      this.assertAccountOperation(epoch);
     } catch (error) {
+      if (epoch !== this.accountRecoveryEpoch || isOpenClawAccountTransitionCancelledError(error)) throw new OpenClawAccountTransitionCancelledError();
       const elapsedMs = Date.now() - startedAtMs;
       console.warn(
         `[OpenClawRuntime] sessions.patch failed after ${elapsedMs}ms.`,
@@ -4413,6 +4435,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * for a LobsterAI-initiated session.
    */
   async connectGatewayIfNeeded(): Promise<void> {
+    const epoch = this.accountRecoveryEpoch;
+    await this.options.waitForAccountRecovery?.();
+    this.assertAccountOperation(epoch);
     this.gatewayReconnectSuppressed = false;
     if (this.gatewayClient) {
       // Another RPC may have established the socket after a gateway restart.
@@ -4426,7 +4451,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       console.log('[ChannelSync] connectGatewayIfNeeded: gateway client ready, starting channel polling');
       this.startChannelPolling();
     } catch (error) {
-      console.error('[ChannelSync] connectGatewayIfNeeded: failed to initialize gateway client:', error);
+      if (!isOpenClawAccountTransitionCancelledError(error)) console.error('[ChannelSync] connectGatewayIfNeeded: failed to initialize gateway client:', error);
       throw error;
     }
   }
@@ -4453,6 +4478,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * to avoid a race where the old client's `onClose` fires after a new client is created.
    */
   async reconnectGateway(): Promise<void> {
+    const epoch = this.accountRecoveryEpoch;
+    await this.options.waitForAccountRecovery?.();
+    this.assertAccountOperation(epoch);
     console.log('[ChannelSync] reconnectGateway: tearing down old client and reconnecting...');
     this.gatewayReconnectSuppressed = false;
     this.stopGatewayClient();
@@ -4461,7 +4489,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       console.log('[ChannelSync] reconnectGateway: gateway client ready, starting channel polling');
       this.startChannelPolling();
     } catch (error) {
-      console.error('[ChannelSync] reconnectGateway: failed to initialize gateway client:', error);
+      if (!isOpenClawAccountTransitionCancelledError(error)) console.error('[ChannelSync] reconnectGateway: failed to initialize gateway client:', error);
       throw error;
     }
   }
@@ -4479,12 +4507,78 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
 
+  /** Fence old local work synchronously before the host stops the old account's process. */
+  prepareForAccountTransition(): number {
+    this.accountRecoveryEpoch++;
+    this.accountRecoveryActive = true;
+    this.accountRecoveryPermit = null;
+    this.gatewayReconnectSuppressed = true;
+    this.cancelGatewayClientInit?.();
+    this.cancelGatewayClientInit = null;
+    this.gatewayClientInitLock = null;
+    const sessions = new Set([...Array.from(this.accountTurnOperations, operation => operation.sessionId), ...this.activeTurns.keys(),
+      ...this.pendingTurns.keys(), ...this.yieldedSessions.keys(), ...this.pendingGoalContinuations.keys()]);
+    for (const operation of this.accountTurnOperations.values()) operation.cancel();
+    // stopSession emits the existing local-stop observation. Remote runs remain reconciling.
+    try {
+      for (const sessionId of sessions) {
+        try { this.stopSession(sessionId); }
+        catch (error) { console.warn('[OpenClawRuntime] account transition task cleanup failed:', error); }
+      }
+    } finally {
+      this.stopGatewayClient(new OpenClawAccountTransitionCancelledError());
+    }
+    return this.accountRecoveryEpoch;
+  }
+
+  /** The host has started the permitted process; only configuration RPCs may use this connection. */
+  async confirmAccountGatewayRecovery(token: number, current: () => boolean): Promise<void> {
+    if (token !== this.accountRecoveryEpoch || !this.accountRecoveryActive || !current()) {
+      throw new OpenClawAccountTransitionCancelledError();
+    }
+    this.accountRecoveryPermit = { token, current };
+    await this.ensureGatewayClientReady(true);
+    this.assertAccountConnection(token, true);
+  }
+
+  /** Release business events only after the host confirms the account's applied configuration. */
+  finishAccountGatewayRecovery(token: number): void {
+    this.assertAccountConnection(token, true);
+    if (!this.accountRecoveryActive) throw new OpenClawAccountTransitionCancelledError();
+    if (!this.gatewayClient || this.engineManager.getStatus().phase !== 'running') {
+      throw new Error('OpenClaw account recovery has no ready gateway connection.');
+    }
+    if (this.recoveryGatewayProcessPid !== (this.engineManager.getGatewayProcessPid?.() ?? null)
+      || this.connectedGatewayGeneration !== this.engineManager.getGatewayConnectionInfo().generation) {
+      throw new Error('OpenClaw gateway process changed before account recovery completed.');
+    }
+    this.accountRecoveryActive = false;
+    this.accountRecoveryPermit = null;
+    this.gatewayReconnectSuppressed = false;
+    const activate = this.deferredGatewayActivation;
+    this.deferredGatewayActivation = null;
+    activate?.(false);
+  }
+
+  private assertAccountOperation(epoch: number): void {
+    if (epoch !== this.accountRecoveryEpoch || this.accountRecoveryActive) throw new OpenClawAccountTransitionCancelledError();
+  }
+
+  private assertAccountConnection(epoch: number, configurationOnly: boolean): void {
+    const permit = this.accountRecoveryPermit;
+    if (epoch !== this.accountRecoveryEpoch || this.accountRecoveryActive
+      && (!configurationOnly || permit?.token !== epoch || !permit.current())) {
+      throw new OpenClawAccountTransitionCancelledError();
+    }
+  }
+
   /**
    * Start periodic polling for channel-originated sessions (e.g. Telegram).
    * Uses the gateway `sessions.list` RPC to discover sessions that may not
    * have been delivered via WebSocket events.
    */
   startChannelPolling(): void {
+    if (this.accountRecoveryActive) return;
     if (!this.channelSessionSync) {
       console.warn('[ChannelSync] startChannelPolling: no channelSessionSync set, skipping');
       return;
@@ -4623,6 +4717,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private async performChannelSessionPoll(): Promise<void> {
+    if (this.accountRecoveryActive) return;
     if (!this.gatewayClient || !this.channelSessionSync) {
       console.warn('[ChannelSync] pollChannelSessions: skipped — gatewayClient:', !!this.gatewayClient, 'channelSessionSync:', !!this.channelSessionSync);
       return;
@@ -4839,6 +4934,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     question: string,
     runId: string,
   ): Promise<CoworkBtwSubmitResponse> {
+    const epoch = this.accountRecoveryEpoch;
     const normalizedSessionId = sessionId.trim();
     const normalizedRunId = runId.trim();
     const normalizedQuestion = normalizeCoworkBtwQuestion(question);
@@ -4913,6 +5009,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     try {
       await this.ensureGatewayClientReady();
+      this.assertAccountOperation(epoch);
       if (this.pendingBtwRunBySessionId.has(normalizedSessionId)) {
         return {
           success: false,
@@ -4957,6 +5054,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         chatSendParams,
         { timeoutMs: 90_000, traceparent: createLlmTraceparent(btwTrace.traceId) },
       );
+      this.assertAccountOperation(epoch);
       const returnedRunId = typeof sendResult?.runId === 'string' ? sendResult.runId.trim() : '';
       if (returnedRunId && !this.addPendingBtwRunAlias(pending, returnedRunId)) {
         return {
@@ -4970,6 +5068,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         runId: normalizedRunId,
       };
     } catch (error) {
+      if (epoch !== this.accountRecoveryEpoch || isOpenClawAccountTransitionCancelledError(error)) throw new OpenClawAccountTransitionCancelledError();
       const message = error instanceof Error ? error.message : String(error);
       const pending = this.pendingBtwRunBySessionId.get(normalizedSessionId);
       if (pending?.clientRunId === normalizedRunId) {
@@ -5241,6 +5340,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   async runGoalCommand(sessionId: string, command: string): Promise<CoworkGoal | null> {
+    const epoch = this.accountRecoveryEpoch;
     const parsed = parseOpenClawGoalCommand(command);
     if (!parsed) {
       throw new Error('Invalid goal command.');
@@ -5270,6 +5370,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       action: parsed.action,
       text: parsed.text,
     }, { timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS });
+    this.assertAccountOperation(epoch);
     const goal = normalizeCoworkGoal(response?.goal);
     this.emitGoalUpdateIfChanged(sessionId, goal);
     this.addGoalSettingUserMessageFromCommand(sessionId, parsed);
@@ -5312,6 +5413,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           systemPrompt: pendingContinuation.systemPrompt,
         })
           .catch((error) => {
+            if (isOpenClawAccountTransitionCancelledError(error)) return;
             const message = error instanceof Error ? error.message : String(error);
             console.error('[OpenClawRuntime] failed to continue after goal command:', error);
             this.store.updateSession(sessionId, { status: 'error' });
@@ -5359,6 +5461,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult> {
+    const epoch = this.accountRecoveryEpoch;
     const session = this.store.getSession(sessionId);
     if (patch.model !== undefined && session?.modelPresetId && (this.activeTurns.has(sessionId) || this.yieldedSessions.has(sessionId))) {
       throw new Error(t('modelPresetSessionBusy'));
@@ -5404,6 +5507,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     };
 
     const sendPatch = async (): Promise<OpenClawSessionPatchGatewayResult | undefined> => {
+      this.assertAccountOperation(epoch);
       try {
         const response = await this.requestSessionPatchWithProfile({
           sessionId,
@@ -5714,6 +5818,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     thinkingLevel?: string;
     source: SessionModelPatchSource;
   }): Promise<void> {
+    const epoch = this.accountRecoveryEpoch;
     const { sessionId, sessionKey, model, thinkingLevel, source } = options;
     if (!model) {
       this.sessionModelPatchStateBySession.delete(sessionId);
@@ -5743,6 +5848,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     try {
       await this.enqueueSessionModelPatch(sessionId, async () => {
+        this.assertAccountOperation(epoch);
         const currentConfirmedState = this.getConfirmedSessionModelPatch(sessionId, sessionKey, model, source);
         if (source === SessionModelPatchSource.AgentModel && currentConfirmedState) {
           console.debug(
@@ -5790,11 +5896,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           reason: 'model sync before chat.send',
           timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_SEND_TIMEOUT_MS,
         });
+        this.assertAccountOperation(epoch);
         this.markGatewayRpcSuccess();
         this.assertSessionModelRoute(sessionId, sessionKey, model, response);
         this.rememberSessionModelPatch(sessionId, sessionKey, model, source);
       });
     } catch (error) {
+      if (epoch !== this.accountRecoveryEpoch || isOpenClawAccountTransitionCancelledError(error)) throw new OpenClawAccountTransitionCancelledError();
       if (error instanceof SessionModelRouteError || this.store.getSession(sessionId)?.modelPresetId) {
         this.sessionModelPatchStateBySession.delete(sessionId);
         throw error;
@@ -5888,7 +5996,24 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
   }
 
-  private async runTurn(
+  private async runTurn(...args: Parameters<OpenClawRuntimeAdapter['runTurnImpl']>): Promise<void> {
+    const epoch = this.accountRecoveryEpoch;
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => { cancel = () => reject(new OpenClawAccountTransitionCancelledError()); });
+    const operation = { sessionId: args[0], cancel };
+    this.accountTurnOperations.add(operation);
+    try {
+      await Promise.race([(async () => {
+        await this.options.waitForAccountRecovery?.();
+        this.assertAccountOperation(epoch);
+        await this.runTurnImpl(args[0], args[1], args[2], epoch);
+      })(), cancelled]);
+    } finally {
+      this.accountTurnOperations.delete(operation);
+    }
+  }
+
+  private async runTurnImpl(
     sessionId: string,
     prompt: string,
     options: {
@@ -5908,6 +6033,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       selectedTextSnippets?: CoworkSelectedTextSnippet[];
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
     },
+    accountEpoch = this.accountRecoveryEpoch,
   ): Promise<void> {
     if (
       !prompt.trim()
@@ -6007,7 +6133,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     try {
       await this.assertTranscriptSafeForRun({ sessionId, sessionKey, agentId });
+      this.assertAccountOperation(accountEpoch);
     } catch (error) {
+      if (accountEpoch !== this.accountRecoveryEpoch || isOpenClawAccountTransitionCancelledError(error)) throw new OpenClawAccountTransitionCancelledError();
       this.store.updateSession(sessionId, { status: 'error' });
       const message = error instanceof Error ? error.message : String(error);
       this.emit('error', sessionId, message);
@@ -6019,6 +6147,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     setCoworkProxySessionId(sessionId);
     firstResponseTiming.gatewayReadyStartedAtMs = Date.now();
     await this.ensureGatewayClientReady();
+    this.assertAccountOperation(accountEpoch);
     registerLlmUsageContext(llmTrace.traceId, sessionId,
       options.skipInitialUserMessage ? this.store.getLatestUserMessage(sessionId)?.content ?? prompt : prompt,
       usageModelSelection);
@@ -6066,6 +6195,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           ? SessionModelPatchSource.SessionOverride
           : SessionModelPatchSource.AgentModel,
       });
+      this.assertAccountOperation(accountEpoch);
       if (this.cancelTurnStartupIfStopped(sessionId, 'session model sync finished')) {
         return;
       }
@@ -6078,6 +6208,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         `Total ${formatTimingOffset(firstResponseTiming.turnStartedAtMs, firstResponseTiming.modelPatchEndedAtMs)}.`,
       );
     } catch (error) {
+      if (accountEpoch !== this.accountRecoveryEpoch || isOpenClawAccountTransitionCancelledError(error)) throw new OpenClawAccountTransitionCancelledError();
       this.store.updateSession(sessionId, { status: 'error' });
       const message = error instanceof Error ? error.message : String(error);
       this.emit('error', sessionId, message);
@@ -6107,10 +6238,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           action: goalBootstrapCommand.action,
           text: goalBootstrapCommand.text,
         }, { timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_TIMEOUT_MS });
+        this.assertAccountOperation(accountEpoch);
         const goal = normalizeCoworkGoal(response?.goal);
         this.emitGoalUpdateIfChanged(sessionId, goal);
         effectivePrompt = formatGoalContinuationPrompt(goal?.objective || goalBootstrapCommand.text);
       } catch (error) {
+        if (accountEpoch !== this.accountRecoveryEpoch || isOpenClawAccountTransitionCancelledError(error)) throw new OpenClawAccountTransitionCancelledError();
         console.error('[OpenClawRuntime] failed to bootstrap goal before first turn:', error);
         this.store.updateSession(sessionId, { status: 'error' });
         const message = error instanceof Error ? error.message : String(error);
@@ -6153,6 +6286,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       options.browserAnnotations,
       firstResponseTiming,
     ));
+    this.assertAccountOperation(accountEpoch);
     if (this.cancelTurnStartupIfStopped(sessionId, 'outbound prompt built')) {
       return;
     }
@@ -6255,6 +6389,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const chatSendStartMs = Date.now();
       firstResponseTiming.chatSendStartedAtMs = chatSendStartMs;
       if (runCwd) await prepareOpenClawDeliverableSync(this.options.prepareDeliverableSync, sessionId, runCwd);
+      this.assertAccountOperation(accountEpoch);
       assertApprovalContinuationAllowed();
       this.options.beforeExecutionDispatch?.(sessionId, executionRunId);
       const sendResult = await client.request<Record<string, unknown>>(
@@ -6262,6 +6397,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         chatSendParams,
         { timeoutMs: 90_000, traceparent: createLlmTraceparent(llmTrace.traceId) },
       );
+      this.assertAccountOperation(accountEpoch);
       const chatSendElapsedMs = Date.now() - chatSendStartMs;
       firstResponseTiming.chatSendAckAtMs = Date.now();
       console.log(
@@ -6280,6 +6416,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         try { this.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, sessionId, returnedRunId); } catch { /* Telemetry listeners cannot turn a gateway ACK into execution failure. */ }
       }
     } catch (error) {
+      if (accountEpoch !== this.accountRecoveryEpoch || isOpenClawAccountTransitionCancelledError(error)) throw new OpenClawAccountTransitionCancelledError();
       this.cleanupSessionTurn(sessionId);
       this.store.updateSession(sessionId, { status: 'error' });
       const message = error instanceof Error ? error.message : String(error);
@@ -6526,23 +6663,36 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     return sections.join('\n');
   }
 
-  private async ensureGatewayClientReady(): Promise<void> {
-    // Serialize concurrent calls: if another init is already in progress, wait for it.
+  private async ensureGatewayClientReady(configurationOnly = false): Promise<void> {
+    const epoch = this.accountRecoveryEpoch;
+    if (!configurationOnly) await this.options.waitForAccountRecovery?.();
+    this.assertAccountConnection(epoch, configurationOnly);
     if (this.gatewayClientInitLock) {
       await this.gatewayClientInitLock;
+      this.assertAccountConnection(epoch, configurationOnly);
       return;
     }
-    this.gatewayClientInitLock = this._ensureGatewayClientReadyImpl();
-    try {
-      await this.gatewayClientInitLock;
-    } finally {
-      this.gatewayClientInitLock = null;
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => { cancel = () => reject(new OpenClawAccountTransitionCancelledError()); });
+    const operation = Promise.race([this._ensureGatewayClientReadyImpl(epoch, configurationOnly), cancelled]);
+    this.gatewayClientInitLock = operation;
+    this.cancelGatewayClientInit = cancel;
+    try { await operation; }
+    finally {
+      if (this.gatewayClientInitLock === operation) {
+        this.gatewayClientInitLock = null;
+        this.cancelGatewayClientInit = null;
+      }
     }
   }
 
-  private async _ensureGatewayClientReadyImpl(): Promise<void> {
-    console.log('[ChannelSync] ensureGatewayClientReady: starting engine gateway...');
-    const engineStatus = await this.engineManager.startGateway('channel-sync-ensure-ready');
+  private async _ensureGatewayClientReadyImpl(epoch: number, configurationOnly: boolean): Promise<void> {
+    this.assertAccountConnection(epoch, configurationOnly);
+    const engineStatus = configurationOnly
+      ? this.engineManager.getStatus()
+      : await (this.options.ensureGatewayStarted?.('channel-sync-ensure-ready')
+        ?? this.engineManager.startGateway('channel-sync-ensure-ready'));
+    this.assertAccountConnection(epoch, configurationOnly);
     console.log('[ChannelSync] ensureGatewayClientReady: engine phase=', engineStatus.phase, 'message=', engineStatus.message);
     if (engineStatus.phase !== 'running') {
       const message = engineStatus.message || 'OpenClaw engine is not running.';
@@ -6561,26 +6711,32 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     const needsNewClient = !this.gatewayClient
+      || this.connectedGatewayGeneration !== connection.generation
+      || this.recoveryGatewayProcessPid !== (this.engineManager.getGatewayProcessPid?.() ?? null)
       || this.gatewayClientVersion !== connection.version
       || this.gatewayClientEntryPath !== connection.clientEntryPath;
     console.log('[ChannelSync] ensureGatewayClientReady: needsNewClient=', needsNewClient, 'hasExistingClient=', !!this.gatewayClient);
     if (!needsNewClient && this.gatewayReadyPromise) {
       await waitWithTimeout(this.gatewayReadyPromise, GATEWAY_READY_TIMEOUT_MS);
+      this.assertAccountConnection(epoch, configurationOnly);
       return;
     }
 
     this.stopGatewayClient();
     console.log('[ChannelSync] ensureGatewayClientReady: creating gateway client, url=', connection.url);
-    await this.createGatewayClient(connection);
+    await this.createGatewayClient(connection, epoch, configurationOnly);
+    this.assertAccountConnection(epoch, configurationOnly);
     console.log('[ChannelSync] ensureGatewayClientReady: createGatewayClient returned, waiting for handshake...');
     if (this.gatewayReadyPromise) {
       await waitWithTimeout(this.gatewayReadyPromise, GATEWAY_READY_TIMEOUT_MS);
     }
+    this.assertAccountConnection(epoch, configurationOnly);
     console.log('[ChannelSync] ensureGatewayClientReady: gateway client created and ready');
   }
 
-  private async createGatewayClient(connection: OpenClawGatewayConnectionInfo): Promise<void> {
+  private async createGatewayClient(connection: OpenClawGatewayConnectionInfo, epoch = this.accountRecoveryEpoch, configurationOnly = false): Promise<void> {
     const GatewayClient = await this.loadGatewayClientCtor(connection.clientEntryPath);
+    this.assertAccountConnection(epoch, configurationOnly);
     const clientGeneration = ++this.gatewayClientGeneration;
     const connectionPid = this.engineManager.getGatewayProcessPid?.() ?? null;
 
@@ -6625,6 +6781,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           console.debug('[ChannelSync] ignored hello from a stale gateway client generation');
           return;
         }
+        try { this.assertAccountConnection(epoch, configurationOnly); }
+        catch (error) { settleReject(error as Error); client.stop(); return; }
         console.log('[ChannelSync] GatewayClient: onHelloOk — handshake succeeded');
         // Expose the client only after the connect handshake completes.
         // Setting gatewayClient earlier would let concurrent code send
@@ -6638,29 +6796,31 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayClient = client;
         this.gatewayClientVersion = connection.version;
         this.recoveryGatewayProcessPid = connectionPid;
+        this.connectedGatewayGeneration = connection.generation;
         this.recoveryGatewayBootId = hello?.server?.bootId || '';
         this.approvalController.setGatewayContract({ version: hello?.server?.version ?? '', bootId: hello?.server?.bootId ?? '', methods: hello?.features?.methods ?? [] });
         this.gatewayClientEntryPath = connection.clientEntryPath;
-        this.gatewayReconnectSuppressed = false;
         this.gatewayReconnectAttempt = 0;
         this.resetGatewayRpcHealth();
-        this.subscribeToGatewaySessionEvents(client);
-        // All connection paths must resume history sync, including model
-        // switches and config RPCs that bypass connectGatewayIfNeeded().
-        if (this.channelSessionSync) {
-          this.startChannelPolling();
-        }
-        void this.questionController.restorePending();
+        const activate = (notifyReady: boolean): void => {
+          if (clientGeneration !== this.gatewayClientGeneration || this.gatewayClient !== client || this.accountRecoveryActive) return;
+          this.gatewayReconnectSuppressed = false;
+          this.subscribeToGatewaySessionEvents(client);
+          if (this.channelSessionSync) this.startChannelPolling();
+          void this.questionController.restorePending();
+          if (notifyReady) {
+            try { this.options.onGatewayClientReady?.(); }
+            catch (error) { console.warn('[ChannelSync] gateway ready callback failed:', error); }
+          }
+          this.lastTickTimestamp = Date.now();
+          this.startTickWatchdog();
+        };
+        if (this.accountRecoveryActive) this.deferredGatewayActivation = activate;
+        else activate(true);
         settleResolve();
-        try {
-          this.options.onGatewayClientReady?.();
-        } catch (error) {
-          console.warn('[OpenClawRuntime] gateway ready callback failed:', error);
-        }
-        this.lastTickTimestamp = Date.now();
-        this.startTickWatchdog();
       },
       onConnectError: (error: Error) => {
+        if (clientGeneration !== this.gatewayClientGeneration || epoch !== this.accountRecoveryEpoch) return;
         console.error('[ChannelSync] GatewayClient: onConnectError —', error.message);
         // Don't reject on transient connect errors — the GatewayClient has
         // built-in reconnection logic and will retry automatically.  Let the
@@ -6732,7 +6892,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       },
       onEvent: (event: GatewayEventFrame) => {
         if (clientGeneration !== this.gatewayClientGeneration) return;
-        this.handleGatewayEvent(event);
+        if (!this.accountRecoveryActive) this.handleGatewayEvent(event);
       },
     });
 
@@ -6749,22 +6909,25 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       {},
       { timeoutMs: OpenClawRuntimeAdapter.GATEWAY_SESSION_SUBSCRIBE_TIMEOUT_MS },
     ).then((result) => {
+      if (client !== this.gatewayClient || this.accountRecoveryActive) return;
       if (result?.subscribed !== true) {
         console.warn('[ChannelSync] gateway session event subscription was not confirmed.');
         return;
       }
       console.log('[ChannelSync] subscribed to gateway session lifecycle events.');
     }).catch((error) => {
+      if (client !== this.gatewayClient || this.accountRecoveryActive) return;
       // Polling remains available as a compatibility fallback if an older or
       // temporarily degraded gateway cannot establish the subscription.
       console.warn('[ChannelSync] failed to subscribe to gateway session lifecycle events:', error);
     });
   }
 
-  private stopGatewayClient(): void {
+  private stopGatewayClient(cancellation?: OpenClawAccountTransitionCancelledError): void {
+    this.deferredGatewayActivation = null;
     this.gatewayStoppingIntentionally = true;
     this.questionController.disconnect();
-    this.failAllPendingBtwRuns(t('coworkBtwDisconnected'), 'gateway stopped');
+    this.failAllPendingBtwRuns(t(cancellation ? 'authAccountChanged' : 'coworkBtwDisconnected'), cancellation ? 'account transition' : 'gateway stopped');
     this.gatewayClientGeneration += 1;
     this.stopChannelPolling();
     this.cancelGatewayReconnect();
@@ -6780,10 +6943,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.approvalController.setGatewayContract(null);
     this.approvalController.dispose();
     this.pendingGatewayClient = null;
+    this.connectedGatewayGeneration = undefined;
     this.gatewayClientVersion = null;
     this.gatewayClientEntryPath = null;
     if (this.gatewayReadyReject) {
-      const stoppedBeforeReadyError = new Error('OpenClaw gateway client stopped before handshake completed.');
+      const stoppedBeforeReadyError = cancellation ?? new Error('OpenClaw gateway client stopped before handshake completed.');
       this.gatewayReadyPromise?.catch(() => {
         // suppress unhandled rejection when no caller is currently awaiting readiness
       });
@@ -7656,6 +7820,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       console.log('[GatewayReconnect] reconnected successfully');
       this.gatewayReconnectAttempt = 0; // reset counter on success
     } catch (error) {
+      if (isOpenClawAccountTransitionCancelledError(error)) return;
       console.warn('[GatewayReconnect] reconnect failed:', error);
       this.scheduleGatewayReconnect(); // retry with next backoff
     }
@@ -12594,6 +12759,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       skipInitialUserMessage: pending.skipInitialUserMessage,
       systemPrompt: pending.systemPrompt ?? session.systemPrompt,
     }).catch((error) => {
+      if (isOpenClawAccountTransitionCancelledError(error)) return;
       const message = error instanceof Error ? error.message : String(error);
       console.error('[OpenClawRuntime] failed to start queued goal continuation:', error);
       this.store.updateSession(sessionId, { status: 'error' });
@@ -13071,6 +13237,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private requireGatewayClient(): GatewayClientLike {
+    this.assertAccountOperation(this.accountRecoveryEpoch);
     if (!this.gatewayClient) {
       throw new Error('OpenClaw gateway client is unavailable.');
     }
@@ -13082,7 +13249,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Used by CronJobService to call cron.* APIs on the same gateway.
    */
   getGatewayClient(): GatewayClientLike | null {
-    return this.gatewayClient;
+    return this.accountRecoveryActive ? null : this.gatewayClient;
   }
 
   /**
@@ -13091,10 +13258,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * can degrade to their own fallback path.
    */
   async ensureGatewayRpcClient(): Promise<GatewayClientLike | null> {
+    const epoch = this.accountRecoveryEpoch;
     try {
-      await this.ensureGatewayClientReady();
+      this.assertAccountConnection(epoch, true);
+      if (this.engineManager.getStatus().phase !== 'running') return null;
+      await this.ensureGatewayClientReady(true);
+      this.assertAccountConnection(epoch, true);
     } catch (error) {
-      console.warn('[OpenClawRuntime] ensureGatewayRpcClient failed:', error);
+      if (!isOpenClawAccountTransitionCancelledError(error)) console.warn('[OpenClawRuntime] ensureGatewayRpcClient failed:', error);
       return null;
     }
     return this.gatewayClient;

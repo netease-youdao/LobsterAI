@@ -60,12 +60,14 @@ import {
   ensurePlanModeProposedPlanBlock,
   estimateOpenClawChatSendFrameBytes,
   isIncompleteStopReason,
+  isOpenClawAccountTransitionCancelledError,
   isOpenClawToolLoopBlockedResultText,
   isPlanModeResponseComplete,
   isPlanModeSafeExecCommand,
   isSignificantAssistantStreamReset,
   normalizeOpenClawRuntimeErrorMessage,
   OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES,
+  OpenClawAccountTransitionCancelledError,
   OpenClawRuntimeAdapter as RuntimeAdapter,
   pickPersistedAssistantSegment,
   resolveOpenClawOutputLimitErrorMessage,
@@ -2263,6 +2265,7 @@ test.each(['ensureReady', 'ensureGatewayRpcClient', 'connectGatewayIfNeeded'] as
       request = request;
     }
     const adapter = new OpenClawRuntimeAdapter(store, {
+      getStatus: () => ({ phase: 'running' }),
       startGateway: async () => ({ phase: 'running' }),
       getGatewayConnectionInfo: () => ({
         url: 'ws://127.0.0.1:9999',
@@ -11700,4 +11703,241 @@ test('tool input_delta is ignored in plan mode and for stale runs', () => {
     data: { toolCallId: 'call-2', phase: 'input_delta', name: 'write', diff: { added: 3, removed: 0 } },
   }, 2);
   expect(session.messages.some((message) => message.type === 'tool_use')).toBe(false);
+});
+
+function createAccountRecoveryAdapter(options: {
+  autoHello?: boolean;
+  waitForAccountRecovery?: () => Promise<void>;
+} = {}) {
+  const callbacks: Array<Record<string, (...args: never[]) => void>> = [];
+  const clients: TestGatewayClient[] = [];
+  const request = vi.fn(async () => ({ subscribed: true }));
+  class TestGatewayClient {
+    constructor(private readonly clientOptions: Record<string, (...args: never[]) => void>) {
+      callbacks.push(clientOptions);
+      clients.push(this);
+    }
+    start() { if (options.autoHello !== false) this.clientOptions.onHelloOk(); }
+    stop = vi.fn();
+    request = request;
+  }
+  const connection = {
+    url: 'ws://127.0.0.1:9999', token: 'token', version: 'test-version',
+    clientEntryPath: '/tmp/openclaw-gateway-client.js', port: 9999, generation: 7,
+  };
+  const engine = {
+    getStatus: vi.fn(() => ({ phase: 'running' })),
+    getGatewayConnectionInfo: () => connection,
+    getGatewayProcessPid: vi.fn(() => 42),
+    startGateway: vi.fn(async () => ({ phase: 'running' })),
+  };
+  const ensureGatewayStarted = vi.fn(async () => ({ phase: 'running' }));
+  const onGatewayClientReady = vi.fn();
+  const adapter = new OpenClawRuntimeAdapter({ updateSession: vi.fn(), getSession: () => null } as never, engine as never, {
+    waitForAccountRecovery: options.waitForAccountRecovery,
+    ensureGatewayStarted: ensureGatewayStarted as never,
+    onGatewayClientReady,
+  });
+  adapter.loadGatewayClientCtor = vi.fn(async () => TestGatewayClient as never);
+  const startPolling = vi.spyOn(adapter, 'startChannelPolling').mockImplementation(() => {});
+  vi.spyOn(adapter, 'startTickWatchdog').mockImplementation(() => {});
+  const handleEvent = vi.spyOn(adapter, 'handleGatewayEvent').mockImplementation(() => {});
+  adapter.channelSessionSync = { clearCache: () => {} } as never;
+  return { adapter, engine, ensureGatewayStarted, onGatewayClientReady, callbacks, clients, request, startPolling, handleEvent };
+}
+
+test('account recovery lets configuration connect while business callers wait outside the init lock', async () => {
+  const gate = Promise.withResolvers<void>();
+  const waitForAccountRecovery = vi.fn(() => gate.promise);
+  const h = createAccountRecoveryAdapter({ waitForAccountRecovery });
+  const token = h.adapter.prepareForAccountTransition();
+  const external = h.adapter.ensureReady();
+  await Promise.resolve();
+  expect(h.adapter.gatewayClientInitLock).toBeNull();
+  expect(await h.adapter.ensureGatewayRpcClient()).toBeNull();
+  expect(h.ensureGatewayStarted).not.toHaveBeenCalled();
+
+  await h.adapter.confirmAccountGatewayRecovery(token, () => true);
+  expect(await h.adapter.ensureGatewayRpcClient()).toBe(h.clients[0]);
+  expect(h.adapter.getGatewayClient()).toBeNull();
+  expect(h.request).not.toHaveBeenCalled();
+  expect(h.startPolling).not.toHaveBeenCalled();
+  h.callbacks[0].onEvent({ event: 'sessions.changed' } as never);
+  expect(h.handleEvent).not.toHaveBeenCalled();
+  expect(waitForAccountRecovery).toHaveBeenCalledTimes(1);
+  expect(h.engine.startGateway).not.toHaveBeenCalled();
+
+  h.adapter.finishAccountGatewayRecovery(token);
+  expect(h.adapter.getGatewayClient()).toBe(h.clients[0]);
+  expect(h.startPolling).toHaveBeenCalledTimes(1);
+  expect(h.request).toHaveBeenCalledWith(OpenClawGatewayMethod.SessionsSubscribe, {}, expect.any(Object));
+  expect(h.onGatewayClientReady).not.toHaveBeenCalled();
+  h.callbacks[0].onEvent({ event: 'sessions.changed' } as never);
+  expect(h.handleEvent).toHaveBeenCalledTimes(1);
+  gate.resolve();
+  await external;
+  expect(h.ensureGatewayStarted).toHaveBeenCalledExactlyOnceWith('channel-sync-ensure-ready');
+  expect(h.clients).toHaveLength(1);
+  h.adapter.disconnectGatewayClient();
+});
+
+test('configuration-only gateway access neither starts a stopped gateway nor waits for account recovery', async () => {
+  const waitForAccountRecovery = vi.fn(() => new Promise<void>(() => {}));
+  const h = createAccountRecoveryAdapter({ waitForAccountRecovery });
+  h.engine.getStatus.mockReturnValue({ phase: 'ready' });
+  expect(await h.adapter.ensureGatewayRpcClient()).toBeNull();
+  expect(waitForAccountRecovery).not.toHaveBeenCalled();
+  expect(h.engine.startGateway).not.toHaveBeenCalled();
+  expect(h.ensureGatewayStarted).not.toHaveBeenCalled();
+  expect(h.clients).toHaveLength(0);
+});
+
+test('account transition cancels an old start immediately without letting its finally clear a newer init lock', async () => {
+  const h = createAccountRecoveryAdapter({ autoHello: false });
+  const startup = Promise.withResolvers<{ phase: string }>();
+  h.ensureGatewayStarted.mockReturnValueOnce(startup.promise);
+  const old = h.adapter.ensureReady();
+  const rejection = expect(old).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError);
+  await vi.waitFor(() => expect(h.ensureGatewayStarted).toHaveBeenCalledTimes(1));
+  const token = h.adapter.prepareForAccountTransition();
+  const recovery = h.adapter.confirmAccountGatewayRecovery(token, () => true);
+  const newLock = h.adapter.gatewayClientInitLock;
+  await rejection;
+  expect(h.adapter.gatewayClientInitLock).toBe(newLock);
+  startup.resolve({ phase: 'running' });
+  await vi.waitFor(() => expect(h.clients).toHaveLength(1));
+  expect(h.adapter.gatewayClientInitLock).toBe(newLock);
+  h.callbacks[0].onHelloOk();
+  await recovery;
+  h.adapter.finishAccountGatewayRecovery(token);
+  expect(h.clients).toHaveLength(1);
+  h.adapter.disconnectGatewayClient();
+});
+
+test('account transition discards a delayed gateway constructor and stale pending-handshake callbacks', async () => {
+  const h = createAccountRecoveryAdapter({ autoHello: false });
+  const constructor = Promise.withResolvers<never>();
+  const load = h.adapter.loadGatewayClientCtor;
+  h.adapter.loadGatewayClientCtor = vi.fn(() => constructor.promise);
+  const old = h.adapter.ensureReady();
+  const rejected = expect(old).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError);
+  await vi.waitFor(() => expect(h.adapter.loadGatewayClientCtor).toHaveBeenCalled());
+  h.adapter.prepareForAccountTransition();
+  await rejected;
+  constructor.resolve(await load('unused'));
+  await Promise.resolve();
+  expect(h.clients).toHaveLength(0);
+
+  h.adapter.loadGatewayClientCtor = load;
+  const token = h.adapter.prepareForAccountTransition();
+  const recovery = h.adapter.confirmAccountGatewayRecovery(token, () => true);
+  const staleRecovery = expect(recovery).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError);
+  await vi.waitFor(() => expect(h.clients).toHaveLength(1));
+  h.adapter.prepareForAccountTransition();
+  await staleRecovery;
+  h.callbacks[0].onHelloOk();
+  h.callbacks[0].onEvent({ event: 'sessions.changed' } as never);
+  h.callbacks[0].onClose(1006 as never, 'old socket' as never);
+  expect(h.clients[0].stop).toHaveBeenCalledTimes(1);
+  expect(h.adapter.getGatewayClient()).toBeNull();
+  expect(h.handleEvent).not.toHaveBeenCalled();
+  expect(h.adapter.gatewayReconnectTimer).toBeNull();
+});
+
+test('account recovery cannot release a superseded permit or changed gateway process', async () => {
+  const h = createAccountRecoveryAdapter();
+  const token = h.adapter.prepareForAccountTransition();
+  await expect(h.adapter.confirmAccountGatewayRecovery(token, () => false))
+    .rejects.toSatisfy(isOpenClawAccountTransitionCancelledError);
+  expect(h.clients).toHaveLength(0);
+  let current = true;
+  await h.adapter.confirmAccountGatewayRecovery(token, () => current);
+  current = false;
+  expect(() => h.adapter.finishAccountGatewayRecovery(token)).toThrow(OpenClawAccountTransitionCancelledError);
+  current = true;
+  h.engine.getGatewayProcessPid.mockReturnValue(43);
+  expect(() => h.adapter.finishAccountGatewayRecovery(token)).toThrow('process changed');
+  expect(h.adapter.getGatewayClient()).toBeNull();
+  expect(h.startPolling).not.toHaveBeenCalled();
+  await h.adapter.confirmAccountGatewayRecovery(token, () => true);
+  expect(h.clients).toHaveLength(2);
+  h.adapter.finishAccountGatewayRecovery(token);
+  expect(h.adapter.getGatewayClient()).toBe(h.clients[1]);
+  h.adapter.disconnectGatewayClient();
+});
+
+test('account transition cancels turn preparation without waiting for its model patch or reporting completion', async () => {
+  const { adapter, session, requests, firstModelPatchStarted, releaseFirstModelPatch } = createRunTurnAdapter({ holdFirstModelPatch: true });
+  const onError = vi.fn();
+  const onComplete = vi.fn();
+  const onStopped = vi.fn();
+  adapter.on('error', onError);
+  adapter.on('complete', onComplete);
+  adapter.on('sessionStopped', onStopped);
+  const turn = adapter.startSession(session.id, 'old account request');
+  const cancelled = expect(turn).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError);
+  await firstModelPatchStarted;
+  adapter.prepareForAccountTransition();
+  await cancelled;
+  expect(session.status).toBe('idle');
+  expect(onStopped).toHaveBeenCalledExactlyOnceWith(session.id);
+  releaseFirstModelPatch();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(requests.filter(request => request.method === OpenClawGatewayMethod.ChatSend)).toHaveLength(0);
+  expect(onError).not.toHaveBeenCalled();
+  expect(onComplete).not.toHaveBeenCalled();
+  expect(adapter.activeTurns.size).toBe(0);
+  expect(adapter.pendingTurns.size).toBe(0);
+});
+
+test('account transition stops active, pending and yielded observations without confirming remote termination', () => {
+  const h = createAccountRecoveryAdapter();
+  const stopped = vi.fn();
+  const terminated = vi.fn();
+  const complete = vi.fn();
+  const resolved = vi.fn();
+  h.adapter.on('sessionStopped', stopped);
+  h.adapter.on('runTermination', terminated);
+  h.adapter.on('complete', complete);
+  h.adapter.activeTurns.set('active', createActiveTurn('active', 'agent:main:lobsterai:active', 'run-active'));
+  h.adapter.pendingTurns.set('pending', { resolve: resolved, reject: vi.fn() });
+  h.adapter.yieldedSessions.set('yielded', { sessionKey: 'agent:main:lobsterai:yielded', runId: 'run-yielded' } as never);
+  h.adapter.prepareForAccountTransition();
+  expect(new Set(stopped.mock.calls.map(([id]) => id))).toEqual(new Set(['active', 'pending', 'yielded']));
+  expect(resolved).toHaveBeenCalledTimes(1);
+  expect(h.adapter.activeTurns.size + h.adapter.pendingTurns.size + h.adapter.yieldedSessions.size).toBe(0);
+  expect(terminated).not.toHaveBeenCalled();
+  expect(complete).not.toHaveBeenCalled();
+});
+
+test('a late BTW acknowledgement after account transition cannot return a successful submission', async () => {
+  const { adapter, session } = createRunTurnAdapter();
+  const sent = Promise.withResolvers<void>();
+  const ack = Promise.withResolvers<Record<string, unknown>>();
+  adapter.gatewayClient.request = vi.fn(async () => { sent.resolve(); return ack.promise; });
+  const result = adapter.submitBtw(session.id, 'old side question', 'old-btw');
+  await sent.promise;
+  adapter.prepareForAccountTransition();
+  ack.resolve({ runId: 'old-btw' });
+  await expect(result).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError);
+  expect(adapter.pendingBtwRuns.size).toBe(0);
+});
+
+test('account transition immediately cancels all old task callers waiting outside the initialization lock', async () => {
+  const gate = Promise.withResolvers<void>();
+  const h = createAccountRecoveryAdapter({ waitForAccountRecovery: () => gate.promise });
+  const first = h.adapter.startSession('pending', 'first request');
+  const second = h.adapter.startSession('pending', 'second request');
+  const cancelled = Promise.all([
+    expect(first).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError),
+    expect(second).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError),
+  ]);
+  expect(h.adapter.gatewayClientInitLock).toBeNull();
+  h.adapter.prepareForAccountTransition();
+  await cancelled;
+  gate.resolve();
+  await Promise.resolve();
+  expect(h.clients).toHaveLength(0);
+  expect(h.ensureGatewayStarted).not.toHaveBeenCalled();
 });

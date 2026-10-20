@@ -25,7 +25,7 @@ export const COWORK_START_BLOCK_MESSAGE_KEYS: Record<CoworkStartBlock, string> =
 };
 
 export function isOpenClawReadyForSession(status: OpenClawEngineStatus | null): boolean {
-  if (!status) return false;
+  if (!status || status.accountRecoveryPending) return false;
   return status.phase === 'running' || status.phase === 'ready';
 }
 

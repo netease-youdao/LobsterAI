@@ -41,6 +41,10 @@ let persistedTipIndex: number | null = null;
 let overlayWasVisible = true;
 
 const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
+  if (status.accountRecoveryPending) {
+    return status.message?.trim() || i18nService.t(status.phase === 'error'
+      ? 'coworkOpenClawError' : 'coworkOpenClawStarting');
+  }
   switch (status.phase) {
     case 'not_installed':
       return i18nService.t('coworkOpenClawNotInstalledNotice');
@@ -102,6 +106,7 @@ const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrappi
     return unsubscribe;
   }, []);
 
+  // Account recovery shares the existing gateway startup/restart overlay.
   const isStarting = status?.phase === 'starting';
   const visible = bootstrapping || isStarting;
 
@@ -160,7 +165,8 @@ const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrappi
     return null;
   }
 
-  const progressPercent = typeof status?.progressPercent === 'number'
+  // Process progress can still be 100% while account/config confirmation is pending.
+  const progressPercent = !status?.accountRecoveryPending && typeof status?.progressPercent === 'number'
     ? Math.max(0, Math.min(100, Math.round(status.progressPercent)))
     : null;
 

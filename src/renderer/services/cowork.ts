@@ -176,6 +176,7 @@ class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
   private initialized = false;
   private openClawStatus: OpenClawEngineStatus | null = null;
+  private openClawStatusRevision = 0;
   private openClawStatusListeners = new Set<(status: OpenClawEngineStatus) => void>();
   private openClawRepairPromise: Promise<OpenClawGatewayRepairResult> | null = null;
   private openClawEngineListenerAttached = false;
@@ -842,6 +843,7 @@ class CoworkService {
     // Describes one refused request while the gateway keeps running; broadcasting
     // it as "starting" would pin the global startup overlay until a later event.
     if (isConfigApplyPendingStatus(status)) return;
+    this.openClawStatusRevision += 1;
     this.openClawStatus = status;
     this.openClawStatusListeners.forEach((listener) => {
       listener(status);
@@ -1116,7 +1118,11 @@ class CoworkService {
     if (!engineApi?.getStatus) {
       return null;
     }
+    // Progress events and newer reads supersede this snapshot request. Return
+    // the latest snapshot too, so a component's .then() cannot restore stale UI.
+    const revision = ++this.openClawStatusRevision;
     const result = await engineApi.getStatus();
+    if (revision !== this.openClawStatusRevision) return this.openClawStatus;
     if (result?.success && result.status) {
       this.notifyOpenClawStatus(result.status);
       return result.status;
@@ -2643,6 +2649,7 @@ class CoworkService {
   }
 
   destroy(): void {
+    this.openClawStatusRevision += 1;
     this.clearNewUserWelcomeAnimation();
     this.cleanupListeners();
     this.openClawStatusListeners.clear();

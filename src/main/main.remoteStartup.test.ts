@@ -10,6 +10,8 @@ import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
 import { LogReporterStoreKey } from '../shared/analytics/constants';
+import * as OpenClawConstants from '../shared/openclawEngine/constants';
+import * as AccountRecovery from './libs/openclawAccountRecovery';
 import { OPENCLAW_LOOPBACK_STATE_FILE } from './libs/openclawLoopbackState';
 import { payloadHash, sameOwner } from './remote/canonical';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
@@ -104,6 +106,8 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     url: moduleOf({ fileURLToPath, pathToFileURL: inert }),
     electron: moduleOf({ app, BrowserWindow: moduleOf({ getAllWindows: () => [] }) }),
     '../shared/analytics/constants': moduleOf({ LogReporterStoreKey }),
+    '../shared/openclawEngine/constants': moduleOf(OpenClawConstants),
+    './libs/openclawAccountRecovery': moduleOf(AccountRecovery),
     './appConstants': moduleOf({ APP_NAME: 'LobsterAI', DB_FILENAME: 'lobsterai.sqlite' }),
     './sqliteStore': moduleOf({ SqliteStore: { create: () => { events.push('store:creating'); return created.promise; } } }),
     './coworkStore': moduleOf({ CoworkStore: function () {
@@ -115,7 +119,7 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     './remote/canonical': moduleOf({ payloadHash, sameOwner }),
     './remote/remoteAccountTransition': moduleOf({ RemoteAccountTransition }),
     './remote/automationOwnership': moduleOf({ fenceCronJobs: () => { events.push('gateway:fence'); if (failFence) throw new Error('cron fence failed'); } }),
-    './libs/openclawEngineManager': moduleOf({ OpenClawEngineManager: function () { return moduleOf({ getStateDir: () => fakePath, stopGateway: () => { events.push('gateway:stop'); return stopped.promise; } }); } }),
+    './libs/openclawEngineManager': moduleOf({ OpenClawEngineManager: function () { return moduleOf({ getStatus: () => ({ phase: OpenClawConstants.OpenClawEnginePhase.Ready }), getStateDir: () => fakePath, stopGateway: () => { events.push('gateway:stop'); return stopped.promise; } }); } }),
     './libs/openclawLoopbackState': moduleOf({ OPENCLAW_LOOPBACK_STATE_FILE }),
     './remote/sessionCommandService': moduleOf({ SessionCommandService: function () { events.push('remote:construct'); return commands; } }),
     './remote/remoteBridge': moduleOf({ RemoteBridge: function () { events.push('remote:bridge'); return bridge; } }),

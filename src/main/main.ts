@@ -482,6 +482,7 @@ import { MediaTaskStore, type MediaTaskTracker as PersistedMediaTaskTracker } fr
 import { MediaUsageAnalytics } from './libs/mediaUsageAnalytics';
 import { MediaUsageStore } from './libs/mediaUsageStore';
 import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
+import { AccountRecoveryCancelledError, AccountRecoveryPhase, OpenClawAccountRecovery } from './libs/openclawAccountRecovery';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -526,7 +527,8 @@ import {
   observeConfigRecovery,
   writeConfigDiagnostic,
 } from './libs/openclawConfigObservation';
-import { isDeferredRestartSatisfied, OpenClawConfigRecovery } from './libs/openclawConfigRecovery';
+import { OpenClawConfigRecovery } from './libs/openclawConfigRecovery';
+import { createOpenClawConfigStartupInputs } from './libs/openclawConfigRestartInputs';
 import { buildProviderSelection, OpenClawConfigSync } from './libs/openclawConfigSync';
 import {
   type OpenClawConfigTarget,
@@ -2311,6 +2313,9 @@ const getOpenClawEngineManager = (): OpenClawEngineManager => {
   if (!openClawEngineManager) {
     openClawEngineManager = new OpenClawEngineManager();
     openClawEngineManager.setStartupPrerequisite(() => openClawStartupConfigReady);
+    openClawEngineManager.setStartPermitProvider(() => openClawAccountRecovery
+      ? openClawAccountRecovery.captureStartPermit()
+      : () => !isQuitting && !isDataMigrationRestoreInProgress);
   }
   return openClawEngineManager;
 };
@@ -2426,7 +2431,24 @@ const getMainLogReporter = (): MainLogReporter => {
   return mainLogReporter;
 };
 
+const projectOpenClawStatus = (status: OpenClawEngineStatus): OpenClawEngineStatus => {
+  if (!openClawAccountRecovery?.active) return status;
+  const state = openClawAccountRecovery.state;
+  const failed = state?.phase === AccountRecoveryPhase.Failed;
+  return {
+    ...status,
+    phase: failed ? OpenClawEnginePhase.Error : OpenClawEnginePhase.Starting,
+    accountRecoveryPending: true,
+    configApplyPending: false,
+    canRetry: failed,
+    message: failed
+      ? t('openClawAccountRecoveryFailed', { error: state.error || 'Gateway unavailable' })
+      : t('openClawAccountRecoveryPending'),
+  };
+};
+
 const forwardOpenClawStatus = (status: OpenClawEngineStatus): void => {
+  status = projectOpenClawStatus(status);
   const windows = BrowserWindow.getAllWindows();
   windows.forEach(win => {
     if (win.isDestroyed()) return;
@@ -2486,6 +2508,8 @@ const bootstrapOpenClawEngine = async (
     const t0 = Date.now();
     const elapsed = () => `${Date.now() - t0}ms`;
     try {
+      await waitForAccountGatewayRecovery();
+      const isAccountCurrent = captureOpenClawAccountSnapshot();
       console.log(`[OpenClaw] bootstrap starting (reason=${reason})`);
 
       // Start AskUser HTTP server before config sync
@@ -2529,12 +2553,13 @@ const bootstrapOpenClawEngine = async (
         && ensuredStatus.phase !== OpenClawEnginePhase.Starting) {
         return ensuredStatus;
       }
-      if (isQuitting || isDataMigrationRestoreInProgress) return manager.getStatus();
+      if (isQuitting || isDataMigrationRestoreInProgress || !isAccountCurrent()) return projectOpenClawStatus(manager.getStatus());
       const result = await manager.startGateway(`bootstrap:${reason}`);
       console.log(`[OpenClaw] bootstrap completed (${elapsed()}), phase=${result.phase}`);
-      return result;
+      return projectOpenClawStatus(result);
     } catch (error) {
       console.error(`[OpenClaw] bootstrap failed (${reason}, ${elapsed()}):`, error);
+      if (openClawAccountRecovery?.active) return projectOpenClawStatus(manager.getStatus());
       if (manager.getStatus().phase === OpenClawEnginePhase.Starting) {
         return manager.setExternalError(error instanceof Error ? error.message : 'OpenClaw startup failed.');
       }
@@ -2573,7 +2598,16 @@ type CoworkEngineAdmission = {
 };
 
 const ensureOpenClawRunningForCowork = async (admission: CoworkEngineAdmission = {}) => {
-  await remoteAccountTransition.wait();
+  try {
+    await waitForAccountGatewayRecovery();
+    await remoteAccountTransition.wait();
+  } catch (error) {
+    const status = projectOpenClawStatus(getOpenClawEngineManager().getStatus());
+    return { ...status, phase: OpenClawEnginePhase.Error, canRetry: true,
+      message: status.accountRecoveryPending ? status.message
+        : error instanceof Error ? error.message : t('openClawAccountRecoveryPending') };
+  }
+  const isAccountCurrent = captureOpenClawAccountSnapshot();
   if (!admission.joinsActiveTurn) {
     const configApplyStatus = await waitForOpenClawConfigApply(
       'cowork engine startup',
@@ -2591,7 +2625,8 @@ const ensureOpenClawRunningForCowork = async (admission: CoworkEngineAdmission =
     // Token proxy handles dynamic token injection — no need to restart
     // the gateway for token changes. Just wait for any in-flight refresh.
     await waitForPendingTokenRefresh();
-    return manager.getStatus();
+    if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
+    return projectOpenClawStatus(manager.getStatus());
   }
   if (status.phase === 'starting') {
     return status;
@@ -2615,11 +2650,14 @@ const ensureOpenClawRunningForCowork = async (admission: CoworkEngineAdmission =
     return buildConfigApplyPendingStatus(syncResult.error || t('openClawConfigApplyPending'));
   }
 
+  if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
   console.log(`${gwDiagTs()} ensureRunning: gateway not running (phase=${status.phase}), starting`);
   const started = await manager.startGateway('ensure-running-for-cowork');
-  if (started.phase !== OpenClawEnginePhase.Running) return started;
+  if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
+  if (started.phase !== OpenClawEnginePhase.Running) return projectOpenClawStatus(started);
   await syncOpenClawConfig({ reason: 'ensureRunning:config-confirm' });
-  if (admission.joinsActiveTurn) return manager.getStatus();
+  if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
+  if (admission.joinsActiveTurn) return projectOpenClawStatus(manager.getStatus());
   return await waitForOpenClawConfigApply(
     'cowork startup confirmation',
     true,
@@ -2707,6 +2745,17 @@ const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
 
 const remoteAccountTransition = new RemoteAccountTransition();
 let remoteCredentialsAllowed = true;
+let openClawAccountRecovery: OpenClawAccountRecovery | null = null;
+let captureOpenClawAccountSnapshot: () => (() => boolean) = () => () => true;
+let accountGatewayStartupRequested = false;
+let accountRecoveryManualRetry = false;
+
+const waitForAccountGatewayRecovery = async (): Promise<void> => {
+  accountGatewayStartupRequested = true;
+  openClawAccountRecovery?.requestRunning();
+  await openClawAccountRecovery?.waitForAuthState();
+  await openClawAccountRecovery?.wait();
+};
 
 const getOpenClawConfigSync = (): OpenClawConfigSync => {
   if (!openClawConfigSync) {
@@ -2936,13 +2985,16 @@ const clearDeferredRestart = () => {
 
 type SyncOpenClawConfigOptions = {
   reason: string;
+  isAccountCurrent?: () => boolean;
   skillChangeBatch?: SkillChangeBatch;
   manualRepair?: boolean;
   restartGatewayIfRunning?: boolean;
   expectedImpact?: OpenClawConfigImpact;
   /** Only ordinary IM saves can reuse a completed restart of this exact config. */
   imConfigRestartFingerprint?: string;
-  /** When the deferred restart executed by this sync was first requested. */
+  /** Retry the existing demand; never manufacture a new explicit restart. */
+  retryPendingRestart?: boolean;
+  /** First scheduling time, retained across polls for overdue diagnostics. */
   restartRequestedAt?: number;
 };
 
@@ -2966,6 +3018,13 @@ let openClawConfigApplyGeneration = 0;
 const openClawConfigRecovery = new OpenClawConfigRecovery();
 let deferredRestartReason: string | null = null;
 let deferredRestartRequestedAt: number | null = null;
+const resetOpenClawConfigRecoveryForAccount = (ownerEpoch: string): void => {
+  clearDeferredRestart();
+  deferredRestartReason = null;
+  deferredRestartRequestedAt = null;
+  openClawConfigRecovery.resetForOwner(ownerEpoch);
+  getOpenClawEngineManager().setGatewayStartupInputRevision(openClawConfigRecovery.startupInputRevision);
+};
 const imConfigRestartTracker = new OpenClawImConfigRestartTracker({
   getImConfigFingerprint: () => createStableConfigFingerprint(getIMGatewayManager().getConfig()),
   getGatewayGeneration: () => getOpenClawEngineManager().getGatewayConnectionInfo().generation,
@@ -3140,16 +3199,15 @@ const executeDeferredGatewayRestart = async (reason: string) => {
     : `${DEFERRED_SYNC_REASON_PREFIX}${reason}`;
   await syncOpenClawConfig({
     reason: syncReason,
-    restartGatewayIfRunning: true,
-    expectedImpact: OpenClawConfigImpact.Restart,
+    retryPendingRestart: true,
     restartRequestedAt,
   });
 };
 
 const scheduleDeferredGatewayRestart = (reason: string, requestedAt = Date.now()) => {
   deferredRestartReason = mergeDeferredGatewayRestartReason(deferredRestartReason, reason);
-  // The latest demand decides which gateway spawn can satisfy the merged request.
-  deferredRestartRequestedAt = Math.max(deferredRestartRequestedAt ?? 0, requestedAt);
+  // Scheduling does not create a new process demand or change its original request time.
+  deferredRestartRequestedAt = Math.min(deferredRestartRequestedAt ?? requestedAt, requestedAt);
   // Recovery retains the latest target even when it has not been persisted.
   if (deferredRestartTimer) {
     console.log(
@@ -3199,7 +3257,12 @@ const _syncOpenClawConfigImpl = async (
   options: SyncOpenClawConfigOptions = { reason: 'unknown' },
   syncId = 0,
 ): Promise<SyncOpenClawConfigResult> => {
+  const assertAccountCurrent = () => {
+    if (options.isAccountCurrent?.() === false) throw new Error('Account changed during config synchronization');
+  };
+  assertAccountCurrent();
   await remoteAccountTransition.wait();
+  assertAccountCurrent();
   const D = gwDiagTs;
   console.log(
     `${D()} ──── syncOpenClawConfig START reason=${options.reason} restartIfRunning=${!!options.restartGatewayIfRunning} expectedImpact=${options.expectedImpact ?? OpenClawConfigImpact.None}`,
@@ -3225,6 +3288,7 @@ const _syncOpenClawConfigImpl = async (
     env: process.env,
     secretEnvVars: migrationSecretEnvVars,
   });
+  assertAccountCurrent();
   if (pluginInstallMigration.status === OpenClawPluginInstallMigrationStatus.Failed) {
     const message = `OpenClaw legacy plugin install migration failed: ${pluginInstallMigration.error}`;
     console.error('[OpenClaw] Legacy plugin install migration blocked config sync:', new Error(message));
@@ -3243,11 +3307,14 @@ const _syncOpenClawConfigImpl = async (
   try {
     await getMcpRuntime().refreshResolvedServersCache();
   } catch (err) {
+    assertAccountCurrent();
     console.warn(`[OpenClaw] getResolvedMcpServers failed (non-fatal):`, err);
     getMcpRuntime().clearResolvedServersCache();
   }
 
+  assertAccountCurrent();
   await remoteAccountTransition.wait();
+  assertAccountCurrent();
   // Legacy Weixin pairing allowlists make the pinned runtime refuse readiness
   // at startup; fold them into the channel config before it is rendered.
   runLegacyWeixinAllowFromMigration({
@@ -3328,39 +3395,34 @@ const _syncOpenClawConfigImpl = async (
     console.log(`${D()} secretEnvVars unchanged (${Object.keys(effectiveNextSecretEnvVars).length}/${Object.keys(nextSecretEnvVars).length} referenced keys)`);
   }
 
-  // Force a hard restart when env/bindings changed, or when the caller explicitly
-  // requires a running gateway restart. Some IM account state changes are stored
-  // outside openclaw.json, so the explicit flag must not depend on config diffing.
-  const expectedRestartImpact =
-    effectiveConfigChanged
+  // Diff startup-only inputs against the last desired input, not the old disk
+  // contents. A deferred poll is only a retry of the original process demand.
+  const expectedRestartImpact = effectiveConfigChanged
     && options.expectedImpact === OpenClawConfigImpact.Restart;
-  const syncRestartImpact =
-    nspClawguardPatched ||
-    syncResult.restartImpact === OpenClawConfigImpact.Restart;
   const imRestartSatisfied = imConfigRestartTracker.isRestartSatisfied(
     options.imConfigRestartFingerprint,
     effectiveConfigChanged,
   );
   const fallbackRecovery = isConfigDeliveryFallbackReason(options.reason);
-  const deferredRestartSatisfied = isDeferredRestartSatisfied({
-    restartRequestedAt: options.restartRequestedAt,
-    gatewayProcessStartedAt: manager.getGatewayProcessStartedAt(),
-    configChanged: effectiveConfigChanged,
-    envChanged: secretEnvVarsChanged,
-    bindingsChanged: syncResult.bindingsChanged === true,
-    restartImpact: syncRestartImpact,
-  });
-  if (deferredRestartSatisfied) {
-    console.log(`${D()} deferred restart already satisfied by a gateway started after the request; skipping respawn. reason=${options.reason}`);
-  }
-  const requestedRespawn =
-    secretEnvVarsChanged ||
-    syncResult.bindingsChanged === true ||
-    syncRestartImpact ||
-    (!fallbackRecovery && expectedRestartImpact) ||
-    (!fallbackRecovery && options.restartGatewayIfRunning === true && !imRestartSatisfied
-      && !deferredRestartSatisfied);
-  openClawConfigRecovery.stage(target, requestedRespawn, manager.getGatewayProcessGeneration());
+  const startupInputs = createOpenClawConfigStartupInputs(target.raw, nextSecretEnvVars);
+  const observeGatewayStartup = () => {
+    const env = manager.getGatewayProcessSecretEnvVars();
+    const raw = manager.getGatewayProcessConfigRaw();
+    openClawConfigRecovery.observeGatewayStartup(
+      manager.getGatewayProcessGeneration(),
+      manager.getGatewayProcessStartupInputRevision(),
+      env && raw !== null ? createOpenClawConfigStartupInputs(raw, env) : null,
+    );
+  };
+  observeGatewayStartup();
+  const originalExplicitRestart = !options.retryPendingRestart && !fallbackRecovery
+    && (expectedRestartImpact || (options.restartGatewayIfRunning === true && !imRestartSatisfied));
+  openClawConfigRecovery.stage(target, nspClawguardPatched || originalExplicitRestart,
+    manager.getGatewayProcessGeneration(), {
+      inputs: startupInputs,
+      initialInputs: createOpenClawConfigStartupInputs(target.baseRaw, prevSecretEnvVars),
+      reason: options.reason,
+    });
   const needsHardRestart = openClawConfigRecovery.needsRespawn(manager.getGatewayProcessGeneration());
 
   if (imRestartSatisfied && !needsHardRestart) {
@@ -3377,6 +3439,7 @@ const _syncOpenClawConfigImpl = async (
   if (phase !== OpenClawEnginePhase.Running && phase !== OpenClawEnginePhase.Starting
     && manager.getGatewayProcessPid() === null) {
     persistOpenClawConfigTarget(manager.getConfigPath(), target);
+    manager.setGatewayStartupInputRevision(openClawConfigRecovery.startupInputRevision);
     clearDeferredRestart();
     deferredRestartReason = null;
     deferredRestartRequestedAt = null;
@@ -3384,15 +3447,27 @@ const _syncOpenClawConfigImpl = async (
   }
 
   const deliver = async () => {
+    assertAccountCurrent();
     let payloadDigest: string | undefined;
     const gatewayGeneration = manager.getGatewayProcessGeneration();
     const delivery = await deliverOpenClawConfigToGateway({
       reason: options.reason,
       gatewayPhase: manager.getStatus().phase,
-      readConfigFile: () => rebaseOpenClawConfigTarget(target, readOpenClawConfigRaw(manager.getConfigPath())),
+      readConfigFile: () => {
+        assertAccountCurrent();
+        return rebaseOpenClawConfigTarget(target, readOpenClawConfigRaw(manager.getConfigPath()));
+      },
       configPath: manager.getConfigPath(),
-      recoverConfigLock: () => manager.reclaimStaleConfigLock(`config-delivery:${options.reason}`),
-      ensureRpcClient: async () => openClawRuntimeAdapter?.ensureGatewayRpcClient() ?? null,
+      recoverConfigLock: () => {
+        assertAccountCurrent();
+        return manager.reclaimStaleConfigLock(`config-delivery:${options.reason}`);
+      },
+      ensureRpcClient: async () => {
+        assertAccountCurrent();
+        const client = await openClawRuntimeAdapter?.ensureGatewayRpcClient() ?? null;
+        assertAccountCurrent();
+        return client;
+      },
       onDiagnostic: event => {
         if (event.payloadDigest) payloadDigest = event.payloadDigest;
         const terminal = event.stage === ConfigDiagnosticStage.Complete;
@@ -3414,15 +3489,21 @@ const _syncOpenClawConfigImpl = async (
         }, warn);
       },
     });
+    assertAccountCurrent();
     if (delivery.mode === OpenClawConfigDeliveryMode.Applied
       && gatewayGeneration !== manager.getGatewayProcessGeneration()) {
       return { ...delivery, mode: OpenClawConfigDeliveryMode.Fallback, detail: 'Gateway generation changed during application confirmation.' };
     }
     if (delivery.mode === OpenClawConfigDeliveryMode.Applied) {
+      observeGatewayStartup();
       if (openClawConfigRecovery.applied(target, manager.getGatewayProcessGeneration())) {
         clearDeferredRestart();
         deferredRestartReason = null;
         deferredRestartRequestedAt = null;
+      } else if (openClawConfigRecovery.needsRespawn(manager.getGatewayProcessGeneration())) {
+        return { ...delivery, mode: OpenClawConfigDeliveryMode.Fallback,
+          errorKind: ConfigDiagnosticErrorKind.Other,
+          detail: 'Gateway startup inputs do not satisfy the pending restart requirement.' };
       }
     } else if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
       openClawConfigRecovery.reject(target, delivery.detail);
@@ -3434,8 +3515,10 @@ const _syncOpenClawConfigImpl = async (
   };
 
   const retryDeferredDelivery = options.reason.startsWith(DEFERRED_SYNC_REASON_PREFIX) && fallbackRecovery;
-  if (!needsHardRestart) {
+  if (!needsHardRestart || openClawConfigRecovery.stalled
+    || ((fallbackRecovery || openClawConfigRecovery.hasAttemptedRestartDemand) && !openClawConfigRecovery.canRestart())) {
     const delivery = await deliver();
+    assertAccountCurrent();
     if (delivery.mode === OpenClawConfigDeliveryMode.Rejected) {
       return { success: false, changed: effectiveConfigChanged, status: buildConfigApplyErrorStatus(delivery.detail), error: delivery.detail };
     }
@@ -3501,6 +3584,15 @@ const _syncOpenClawConfigImpl = async (
   if (isQuitting || isDataMigrationRestoreInProgress) {
     return { success: false, changed: true, status: manager.getStatus() };
   }
+  // Delivery recovery creates a demand only after its existing retry, idle,
+  // and cooldown gates allow a real process replacement.
+  if (!needsHardRestart) {
+    openClawConfigRecovery.stage(target, true, manager.getGatewayProcessGeneration(), {
+      inputs: startupInputs,
+      initialInputs: startupInputs,
+      reason: options.reason,
+    });
+  }
   console.log(
     `${D()} ──── HARD RESTART EXECUTING. reason=${options.reason}, syncId=${syncId}, phase=${status.phase}, port=${status.message?.match(/loopback:(\d+)/)?.[1] ?? 'unknown'}`,
   );
@@ -3512,11 +3604,14 @@ const _syncOpenClawConfigImpl = async (
     imConfigFingerprint,
     () => manager.restartGateway(`config-sync:${options.reason}`, {
       beforeStart: () => {
+        assertAccountCurrent();
         persistOpenClawConfigTarget(manager.getConfigPath(), target);
-        if (fallbackRecovery) openClawConfigRecovery.restarted();
+        manager.setGatewayStartupInputRevision(openClawConfigRecovery.startupInputRevision);
+        openClawConfigRecovery.restarted();
       },
     }),
   );
+  assertAccountCurrent();
   if (restarted.phase !== 'running') {
     return {
       success: false,
@@ -3528,9 +3623,11 @@ const _syncOpenClawConfigImpl = async (
   // Restore desktop IM sync even when the next message arrives only on mobile.
   // Config-driven restarts intentionally suppress the client's auto-reconnect.
   if (openClawRuntimeAdapter && !isQuitting && !isDataMigrationRestoreInProgress) {
-    await openClawRuntimeAdapter.connectGatewayIfNeeded();
+    await openClawRuntimeAdapter.ensureGatewayRpcClient();
+    assertAccountCurrent();
   }
   const confirmed = await deliver();
+  assertAccountCurrent();
   if (confirmed.mode !== OpenClawConfigDeliveryMode.Applied || openClawConfigRecovery.pending) {
     if (confirmed.mode !== OpenClawConfigDeliveryMode.Rejected) {
       // The new process spawned from the persisted target, so its failed
@@ -3568,6 +3665,15 @@ const syncOpenClawConfig = async (
   // Wait before enqueueing, so a background sync cannot block the repair's
   // own regeneration behind a promise that is waiting for repair completion.
   if (openClawManualRepairActive && !options.manualRepair) await openClawManualRepairBarrier;
+  // Auth commit is independent of recovery/config delivery. Never wait for the
+  // full recovery from this queue: recovery itself needs config RPCs.
+  try {
+    do { await openClawAccountRecovery?.waitForAuthState(); }
+    while (openClawAccountRecovery?.authMutationPending);
+  } catch (error) {
+    return { success: false, changed: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const isAccountCurrent = captureOpenClawAccountSnapshot();
   const generation = ++openClawConfigApplyGeneration;
   const enqueuedAt = Date.now();
   const startAfterPrevious = openClawConfigApplyQueue.catch(() => {});
@@ -3582,7 +3688,7 @@ const syncOpenClawConfig = async (
       skillChangeBatch: options.skillChangeBatch, queueWaitMs: startedAt - enqueuedAt,
     });
     try {
-      return await _syncOpenClawConfigImpl(options, generation);
+      return await _syncOpenClawConfigImpl({ ...options, isAccountCurrent }, generation);
     } finally {
       const cpu = process.cpuUsage(cpuAtStart);
       writeConfigDiagnostic({
@@ -3705,6 +3811,12 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
   promise = (async (): Promise<OpenClawGatewayRepairResult> => {
     const manager = getOpenClawEngineManager();
     const originalPath = manager.getConfigPath();
+    await remoteAccountTransition.wait();
+    await openClawAccountRecovery?.waitForAuthState();
+    const isAccountCurrent = captureOpenClawAccountSnapshot();
+    // A live recovery owns startup. Repair may only take over after it settles.
+    if (openClawAccountRecovery?.active) await openClawAccountRecovery.wait().catch(() => {});
+    if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
 
     const initialBusyResult = buildOpenClawRepairBusyResult(originalPath, manager.getStatus());
     if (initialBusyResult) {
@@ -3752,6 +3864,7 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       openClawManualRepairActive = true;
       openClawManualRepairBarrier = new Promise<void>(resolve => { releaseConfigMaintenance = resolve; });
       await openClawConfigApplyQueue;
+      if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
       const pendingWork = buildOpenClawRepairBusyResult(originalPath, manager.getStatus());
       if (pendingWork) return pendingWork;
       console.log('[OpenClawRepair] starting gateway state repair.');
@@ -3799,15 +3912,23 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
         });
       });
       repairStage = OpenClawRepairStage.Gateway;
-      const started = await manager.startGateway('manual-repair', { retryBlocked: true });
-      // Reconnection can await a token refresh that itself needs config sync.
-      // Release config writers after repair/startup, before awaiting the client.
+      if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
+      // Recovery's prepare step needs this queue, so release maintenance before
+      // joining recovery. Never connect a business client before confirmation.
       openClawManualRepairActive = false;
       releaseConfigMaintenance?.();
-      if (isOpenClawGatewayRepairSuccess(started)) {
-        await openClawRuntimeAdapter?.connectGatewayIfNeeded();
+      if (openClawAccountRecovery?.active) {
+        accountRecoveryManualRetry = true;
+        openClawAccountRecovery.requestRunning();
+        try { await openClawAccountRecovery.retry(); }
+        finally { accountRecoveryManualRetry = false; }
+      } else {
+        const started = await manager.startGateway('manual-repair', { retryBlocked: true });
+        if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
+        if (isOpenClawGatewayRepairSuccess(started)) await openClawRuntimeAdapter?.connectGatewayIfNeeded();
       }
-      const status = manager.getStatus();
+      if (!isAccountCurrent()) throw new AccountRecoveryCancelledError();
+      const status = projectOpenClawStatus(manager.getStatus());
       const success = isOpenClawGatewayRepairSuccess(status);
       if (success) {
         console.log('[OpenClawRepair] gateway state repair completed successfully.');
@@ -3830,7 +3951,8 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
       const failedStage = error instanceof OpenClawRepairFailure ? error.stage : repairStage;
       return {
         success: false,
-        status: manager.setExternalError(message),
+        status: projectOpenClawStatus(error instanceof AccountRecoveryCancelledError || !isAccountCurrent()
+          ? manager.getStatus() : manager.setExternalError(message)),
         originalPath,
         backupPath,
         error: message,
@@ -4157,6 +4279,11 @@ const getCoworkEngineRouter = () => {
           beforePreparationDispatch: (sessionId, runId) => { assertRemoteExecutionPermit(); if (runId) getCoworkStore().remote.markExecutionDispatch(sessionId, runId); },
           beforeExecutionDispatch: (sessionId, runId) => { assertRemoteExecutionPermit(); if (runId) getCoworkStore().remote.markExecutionDispatch(sessionId, runId); markRemoteExecutionDispatched(); },
           prepareDeliverableSync: async (sessionId, cwd) => { await prepareRemoteFileRun?.(sessionId, cwd); },
+          waitForAccountRecovery: waitForAccountGatewayRecovery,
+          ensureGatewayStarted: async reason => {
+            await waitForAccountGatewayRecovery();
+            return getOpenClawEngineManager().startGateway(reason);
+          },
           normalizeModelRef: normalizeOpenClawModelRef,
           onChannelPromptSubmit: (event, sessionId) => {
             getTaskUsageAnalytics().begin(sessionId, {},
@@ -5846,6 +5973,8 @@ if (!gotTheLock) {
   };
   let authExchangeIntentSequence = 0;
   let activeAuthExchangeIntent: AuthExchangeIntentSnapshot | null = null;
+  const authMutationRevision = (): number => openClawAccountRecovery?.authRevision ?? 0;
+  const isCurrentAuthMutation = (revision: number): boolean => revision === authMutationRevision();
 
   /**
    * Helper: Persist auth tokens into the kv store.
@@ -5898,6 +6027,7 @@ if (!gotTheLock) {
       getStore().set(LogReporterStoreKey.AuthUser, user);
     } catch (error) {
       console.warn('[Auth] failed to save auth user for attribution:', error);
+      throw error;
     }
   };
 
@@ -5990,35 +6120,9 @@ if (!gotTheLock) {
       return false;
     }
 
-    authExchangeIntentSequence += 1;
-    activeAuthExchangeIntent = null;
-    authAccountGeneration += 1;
-    desktopCompanionManager?.resetForAccountChange();
-    revalidateArtifactPreviews();
-    const quotaGateChanged = (
-      cachedSubscriptionStatus !== AuthSubscriptionStatus.Free
-      || cachedMediaGenerationEntitled
-    );
-    cachedSubscriptionStatus = AuthSubscriptionStatus.Free;
-    cachedMediaGenerationEntitled = false;
-    clearAuthTokens();
-    clearAuthUser();
-    clearEnterpriseAccountContext(getStore());
-    clearServerModelMetadata();
-    mediaSelectionBySession.clear();
-    mediaTurnAccountScopeBySession.clear();
-    mediaReferencesBySession.clear();
-    if (requestAccountScope) {
-      clearMediaPollingStateForOwner(requestAccountScope.ownerAccountKey);
-    }
-    if (pendingMediaTasks.size === 0) {
-      stopMediaPollTimer();
-    }
-    syncOpenClawConfig({
-      reason: 'enterprise-account-context-invalidated',
-      restartGatewayIfRunning: quotaGateChanged,
-    }).catch(error => {
-      console.warn('[EnterpriseAccount] failed to sync OpenClaw after context invalidation:', error);
+    clearLocalAuthSession({
+      reason: AuthSessionChangeReason.EnterpriseMembershipRevoked,
+      notifyRenderer: false,
     });
 
     BrowserWindow.getAllWindows().forEach(win => {
@@ -6065,6 +6169,7 @@ if (!gotTheLock) {
       getStore().delete(LogReporterStoreKey.AuthUser);
     } catch (error) {
       console.warn('[Auth] failed to clear auth user for attribution:', error);
+      throw error;
     }
   };
 
@@ -6443,42 +6548,110 @@ if (!gotTheLock) {
       },
     });
     const accountFenceKey = 'remote_account_execution_fence';
-    let fenceGeneration = 0;
-    let fenceRetry: ReturnType<typeof setTimeout> | undefined;
-    const queueAccountFence = (next: RemoteOwner | null, attempt = 0): void => {
-      // Install the in-memory gate and Promise barrier before touching optional task records.
-      remoteCredentialsAllowed = false;
-      const generation = ++fenceGeneration;
-      if (fenceRetry) clearTimeout(fenceRetry);
-      let markerPersisted = false;
-      void remoteAccountTransition.run(async current => {
-        if (!markerPersisted) throw new Error('Account fence marker is not durable');
-        await getOpenClawEngineManager().stopGateway();
-        if (!current()) return;
-        fenceCronJobs(getOpenClawEngineManager().getStateDir(), getCoworkStore().remote, next);
-        if (!current() || (next === null ? getCurrentRemoteOwner() !== null : !sameOwner(next, getCurrentRemoteOwner()))) return;
-        // Persist ready only after both stop and ownership fencing are confirmed. No finally release.
-        getStore().set(accountFenceKey, { version: 1, phase: 'ready', ownerHash: payloadHash(next) });
+    const recoveryIdentity = () => `${getRemoteAccountEpoch()}:${payloadHash(getCurrentRemoteOwner())}`;
+    let adapterTransitionToken = 0;
+    let recoveryStartedAt = 0;
+    let observedRecoveryId = 0;
+    openClawAccountRecovery = new OpenClawAccountRecovery({
+      identity: recoveryIdentity,
+      canRun: () => !isQuitting && !isDataMigrationRestoreInProgress,
+      allowCredentials: () => {
+        if (getAuthTokens() && !getCurrentRemoteOwner()) throw new Error('Authenticated account context is incomplete.');
         remoteCredentialsAllowed = true;
-      }).catch(error => {
-        console.warn('[RemoteAccount] Execution remains fenced', error);
-        if (generation !== fenceGeneration || isQuitting) return;
-        const delay = Math.ceil([1000, 5000, 15000, 60000][Math.min(attempt, 3)] * (0.8 + Math.random() * 0.4));
-        try {
-          getStore().set(accountFenceKey, { version: 1, phase: 'pending', ownerHash: payloadHash(next),
-            attempts: attempt + 1, nextAttemptAt: Date.now() + delay });
-        } catch { /* The in-memory gate remains closed until the durable marker can be restored. */ }
-        fenceRetry = setTimeout(() => {
-          if (!isQuitting && generation === fenceGeneration && (next === null ? getCurrentRemoteOwner() === null : sameOwner(next, getCurrentRemoteOwner()))) queueAccountFence(next, attempt + 1);
-        }, delay);
-        fenceRetry.unref?.();
+      },
+      prepare: async context => {
+        await startAskUserServer();
+        context.assertCurrent();
+        const result = await syncOpenClawConfig({ reason: 'account-recovery:prepare', restartGatewayIfRunning: false });
+        context.assertCurrent();
+        if (!result.success || openClawConfigRecovery.rejected) {
+          throw new Error(result.error || openClawConfigRecovery.error || 'Account config preparation failed.');
+        }
+      },
+      start: async context => {
+        const retryBlocked = accountRecoveryManualRetry;
+        accountRecoveryManualRetry = false;
+        const status = await getOpenClawEngineManager().startGateway('account-recovery', { retryBlocked });
+        context.assertCurrent();
+        if (status.phase !== OpenClawEnginePhase.Running) throw new Error(status.message || 'Gateway startup did not finish.');
+      },
+      confirm: async context => {
+        if (!openClawRuntimeAdapter) throw new Error('Gateway adapter is unavailable.');
+        await openClawRuntimeAdapter.confirmAccountGatewayRecovery(adapterTransitionToken, context.isCurrent);
+        context.assertCurrent();
+        const result = await syncOpenClawConfig({ reason: 'account-recovery:config-confirm' });
+        context.assertCurrent();
+        if (!result.success || openClawConfigRecovery.pending || deferredRestartReason) {
+          throw new Error(result.error || openClawConfigRecovery.error || 'Gateway configuration has not been confirmed.');
+        }
+      },
+      complete: () => { openClawRuntimeAdapter!.finishAccountGatewayRecovery(adapterTransitionToken); },
+      changed: state => {
+        if (observedRecoveryId !== state.id) {
+          observedRecoveryId = state.id;
+          recoveryStartedAt = Date.now();
+        }
+        console.info('[AccountGatewayRecovery]', {
+          recoveryId: state.id, phase: state.phase, attempt: state.attempt,
+          authRevision: openClawAccountRecovery?.authRevision,
+          elapsedMs: Date.now() - recoveryStartedAt,
+          gatewayGeneration: getOpenClawEngineManager().getGatewayProcessGeneration(),
+          restartDemandId: openClawConfigRecovery.pendingRestartDemand?.requestId ?? null,
+        });
+        forwardOpenClawStatus(getOpenClawEngineManager().getStatus());
+      },
+      canRetry: () => !isQuitting && !isDataMigrationRestoreInProgress
+        && !getOpenClawEngineManager().isGatewayStartupBlocked()
+        && !openClawConfigRecovery.rejected && !openClawConfigRecovery.stalled,
+      retryDelayMs: () => openClawConfigRecovery.pending ? 30_000 : 0,
+    });
+    captureOpenClawAccountSnapshot = () => {
+      const identity = recoveryIdentity();
+      const revision = openClawAccountRecovery!.authRevision;
+      return () => identity === recoveryIdentity() && revision === openClawAccountRecovery!.authRevision
+        && !openClawAccountRecovery!.authMutationPending && !isQuitting && !isDataMigrationRestoreInProgress;
+    };
+    const queueAccountFence = (next: RemoteOwner | null): void => {
+      remoteCredentialsAllowed = false;
+      resetOpenClawConfigRecoveryForAccount(recoveryIdentity());
+      const status = getOpenClawEngineManager().getStatus();
+      const resume = accountGatewayStartupRequested || status.phase === OpenClawEnginePhase.Running
+        || status.phase === OpenClawEnginePhase.Starting;
+      let cleanupError: unknown;
+      try { adapterTransitionToken = openClawRuntimeAdapter!.prepareForAccountTransition(); }
+      catch (error) { cleanupError = error; }
+      let markerPersisted = false;
+      const recovery = openClawAccountRecovery!.request({
+        resume,
+        // Only isolation runs inside this serial fence. Startup/config must stay outside.
+        fence: context => remoteAccountTransition.run(async current => {
+          if (!markerPersisted) {
+            getStore().set(accountFenceKey, { version: 1, phase: 'pending', ownerHash: payloadHash(next) });
+            markerPersisted = true;
+          }
+          await getOpenClawEngineManager().stopGateway();
+          context.assertCurrent();
+          if (!current()) throw new AccountRecoveryCancelledError();
+          if (cleanupError) {
+            adapterTransitionToken = openClawRuntimeAdapter!.prepareForAccountTransition();
+            cleanupError = undefined;
+          }
+          fenceCronJobs(getOpenClawEngineManager().getStateDir(), getCoworkStore().remote, next);
+          context.assertCurrent();
+          if (!current()) throw new AccountRecoveryCancelledError();
+          getStore().set(accountFenceKey, { version: 1, phase: 'ready', ownerHash: payloadHash(next) });
+        }),
       });
       try {
         getStore().set(accountFenceKey, { version: 1, phase: 'pending', ownerHash: payloadHash(next) });
         markerPersisted = true;
       } catch (error) { console.warn('[RemoteAccount] Account fence persistence failed', error); }
+      void recovery.catch(error => {
+        if (!(error instanceof AccountRecoveryCancelledError)) console.warn('[OpenClawAccount] Recovery remains pending', error);
+      });
     };
     let previousRemoteOwner = getCurrentRemoteOwner();
+    let previousRecoveryIdentity = recoveryIdentity();
     try {
       const saved = getStore().get<{ version: number; phase: string; ownerHash: string }>(accountFenceKey);
       if (saved !== undefined && saved !== null && (saved.version !== 1 || saved.phase !== 'ready' || saved.ownerHash !== payloadHash(previousRemoteOwner))) queueAccountFence(previousRemoteOwner);
@@ -6492,7 +6665,9 @@ if (!gotTheLock) {
         }
         const previous = previousRemoteOwner;
         const changed = !(previous === null && next === null) && !sameOwner(previous, next);
-        if (changed || !remoteCredentialsAllowed) queueAccountFence(next);
+        const nextIdentity = recoveryIdentity();
+        if (changed || nextIdentity !== previousRecoveryIdentity || !remoteCredentialsAllowed) queueAccountFence(next);
+        previousRecoveryIdentity = nextIdentity;
         previousRemoteOwner = next;
         try { if (changed) revalidateArtifactPreviews(); } catch (error) { console.warn('[RemoteAccount] Preview refresh failed', error); }
         try { remoteSessionCommands?.accountChanged(previous, next); }
@@ -6882,27 +7057,33 @@ if (!gotTheLock) {
 
   let pendingEnterpriseAccountContextRefresh: {
     generation: number;
+    revision: number;
     promise: ReturnType<typeof fetchEnterpriseAccountContext>;
   } | null = null;
 
-  const refreshEnterpriseAccountContext = (): ReturnType<typeof fetchEnterpriseAccountContext> => {
+  const refreshEnterpriseAccountContext = (existingRevision?: number): ReturnType<typeof fetchEnterpriseAccountContext> => {
     const generation = authAccountGeneration;
-    const requestAccountScope = getCurrentMediaAccountScope();
-    const requestEnterpriseSession = captureEnterpriseAuthSessionSnapshot(requestAccountScope);
-    if (pendingEnterpriseAccountContextRefresh?.generation === generation) {
+    const beforeRevision = authMutationRevision();
+    if (existingRevision !== undefined && existingRevision !== beforeRevision
+      || existingRevision === undefined && openClawAccountRecovery?.authMutationPending) {
+      return Promise.resolve({ success: false, context: getPersistedEnterpriseAccountContext(getStore()), error: t('authAccountChanged') });
+    }
+    if (pendingEnterpriseAccountContextRefresh?.generation === generation
+      && pendingEnterpriseAccountContextRefresh.revision === beforeRevision) {
       return pendingEnterpriseAccountContextRefresh.promise;
     }
-
+    const ownMutation = existingRevision === undefined;
+    const revision = existingRevision ?? openClawAccountRecovery?.beginAuthMutation() ?? 0;
+    const requestAccountScope = getCurrentMediaAccountScope();
+    const requestEnterpriseSession = captureEnterpriseAuthSessionSnapshot(requestAccountScope);
+    const previousOwner = getCurrentRemoteOwner();
     const promise = fetchEnterpriseAccountContext({
       getServerBaseUrl: getServerApiBaseUrl,
       fetchWithAuth,
       store: getStore(),
-      isRequestCurrent: () => authAccountGeneration === generation && getAuthTokens() !== null,
+      isRequestCurrent: () => authAccountGeneration === generation && getAuthTokens() !== null && isCurrentAuthMutation(revision),
       onAccountModeMismatch: () => {
-        handleEnterpriseAccountContextMismatch(
-          EnterpriseApiErrorCode.AccountModeMismatch,
-          requestAccountScope,
-        );
+        handleEnterpriseAccountContextMismatch(EnterpriseApiErrorCode.AccountModeMismatch, requestAccountScope);
       },
       onMembershipRevoked: () => {
         handleEnterpriseMembershipRevocation({
@@ -6911,32 +7092,38 @@ if (!gotTheLock) {
           requestSession: requestEnterpriseSession,
         });
       },
-    }).finally(() => {
-      if (pendingEnterpriseAccountContextRefresh?.promise === promise) {
-        pendingEnterpriseAccountContextRefresh = null;
+    }).then(result => {
+      if (ownMutation && isCurrentAuthMutation(revision)) {
+        if (!sameOwner(previousOwner, getCurrentRemoteOwner())) clearServerModelMetadata();
+        // A rejected refresh preserves the old context, or the revocation handler
+        // supersedes this revision with a complete logout transaction.
+        openClawAccountRecovery?.commitAuthMutation(revision);
       }
+      return result;
+    }).catch(error => {
+      if (ownMutation) openClawAccountRecovery?.failAuthMutation(revision, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }).finally(() => {
+      if (pendingEnterpriseAccountContextRefresh?.promise === promise) pendingEnterpriseAccountContextRefresh = null;
     });
-    pendingEnterpriseAccountContextRefresh = { generation, promise };
+    pendingEnterpriseAccountContextRefresh = { generation, revision, promise };
     return promise;
   };
 
-  const syncEnterpriseAccountContextFromPayload = async (
-    payload: unknown,
-  ) => {
+  const syncEnterpriseAccountContextFromPayload = async (payload: unknown, revision: number) => {
+    if (!isCurrentAuthMutation(revision)) throw new Error(t('authAccountChanged'));
     const context = normalizeEnterpriseAccountContext(payload);
     if (context) {
       persistEnterpriseAccountContext(getStore(), context);
       console.debug(`[EnterpriseAccount] applied context from auth payload for enterprise ${context.enterpriseId} with role ${context.role}`);
       return context;
     }
-
     if (readAccountMode(payload) === EnterpriseAccountMode.Personal) {
       clearEnterpriseAccountContext(getStore());
       console.debug('[EnterpriseAccount] cleared context from personal auth payload');
       return null;
     }
-
-    const result = await refreshEnterpriseAccountContext();
+    const result = await refreshEnterpriseAccountContext(revision);
     return result.context;
   };
 
@@ -8408,33 +8595,76 @@ if (!gotTheLock) {
     cachedMediaGenerationEntitled = defaultGateState.mediaGenerationEntitled;
   };
 
+  const captureAuthMutationState = () => ({
+    tokens: getAuthTokens(), user: getAuthUser(),
+    enterpriseContext: getPersistedEnterpriseAccountContext(getStore()),
+    quotaGate: getAuthQuotaGateState(), serverModels: getAllServerModelMetadata(),
+  });
+
+  const rollbackAuthMutation = (revision: number, previous: ReturnType<typeof captureAuthMutationState>, restoreTokens = true): void => {
+    if (!isCurrentAuthMutation(revision)) return;
+    const rollbackRevision = openClawAccountRecovery?.beginAuthMutation() ?? 0;
+    try {
+      authAccountGeneration += 1;
+      desktopCompanionManager?.resetForAccountChange();
+      revalidateArtifactPreviews();
+      if (restoreTokens) {
+        if (previous.tokens) saveAuthTokens(previous.tokens.accessToken, previous.tokens.refreshToken);
+        else clearAuthTokens();
+      }
+      if (previous.user) saveAuthUser(previous.user);
+      else clearAuthUser();
+      if (previous.enterpriseContext) persistEnterpriseAccountContext(getStore(), previous.enterpriseContext);
+      else clearEnterpriseAccountContext(getStore());
+      updateServerModelMetadata(previous.serverModels);
+      cachedSubscriptionStatus = previous.quotaGate.subscriptionStatus;
+      cachedMediaGenerationEntitled = previous.quotaGate.mediaGenerationEntitled;
+      openClawAccountRecovery?.commitAuthMutation(rollbackRevision);
+      syncOpenClawConfig({ reason: 'auth-mutation-rollback', restartGatewayIfRunning: false }).catch(error => {
+        console.warn('[Auth] failed to sync OpenClaw config after auth rollback:', error);
+      });
+    } catch (error) {
+      openClawAccountRecovery?.failAuthMutation(rollbackRevision, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  };
+
   const clearLocalAuthSession = (options: {
     reason: AuthSessionChangeReason;
     notifyRenderer: boolean;
   }): void => {
-    remoteSessionCommands?.accountChanged(getCurrentRemoteOwner(), null);
-    remoteBridge?.accountChanged();
-    const previousAccountScope = getCurrentMediaAccountScope();
+    const revision = openClawAccountRecovery?.beginAuthMutation() ?? 0;
     const previousQuotaGateState = getAuthQuotaGateState();
-    authExchangeIntentSequence += 1;
-    activeAuthExchangeIntent = null;
-    authAccountGeneration += 1;
-    desktopCompanionManager?.resetForAccountChange();
-    revalidateArtifactPreviews();
-    mediaSelectionBySession.clear();
-    mediaTurnAccountScopeBySession.clear();
-    mediaReferencesBySession.clear();
-    if (previousAccountScope) {
-      clearMediaPollingStateForOwner(previousAccountScope.ownerAccountKey);
+    try {
+      try { remoteSessionCommands?.accountChanged(getCurrentRemoteOwner(), null); }
+      catch (error) { console.warn('[Auth] failed to notify remote task cleanup:', error); }
+      try { remoteBridge?.accountChanged(); }
+      catch (error) { console.warn('[Auth] failed to notify remote bridge cleanup:', error); }
+      const previousAccountScope = getCurrentMediaAccountScope();
+      authExchangeIntentSequence += 1;
+      activeAuthExchangeIntent = null;
+      authAccountGeneration += 1;
+      desktopCompanionManager?.resetForAccountChange();
+      revalidateArtifactPreviews();
+      mediaSelectionBySession.clear();
+      mediaTurnAccountScopeBySession.clear();
+      mediaReferencesBySession.clear();
+      if (previousAccountScope) {
+        clearMediaPollingStateForOwner(previousAccountScope.ownerAccountKey);
+      }
+      if (pendingMediaTasks.size === 0) {
+        stopMediaPollTimer();
+      }
+      clearAuthTokens();
+      clearAuthUser();
+      clearEnterpriseAccountContext(getStore());
+      clearServerModelMetadata();
+      resetAuthQuotaGateState();
+      openClawAccountRecovery?.commitAuthMutation(revision);
+    } catch (error) {
+      openClawAccountRecovery?.failAuthMutation(revision, error instanceof Error ? error : new Error(String(error)));
+      throw error;
     }
-    if (pendingMediaTasks.size === 0) {
-      stopMediaPollTimer();
-    }
-    clearAuthTokens();
-    clearAuthUser();
-    clearEnterpriseAccountContext(getStore());
-    clearServerModelMetadata();
-    resetAuthQuotaGateState();
 
     const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
     if (!quotaGateSyncScheduled) {
@@ -8566,11 +8796,9 @@ if (!gotTheLock) {
   };
 
   ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
-    const startingTokens = getAuthTokens();
-    const startingUser = getAuthUser();
-    const startingEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
-    const startingQuotaGateState = getAuthQuotaGateState();
-    const startingServerModels = getAllServerModelMetadata();
+    const startingState = captureAuthMutationState();
+    const startingTokens = startingState.tokens;
+    const startingQuotaGateState = startingState.quotaGate;
     const exchangeIntent: AuthExchangeIntentSnapshot = {
       intentId: ++authExchangeIntentSequence,
       accountGeneration: authAccountGeneration,
@@ -8585,6 +8813,7 @@ if (!gotTheLock) {
       getAuthTokens(),
     );
     let committedExchangeGeneration: number | null = null;
+    let mutationRevision: number | null = null;
 
     try {
       const serverBaseUrl = getServerApiBaseUrl();
@@ -8616,11 +8845,13 @@ if (!gotTheLock) {
       }
 
       const previousAccountScope = getCurrentMediaAccountScope();
+      mutationRevision = openClawAccountRecovery?.beginAuthMutation() ?? 0;
       activeAuthExchangeIntent = null;
       authAccountGeneration += 1;
+      const exchangeAccountGeneration = authAccountGeneration;
+      committedExchangeGeneration = exchangeAccountGeneration;
       revalidateArtifactPreviews();
       desktopCompanionManager?.resetForAccountChange();
-      const exchangeAccountGeneration = authAccountGeneration;
       clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
       // A login exchange can switch accounts without an explicit logout.
@@ -8629,8 +8860,7 @@ if (!gotTheLock) {
       resetAuthQuotaGateState();
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
       saveAuthUser(body.data.user);
-      committedExchangeGeneration = exchangeAccountGeneration;
-      const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
+      const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data, mutationRevision);
       const requiresEnterpriseContext = (
         readAccountMode(body.data) === EnterpriseAccountMode.Enterprise
         || body.data.quota.subscriptionStatus === AuthSubscriptionStatus.Enterprise
@@ -8641,8 +8871,9 @@ if (!gotTheLock) {
       if (
         authAccountGeneration !== exchangeAccountGeneration
         || authExchangeIntentSequence !== exchangeIntent.intentId
+        || !isCurrentAuthMutation(mutationRevision)
       ) {
-        return { success: false, error: t('authAccountChanged') };
+        throw new Error(t('authAccountChanged'));
       }
       mediaSelectionBySession.clear();
       mediaTurnAccountScopeBySession.clear();
@@ -8657,6 +8888,7 @@ if (!gotTheLock) {
         `[Auth] exchange completed; enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
       const quota = normalizeQuota(body.data.quota);
+      openClawAccountRecovery?.commitAuthMutation(mutationRevision);
       const purchaseOffer = await activateLowCreditPurchaseOffer();
       if (
         authAccountGeneration !== exchangeAccountGeneration
@@ -8679,39 +8911,14 @@ if (!gotTheLock) {
         enterpriseContext,
       };
     } catch (error) {
-      if (
-        committedExchangeGeneration !== null
-        && authAccountGeneration === committedExchangeGeneration
-        && authExchangeIntentSequence === exchangeIntent.intentId
-      ) {
-        authAccountGeneration += 1;
-        desktopCompanionManager?.resetForAccountChange();
-        revalidateArtifactPreviews();
-        if (startingTokens) {
-          saveAuthTokens(startingTokens.accessToken, startingTokens.refreshToken);
-        } else {
-          clearAuthTokens();
+      if (mutationRevision !== null && committedExchangeGeneration !== null
+        && authAccountGeneration === committedExchangeGeneration && isCurrentAuthMutation(mutationRevision)) {
+        try {
+          rollbackAuthMutation(mutationRevision, startingState);
+          console.warn('[Auth] rolled back local credentials after an incomplete exchange');
+        } catch (rollbackError) {
+          console.error('[Auth] exchange rollback failed:', rollbackError);
         }
-        if (startingUser) {
-          saveAuthUser(startingUser);
-        } else {
-          clearAuthUser();
-        }
-        if (startingEnterpriseContext) {
-          persistEnterpriseAccountContext(getStore(), startingEnterpriseContext);
-        } else {
-          clearEnterpriseAccountContext(getStore());
-        }
-        updateServerModelMetadata(startingServerModels);
-        cachedSubscriptionStatus = startingQuotaGateState.subscriptionStatus;
-        cachedMediaGenerationEntitled = startingQuotaGateState.mediaGenerationEntitled;
-        syncOpenClawConfig({
-          reason: 'auth-exchange-rollback',
-          restartGatewayIfRunning: false,
-        }).catch(syncError => {
-          console.warn('[Auth] failed to sync OpenClaw config after exchange rollback:', syncError);
-        });
-        console.warn('[Auth] rolled back local credentials after an incomplete exchange');
       }
       console.error('[Auth] exchange failed:', error);
       return {
@@ -8738,7 +8945,12 @@ if (!gotTheLock) {
       };
     };
 
+    let mutationRevision: number | null = null;
+    let startingState: ReturnType<typeof captureAuthMutationState> | null = null;
+    let committed = false;
     try {
+      if (openClawAccountRecovery?.authMutationPending) return createUnavailableResponse();
+      const requestRevision = authMutationRevision();
       const tokens = getAuthTokens();
       if (!tokens) {
         return {
@@ -8752,7 +8964,7 @@ if (!gotTheLock) {
       const serverBaseUrl = getServerApiBaseUrl();
       // Fetch user profile
       const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
-      if (authAccountGeneration !== requestAccountGeneration) {
+      if (authAccountGeneration !== requestAccountGeneration || !isCurrentAuthMutation(mutationRevision ?? requestRevision)) {
         return createUnavailableResponse();
       }
       if (!profileResp.ok) {
@@ -8768,7 +8980,7 @@ if (!gotTheLock) {
         code: number;
         data: Record<string, unknown>;
       };
-      if (!isCurrentAuthStateSnapshot(profileResponseAuthState)) {
+      if (!isCurrentAuthStateSnapshot(profileResponseAuthState) || !isCurrentAuthMutation(requestRevision)) {
         return createUnavailableResponse();
       }
       if (handleEnterpriseAccountContextMismatch(profileBody.code, requestAccountScope)) {
@@ -8782,10 +8994,14 @@ if (!gotTheLock) {
           cachedUser: getAuthUser(),
         };
       }
+      if (openClawAccountRecovery?.authMutationPending) return createUnavailableResponse();
+      startingState = captureAuthMutationState();
+      const previousOwner = getCurrentRemoteOwner();
+      mutationRevision = openClawAccountRecovery?.beginAuthMutation() ?? 0;
       saveAuthUser(profileBody.data);
       // Fetch quota separately
       const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
-      if (authAccountGeneration !== requestAccountGeneration) {
+      if (authAccountGeneration !== requestAccountGeneration || !isCurrentAuthMutation(mutationRevision ?? requestRevision)) {
         return createUnavailableResponse();
       }
       let quota = null;
@@ -8795,7 +9011,7 @@ if (!gotTheLock) {
           code: number;
           data: Record<string, unknown>;
         };
-        if (!isCurrentAuthStateSnapshot(quotaResponseAuthState)) {
+        if (!isCurrentAuthStateSnapshot(quotaResponseAuthState) || !isCurrentAuthMutation(mutationRevision)) {
           return createUnavailableResponse();
         }
         if (handleEnterpriseAccountContextMismatch(quotaBody.code, requestAccountScope)) {
@@ -8807,11 +9023,11 @@ if (!gotTheLock) {
           syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
         }
       }
-      if (authAccountGeneration !== requestAccountGeneration) {
+      if (authAccountGeneration !== requestAccountGeneration || !isCurrentAuthMutation(mutationRevision ?? requestRevision)) {
         return createUnavailableResponse();
       }
-      const enterpriseContext = await syncEnterpriseAccountContextFromPayload(profileBody.data);
-      if (authAccountGeneration !== requestAccountGeneration) {
+      const enterpriseContext = await syncEnterpriseAccountContextFromPayload(profileBody.data, mutationRevision);
+      if (authAccountGeneration !== requestAccountGeneration || !isCurrentAuthMutation(mutationRevision ?? requestRevision)) {
         return createUnavailableResponse();
       }
       const requiresEnterpriseContext = (
@@ -8819,15 +9035,17 @@ if (!gotTheLock) {
         || quota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
       );
       if (requiresEnterpriseContext && !enterpriseContext) {
-        console.warn('[Auth] enterprise account context was unavailable during profile refresh');
-        return createUnavailableResponse();
+        throw new Error('Enterprise account context was unavailable during profile refresh');
       }
       console.log(
         `[Auth] profile refresh completed; quota=${quota ? 'present' : 'absent'}; `
         + `enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
+      if (!sameOwner(previousOwner, getCurrentRemoteOwner())) clearServerModelMetadata();
+      openClawAccountRecovery?.commitAuthMutation(mutationRevision);
+      committed = true;
       const purchaseOffer = await activateLowCreditPurchaseOffer();
-      if (authAccountGeneration !== requestAccountGeneration) {
+      if (authAccountGeneration !== requestAccountGeneration || !isCurrentAuthMutation(mutationRevision ?? requestRevision)) {
         return createUnavailableResponse();
       }
       return {
@@ -8851,31 +9069,38 @@ if (!gotTheLock) {
           ? getAuthUser()
           : null,
       };
+    } finally {
+      if (!committed && mutationRevision !== null && startingState && isCurrentAuthMutation(mutationRevision)) {
+        try { rollbackAuthMutation(mutationRevision, startingState, false); }
+        catch (rollbackError) { console.error('[Auth] profile refresh rollback failed:', rollbackError); }
+      }
     }
   });
 
   ipcMain.handle(AuthIpcChannel.GetQuota, async () => {
     try {
+      if (openClawAccountRecovery?.authMutationPending) return { success: false };
+      const requestRevision = authMutationRevision();
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
       const requestAccountGeneration = authAccountGeneration;
       const requestAccountScope = getCurrentMediaAccountScope();
       const serverBaseUrl = getServerApiBaseUrl();
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
-      if (authAccountGeneration !== requestAccountGeneration) return { success: false };
+      if (authAccountGeneration !== requestAccountGeneration || !isCurrentAuthMutation(requestRevision)) return { success: false };
       if (!resp.ok) return { success: false };
       const responseAuthState = captureAuthStateSnapshot();
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> };
-      if (!isCurrentAuthStateSnapshot(responseAuthState)) return { success: false };
+      if (!isCurrentAuthStateSnapshot(responseAuthState) || !isCurrentAuthMutation(requestRevision)) return { success: false };
       if (handleEnterpriseAccountContextMismatch(body.code, requestAccountScope)) {
         return { success: false };
       }
       if (body.code !== 0 || !body.data) return { success: false };
       const previousQuotaGateState = getAuthQuotaGateState();
       const quota = normalizeQuota(body.data);
-      syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
       const enterpriseContextResult = await refreshEnterpriseAccountContext();
       if (authAccountGeneration !== requestAccountGeneration) return { success: false };
+      syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
       const purchaseOffer = await activateLowCreditPurchaseOffer();
       if (authAccountGeneration !== requestAccountGeneration) return { success: false };
       return {
@@ -10046,7 +10271,7 @@ if (!gotTheLock) {
       const manager = getOpenClawEngineManager();
       return {
         success: true,
-        status: manager.getStatus(),
+        status: projectOpenClawStatus(manager.getStatus()),
       };
     } catch (error) {
       return {
@@ -10098,33 +10323,39 @@ if (!gotTheLock) {
 
   let restartGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   ipcMain.handle(OpenClawEngineIpc.RestartGateway, async () => {
-    console.log(
-      `${gwDiagTs()} IPC ${OpenClawEngineIpc.RestartGateway}: manual restart requested from renderer`,
-    );
-    if (restartGatewayPromise) {
-      console.log(
-        `${gwDiagTs()} IPC ${OpenClawEngineIpc.RestartGateway}: restart already in progress, joining existing promise`,
-      );
-      const status = await restartGatewayPromise;
-      return { success: status.phase === 'running' || status.phase === 'ready', status };
-    }
     try {
-      const manager = getOpenClawEngineManager();
-      restartGatewayPromise = manager.restartGateway('ipc-manual', { retryBlocked: true });
+      restartGatewayPromise ??= (async () => {
+        const manager = getOpenClawEngineManager();
+        accountGatewayStartupRequested = true;
+        await openClawAccountRecovery?.waitForAuthState();
+        openClawAccountRecovery?.requestRunning();
+        if (openClawAccountRecovery?.active) {
+          accountRecoveryManualRetry = true;
+          openClawAccountRecovery.requestRunning();
+          await openClawAccountRecovery.retry();
+        } else {
+          await remoteAccountTransition.wait();
+          const isCurrent = captureOpenClawAccountSnapshot();
+          await manager.restartGateway('ipc-manual', { retryBlocked: true });
+          if (!isCurrent()) throw new AccountRecoveryCancelledError();
+          await syncOpenClawConfig({ reason: 'manual-restart:config-confirm' });
+          await openClawRuntimeAdapter?.connectGatewayIfNeeded();
+          if (!isCurrent()) throw new AccountRecoveryCancelledError();
+        }
+        return projectOpenClawStatus(manager.getStatus());
+      })();
       const status = await restartGatewayPromise;
-      return {
-        success: status.phase === 'running' || status.phase === 'ready',
-        status,
-      };
+      return { success: status.phase === OpenClawEnginePhase.Running && !status.accountRecoveryPending
+        && !openClawConfigRecovery.pending, status };
     } catch (error) {
-      const manager = getOpenClawEngineManager();
       return {
         success: false,
-        status: manager.getStatus(),
+        status: projectOpenClawStatus(getOpenClawEngineManager().getStatus()),
         error: error instanceof Error ? error.message : 'Failed to restart OpenClaw gateway',
       };
     } finally {
       restartGatewayPromise = null;
+      accountRecoveryManualRetry = false;
     }
   });
 
@@ -10247,6 +10478,7 @@ if (!gotTheLock) {
       const archivePath = openResult.filePaths[0];
       await inspectMigrationArchive(archivePath);
       isDataMigrationRestoreInProgress = true;
+      openClawAccountRecovery?.cancel();
       isCleanupInProgress = true;
       isQuitting = true;
       await releaseRendererWindowsForDataMigrationRestore();
@@ -16218,6 +16450,7 @@ if (!gotTheLock) {
   const runAppCleanupAndExit = (trigger: string) => {
     isCleanupInProgress = true;
     isQuitting = true;
+    openClawAccountRecovery?.cancel();
     hideAppWindowsForQuit();
 
     const watchdog = setTimeout(() => {

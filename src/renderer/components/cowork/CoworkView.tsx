@@ -818,6 +818,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     );
   }
 
+  const isAccountRecoveryPending = openClawStatus?.accountRecoveryPending === true;
   const shouldShowEngineStatus = Boolean(openClawStatus && openClawStatus.phase !== 'running');
   const isEngineError = openClawStatus?.phase === 'error';
   const isEngineReady = isOpenClawReadyForSession(openClawStatus);
@@ -875,7 +876,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   // Non-blocking engine states (ready/not_installed/installing) float below
   // the title bar as a lightweight notice; starting and blocking startup
   // failures render as global overlays in App.tsx.
-  const engineStatusBanner = shouldShowEngineStatus && !isEngineError && openClawStatus && openClawStatus.phase !== 'starting' ? (
+  const engineStatusBanner = shouldShowEngineStatus && !isAccountRecoveryPending && !isEngineError && openClawStatus && openClawStatus.phase !== 'starting' ? (
     <div className="pointer-events-none absolute inset-x-0 top-14 z-30 flex justify-center px-4">
       <div className="pointer-events-auto w-full max-w-xl rounded-2xl border border-amber-200 bg-surface p-4 shadow-lg animate-fade-in-down dark:border-amber-900/60">
         <div className="flex items-start gap-3">
@@ -987,8 +988,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                   onSubmit={handleStartSession}
                   onStop={handleStopSession}
                   isStreaming={isStreaming}
-                  disabled={!isEngineReady}
-                  submitDisabled={Boolean(blockingHomeQuotaReason)}
+                  disabled={!isEngineReady && !isAccountRecoveryPending}
+                  submitDisabled={!isEngineReady || Boolean(blockingHomeQuotaReason)}
                   placeholder={i18nService.t('coworkPlaceholder')}
                   size="large"
                   workingDirectory={currentAgentWorkingDirectory}

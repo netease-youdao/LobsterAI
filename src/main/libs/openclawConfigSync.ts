@@ -82,6 +82,7 @@ import {
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
+import { buildModelCompatRestartFingerprint } from './openclawConfigRestartInputs';
 import { createOpenClawConfigTarget, type OpenClawConfigTarget, readOpenClawConfigRaw } from './openclawConfigTarget';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
@@ -165,38 +166,6 @@ const asConfigRecord = (value: unknown): Record<string, unknown> | undefined => 
     ? value as Record<string, unknown>
     : undefined
 );
-
-const buildModelCompatRestartFingerprint = (config: unknown): string => {
-  const root = asConfigRecord(config);
-  const models = asConfigRecord(root?.models);
-  const providers = asConfigRecord(models?.providers);
-  const ownerProviderIds = Object.entries(providers ?? {})
-    .filter(([, value]) => (
-      asConfigRecord(value)?.api === OPENCLAW_MODEL_COMPAT_PLUGIN_ID
-    ))
-    .map(([providerId]) => providerId)
-    .sort();
-
-  const plugins = asConfigRecord(root?.plugins);
-  const entries = asConfigRecord(plugins?.entries);
-  const compatEntry = asConfigRecord(entries?.[OPENCLAW_MODEL_COMPAT_PLUGIN_ID]);
-  const compatConfig = asConfigRecord(compatEntry?.config);
-  const modelProfiles = asConfigRecord(compatConfig?.modelProfiles);
-  const sortedModelProfiles = Object.fromEntries(
-    Object.entries(modelProfiles ?? {}).sort(([left], [right]) => left.localeCompare(right)),
-  );
-  const thinkingProfiles = asConfigRecord(compatConfig?.thinkingProfiles);
-  const sortedThinkingProfiles = Object.fromEntries(
-    Object.entries(thinkingProfiles ?? {}).sort(([left], [right]) => left.localeCompare(right)),
-  );
-
-  return JSON.stringify({
-    ownerProviderIds,
-    pluginEnabled: compatEntry?.enabled === true,
-    modelProfiles: sortedModelProfiles,
-    thinkingProfiles: sortedThinkingProfiles,
-  });
-};
 
 export const modelCompatConfigChangeRequiresRestart = (
   previousConfig: unknown,

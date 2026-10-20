@@ -405,6 +405,7 @@ interface CoworkApiConfig {
 type OpenClawEnginePhase = SharedOpenClawEnginePhase;
 
 interface OpenClawEngineStatus {
+  accountRecoveryPending?: boolean;
   phase: OpenClawEnginePhase;
   version: string | null;
   progressPercent?: number;

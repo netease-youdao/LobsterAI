@@ -128,7 +128,9 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
     }
   };
 
-  if (suspended || !status || (status.phase !== OpenClawEnginePhase.Error && !isRepairingGateway && !isConfigStalled)) {
+  if (suspended || !status
+    || (status.accountRecoveryPending && status.phase !== OpenClawEnginePhase.Error)
+    || (status.phase !== OpenClawEnginePhase.Error && !isRepairingGateway && !isConfigStalled)) {
     return null;
   }
 

@@ -41,6 +41,17 @@ describe('EngineFailureOverlay', () => {
     expect(renderToStaticMarkup(React.createElement(EngineFailureOverlay))).toBe('');
   });
 
+  test('reuses the gateway failure dialog and retry actions for account recovery failures', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Error, version: null, canRetry: true,
+      accountRecoveryPending: true, message: 'Account recovery failed: connection unavailable',
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain(snapshot.status.message);
+    expect(html).toContain('coworkOpenClawRestartGateway');
+  });
+
   test('guides reinstall instead of config repair when runtime workers are missing', () => {
     snapshot.status = {
       phase: OpenClawEnginePhase.Error,
