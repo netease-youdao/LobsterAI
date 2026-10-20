@@ -685,6 +685,7 @@ import { RemoteModelCatalog } from './remote/remoteModelCatalog';
 import { remoteNetworkBinaryDownload } from './remote/remoteNetworkProtocol';
 import { remoteNetworkTransport } from './remote/remoteNetworkTransport';
 import { showQuarantineRecovery, stopOwnedSessionWithRecovery } from './remote/remoteQuarantineRecovery';
+import { RemoteRegistrationIdentityStore } from './remote/remoteRegistrationIdentity';
 import { RemoteSecurityCoordinator } from './remote/remoteSecurityCoordinator';
 import { RemoteSecurityJournal, RemoteSecurityJournalWorkerIo } from './remote/remoteSecurityJournal';
 import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
@@ -6309,6 +6310,7 @@ if (!gotTheLock) {
         } catch { return { modelRef: null, modelVersion: null, thinkingLevel: null }; }
       },
       agentOwnership: getCoworkStore().agentOwnership,
+      registrationIdentities: new RemoteRegistrationIdentityStore(app.getPath('appData'), app.getPath('userData'), safeStorage, identity),
       store: getCoworkStore().remote, identity, getOwner: getCurrentRemoteOwner, getApiBaseUrl: getServerApiBaseUrl,
       metadata: { name: os.hostname(), hostName: os.hostname(), instanceLabel: path.basename(app.getPath('userData')),
         platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', appVersion: app.getVersion() },

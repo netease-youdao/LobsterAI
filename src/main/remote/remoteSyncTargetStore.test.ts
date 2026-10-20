@@ -551,3 +551,24 @@ test('an oversized associated record cannot be mistaken for an absent record', (
   expect(admissions.isPristine(f.store.sync('good')!)).toBe(true);
   expect(f.db.prepare("SELECT value FROM remote_state WHERE key='inbox:large'").get()).toEqual({ value: raw });
 });
+
+
+test('explicit registration replacement archives old transport state without inheriting commands or changing local tasks', () => {
+  const f = fixture(); f.add(); const old = f.activate(); f.bind('s', old.targetId);
+  f.store.put(`inbox:${old.targetId}:command`, { targetId: old.targetId, owner, localSessionId: 's',
+    remoteSessionId: f.store.sync('s')!.session_id, state: 'prepared', command: { commandId: 'command' } });
+  const original = f.store.sync('s')!;
+  const local = f.db.prepare('SELECT * FROM cowork_sessions').all();
+  expect(() => f.targets.activate({ ...input(), deviceId: 'replacement' })).toThrow('device or owner changed');
+  const request = { ...input(), deviceId: 'replacement', registrationScope: 'new-installation' };
+  const next = f.targets.activate(request);
+  expect(next.targetId).not.toBe(old.targetId);
+  expect(f.store.sync('s')!.device_id).toBe('replacement');
+  expect(f.store.sync('s')!.session_id).not.toBe(original.session_id);
+  expect(f.store.sync('s')!.ack_seq).toBe(0);
+  expect(f.db.prepare('SELECT * FROM cowork_sessions').all()).toEqual(local);
+  expect(f.store.get<any>(`inbox:${old.targetId}:command`).targetId).toBe(old.targetId);
+  expect(f.store.get(`inbox:${next.targetId}:command`)).toBeNull();
+  expect(f.db.prepare("SELECT row_json FROM remote_sync_target_archives WHERE target_id=? AND table_name='remote_sync'").get(old.targetId)).toBeTruthy();
+  expect(new RemoteSyncTargetStore(f.store).activate(request).targetId).toBe(next.targetId);
+});

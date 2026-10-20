@@ -20,7 +20,9 @@ export interface StoredRemoteSyncTarget {
 }
 export interface RemoteSyncTargetActivation {
   owner: RemoteOwner; deviceId: string; syncTarget: RemoteSyncTargetIdentity; targetId?: string;
-  /** Only an authenticated, independently identified data space authorizes a fresh working set. */
+  /** Set only by explicit registration recovery; separates the new device from retained execution state. */
+  registrationScope?: string;
+  /** An independently identified data space authorizes a fresh working set. */
   bootstrap?: boolean; legacyStates?: RetentionState[]; allowPartialLegacy?: boolean;
 }
 export interface RemoteSyncTargetActivationResult extends StoredRemoteSyncTarget {
@@ -37,8 +39,8 @@ const accountKeys = ['settings', 'controlQueue', 'namePending', 'agentCatalogFai
 const ownSessions = "SELECT session_id FROM cowork_session_ownership WHERE owner_user_id=? AND owner_scope_key=? AND ownership_status='confirmed'";
 const hasArchives = (store: Store): boolean => !!store.db.prepare("SELECT 1 FROM sqlite_master WHERE name='remote_sync_target_archives'").get();
 
-export function remoteSyncTargetId(target: RemoteSyncTargetIdentity, owner: RemoteOwner): string {
-  return payloadHash([target.dataSpaceId, target.dataGeneration, owner.userId, owner.scopeKey]);
+export function remoteSyncTargetId(target: RemoteSyncTargetIdentity, owner: RemoteOwner, registrationScope?: string): string {
+  return payloadHash([target.dataSpaceId, target.dataGeneration, owner.userId, owner.scopeKey, ...(registrationScope ? [registrationScope] : [])]);
 }
 
 export function activeRemoteSyncTargetContext(store: Store, owner: RemoteOwner): { targetId: string; epoch: number } | null {
@@ -114,7 +116,7 @@ export class RemoteSyncTargetStore {
     return environment === targetId || typeof environment === 'string'
       && !!this.store.db.prepare('SELECT 1 FROM remote_sync_target_aliases WHERE target_id=? AND environment=?').get(targetId, environment);
   }
-  activateLegacy(input: { owner: RemoteOwner; deviceId: string; legacyStates?: RetentionState[]; allowPartialLegacy?: boolean }): RemoteSyncTargetActivationResult {
+  activateLegacy(input: { owner: RemoteOwner; deviceId: string; registrationScope?: string; legacyStates?: RetentionState[]; allowPartialLegacy?: boolean }): RemoteSyncTargetActivationResult {
     const active = this.active(input.owner);
     if (active?.syncTarget) throw new RemoteSyncStateError('An identified synchronization target cannot be downgraded');
     const targetId = `legacy:${payloadHash([input.owner.userId, input.owner.scopeKey, input.deviceId])}`;
@@ -123,7 +125,7 @@ export class RemoteSyncTargetStore {
   activate(input: RemoteSyncTargetActivation): RemoteSyncTargetActivationResult {
     const target = parseRemoteSyncTarget(input.syncTarget);
     if (!target) throw new RemoteSyncStateError('Invalid synchronization target identity');
-    const targetId = remoteSyncTargetId(target, input.owner);
+    const targetId = remoteSyncTargetId(target, input.owner, input.registrationScope);
     if (input.targetId && input.targetId !== targetId) throw new RemoteSyncStateError('Synchronization target identity mismatch');
     return this.activateInternal({ ...input, targetId, syncTarget: target });
   }
@@ -356,8 +358,8 @@ export class RemoteSyncTargetStore {
     return this.admissions.ownerBlocked(owner) || this.active(owner)?.targetId !== targetId || this.admissions.controlBlocked(targetId);
   }
   /** One resume step; the owner gate forbids remote writers until the final pointer commit. */
-  resumeAdmission(input: { owner: RemoteOwner; deviceId: string; syncTarget: RemoteSyncTargetIdentity | null }): RemoteSyncTargetActivationResult | null {
-    const targetId = input.syncTarget ? remoteSyncTargetId(input.syncTarget, input.owner) : `legacy:${payloadHash([input.owner.userId, input.owner.scopeKey, input.deviceId])}`;
+  resumeAdmission(input: { owner: RemoteOwner; deviceId: string; syncTarget: RemoteSyncTargetIdentity | null; registrationScope?: string }): RemoteSyncTargetActivationResult | null {
+    const targetId = input.syncTarget ? remoteSyncTargetId(input.syncTarget, input.owner, input.registrationScope) : `legacy:${payloadHash([input.owner.userId, input.owner.scopeKey, input.deviceId])}`;
     const previous = this.active(input.owner);
     if (previous?.syncTarget && previous.targetId !== targetId) throw new RemoteSyncStateError('Incremental admission cannot replace an identified target');
     this.register({ ...input, targetId });
@@ -458,7 +460,7 @@ export class RemoteSyncTargetStore {
     return { owner: { ...input.owner }, deviceId: input.deviceId, targetId: input.targetId, syncTarget: input.syncTarget, epoch,
       kind: RemoteSyncTargetActivationKind.Claimed };
   }
-  private activateInternal(input: { owner: RemoteOwner; deviceId: string; targetId: string; syncTarget: RemoteSyncTargetIdentity | null; bootstrap?: boolean; legacyStates?: RetentionState[]; allowPartialLegacy?: boolean }): RemoteSyncTargetActivationResult {
+  private activateInternal(input: { owner: RemoteOwner; deviceId: string; targetId: string; syncTarget: RemoteSyncTargetIdentity | null; registrationScope?: string; bootstrap?: boolean; legacyStates?: RetentionState[]; allowPartialLegacy?: boolean }): RemoteSyncTargetActivationResult {
     if (!input.deviceId || !input.owner.userId || !input.owner.scopeKey) throw new RemoteSyncStateError('Synchronization target requires an authenticated device and owner');
     const job = this.admissions.job(input.targetId);
     if (job && job.phase !== AdmissionJobPhase.Complete) throw new RemoteSyncAdmissionBudgetError(input.targetId);
@@ -476,9 +478,10 @@ export class RemoteSyncTargetStore {
         AND json_extract(sync_target_json,'$.dataSpaceId')=? AND json_extract(sync_target_json,'$.dataGeneration')<>?`).get(
         input.owner.userId, input.owner.scopeKey, input.syncTarget.dataSpaceId, input.syncTarget.dataGeneration);
       if (changedGeneration) throw new RemoteSyncStateError('Synchronization data generation requires recovery');
-      if (!known && !active?.syncTarget && input.allowPartialLegacy) return this.activatePartial(input, active, rows, checkBudget!);
-      const claim = !known && !active?.syncTarget && this.canClaim(rows, input.deviceId, input.legacyStates || []);
-      if (!claim && !known && (!input.bootstrap || !input.syncTarget || !active?.syncTarget)) throw new RemoteSyncStateError('Synchronization history requires verified state before binding');
+      const replacingRegistration = Boolean(input.registrationScope && active && active.deviceId !== input.deviceId);
+      if (!replacingRegistration && !known && !active?.syncTarget && input.allowPartialLegacy) return this.activatePartial(input, active, rows, checkBudget!);
+      const claim = !replacingRegistration && !known && !active?.syncTarget && this.canClaim(rows, input.deviceId, input.legacyStates || []);
+      if (!replacingRegistration && !claim && !known && (!input.bootstrap || !input.syncTarget || !active?.syncTarget)) throw new RemoteSyncStateError('Synchronization history requires verified state before binding');
       if (claim) return this.activatePartial(input, active, rows, checkBudget!);
       this.register(input);
       let kind: RemoteSyncTargetActivationResult['kind'];

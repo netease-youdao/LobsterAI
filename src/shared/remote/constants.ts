@@ -7,6 +7,7 @@ export const RemoteIpc = {
   Connections: 'remote:connections', RemoveConnection: 'remote:connection:remove', ResumeConnection: 'remote:connection:resume', ConnectionOperation: 'remote:connection:operation',
 } as const;
 export const RemoteSettingsError = { AccountChanged: 'remoteAccountChanged' } as const;
+export const REMOTE_DEVICE_RETIRED_CODE = 47023;
 export const REMOTE_PROTOCOL_VERSION = 1;
 export const REMOTE_TEXT_BYTES = 16 * 1024;
 export const REMOTE_MESSAGE_BYTES = 512 * 1024;
@@ -76,7 +77,7 @@ export interface RemoteSettingsState {
   owner: RemoteOwner | null; workspaces: RemoteWorkspace[]; error?: string;
   accessRequests: Array<{ requestId: string; mobileDevice: { deviceId: string; name: string; platform: string }; permissions: string[]; expiresAt?: string }>;
 }
-export interface RemoteConfigureRequest { expectedAccountEpoch?: string; keepAwakeEnabled?: boolean; retry?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
+export interface RemoteConfigureRequest { expectedAccountEpoch?: string; reregister?: boolean; keepAwakeEnabled?: boolean; retry?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
 export interface RemoteSettingsApi {
   telemetry?(input: RemoteTelemetryUiInput): void;
   onChanged(listener: (state: RemoteSettingsState) => void): () => void;

@@ -34,7 +34,7 @@ function fixture() {
 
 describe('remote settings account preconditions', () => {
   test.each<RemoteConfigureRequest>([
-    { enabled: true }, { enabled: false }, { name: 'New name' }, { retry: true },
+    { reregister: true }, { enabled: true }, { enabled: false }, { name: 'New name' }, { retry: true },
     { keepAwakeEnabled: true }, { keepAwakeEnabled: false }, { addWorkspace: true },
     { removeWorkspaceId: 'workspace-1' }, { retrySessionId: 'task-1' },
   ])('rejects stale requests before any settings or connection effects: %j', async changes => {
@@ -133,4 +133,13 @@ describe('remote settings account preconditions', () => {
     await expect(configureRemoteSettings({ expectedAccountEpoch: f.epoch(), retry: true }, f.deps))
       .rejects.toThrow(RemoteSettingsError.AccountChanged);
   });
+});
+
+
+test('registration recovery requires a current explicit account epoch and forwards a separate action', async () => {
+  const f = fixture();
+  await expect(configureRemoteSettings({ reregister: true }, f.deps)).rejects.toThrow('Invalid registration recovery request');
+  expect(f.configureRemote).not.toHaveBeenCalled();
+  await configureRemoteSettings({ reregister: true, expectedAccountEpoch: f.epoch() }, f.deps);
+  expect(f.configureRemote).toHaveBeenCalledWith(expect.objectContaining({ reregister: true, retry: undefined }));
 });
