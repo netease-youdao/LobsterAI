@@ -7,6 +7,7 @@ vi.mock('electron', () => ({ net: { fetch: vi.fn() } }));
 vi.mock('../libs/claudeSettings', async (importOriginal) => ({
   ...await importOriginal<typeof import('../libs/claudeSettings')>(),
   resolveAllEnabledProviderConfigs: vi.fn(() => []),
+  listProviderSourceEntries: vi.fn(() => []),
 }));
 vi.mock('../libs/openclawConfigSync', () => ({
   buildProviderSelection: ({ providerName, modelId }: { providerName: string; modelId: string }) => ({ primaryModel: `${providerName}/${modelId}` }),
@@ -16,7 +17,7 @@ import { OpenClawProviderId } from '../../shared/providers/constants';
 import { LobsterAIRequestCapability } from '../../shared/providers/lobsterAIRequestOptions';
 import { RemoteInputMode, RemoteInputReason, RemoteModelUnavailableReason, type RemotePreparationClaim } from '../../shared/remote/input';
 import type { CoworkStore } from '../coworkStore';
-import { clearServerModelMetadata, resolveAllEnabledProviderConfigs, updateServerModelMetadata } from '../libs/claudeSettings';
+import { clearServerModelMetadata, listProviderSourceEntries, resolveAllEnabledProviderConfigs, updateServerModelMetadata } from '../libs/claudeSettings';
 import { InputPreparationService } from './inputPreparationService';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { listRemoteInputModels } from './remoteInputModels';
@@ -38,9 +39,91 @@ function catalogFixture() {
 beforeEach(() => {
   clearServerModelMetadata();
   vi.mocked(resolveAllEnabledProviderConfigs).mockReturnValue([]);
+  vi.mocked(listProviderSourceEntries).mockReturnValue([]);
 });
 
 describe('remote input model availability', () => {
+  it('publishes custom provider display names and renames without changing the runtime identity', async () => {
+    const providerName = 'custom_0';
+    vi.mocked(resolveAllEnabledProviderConfigs).mockReturnValue([{
+      providerName, apiKey: 'private-key', baseURL: 'https://provider.private.example', apiType: 'openai', codingPlanEnabled: false,
+      models: [{ id: 'chat', name: 'DeepSeek Flash' }],
+    }]);
+    const { catalog } = catalogFixture();
+    const legacyItems = catalog.refresh(owner, 'pc');
+    expect(legacyItems[0].providerLabel).toBe(providerName);
+    let savedItems = legacyItems;
+    let version = '1';
+    const api = vi.fn(async (_path: string, method?: string, body?: { items: typeof legacyItems }) => {
+      if (method === 'POST') {
+        savedItems = body!.items;
+        version = String(Number(version) + 1);
+      }
+      return { catalogVersion: version, items: savedItems };
+    });
+    await catalog.publish(owner, 'pc', '1', api, () => true);
+
+    for (const [index, displayName] of [' 50刀 ', '工作代理'].entries()) {
+      vi.mocked(listProviderSourceEntries).mockReturnValue([{ providerName, codingPlanEnabled: false, displayName }]);
+      await catalog.publish(owner, 'pc', '1', api, () => true);
+      const item = savedItems[0];
+      expect(item).toMatchObject({ modelRef: legacyItems[0].modelRef, version: String(index + 2),
+        providerLabel: displayName.trim(), displayName: 'DeepSeek Flash' });
+      expect(catalog.resolve(owner, 'pc', item.modelRef, item.version).local).toMatchObject({
+        identity: JSON.stringify([providerName, 'chat']), runtimeRef: `${providerName}/chat`,
+      });
+      expect(JSON.stringify(savedItems)).not.toMatch(/private-key|private\.example|apiKey|baseURL|runtimeRef/u);
+    }
+    expect(api.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(2);
+  });
+
+  it.each([undefined, '', '   '])('keeps the legacy provider label when the display name is %j', (displayName) => {
+    vi.mocked(resolveAllEnabledProviderConfigs).mockReturnValue([{
+      providerName: 'custom_0', apiKey: 'private-key', baseURL: 'https://provider.private.example', apiType: 'openai', codingPlanEnabled: false,
+      models: [{ id: 'chat', name: 'Chat' }],
+    }]);
+    vi.mocked(listProviderSourceEntries).mockReturnValue([{ providerName: 'custom_0', codingPlanEnabled: false, displayName }]);
+    const { catalog } = catalogFixture();
+    expect(catalog.refresh(owner, 'pc')[0].providerLabel).toBe('custom_0');
+  });
+
+  it('applies public label sanitization to custom provider names', () => {
+    vi.mocked(resolveAllEnabledProviderConfigs).mockReturnValue([{
+      providerName: 'custom_0', apiKey: 'private-key', baseURL: 'https://provider.private.example', apiType: 'openai', codingPlanEnabled: false,
+      models: [{ id: 'chat', name: 'Chat' }],
+    }]);
+    vi.mocked(listProviderSourceEntries).mockReturnValue([{
+      providerName: 'custom_0', codingPlanEnabled: false, displayName: 'https://private.example/secret',
+    }]);
+    const { catalog } = catalogFixture();
+    const items = catalog.refresh(owner, 'pc');
+    expect(items[0].providerLabel).toBe('custom');
+    expect(JSON.stringify(items)).not.toContain('private.example');
+  });
+
+  it('preserves server catalog order and configured custom model order within each source', () => {
+    const serverModels = [
+      { modelId: 'balanced', modelName: 'Fast' },
+      { modelId: 'ultimate', modelName: 'Flagship' },
+      { modelId: 'z-chat', modelName: 'Z chat' },
+      { modelId: 'a-chat', modelName: 'A chat' },
+    ];
+    updateServerModelMetadata(serverModels);
+    vi.mocked(resolveAllEnabledProviderConfigs).mockReturnValue(['custom-z', 'custom-a'].map(providerName => ({
+      providerName, apiKey: 'private-key', baseURL: 'https://provider.private.example', apiType: 'openai', codingPlanEnabled: false,
+      models: [{ id: 'z', name: `${providerName} Z` }, { id: 'a', name: `${providerName} A` }],
+    })));
+    const models = listRemoteInputModels(server);
+    expect(models.filter(model => model.source === 'subscription').map(model => model.displayName))
+      .toEqual(serverModels.map(model => model.modelName));
+    expect(models.filter(model => model.source === 'custom').map(model => model.displayName))
+      .toEqual(['custom-z Z', 'custom-z A', 'custom-a Z', 'custom-a A']);
+
+    // An order-only refresh updates the cache even though runtime metadata is unchanged.
+    expect(updateServerModelMetadata([...serverModels].reverse())).toBe(false);
+    expect(listRemoteInputModels(server).filter(model => model.source === 'subscription').map(model => model.displayName))
+      .toEqual([...serverModels].reverse().map(model => model.modelName));
+  });
   it.each([undefined, false, true])('matches the ordinary desktop gate when tool calling is %s', (supportsToolCalling) => {
     updateServerModelMetadata([{ ...ordinary, supportsToolCalling }]);
     const { catalog } = catalogFixture();

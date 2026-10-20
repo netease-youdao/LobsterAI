@@ -400,6 +400,32 @@ describe('delivered files require live preparation and current successful-run ev
 });
 
 describe('MEDIA explicitly delivers existing files without a producer tool', () => {
+  test('seals an unchanged DOCX explicitly resent by inline MEDIA without a producer tool', async () => {
+    const f = fixture(), filePath = path.join(f.workspace, '工作简报.docx');
+    const rules = structuredClone(policy);
+    rules.types.push({ category: 'document', extensions: ['docx'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true });
+    f.write('existing Word document', filePath);
+    await f.prepare();
+    f.finish({ withoutTools: true, assistantText: `文件在下面，点开就能下载。 MEDIA:${filePath}` });
+    await f.collect(rules);
+    expect(f.recordArtifact).toHaveBeenCalledOnce();
+    expect(f.recordArtifact.mock.calls[0][0]).toMatchObject({ filePath, detectedType: 'document', relationKind: LibraryRelationKind.Referenced });
+    expect(f.accept).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(f.accept.mock.calls[0][4].path, 'utf8')).toBe('existing Word document');
+    expect(f.events).toEqual(['record', 'accept']);
+  });
+
+  test.each(['示例 MEDIA:', '示例。 MEDIA:', '> 已发送。 MEDIA:', '- 已发送。 MEDIA:', '`example` 已发送。 MEDIA:'])
+    ('does not resend an unchanged file from an inline example: %s', async prefix => {
+      const f = fixture();
+      f.write('existing document');
+      await f.prepare();
+      f.finish({ withoutTools: true, assistantText: `${prefix}${f.source}` });
+      await f.collect();
+      expect(f.recordArtifact).not.toHaveBeenCalled();
+      expect(f.accept).not.toHaveBeenCalled();
+    });
+
   test.each([false, true])('seals two unchanged files only as explicit references (readOnlyTool=%s)', async readOnlyTool => {
     const f = fixture(), desktopFile = path.join(f.desktop, 'existing answer.txt');
     f.write('existing question'); f.write('existing answer', desktopFile);
@@ -478,5 +504,67 @@ describe('MEDIA explicitly delivers existing files without a producer tool', () 
       return true;
     });
     await f.collect(); expect(f.recordArtifact).toHaveBeenCalledOnce(); expect(f.accept).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('relative final Word deliveries retain run and directory evidence', () => {
+  const rules = structuredClone(policy);
+  rules.types.push({ category: 'document', extensions: ['docx'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true });
+
+  test('seals a new relative DOCX after a successful producer', async () => {
+    const f = fixture(), filePath = path.join(f.workspace, '工作简报.docx');
+    await f.prepare();
+    f.write('new Word document', filePath);
+    f.finish({ assistantText: 'Word 文件已经生成：[工作简报.docx](./工作简报.docx)' });
+    await f.collect(rules);
+    expect(f.recordArtifact).toHaveBeenCalledOnce();
+    expect(f.recordArtifact.mock.calls[0][0]).toMatchObject({ filePath, detectedType: 'document', relationKind: LibraryRelationKind.Modified });
+    expect(f.accept).toHaveBeenCalledOnce();
+    expect(f.accept.mock.calls[0][3]).toBe(filePath);
+    expect(f.accept.mock.calls[0][4].path).not.toBe(filePath);
+    expect(fs.readFileSync(f.accept.mock.calls[0][4].path, 'utf8')).toBe('new Word document');
+  });
+
+  test('does not upload an unchanged relative link merely because another producer succeeded', async () => {
+    const f = fixture(), filePath = path.join(f.workspace, '工作简报.docx');
+    f.write('existing Word document', filePath);
+    await f.prepare();
+    f.finish({ assistantText: '[工作简报](工作简报.docx)' });
+    await f.collect(rules);
+    expect(f.recordArtifact).not.toHaveBeenCalled();
+    expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test.each(['absent', 'failed'])('requires successful producer evidence (%s)', async producer => {
+    const f = fixture(), filePath = path.join(f.workspace, '工作简报.docx');
+    await f.prepare();
+    f.write('new Word document', filePath);
+    f.finish({ withoutTools: producer === 'absent', exitCode: 1, assistantText: '[工作简报](工作简报.docx)' });
+    await f.collect(rules);
+    expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test('does not reinterpret a relative link against Desktop when cwd baseline is unavailable', async () => {
+    const f = fixture();
+    fs.rmdirSync(f.workspace);
+    await f.prepare();
+    const relativeName = '工作简报.docx', control = path.join(f.desktop, '对照文档.docx');
+    f.write('must not fall back to Desktop', path.join(f.desktop, relativeName));
+    f.write('absolute Desktop control', control);
+    f.finish({ assistantText: `[工作简报](${relativeName}) [对照文档](${control})` });
+    await f.collect(rules);
+    expect(f.accept).toHaveBeenCalledOnce();
+    expect(f.accept.mock.calls[0][3]).toBe(control);
+  });
+
+  test.each(['nested/工作简报.docx', '../工作简报.docx'])('does not expand baseline roots to %s', async relativePath => {
+    const f = fixture(), filePath = path.resolve(f.workspace, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    await f.prepare();
+    f.write('outside direct baseline files', filePath);
+    f.finish({ assistantText: `[工作简报](${relativePath})` });
+    await f.collect(rules);
+    expect(f.accept).not.toHaveBeenCalled();
   });
 });

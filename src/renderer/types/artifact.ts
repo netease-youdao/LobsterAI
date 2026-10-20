@@ -35,17 +35,7 @@ export interface LocalServiceArtifactMetadata {
   projectCandidates?: ShareDeploymentProjectCandidate[];
 }
 
-export const PREVIEWABLE_ARTIFACT_TYPES = new Set<ArtifactType>([
-  ArtifactTypeValue.Html,
-  ArtifactTypeValue.Svg,
-  ArtifactTypeValue.Mermaid,
-  ArtifactTypeValue.Image,
-  ArtifactTypeValue.Video,
-  ArtifactTypeValue.Markdown,
-  ArtifactTypeValue.Text,
-  ArtifactTypeValue.Document,
-  ArtifactTypeValue.LocalService,
-]);
+export { PREVIEWABLE_ARTIFACT_TYPES } from '../../shared/artifactPreview/displayPolicy';
 
 export interface Artifact {
   id: string;

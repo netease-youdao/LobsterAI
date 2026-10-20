@@ -23,6 +23,7 @@ import { captureRemoteFileTelemetry, RemoteFileTelemetry as Telemetry,remoteFile
 interface PendingRun {
   owner: RemoteOwner;
   runId: string;
+  cwd?: string;
   baseline?: DeliveryBaseline;
   current(): boolean;
   retryAt: number;
@@ -57,6 +58,8 @@ export class RemoteDeliveredFileSync {
     if (this.pending.size >= MAX_PENDING_RUNS) this.pending.delete(this.pending.keys().next().value!);
     const entry: PendingRun = {
       owner, runId: run.runId, retryAt: 0, captured: new Set(),
+      // The first requested root is the session cwd, even if only the Desktop scan succeeds.
+      cwd: roots[0] && path.isAbsolute(roots[0]) ? path.resolve(roots[0]) : undefined,
       current: () => this.pending.get(sessionId) === entry && validEpoch() && sameOwner(owner, this.deps.store.owner(sessionId))
         && this.deps.store.run(sessionId)?.runId === run.runId
         && this.deps.store.get<string>(`fileRunOrdinal:${sessionId}`) === ordinal,
@@ -129,7 +132,7 @@ export class RemoteDeliveredFileSync {
       if (!final || final.content === null) { this.pending.delete(sessionId); continue; }
       const produced = this.hasSuccessfulProducer(messages);
       let retry = false;
-      for (const delivery of deliveredFileDeclarations(final.content).slice(0, Math.min(20, policy.limits.maxTaskArtifactCount))) {
+      for (const delivery of deliveredFileDeclarations(final.content, entry.cwd).slice(0, Math.min(20, policy.limits.maxTaskArtifactCount))) {
         const explicitMedia = delivery.kind === RemoteFileDeliveryKind.Media, filePath = delivery.filePath;
         if (!explicitMedia && !produced) continue;
         if (entry.captured.has(filePath)) continue;

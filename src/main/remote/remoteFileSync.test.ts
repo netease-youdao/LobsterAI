@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'crypto';
 import { buildSync } from 'esbuild';
+import { strToU8, zipSync } from 'fflate';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -27,7 +28,7 @@ afterEach(() => { for (const dispose of disposable.splice(0).reverse()) dispose(
 const policy: RemoteFilePolicy = { policyVersion: '1', features: { inputUpload: true, desktopInputSync: true, artifactPublish: true, artifactDownload: true },
   types: [{ category: 'text', extensions: ['md', 'txt', 'json', 'yaml', 'js', 'html'], maxFileBytes: '5242880', inputAllowed: true, artifactAutoSync: true },
     { category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true },
-    { category: 'document', extensions: ['pdf'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true }],
+    { category: 'document', extensions: ['pdf', 'docx'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true }],
   limits: { partBytes: '4194304', maxInputCount: 10, maxInputBytes: '104857600', maxImageBytes: '20971520', maxTaskArtifactCount: 20, maxTaskArtifactBytes: '209715200' } };
 function folder(): string { const result = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-files-test-'))); disposable.push(() => fs.rmSync(result, { recursive: true, force: true })); return result; }
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
@@ -242,6 +243,42 @@ describe('remote files policy and immutable snapshots', () => {
     expect(live?.payload.blocks.filter((block: any) => block.type === 'artifact' && block.availability === 'ready')).toHaveLength(2);
   });
 
+  it('uploads an unchanged Word document declared after a sentence and replaces desktop-only cards with ready references', async () => {
+    const f = fixture(false, true, '工作简报.docx');
+    const document = Buffer.from(zipSync({
+      '[Content_Types].xml': strToU8('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+      '_rels/.rels': strToU8('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+      'word/document.xml': strToU8('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>工作简报</w:t></w:r></w:p></w:body></w:document>'),
+    }));
+    fs.writeFileSync(f.source, document);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); await f.prepareDelivery();
+    const before = f.store.snapshot('s').records.find(row => row.payload.message?.messageId === 'm1')!.payload.message;
+    expect(before.blocks).toContainEqual(expect.objectContaining({ name: '工作简报.docx', availability: 'desktop_only' }));
+    expect(f.uploads.size).toBe(0);
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='m1'")
+        .run(`文件在下面，点开就能下载，然后在手机上用 WPS 或 Word 打开。 MEDIA:${f.source}`);
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2);
+    f.store.updateRun('s', 'succeeded'); clock.mockRestore();
+    await f.tick(); await f.tick();
+    expect(f.uploads.size).toBe(1);
+    expect(f.bytes.get('asset1')).toEqual(document);
+    expect(f.calls.map(call => call.pathname)).toEqual(expect.arrayContaining([
+      '/artifacts/remote/versions', '/artifact-uploads/asset1/parts/1', '/artifact-uploads/asset1/complete', '/artifacts/remote/versions/1/publish',
+    ]));
+    const message = f.store.snapshot('s').records.find(row => row.payload.message?.messageId === 'm1')!.payload.message;
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    for (const blocks of [message.blocks, live?.payload.blocks]) expect(blocks.filter((block: any) => block.type === 'artifact')).toEqual([
+      expect.objectContaining({ name: '工作简报.docx', availability: 'ready', assetId: 'asset1', assetVersion: '1', artifactVersion: '1', referenceMode: 'latest',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+    ]);
+    expect(f.references).toHaveLength(0);
+  });
+
   it('bounds a session artifact discovery and excludes oversized provenance metadata', async () => {
     const oversized = fixture();
     oversized.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='m1'").run(JSON.stringify({ remoteRunId: 'run1', padding: 'x'.repeat(32768) }));
@@ -324,14 +361,14 @@ describe('remote files policy and immutable snapshots', () => {
   });
 });
 describe('artifact sync durable boundaries and protocol', () => {
-  it('publishes an exec-delivered Markdown reference through the existing HTTP protocol', async () => {
+  it.each([false, true])('publishes an exec-delivered Markdown reference through the existing HTTP protocol (relative=%s)', async relative => {
     const f = fixture(false, true);
     f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
     await f.tick();
     await f.prepareDelivery();
     fs.writeFileSync(f.source, '100 new arithmetic problems');
     f.store.transaction(() => {
-      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'").run(`Delivered [report](${f.source})`);
+      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'").run(`Delivered [report](${relative ? './report.md' : f.source})`);
       f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,1)").run(JSON.stringify({ remoteRunId: 'run1', toolName: 'exec', toolUseId: 't' }));
       f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,2)").run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true, toolResultDetails: { exitCode: 0 } }));
     });
@@ -346,6 +383,61 @@ describe('artifact sync durable boundaries and protocol', () => {
     expect(message?.payload.message.blocks.at(-1)).toMatchObject({ availability: 'ready', referenceMode: 'latest' });
   });
   it.each([
+    { pinned: true, related: true, current: 'report.docx', snapshot: 'make_docx.js', visible: false },
+    { pinned: true, related: true, current: 'make_docx.js', snapshot: 'report.docx', visible: true },
+    { pinned: true, related: false, current: 'report.docx', snapshot: 'make_docx.js', visible: true },
+    { pinned: false, related: true, current: 'make_docx.js', snapshot: undefined, visible: false },
+    { pinned: false, related: false, current: 'make_docx.js', snapshot: undefined, visible: true },
+  ])('does not revive hidden versions or suppress unrelated fallback ($pinned/$related/$current)', async sample => {
+    const f = fixture(false);
+    await f.tick();
+    const entry = f.store.entries<any>('fileOutput:')[0], targetMessage = sample.related ? 'm1' : 'other';
+    const job = { ...entry.value, ...(sample.pinned ? { artifactId: 'remote' } : {}), name: sample.current, messageId: targetMessage,
+      reason: RemoteFileReason.Type, references: sample.pinned ? { [targetMessage]: { pinned: true, latest: {
+        artifactVersion: '1', assetId: 'asset1', assetVersion: '1', fileName: sample.snapshot,
+        mimeType: 'application/octet-stream', sizeBytes: '5', sha256: 'a'.repeat(64),
+      } } } : {} };
+    const original = structuredClone(job);
+    f.store.transaction(() => {
+      f.store.put(entry.key, job);
+      f.db.exec("UPDATE library_local_artifacts SET file_name='report.docx',extension='docx' WHERE id='local'");
+      f.store.markFilesDirty('s');
+    });
+    const history = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    for (const blocks of [history?.payload.message.blocks, live?.payload.blocks]) {
+      expect(blocks).not.toContain(null);
+      const cards = blocks.filter((block: any) => block.type === 'artifact');
+      expect(cards).toHaveLength(sample.visible ? 1 : 0);
+      if (sample.visible) expect(cards[0]).toMatchObject({ name: 'report.docx', availability: sample.related ? 'ready' : 'desktop_only' });
+    }
+    expect(f.store.get(entry.key)).toEqual(original);
+  });
+  it('omits code output cards from live library fallback while preserving user-selected code attachments', async () => {
+    const f = fixture(false, false, 'make_docx.js');
+    await f.tick();
+    f.store.transaction(() => {
+      f.db.prepare("INSERT INTO library_local_artifacts VALUES ('document',?,'工作简报.docx','identity',1,'docx',42,'available')")
+        .run(path.join(path.dirname(f.source), '工作简报.docx'));
+      f.db.exec("INSERT INTO library_artifact_sessions VALUES ('document','s','m1','created')");
+      f.db.prepare("INSERT INTO cowork_messages VALUES('input','s','user','Analyze',?,1,2)").run(JSON.stringify({ remoteRunId: 'run1' }));
+    });
+    f.store.put('desktopInputRun:run1', { owner, text: 'Analyze', attachments: [{ path: f.source,
+      fileName: 'make_docx.js', mimeType: 'text/javascript', sizeBytes: '5', intent: 'file' }] });
+    const project = (objectId: string) => {
+      const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id=?").get(objectId) as { revision: number };
+      return projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+        deviceId: 'pc', owner, objectId, revision: String(revision.revision), environment: 'https://example.invalid' });
+    };
+    expect(project('m1')?.payload.blocks.filter((block: any) => block.type === 'artifact')).toEqual([
+      expect.objectContaining({ artifactId: 'document', name: '工作简报.docx', availability: 'desktop_only' }),
+    ]);
+    expect(project('input')?.payload.blocks).toContainEqual(expect.objectContaining({ name: 'make_docx.js', availability: 'desktop_only' }));
+  });
+  it.each([
+    { fileName: 'make_docx.js', bytes: Buffer.from('console.log("document generated");'), mimeType: 'text/plain', image: false },
     { fileName: 'result.json', bytes: Buffer.from('{"answer":42}'), mimeType: 'application/json', image: false },
     { fileName: 'result.yaml', bytes: Buffer.from('answer: 42\n'), mimeType: 'text/plain', image: false },
     { fileName: 'result.png', bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=', 'base64'), mimeType: 'image/png', image: true },
@@ -368,7 +460,14 @@ describe('artifact sync durable boundaries and protocol', () => {
     expect(f.bytes.get('asset1')).toEqual(sample.bytes);
     expect(f.calls.find(call => call.pathname === '/artifacts/remote/versions')?.body).toMatchObject({ mimeType: sample.mimeType });
     const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
-    expect(message?.payload.message.blocks.at(-1)).toMatchObject({ name: sample.fileName, availability: 'ready', referenceMode: 'latest', mimeType: sample.mimeType });
+    const cards = message?.payload.message.blocks.filter((block: any) => block.type === 'artifact');
+    if (sample.image) expect(cards).toEqual([expect.objectContaining({ name: sample.fileName, availability: 'ready', referenceMode: 'latest', mimeType: sample.mimeType })]);
+    else expect(cards).toEqual([]);
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    expect(live?.payload.blocks.filter((block: any) => block.type === 'artifact')).toHaveLength(sample.image ? 1 : 0);
+    expect(f.jobs()[0].latest).toMatchObject({ assetId: 'asset1', mimeType: sample.mimeType });
     expect(JSON.stringify(f.calls)).not.toContain(f.source);
   });
   it('binds identical current bytes to a new message without fabricating terminal history', async () => {

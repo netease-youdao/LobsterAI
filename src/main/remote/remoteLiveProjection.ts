@@ -1,9 +1,10 @@
 import type Database from 'better-sqlite3';
 import { createHash } from 'crypto';
 
+import { isConversationArtifactFileName } from '../../shared/artifactPreview/displayPolicy';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { payloadHash, sameOwner, stableJson } from './canonical';
-import { type ArtifactProjectionJob, projectRemoteArtifacts } from './remoteArtifactProjection';
+import { type ArtifactProjectionJob, projectRemoteArtifacts, type RemoteArtifactProjection } from './remoteArtifactProjection';
 import { isPublicReplyMessage, redactReplyText, replyBlocks, replyToolState } from './remoteReplyProjection';
 
 export interface LiveProjectionInput { database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string }
@@ -101,7 +102,7 @@ function liveArtifactBlocks(db: Database.Database, input: LiveProjectionInput, m
   const prefix = `fileOutput:${createHash('sha256').update(JSON.stringify([input.environment,input.owner,input.deviceId])).digest('hex')}:${input.localId}:`;
   const jobs = db.prepare('SELECT value FROM remote_state WHERE key>=? AND key<? AND length(CAST(value AS BLOB))<=131072 LIMIT 64')
     .all(prefix,`${prefix}\uffff`) as Array<{ value: string }>;
-  const projected: Array<{ localArtifactId: string; block: Record<string, unknown> }> = [];
+  const projected: RemoteArtifactProjection[] = [];
   for (const row of jobs) {
     try {
       const job = JSON.parse(row.value) as ArtifactProjectionJob & { owner: RemoteOwner; environment: string; deviceId: string; localSessionId: string };
@@ -113,11 +114,11 @@ function liveArtifactBlocks(db: Database.Database, input: LiveProjectionInput, m
     const local = db.prepare(`SELECT a.id,a.file_name,a.extension,a.size_bytes,a.availability FROM library_local_artifacts a
       JOIN library_artifact_sessions r ON r.artifact_id=a.id WHERE r.session_id=? AND r.last_message_id=? ORDER BY a.id LIMIT 64`)
       .all(input.localId,messageId) as any[];
-    for (const item of local) if (!projected.some(value => value.localArtifactId === item.id)) projected.push({ localArtifactId: item.id, block: {
+    for (const item of local) if (isConversationArtifactFileName(item.file_name) && !projected.some(value => value.localArtifactId === item.id)) projected.push({ localArtifactId: item.id, block: {
       type: 'artifact', artifactId: item.id, name: String(item.file_name).split(/[\\/]/u).at(-1)!.slice(0,128),
       mimeType: 'application/octet-stream', sizeBytes: Number.isSafeInteger(item.size_bytes) && item.size_bytes >= 0 ? String(item.size_bytes) : null,
       availability: item.availability === 'missing' ? 'missing' : 'desktop_only',
     } });
   }
-  return projected.map(item => item.block);
+  return projected.flatMap(item => item.block ? [item.block] : []);
 }

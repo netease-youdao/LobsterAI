@@ -131,33 +131,63 @@ function withoutCode(content: string): string {
   return result;
 }
 
+/** Relative links gain authority only from visible, unquoted final-reply text. */
+function relativeDeliveryText(content: string): string {
+  const hiddenTags: string[] = [];
+  let comment = false, quoted = false;
+  return withoutCode(content).split(/\r?\n/u).map(line => {
+    if (/^[ \t]*>/u.test(line)) { quoted = true; return ''; }
+    if (!line.trim()) quoted = false;
+    if (quoted) return '';
+    const visible = !comment && !hiddenTags.length;
+    let hasHiddenMarkup = false;
+    for (const token of line.matchAll(/<!--|-->|<\/?(think|thinking|pre|code|blockquote)\b[^>]*>/giu)) {
+      if (comment) { if (token[0] === '-->') comment = false; continue; }
+      hasHiddenMarkup = true;
+      if (token[0] === '<!--') { comment = true; continue; }
+      if (token[0] === '-->') continue;
+      const name = token[1].toLowerCase();
+      if (!token[0].startsWith('</')) hiddenTags.push(name);
+      else if (hiddenTags.at(-1) === name) hiddenTags.pop();
+    }
+    return visible && !comment && !hiddenTags.length && !hasHiddenMarkup ? line : '';
+  }).join('\n');
+}
+
 export const RemoteFileDeliveryKind = { Link: 'link', Media: 'media' } as const;
 export interface RemoteFileDelivery { filePath: string; kind: typeof RemoteFileDeliveryKind[keyof typeof RemoteFileDeliveryKind] }
 
-function localDeliveryPath(target: string, markdown: boolean): string | null {
+function localDeliveryPath(target: string, markdown: boolean, cwd?: string): string | null {
   try {
+    if (markdown && /%2f|%5c/iu.test(target)) return null;
     let filePath: string;
     if (/^file:/iu.test(target)) {
       const url = new URL(target);
       if (url.protocol !== 'file:' || url.hostname && url.hostname !== 'localhost') return null;
       filePath = fileURLToPath(url);
     } else {
-      if (!path.isAbsolute(target) || target.startsWith('//') || markdown && /%2f|%5c/iu.test(target)) return null;
       // MEDIA holds a literal filesystem path; percent escapes are meaningful only in a file URL/Markdown href.
       filePath = markdown ? decodeURIComponent(target) : target;
+      if (/^(?:\/\/|\\\\|#)/u.test(filePath)) return null;
+      if (!path.isAbsolute(filePath)) {
+        if (!markdown || !cwd || !path.isAbsolute(cwd) || /^(?:\/\/|\\\\)/u.test(cwd) || /^[a-z][a-z0-9+.-]*:/iu.test(filePath)) return null;
+        filePath = path.resolve(cwd, filePath);
+      }
     }
-    if (!path.isAbsolute(filePath) || /[\u0000-\u001f\u007f]/u.test(filePath)) return null;
+    if (!path.isAbsolute(filePath) || /^(?:\/\/|\\\\)/u.test(filePath) || /[\u0000-\u001f\u007f]/u.test(filePath)) return null;
     return path.resolve(filePath);
   } catch { return null; }
 }
 
-/** MEDIA is a standalone delivery directive, not a path mentioned in prose, code or thinking. */
+/** Accept explicit standalone or sentence-final MEDIA directives outside examples, code and thinking. */
 function mediaDeliveries(content: string): string[] {
   const files: string[] = [];
   let fence: string | undefined, code: string | undefined;
   const hiddenTags: string[] = [];
-  let comment = false;
+  let comment = false, quotedParagraph = false, blockquoteDepth = 0;
   for (const line of content.split(/\r?\n/u)) {
+    if (!line.trim()) quotedParagraph = false;
+    else if (/^ {0,3}(?:>|[-+*][ \t]|\d+[.)][ \t])/u.test(line)) quotedParagraph = true;
     const unquoted = line.replace(/^(?: {0,3}>[ \t]?)+/u, '');
     if (fence) {
       const closing = unquoted.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/u)?.[1];
@@ -168,8 +198,8 @@ function mediaDeliveries(content: string): string[] {
     if (opening) { fence = opening; continue; }
     if (/^(?: {4}|\t)/u.test(unquoted)) continue;
     const visible = !code && !hiddenTags.length && !comment;
-    let hasHiddenMarkup = false;
-    for (const token of line.matchAll(/<!--|-->|`+|<\/?(think|thinking|pre|code)\b[^>]*>/giu)) {
+    let hasHiddenMarkup = false, hasBlockquote = blockquoteDepth > 0;
+    for (const token of line.matchAll(/<!--|-->|`+|<\/?(think|thinking|pre|code|blockquote)\b[^>]*>/giu)) {
       if (comment) { if (token[0] === '-->') comment = false; continue; }
       if (token[0] === '<!--' && !code) { comment = true; hasHiddenMarkup = true; continue; }
       if (token[0] === '-->') continue;
@@ -178,16 +208,26 @@ function mediaDeliveries(content: string): string[] {
         if (code === token[0]) code = undefined;
         else if (!code) code = token[0];
       } else if (!code) {
-        hasHiddenMarkup = true;
         const name = token[1].toLowerCase();
+        if (name === 'blockquote') {
+          hasBlockquote = true;
+          blockquoteDepth = token[0].startsWith('</') ? Math.max(0, blockquoteDepth - 1) : blockquoteDepth + 1;
+          continue;
+        }
+        hasHiddenMarkup = true;
         if (!token[0].startsWith('</')) hiddenTags.push(name);
         else if (hiddenTags.at(-1) === name) hiddenTags.pop();
       }
     }
     if (!visible || code || hiddenTags.length || comment || hasHiddenMarkup) continue;
-    const match = /^ {0,3}MEDIA:[ \t]*(.+?)[ \t]*$/iu.exec(line);
-    if (!match) continue;
-    let target = match[1];
+    if ((line.match(/MEDIA:/giu) || []).length !== 1) continue;
+    let target = /^ {0,3}MEDIA:[ \t]*(.+?)[ \t]*$/iu.exec(line)?.[1];
+    if (!target) {
+      const inline = /^ {0,3}(.+[.!。！])[ \t]*MEDIA:[ \t]*(.+?)[ \t]*$/iu.exec(line);
+      if (!inline || quotedParagraph || hasBlockquote || /^ {0,3}(?:\t|#{1,6}[ \t])/u.test(line)
+        || !/[\p{L}\p{N}]/u.test(inline[1]) || /`|示例|例如|举例|\b(?:example|sample)\b/iu.test(inline[1])) continue;
+      target = inline[2];
+    }
     const quote = target[0], closing = quote === '<' ? '>' : quote;
     if (['`', '"', "'", '<'].includes(quote)) {
       if (target.length < 3 || !target.endsWith(closing)) continue;
@@ -202,19 +242,22 @@ function mediaDeliveries(content: string): string[] {
 }
 
 /** Explicit file/image links retain their changed-file policy; MEDIA additionally declares delivery of existing bytes. */
-export function deliveredFileDeclarations(content: string): RemoteFileDelivery[] {
+export function deliveredFileDeclarations(content: string, cwd?: string): RemoteFileDelivery[] {
   const declarations = new Map<string, RemoteFileDelivery>();
   for (const filePath of mediaDeliveries(content)) declarations.set(filePath, { filePath, kind: RemoteFileDeliveryKind.Media });
   const markdownLink = /(?<![!\\])(!?)\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))(?:\s+["'][^"'\r\n]*["'])?\s*\)/gu;
+  const visibleRelativeLinks = new Set(cwd
+    ? [...relativeDeliveryText(content).matchAll(markdownLink)].map(match => match[0]) : []);
   for (const match of withoutCode(content).matchAll(markdownLink)) {
     if (declarations.size >= MAX_DELIVERED_FILES) break;
-    const filePath = localDeliveryPath(match[2] || match[3], true);
+    const target = match[2] || match[3];
+    const filePath = localDeliveryPath(target, true, visibleRelativeLinks.has(match[0]) ? cwd : undefined);
     if (!filePath || match[1] && !IMAGE_DELIVERY_EXTENSIONS.has(path.extname(filePath).toLowerCase())) continue;
     if (!declarations.has(filePath)) declarations.set(filePath, { filePath, kind: RemoteFileDeliveryKind.Link });
   }
   return [...declarations.values()];
 }
 
-export function deliveredFileLinks(content: string): string[] {
-  return deliveredFileDeclarations(content).map(value => value.filePath);
+export function deliveredFileLinks(content: string, cwd?: string): string[] {
+  return deliveredFileDeclarations(content, cwd).map(value => value.filePath);
 }

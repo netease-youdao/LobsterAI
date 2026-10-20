@@ -160,6 +160,22 @@ describe('durable ownership and synchronization', () => {
     snapshot = store.snapshot('s'); item = snapshot.records.find(r => r.eventType === 'message.upsert')!.payload.message;
     expect(item.blocks[1].availability).toBe('missing');
   });
+  it.each([false, true])('omits code output cards from the library fallback (files=%s)', files => {
+    const store = fixture(':memory:', true); store.setEnabledOwner(owner); store.setFileProjectionSupported(files);
+    create(store, 's'); message(store, 'Word document is ready');
+    store.transaction(() => {
+      for (const [id, name, extension] of [['script', 'make_docx.js', '.js'], ['document', '工作简报.docx', '.docx']]) {
+        store.db.prepare("INSERT INTO library_local_artifacts VALUES (?,?,?,42,'available',?,?)")
+          .run(id, name, extension, `/private/${name}`, id);
+        store.db.prepare("INSERT INTO library_artifact_sessions VALUES (?,'s','m')").run(id);
+      }
+    });
+    const projected = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+    expect(projected.blocks.filter((block: any) => block.type === 'artifact')).toEqual([
+      expect.objectContaining({ artifactId: 'document', name: '工作简报.docx', availability: 'desktop_only' }),
+    ]);
+    expect(store.db.prepare('SELECT COUNT(*) AS count FROM library_local_artifacts').get()).toEqual({ count: 2 });
+  });
   it('filters mismatched IM instances and pauses only verified other-owner cron jobs', () => {
     const store = fixture(); store.bindSource('im:nim:a', owner); store.bindSource('cron:job', owner);
     expect(filterOwnedInstances([{ instanceId: 'a' }, { instanceId: 'unowned' }], 'nim', store, other)).toEqual([{ instanceId: 'unowned' }]);

@@ -15,9 +15,76 @@ function fixture(getTargetId?: () => string | null) {
     providerLabel: 'Custom', available: true, image: true, toolCalling: true, thinking: { options: ['low', 'high'], default: 'low' },
     configuration: { apiKey: 'secret-one', baseURL: 'http://private.local/v1' } }];
   return { values, catalog: new RemoteModelCatalog(store as Pick<RemoteStore, 'get' | 'put'>, () => models, getTargetId),
-    change: (patch: Partial<LocalRemoteModel>) => { models = [{ ...models[0], ...patch }]; }, remove: () => { models = []; } };
+    change: (patch: Partial<LocalRemoteModel>) => { models = [{ ...models[0], ...patch }]; },
+    replace: (next: LocalRemoteModel[]) => { models = next; }, remove: () => { models = []; } };
 }
 describe('remote model references', () => {
+  it('publishes model reordering promptly without changing model references or versions', async () => {
+    const { catalog, replace } = fixture();
+    const base = catalog.resolve(owner, 'pc', catalog.refresh(owner, 'pc')[0].modelRef).local;
+    replace([base, { ...base, identity: 'provider/second', runtimeRef: 'custom/second', displayName: 'Second' }]);
+    const initial = catalog.refresh(owner, 'pc');
+    const locals = initial.map(item => catalog.resolve(owner, 'pc', item.modelRef, item.version).local);
+    const original = [...initial].sort((a, b) => a.modelRef.localeCompare(b.modelRef));
+    replace(original.map(item => locals.find(local => local.displayName === item.displayName)!));
+    const reordered = [...original].reverse();
+    let savedItems = original;
+    let version = '1';
+    const api = vi.fn(async (_path: string, method?: string, body?: { items: typeof original }) => {
+      if (method === 'POST') {
+        savedItems = body!.items;
+        version = String(Number(version) + 1);
+      }
+      return { catalogVersion: version, items: savedItems };
+    });
+    await catalog.publish(owner, 'pc', '1', api, () => true);
+    expect(api).toHaveBeenCalledTimes(1);
+
+    // Force the display order to disagree with UUID ordering, without depending on random UUIDs.
+    replace(reordered.map(item => locals.find(local => local.displayName === item.displayName)!));
+    expect(catalog.refresh(owner, 'pc')).toEqual(reordered);
+    await catalog.publish(owner, 'pc', '1', api, () => true);
+    expect(savedItems).toEqual(reordered);
+    expect(api.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+    for (const item of original) {
+      expect(catalog.resolve(owner, 'pc', item.modelRef, item.version).item).toEqual(item);
+    }
+    await catalog.publish(owner, 'pc', '1', api, () => true);
+    expect(api).toHaveBeenCalledTimes(3);
+  });
+
+  it('finishes a pending legacy UUID-ordered publication before publishing the desktop order', async () => {
+    const { catalog, replace, values } = fixture();
+    const base = catalog.resolve(owner, 'pc', catalog.refresh(owner, 'pc')[0].modelRef).local;
+    replace([base, { ...base, identity: 'provider/second', runtimeRef: 'custom/second', displayName: 'Second' }]);
+    const initial = catalog.refresh(owner, 'pc');
+    const locals = initial.map(item => catalog.resolve(owner, 'pc', item.modelRef, item.version).local);
+    const legacyItems = [...initial].sort((a, b) => a.modelRef.localeCompare(b.modelRef));
+    const desktopItems = [...legacyItems].reverse();
+    replace(desktopItems.map(item => locals.find(local => local.displayName === item.displayName)!));
+    const pending = { publicationId: 'legacy-publication', expectedCatalogVersion: '0', items: legacyItems };
+    const [key, state] = [...values.entries()][0];
+    values.set(key, { ...(state as object), pending });
+    let savedItems: typeof initial = [];
+    let version = '0';
+    const api = vi.fn(async (_path: string, method?: string, body?: typeof pending) => {
+      if (method === 'POST') {
+        savedItems = body!.items;
+        version = String(Number(version) + 1);
+      }
+      return { catalogVersion: version, items: savedItems };
+    });
+
+    await catalog.publish(owner, 'pc', '1', api, () => true);
+    expect(api.mock.calls.find(([, method]) => method === 'POST')?.[2]).toMatchObject(pending);
+    expect(savedItems).toEqual(legacyItems);
+    await catalog.publish(owner, 'pc', '1', api, () => true);
+    expect(savedItems).toEqual(desktopItems);
+    const publications = api.mock.calls.filter(([, method]) => method === 'POST');
+    expect(publications).toHaveLength(2);
+    expect(publications[1][2]?.publicationId).not.toBe(pending.publicationId);
+    expect(publications[1][2]?.expectedCatalogVersion).toBe('1');
+  });
   it('does not create references before a target is known', async () => {
     const { catalog, values } = fixture(() => null);
     expect(() => catalog.refresh(owner, 'pc')).toThrow(RemoteInputReason.Stale);

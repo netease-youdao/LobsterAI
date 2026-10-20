@@ -26,16 +26,16 @@ it('projects mobile attachment references and original text without generated lo
   expect(JSON.stringify(projection)).not.toContain('/private/secret');
   expect(projection.records.find(row => row.eventType === 'message.upsert')?.payload.message.blocks[1]).toMatchObject({ type: 'attachment', assetId: 'asset', availability: 'ready' });
 });
-it('creates one stable desktop placeholder and uses completed server MIME at a higher revision', () => {
+it.each(['report.txt', 'make_docx.js'])('keeps selected %s as a stable desktop placeholder and ready input attachment', fileName => {
   const store = fixture();
-  store.put('desktopInputRun:run', { owner, text: 'Analyze', attachments: [{ path: '/private/secret/report.txt', fileName: 'report.txt', mimeType: 'text/plain', sizeBytes: '12', intent: 'file' }] });
+  store.put('desktopInputRun:run', { owner, text: 'Analyze', attachments: [{ path: `/private/secret/${fileName}`, fileName, mimeType: 'text/plain', sizeBytes: '12', intent: 'file' }] });
   userMessage(store);
   const before = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
-  expect(before.blocks[1]).toMatchObject({ type: 'artifact', availability: 'desktop_only' });
+  expect(before.blocks[1]).toMatchObject({ type: 'artifact', name: fileName, availability: 'desktop_only' });
   const job = store.get<any>('desktopAsset:m:0');
-  store.put('desktopAsset:m:0', { ...job, availability: 'ready', uploadedAsset: { assetId: 'asset', version: '1', fileName: 'report.txt', mimeType: 'application/octet-stream', sizeBytes: '12', intent: 'file' } });
+  store.put('desktopAsset:m:0', { ...job, availability: 'ready', uploadedAsset: { assetId: 'asset', version: '1', fileName, mimeType: 'application/octet-stream', sizeBytes: '12', intent: 'file' } });
   const after = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
-  expect(after.blocks[1]).toMatchObject({ type: 'attachment', mimeType: 'application/octet-stream' });
+  expect(after.blocks[1]).toMatchObject({ type: 'attachment', name: fileName, mimeType: 'application/octet-stream' });
   expect(BigInt(after.revision)).toBeGreaterThan(BigInt(before.revision));
   expect(store.entries('desktopAsset:')).toHaveLength(1);
   expect(JSON.stringify(after)).not.toContain('/private/secret');

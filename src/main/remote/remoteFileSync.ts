@@ -8,7 +8,7 @@ import { type RemoteArtifactManifest, type RemoteFilePolicy, RemoteFileReason, r
 import type { RemoteInputAsset } from '../../shared/remote/input';
 import { sameOwner, stableJson } from './canonical';
 import type { DesktopInputSource } from './desktopInputMetadata';
-import { projectRemoteArtifacts, remoteArtifactReasons } from './remoteArtifactProjection';
+import { projectRemoteArtifacts, type RemoteArtifactProjection,remoteArtifactReasons } from './remoteArtifactProjection';
 import { touchAvailabilityMessage } from './remoteAvailabilitySource';
 import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
@@ -740,7 +740,7 @@ export class RemoteFileSync {
     telemetry.emit(Telemetry.File, { phase: Telemetry.LocalCommit, outcome: Telemetry.Succeeded });
     await fs.promises.rm(pending.snapshot.path, { force: true }).catch(error => { telemetry.emit(Telemetry.Stage, { stage: Telemetry.Cleanup, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); });
   }
-  private projection(sessionId: string, messageId: string): Array<{ localArtifactId: string; block: Record<string, unknown> }> {
+  private projection(sessionId: string, messageId: string): RemoteArtifactProjection[] {
     const connection = this.connection;
     if (!connection || !this.current(connection, sessionId)) return [];
     return projectRemoteArtifacts(this.fileEntries<ArtifactJob>(`${this.prefix(connection)}${sessionId}:`, false, true)

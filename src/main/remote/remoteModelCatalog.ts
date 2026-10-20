@@ -63,7 +63,8 @@ export class RemoteModelCatalog {
     }
     for (const binding of state.bindings) if (!seen.has(binding.identity)) binding.removed = true;
     this.store.put(this.key(owner, deviceId), state);
-    return items.sort((a, b) => a.modelRef.localeCompare(b.modelRef));
+    // Opaque references are identities, not display order. Preserve the desktop model order.
+    return items;
   }
   resolve(owner: RemoteOwner, deviceId: string, modelRef: string, version?: string): { item: RemoteModelItem; local: LocalRemoteModel } {
     const item = this.refresh(owner, deviceId).find(value => value.modelRef === modelRef);

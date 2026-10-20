@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'crypto';
 
+import { isConversationArtifactFileName } from '../../shared/artifactPreview/displayPolicy';
 import { OWNERSHIP_MANUAL_SOURCE } from '../../shared/ownership/constants';
 import { REMOTE_MESSAGE_BYTES, type RemoteAgentSummary, type RemoteOwner, type RemoteRunStatusValue } from '../../shared/remote/constants';
 import { type DeletionGuard, RemoteDeletion } from '../../shared/remote/deletions';
@@ -10,7 +11,7 @@ import { RemoteReply, RemoteReplyBlockType, type RemoteReplyContentRef, type Rem
 import { RemoteRetention } from '../../shared/remote/retention';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import type { DesktopInputRun } from './desktopInputMetadata';
-import { remoteArtifactReasons } from './remoteArtifactProjection';
+import { type RemoteArtifactProjection,remoteArtifactReasons } from './remoteArtifactProjection';
 import { initializeAvailabilityProjectionSources, initializeAvailabilitySource, markAvailabilityControl, touchAvailabilityControl } from './remoteAvailabilitySource';
 import type { InboxEntry } from './remoteBridge';
 import { replaceCoreTrigger } from './remoteCoreTriggers';
@@ -177,7 +178,7 @@ export class RemoteStore {
   private projectionIdentity: { key: string; environment: string; owner: RemoteOwner; deviceId: string } | null = null;
   private fileEnvironment: string | null = null;
   private fileTerminalBoundary: ((sessionId: string, runId: string) => void) | null = null;
-  private artifactProjection: ((sessionId: string, messageId: string) => Array<{ localArtifactId: string; block: Record<string, unknown> }>) | null = null;
+  private artifactProjection: ((sessionId: string, messageId: string) => RemoteArtifactProjection[]) | null = null;
   private approvalLifecycle: { expire(now: number): void; close(sessionId: string, runId: string, status: string): void } | null = null;
   private advanceCheckpoint: (() => number) | null = null;
   private enabledOwner: RemoteOwner | null = null;
@@ -1542,13 +1543,14 @@ export class RemoteStore {
         }
       }
       const remoteArtifacts = this.fileProjectionSupported ? this.artifactProjection?.(sessionId, m.id) || [] : [];
-      for (const artifact of artifacts.filter(a => a.last_message_id === m.id && !remoteArtifacts.some(value => value.localArtifactId === a.id))) blocks.push({ type: 'artifact', artifactId: artifact.id,
+      for (const artifact of artifacts.filter(a => a.last_message_id === m.id && isConversationArtifactFileName(a.file_name)
+        && !remoteArtifacts.some(value => value.localArtifactId === a.id))) blocks.push({ type: 'artifact', artifactId: artifact.id,
         name: String(artifact.file_name).split(/[\\/]/).pop()!.slice(0, 128),
         mimeType: ({ pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', csv: 'text/csv', html: 'text/html' } as Record<string, string>)[String(artifact.extension).replace(/^\./, '').toLowerCase()] || 'application/octet-stream',
         sizeBytes: Number.isSafeInteger(artifact.size_bytes) && artifact.size_bytes >= 0 ? String(artifact.size_bytes) : null,
         availability: artifact.availability === 'missing' ? 'missing' : 'desktop_only',
       });
-      blocks.push(...remoteArtifacts.map(value => value.block));
+      blocks.push(...remoteArtifacts.flatMap(value => value.block ? [value.block] : []));
       if (this.replyProjectionSupported) for (const [index, block] of blocks.entries()) if (typeof block.text === 'string' && !block.blockId) block.blockId = replyBlockId(m.id, `text:${index}`);
       const message: any = { messageId: m.id, ordinal: String(Math.max(1, m.sequence || 1)), revision: '0',
         runId: foreignHistory ? null : metadata.remoteRunId || null, commandId: foreignHistory ? null : metadata.remoteCommandId || null,

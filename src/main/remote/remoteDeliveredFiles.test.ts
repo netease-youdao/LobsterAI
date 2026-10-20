@@ -200,6 +200,49 @@ describe('explicit delivered file links', () => {
 });
 
 describe('explicit MEDIA declarations', () => {
+  it.each(['文件在下面。', '已发送！', 'Ready.', 'Sent!'])('accepts a single trailing MEDIA directive after visible delivery prose: %s', prefix => {
+    const file = path.join(directory(), '工作简报 一.docx');
+    for (const target of [file, `"${file}"`, `'${file}'`, `<${file}>`, `\`${file}\``]) {
+      expect(deliveredFileDeclarations(`${prefix}\tMEDIA: ${target}`)).toEqual([
+        { filePath: file, kind: RemoteFileDeliveryKind.Media },
+      ]);
+    }
+    expect(deliveredFileLinks(`已发送。MEDIA:${file}`)).toEqual([file]);
+  });
+
+  it('recognizes a trailing Windows MEDIA path without treating backslashes or Chinese text as escapes', () => {
+    const file = String.raw`D:\agent\主\工作简报.docx`;
+    const isAbsolute = path.isAbsolute, resolve = path.resolve;
+    vi.spyOn(path, 'isAbsolute').mockImplementation(value => /^[A-Za-z]:\\/u.test(value) ? path.win32.isAbsolute(value) : isAbsolute(value));
+    vi.spyOn(path, 'resolve').mockImplementation((...parts) => /^[A-Za-z]:\\/u.test(parts[0] || '') ? path.win32.resolve(...parts) : resolve(...parts));
+    expect(deliveredFileDeclarations(`文件在下面，点开就能下载。 MEDIA:${file}`)).toEqual([
+      { filePath: file, kind: RemoteFileDeliveryKind.Media },
+    ]);
+  });
+
+  it.each([
+    '> 已发送。 MEDIA: /tmp/file.pdf', '- 已发送。 MEDIA: /tmp/file.pdf', '1. 已发送。 MEDIA: /tmp/file.pdf',
+    '> Quoted delivery\n已发送。 MEDIA: /tmp/file.pdf', '- Quoted delivery\n已发送。 MEDIA: /tmp/file.pdf',
+    '<blockquote>已发送。 MEDIA: /tmp/file.pdf</blockquote>', '<blockquote>\n已发送。 MEDIA: /tmp/file.pdf\n</blockquote>',
+    '  * 已发送。 MEDIA: /tmp/file.pdf', '    已发送。 MEDIA: /tmp/file.pdf', '\t已发送。 MEDIA: /tmp/file.pdf',
+    ' \t已发送。 MEDIA: /tmp/file.pdf', '# 已发送。 MEDIA: /tmp/file.pdf', '... MEDIA: /tmp/file.pdf',
+    '示例 MEDIA: /tmp/file.pdf', '示例。 MEDIA: /tmp/file.pdf', 'Example. MEDIA: /tmp/file.pdf',
+    '发送吗？ MEDIA: /tmp/file.pdf', 'MEDIA: /tmp/a.pdf MEDIA: /tmp/b.pdf', '已发送。 MEDIA: /tmp/a.pdf MEDIA: /tmp/b.pdf',
+    '`example` 已发送。 MEDIA: /tmp/file.pdf', '`已发送。 MEDIA: /tmp/file.pdf`',
+    '```\n已发送。 MEDIA: /tmp/file.pdf\n```', '<think>已发送。</think> MEDIA: /tmp/file.pdf',
+    '<!-- hidden -->已发送。 MEDIA: /tmp/file.pdf', '<code>example</code>已发送。 MEDIA: /tmp/file.pdf',
+    '已发送。 /tmp/file.pdf', '已发送。 MEDIA: https://example.com/file.pdf',
+  ])('does not turn an ambiguous inline MEDIA example into a delivery: %s', content => {
+    expect(deliveredFileDeclarations(content)).toEqual([]);
+  });
+
+  it('resumes inline delivery after a quoted paragraph or HTML blockquote ends', () => {
+    expect(deliveredFileLinks('> Quoted delivery\n已发送。 MEDIA: /tmp/hidden.pdf\n\n已发送。 MEDIA: /tmp/real.pdf'))
+      .toEqual(['/tmp/real.pdf']);
+    expect(deliveredFileLinks('<blockquote>\n已发送。 MEDIA: /tmp/hidden.pdf\n</blockquote>\n已发送。 MEDIA: /tmp/real.pdf'))
+      .toEqual(['/tmp/real.pdf']);
+  });
+
   it('accepts standalone Chinese, space-containing, quoted and local file URL declarations', () => {
     const first = '/tmp/桌面题目 一.pdf', second = '/tmp/答案 二.pdf';
     expect(deliveredFileDeclarations(`已经发送。\nMEDIA: ${first}\nMEDIA: \`${second}\`\nMEDIA: ${pathToFileURL(first)}\n后续正文。`)).toEqual([

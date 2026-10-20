@@ -283,6 +283,8 @@ describe('desktop core and remote projection isolation', () => {
     ]));
     f.store.transaction(() => {
       addArtifact(f.db, 'report', 'task', 'message');
+      addArtifact(f.db, 'script', 'task', 'message');
+      f.db.exec("UPDATE library_local_artifacts SET file_name='make_docx.js',extension='js',artifact_type='code' WHERE id='script'");
       f.db.exec("INSERT INTO cowork_sessions VALUES('other','Other',1,1,'idle')");
       f.store.assignNew('other', { userId: 'B', scopeKey: 'personal' }, 'local_create');
       addArtifact(f.db, 'other-private', 'other', 'other-message');
@@ -293,6 +295,8 @@ describe('desktop core and remote projection isolation', () => {
     expect(f.db.prepare('SELECT * FROM remote_projection_failures').all()).toEqual([]);
     const message = f.store.snapshot('task').records.find(row => row.payload.message)?.payload.message;
     expect(message?.blocks).toContainEqual(expect.objectContaining({ type: 'artifact', artifactId: 'report', name: 'report.md' }));
+    expect(message?.blocks.filter((block: any) => block.type === 'artifact')).toHaveLength(1);
+    expect(JSON.stringify(message)).not.toContain('make_docx.js');
     expect(JSON.stringify(message)).not.toContain('other-private');
     expect(JSON.stringify(message)).not.toContain('/private/');
     expect(f.db.prepare('SELECT * FROM library_local_artifacts ORDER BY id').all()).toEqual(artifacts);
