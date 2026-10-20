@@ -5,10 +5,11 @@ import { isConversationArtifactFileName } from '../../shared/artifactPreview/dis
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { type ArtifactProjectionJob, projectRemoteArtifacts, type RemoteArtifactProjection } from './remoteArtifactProjection';
+import { replyInputModel, replyModelLabel, type ReplyModelPresetNames } from './remoteReplyModel';
 import { isPublicReplyMessage, redactReplyText, replyBlocks, replyToolState } from './remoteReplyProjection';
 
-export interface LiveProjectionInput { database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string }
-export interface LiveProjection { objectKind: 'message' | 'tool'; objectId: string; sourceObjectRevision: string; representation: 'complete' | 'desktop_only'; payloadHash: string; payload: Record<string, any> }
+export interface LiveProjectionInput { database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames }
+export interface LiveProjection { resolvedModelLabel?: string; objectKind: 'message' | 'tool'; objectId: string; sourceObjectRevision: string; representation: 'complete' | 'desktop_only'; payloadHash: string; payload: Record<string, any> }
 /** Read one bounded source object. No historic projection, outbox or NOS is consulted. */
 export function projectLiveMessage(db: Database.Database, input: LiveProjectionInput): LiveProjection | null {
   return db.transaction((): LiveProjection | null => {
@@ -36,10 +37,10 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
     const runId = metadata.remoteRunId && !foreign.has(metadata.remoteRunId) ? metadata.remoteRunId : null;
     if (runId && readState(`runPublished:${runId}`) === false) return null;
     let content = redactReplyText(row.content || '');
-    let prepared: any = null, desktop: any = null;
+    const prepared = runId ? readState(`inputRun:${runId}`) : null;
+    const desktop = runId ? readState(`desktopInputRun:${runId}`) : null;
+    const model = prepared?.inputModel ?? (desktop && sameOwner(desktop.owner, input.owner) ? desktop.inputModel : null);
     if (row.type === 'user' && runId) {
-      prepared = readState(`inputRun:${runId}`);
-      desktop = readState(`desktopInputRun:${runId}`);
       if (prepared) content = redactReplyText(prepared.input.text);
       else if (desktop && sameOwner(desktop.owner, input.owner)) content = redactReplyText(desktop.text);
     }
@@ -66,9 +67,12 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       preview: Buffer.from(content).subarray(0, 1000).toString('utf8').replace(/\uFFFD$/u, ''),
       originalContentBytes: String(omitted && row.content_bytes > 131072 ? row.content_bytes : originalBytes),
       blocks: omitted ? [] : blocks,
+      ...(model ? { inputModel: replyInputModel(row.type, metadata, model, input.modelPresetNames) } : {}),
       ...(omitted ? { contentUnavailableReason: 'CONTENT_LIMIT_EXCEEDED' } : {}),
     };
+    const resolvedModelLabel = model && (row.type === 'user' || row.type === 'assistant') ? replyModelLabel(metadata, input.modelPresetNames) : null;
     return { objectKind: 'message', objectId: row.id, sourceObjectRevision: input.revision,
+      ...(resolvedModelLabel ? { resolvedModelLabel } : {}),
       representation: omitted ? 'desktop_only' : 'complete', payloadHash: payloadHash(payload), payload };
   })();
 }

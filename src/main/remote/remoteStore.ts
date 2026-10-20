@@ -25,6 +25,7 @@ import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults
 import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
 import type { ProjectionWork } from './remoteProjectionWorker';
 import { type QuestionEvidenceAuthenticator,questionIdSql,questionSessionSql, RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
+import { replyInputModel, type ReplyModelPresetNames,replyModelPresetNames } from './remoteReplyModel';
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
@@ -173,6 +174,7 @@ export class RemoteStore {
   private approvalProjectionSupported = false;
   private questionProjectionSupported = false;
   private inputProjectionSupported = false;
+  private modelPresetNames?: ReplyModelPresetNames;
   private fileProjectionSupported = false;
   private replyProjectionSupported = false;
   private projectionIdentity: { key: string; environment: string; owner: RemoteOwner; deviceId: string } | null = null;
@@ -389,6 +391,7 @@ export class RemoteStore {
     await this.projector?.settled();
   }
   configureDetachedProjection(work: ProjectionWork): void {
+    this.modelPresetNames = work.modelPresetNames;
     this.enabledOwner = work.owner; this.approvalProjectionSupported = work.approval; this.questionProjectionSupported = work.questions; this.inputProjectionSupported = work.input;
     this.fileProjectionSupported = work.files; this.replyProjectionSupported = work.reply; this.fileEnvironment = work.environment; this.deletionProjectionSupported = work.deletions === true;
   }
@@ -440,7 +443,7 @@ export class RemoteStore {
         }
         if (this.deletionProjectionSupported) this.deletionGuard(id);
         if (!this.questionEvidenceHealthy(id)) return null;
-        const work: ProjectionWork = { questionEvidenceDigest: remoteQuestionEvidenceDigest(this.db), database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
+        const work: ProjectionWork = { modelPresetNames: replyModelPresetNames(), questionEvidenceDigest: remoteQuestionEvidenceDigest(this.db), database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
           deviceId: this.projectionIdentity?.deviceId || sync.device_id, environment: this.fileEnvironment || this.projectionIdentity?.environment || null,
           agent: this.agentSummary?.(id, this.enabledOwner) || null, approval: this.approvalProjectionSupported, questions: this.questionProjectionSupported,
           input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, deletions: this.deletionProjectionSupported };
@@ -465,6 +468,7 @@ export class RemoteStore {
     return (!this.projectionFaultEpochs.has(work) || this.projectionFaultEpochs.get(work) === (projectionFault(this.db, work.sessionId)?.epoch ?? null))
       && (!this.projectionTargetContexts.has(work) || this.projectionTargetContexts.get(work) === stableJson(activeRemoteSyncTargetContext(this, work.owner)))
       && this.canProjectTask(work.sessionId) && !this.isSyncClosed(work.sessionId) && sameOwner(work.owner, this.enabledOwner) && sameOwner(this.owner(work.sessionId), work.owner)
+      && (!work.modelPresetNames || stableJson(work.modelPresetNames) === stableJson(replyModelPresetNames()))
       && work.approval === this.approvalProjectionSupported && work.questions === this.questionProjectionSupported && work.input === this.inputProjectionSupported
       && work.files === this.fileProjectionSupported && work.reply === this.replyProjectionSupported && (work.deletions === true) === this.deletionProjectionSupported
       && work.deviceId === (this.projectionIdentity?.deviceId || this.sync(work.sessionId)?.device_id)
@@ -1557,7 +1561,7 @@ export class RemoteStore {
         role: isTool ? 'tool' : this.replyProjectionSupported && m.type === 'system' ? 'notice' : m.type, status: metadata.isStreaming ? 'streaming' : 'complete', createdAt: iso(m.created_at),
         ...(this.replyProjectionSupported ? { projectionVersion: RemoteReply.ProjectionVersion, displayOrdinal: String(displayIndex + 1) } : {}),
         contentState: 'complete', preview: isTool ? '' : preview(content), originalContentBytes: String(Buffer.byteLength(stableJson(blocks))), blocks,
-        ...(this.inputProjectionSupported && !foreignHistory && (inputRun || ownDesktopInput?.inputModel) ? { inputModel: inputRun?.inputModel ?? ownDesktopInput?.inputModel ?? null } : {}) };
+        ...(this.inputProjectionSupported && !foreignHistory && (inputRun || ownDesktopInput?.inputModel) ? { inputModel: replyInputModel(m.type, metadata, inputRun?.inputModel ?? ownDesktopInput?.inputModel ?? null, this.modelPresetNames) } : {}) };
       if (this.replyProjectionSupported) {
         for (const block of blocks) if (typeof block.text === 'string' && Buffer.byteLength(block.text) > RemoteReply.InlineBytes) {
           if (Buffer.byteLength(block.text) > RemoteReply.MaximumContentBytes) {

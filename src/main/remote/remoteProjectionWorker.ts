@@ -8,11 +8,13 @@ import type { RemoteAgentSummary, RemoteOwner } from '../../shared/remote/consta
 import { sameOwner } from './canonical';
 import { type ArtifactProjectionJob,projectRemoteArtifacts } from './remoteArtifactProjection';
 import { questionSessionSql, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
+import type { ReplyModelPresetNames } from './remoteReplyModel';
 import { RemoteStore } from './remoteStore';
 
 export interface ProjectionWork {
   database: string; target: string; sessionId: string; owner: RemoteOwner; deviceId: string; environment: string | null;
   questionEvidenceDigest?: string;
+  modelPresetNames?: ReplyModelPresetNames;
   deletions?: boolean; agent: RemoteAgentSummary | null; approval: boolean; questions: boolean; input: boolean; files: boolean; reply: boolean;
 }
 /** Runs only in a worker: consistent source read, bounded disk materialization, then projection. */

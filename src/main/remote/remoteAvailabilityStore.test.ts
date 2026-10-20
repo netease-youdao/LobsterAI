@@ -5,7 +5,7 @@ import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { advanceAvailabilityMigration, AvailabilityMigration } from './remoteAvailabilityMigration';
-import { type AvailabilityRequest, RemoteAvailabilityStore } from './remoteAvailabilityStore';
+import { type AvailabilityRequest, RemoteAvailabilityStore, ReplyModelDisplayVersion } from './remoteAvailabilityStore';
 
 const cleanup: Array<() => void> = [];
 afterEach(() => cleanup.splice(0).reverse().forEach(dispose => dispose()));
@@ -192,4 +192,32 @@ it('advances past deeply nested legacy JSON without manufacturing a hash or supp
   expect(db.prepare('SELECT count(*) AS count FROM availability_requests WHERE request_hash IS NOT NULL').get()).toEqual({ count: 70 });
   db.exec('DROP TABLE availability_usage');
   expect(() => advanceAvailabilityMigration(db)).toThrow('REMOTE_AVAILABILITY_USAGE_MISSING');
+});
+
+describe('reply model display evidence', () => {
+  it('retains completed projection evidence across reopen without putting it in the immutable business body', () => {
+    const { ledger } = fixture();
+    const request: AvailabilityRequest = { ...pending, replyModelDisplayVersion: ReplyModelDisplayVersion,
+      body: { objectKind: 'message', objectId: 'message', sourceObjectRevision: '8', representation: 'repair', payload: { contentState: 'complete' } } };
+    ledger.saveRequest(request);
+    expect(ledger.request(request.key)?.body).not.toHaveProperty('replyModelDisplayVersion');
+    ledger.completeObject(request, { state: 'accepted', projectionRevision: '12' });
+    ledger.close();
+    expect(ledger.object(request.scope, request.localId, 'message:message')).toEqual({
+      sourceRevision: '8', result: { state: 'accepted', projectionRevision: '12', representation: 'complete', replyModelDisplayVersion: ReplyModelDisplayVersion },
+    });
+  });
+
+  it('keeps legacy receipts eligible for inspection and never marks a changed source as checked', () => {
+    const { ledger } = fixture();
+    const request: AvailabilityRequest = { ...pending,
+      body: { objectKind: 'message', objectId: 'message', sourceObjectRevision: '8', representation: 'complete' } };
+    ledger.saveRequest(request); ledger.completeObject(request, { state: 'accepted', projectionRevision: '12' });
+    ledger.markReplyModelDisplayChecked(request.scope, request.localId, 'message:message', '7');
+    expect(ledger.object(request.scope, request.localId, 'message:message')?.result).not.toHaveProperty('replyModelDisplayVersion');
+    ledger.markReplyModelDisplayChecked(request.scope, request.localId, 'message:message', '8'); ledger.close();
+    expect(ledger.object(request.scope, request.localId, 'message:message')?.result).toMatchObject({
+      state: 'accepted', projectionRevision: '12', replyModelDisplayVersion: ReplyModelDisplayVersion,
+    });
+  });
 });

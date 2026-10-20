@@ -5,12 +5,13 @@ import { payloadHash, stableJson } from './canonical';
 import { acknowledgeAvailabilityDeletion, AvailabilityDeletion, availabilityDeletion, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
 import { availabilitySourceHealth, recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
 import { availabilityControlSnapshot,type ControlSnapshot } from './remoteAvailabilitySource';
-import { AvailabilityReadState, type AvailabilityRequest, type AvailabilitySession, RemoteAvailabilityStore } from './remoteAvailabilityStore';
+import { AvailabilityReadState, type AvailabilityRequest, type AvailabilitySession, RemoteAvailabilityStore, ReplyModelDisplayVersion } from './remoteAvailabilityStore';
 import { ensureDesktopInputJobs } from './remoteDesktopInputJobs';
 import { type HistoryContext, type HistoryOperation,HistoryPreparation } from './remoteHistoryStore';
 import { recentLiveCandidates } from './remoteLiveCandidates';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { recoveryEvents, recoveryRequired, recoverySourceManifest } from './remoteRecoveryProof';
+import { replyModelPresetNames } from './remoteReplyModel';
 import type { CoreRemoteBinding, RemoteStore } from './remoteStore';
 import { remoteDiagnosticLog, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
@@ -820,19 +821,29 @@ export class RemoteAvailabilityPublisher {
             if (!this.eligible(key) || !this.ledger.objectRetryAllowed(context.scope, row.local_id, objectKey, Date.now(), fingerprint)
               || (this.liveScan.get(key) || 0) > Date.now()) continue;
             const acknowledged = this.ledger.object(context.scope, row.local_id, objectKey);
-            if (acknowledged?.sourceRevision === String(candidate.revision)) {
+            const sameSource = acknowledged?.sourceRevision === String(candidate.revision);
+            const repairModelLabel = sameSource && candidate.kind === 'message' && context.publicationResolutionSupported === true
+              && acknowledged.result.replyModelDisplayVersion !== ReplyModelDisplayVersion
+              && (acknowledged.result.state === 'accepted' || acknowledged.result.state === 'superseded' && acknowledged.result.reason === 'ALREADY_REPRESENTED')
+              && /^[1-9][0-9]*$/u.test(String(acknowledged.result.projectionRevision));
+            if (sameSource && !repairModelLabel) {
               recordAvailabilityObjectHealth(this.deps.store, context.scope, row.local_id, objectKey, String(candidate.revision), acknowledged.result.representation || 'unknown');
               continue;
             }
             if (this.ledger.hasPendingObject(context.scope, row.local_id, candidate.kind, candidate.object_id)) continue;
             encoding = true; encoded++;
-            const projection = await this.encoder.project(this.deps.store.db, { database: this.deps.store.db.name,
+            const projection = await this.encoder.project(this.deps.store.db, { database: this.deps.store.db.name, modelPresetNames: replyModelPresetNames(),
               localId: row.local_id, sessionId: row.session_id, deviceId: context.deviceId, owner: context.owner,
               environment: context.environment, objectId: candidate.object_id, objectKind: candidate.kind, revision: String(candidate.revision) });
             encoding = false;
             if (!this.current(context)) return;
             if (this.liveScan.size >= 1024) this.liveScan.delete(this.liveScan.keys().next().value!);
             this.liveScan.set(key, Date.now() + 1000);
+            if (repairModelLabel && (!projection?.resolvedModelLabel
+              || projection.payload.inputModel?.displayName !== projection.resolvedModelLabel)) {
+              this.ledger.markReplyModelDisplayChecked(context.scope, row.local_id, objectKey, String(candidate.revision));
+              continue;
+            }
             if (!projection) {
               this.ledger.skipObject(context.scope, row.local_id, objectKey, String(candidate.revision));
               recordAvailabilityObjectHealth(this.deps.store, context.scope, row.local_id, objectKey, String(candidate.revision), 'local_only');
@@ -845,8 +856,14 @@ export class RemoteAvailabilityPublisher {
               objectId: candidate.object_id, objectRevision: String(candidate.revision), representation: projection.representation,
               contentUnavailableReason: projection.payload.contentUnavailableReason });
             const publicationId = randomUUID();
-            const request = this.save(context, state, publicationId, 'live', '/sync/live-projections', { publicationId,
-              ...projection, policyVersion: '1' }, 3, `/sync/live-projections/${publicationId}?sessionId=${encodeURIComponent(row.session_id)}&writerGeneration=${encodeURIComponent(state.writerGeneration)}`);
+            // Encoder evidence and the format marker remain local. A same-source change uses the server's CAS repair.
+            const { resolvedModelLabel: _resolvedModelLabel, ...wireProjection } = projection;
+            const request = this.ledger.saveRequest({ key: publicationId, lane: 'live', scope: context.scope, localId: state.localId,
+              method: 'POST', pathname: '/sync/live-projections', version: 3, lookupVersion: 3, attempted: false, createdAt: Date.now(),
+              lookup: `/sync/live-projections/${publicationId}?sessionId=${encodeURIComponent(row.session_id)}&writerGeneration=${encodeURIComponent(state.writerGeneration)}`,
+              replyModelDisplayVersion: ReplyModelDisplayVersion,
+              body: { ...this.body(context, state), publicationId, ...wireProjection, policyVersion: '1',
+                ...(repairModelLabel ? { representation: 'repair', expectedProjectionRevision: acknowledged.result.projectionRevision } : {}) } });
             remoteDiagnosticLog('remote.publication.sealed', { operationId: publicationId, localSessionId: row.local_id, objectId: candidate.object_id, lane: 'live' });
             sent++; await this.publishLive(context, request); this.failures.delete(key);
           } catch (error) {
@@ -895,7 +912,18 @@ export class RemoteAvailabilityPublisher {
       deviceId: context.deviceId, localSessionId: request.localId, sessionId: request.body.sessionId, lane: 'live',
       operationId: request.body.publicationId, operationKind: SyncTelemetry.Kind.Live, objectId: request.body.objectId,
       objectRevision: request.body.sourceObjectRevision });
-    const result = await this.send(context, request);
+    let result: any;
+    try { result = await this.send(context, request); }
+    catch (error) {
+      if (request.body.representation !== 'repair' || !context.publicationResolutionSupported || (error as { httpStatus?: number }).httpStatus !== 409) throw error;
+      const state = this.ledger.session(context.scope, request.localId);
+      if (!state) throw new Error('REMOTE_AVAILABILITY_STATE_MISSING');
+      // A changed cloud head cannot justify rewriting this CAS request. Seal its original ID,
+      // retain the bytes, and let a later source revision publish normally.
+      await this.resolveLive(context, state, request.key);
+      this.ledger.markReplyModelDisplayChecked(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision);
+      return;
+    }
     if (result.publicationId !== request.body.publicationId || !['accepted', 'superseded', 'rejected'].includes(result.state)) throw new Error('REMOTE_LIVE_RECEIPT_INVALID');
     if (result.state === 'rejected') this.ledger.objectFault(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`,
       payloadHash({ kind: request.body.objectKind, objectId: request.body.objectId, revision: request.body.sourceObjectRevision }));
@@ -920,10 +948,11 @@ export class RemoteAvailabilityPublisher {
       return;
     }
     this.ledger.completeObject(request, result);
-    if (result.state !== 'rejected') recordAvailabilityObjectHealth(this.deps.store, context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, request.body.representation);
-    if (result.state === 'accepted' && ['complete', 'desktop_only'].includes(request.body.representation)) {
+    const representation = request.body.representation === 'repair' ? request.body.payload?.contentState || 'unknown' : request.body.representation;
+    if (result.state !== 'rejected') recordAvailabilityObjectHealth(this.deps.store, context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, representation);
+    if (result.state === 'accepted' && ['complete', 'desktop_only'].includes(representation)) {
       const key = `${context.scope}:${request.localId}:${request.body.objectKind}:${request.body.objectId}`;
-      const previous = this.contentRepresentations.get(key), representation = request.body.representation as string;
+      const previous = this.contentRepresentations.get(key);
       if (this.contentRepresentations.size >= 1024 && !this.contentRepresentations.has(key))
         this.contentRepresentations.delete(this.contentRepresentations.keys().next().value!);
       this.contentRepresentations.set(key, representation);

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
 import { payloadHash } from './canonical';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
+import { ReplyModelDisplayVersion } from './remoteAvailabilityStore';
 import { recordRemoteSessionDeletion } from './remoteLocalGc';
 import { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
@@ -755,5 +756,142 @@ describe('bootstrap receipt authority', () => {
     expect(f.publisher.controlReady('local')).toBe(true);
     expect(f.request.mock.calls.filter(call => call[0] === '/control/bootstrap').map(call => call[2].operationId))
       .toEqual([state.operationId, state.operationId]);
+  });
+});
+
+describe('acknowledged reply model display repair', () => {
+  const model = { modelRef: 'preset-balanced', version: '3', displayName: '快速', providerName: 'Youdao' };
+  const prepare = async (metadata: Record<string, unknown> = { model: 'deepseek-flash' }) => {
+    const f = fixture(); f.context.publicationResolutionSupported = true;
+    f.store.beginRun('local', 'run');
+    f.store.put('inputRun:run', { input: { text: 'Question', attachments: [] }, inputModel: model });
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET metadata=? WHERE id=?')
+      .run(JSON.stringify({ remoteRunId: 'run', ...metadata }), 'message'));
+    await f.controls();
+    const revision = String((f.db.prepare('SELECT revision FROM remote_live_revisions WHERE object_id=?').get('message') as { revision: number }).revision);
+    f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)')
+      .run(f.context.scope, 'local', 'message:message', revision, JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete' }));
+    f.request.mockClear();
+    return { ...f, revision };
+  };
+
+  it('repairs a same-source acknowledged label with a new publication and keeps local evidence off the wire', async () => {
+    const f = await prepare(), source = f.store.sync('local')!.source_seq;
+    await f.live();
+    const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(body).toMatchObject({ representation: 'repair', sourceObjectRevision: f.revision, expectedProjectionRevision: '41',
+      payload: { inputModel: { ...model, displayName: 'deepseek-flash' } } });
+    expect(body).not.toHaveProperty('resolvedModelLabel');
+    expect(body).not.toHaveProperty('replyModelDisplayVersion');
+    expect(body.payloadHash).toBe(payloadHash(body.payload));
+    expect(f.db.prepare('SELECT representation FROM remote_availability_health_acks WHERE object_key=?').get('message:message')).toEqual({ representation: 'complete' });
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.replyModelDisplayVersion).toBe(ReplyModelDisplayVersion);
+    expect(f.store.sync('local')!.source_seq).toBe(source);
+    expect(f.db.prepare('SELECT revision FROM remote_live_revisions WHERE object_id=?').get('message')).toEqual({ revision: Number(f.revision) });
+    (f.publisher as any).liveScan.clear(); f.request.mockClear(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('does not republish a frozen preset name without an actual recorded model', async () => {
+    const f = await prepare({ model: 'yd-fast' }), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(encode).toHaveBeenCalledTimes(1);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).toMatchObject({
+      state: 'accepted', projectionRevision: '41', replyModelDisplayVersion: ReplyModelDisplayVersion,
+    });
+    (f.publisher as any).liveScan.clear(); await f.live();
+    expect(encode).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes an older immutable pending publication before sealing its label repair', async () => {
+    const f = await prepare(), state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const body = { publicationId: 'older-publication', objectKind: 'message', objectId: 'message', sourceObjectRevision: f.revision,
+      writerGeneration: state.writerGeneration, sessionId: state.sessionId, representation: 'complete', payload: { inputModel: model } };
+    f.publisher.ledger.saveRequest({ key: body.publicationId, lane: 'live', scope: f.context.scope, localId: 'local',
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: '/sync/live-projections/older-publication', lookupVersion: 3,
+      attempted: true, createdAt: 1, body });
+    await f.live();
+    const initial = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(initial).toHaveLength(1);
+    expect(initial[0][2]).toEqual({ ...body, connectionGeneration: f.context.generation });
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('replyModelDisplayVersion');
+    await f.live();
+    const repair = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').at(-1)![2];
+    expect(repair).toMatchObject({ representation: 'repair', expectedProjectionRevision: '900' });
+    expect(repair.publicationId).not.toBe(body.publicationId);
+  });
+
+  it('keeps a conflicting repair immutable for reconciliation instead of changing its CAS revision', async () => {
+    const f = await prepare(), ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') throw Object.assign(new Error('Projection revision changed'), { httpStatus: 409 });
+      return ordinary(...args);
+    });
+    await f.live();
+    const first = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    const saved = f.publisher.ledger.request(first.publicationId)!;
+    expect(saved.body.expectedProjectionRevision).toBe('41');
+    (f.publisher as any).failures.clear(); (f.publisher as any).liveScan.clear(); await f.live();
+    const attempts = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1][2]).toEqual(first);
+    expect(f.publisher.ledger.request(first.publicationId)).toEqual(saved);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('replyModelDisplayVersion');
+  });
+
+  it('requires original-publication resolution support before attempting automatic same-source repair', async () => {
+    const f = await prepare(); f.context.publicationResolutionSupported = false;
+    const encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    await f.live(); expect(f.request).not.toHaveBeenCalled(); expect(encode).not.toHaveBeenCalled();
+  });
+
+  it('seals a conflicting repair without changing its bytes and allows the next source revision', async () => {
+    const f = await prepare(), ordinary = f.request.getMockImplementation()!, state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && args[2].representation === 'repair')
+        throw Object.assign(new Error('Projection revision changed'), { httpStatus: 409 });
+      if (args[0].endsWith('/resolve')) {
+        const publicationId = args[0].split('/')[3];
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: 'sealed_unpublished', publicationId, sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          sealId: 'seal', resolutionRequestHash: payloadHash({ ...business, publicationId }) };
+      }
+      return ordinary(...args);
+    });
+    await f.live();
+    const repair = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    const { connectionGeneration: _generation, ...originalBody } = repair;
+    expect(f.publisher.ledger.request(repair.publicationId)?.body).toEqual(originalBody);
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(false);
+    expect(f.publisher.ledger.db.prepare('SELECT resolution_receipt FROM availability_requests WHERE key=?').get(repair.publicationId)).toMatchObject({
+      resolution_receipt: expect.stringContaining('sealed_unpublished'),
+    });
+    f.request.mockClear(); (f.publisher as any).liveScan.clear(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run('New reply', 'message'));
+    await f.live();
+    const next = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(next.publicationId).not.toBe(repair.publicationId);
+    expect(next).toMatchObject({ representation: 'complete', sourceObjectRevision: String(Number(f.revision) + 1) });
+    expect(next).not.toHaveProperty('expectedProjectionRevision');
+  });
+
+  it('bounds repair inspection and remembers no-label checks so older recent candidates can progress', async () => {
+    const f = await prepare(), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    for (let index = 2; index <= 7; index++) {
+      const id = `unresolved-${index}`;
+      f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(id, 'local', 'assistant', 'Reply', JSON.stringify({ remoteRunId: 'run', model: 'yd-fast' }), index, index));
+      f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)')
+        .run(f.context.scope, 'local', `message:${id}`, '1', JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete' }));
+    }
+    await f.live();
+    expect(encode).toHaveBeenCalledTimes(4);
+    expect(f.request).not.toHaveBeenCalled();
+    await f.live();
+    expect(encode).toHaveBeenCalledTimes(7);
+    expect(f.request.mock.calls.filter(call => call[0] === '/sync/live-projections')).toHaveLength(1);
+    expect(f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2].objectId).toBe('message');
   });
 });

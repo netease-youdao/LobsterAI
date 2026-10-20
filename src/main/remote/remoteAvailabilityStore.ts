@@ -18,7 +18,9 @@ export interface AvailabilitySession {
 export interface AvailabilityRequest {
   key: string; lane: 'control' | 'live'; scope: string; localId: string; method: string; pathname: string; version: number;
   body: Record<string, any>; lookup: string | null; lookupVersion: number; createdAt: number; attempted: boolean;
+  replyModelDisplayVersion?: number;
 }
+export const ReplyModelDisplayVersion = 1;
 export const AvailabilityReadState = { Valid: 'valid', Corrupt: 'corrupt' } as const;
 export type AvailabilityRequestRow = { key: string; localId: string; objectId: string | null; objectKind: string | null }
   & ({ state: typeof AvailabilityReadState.Valid; value: AvailabilityRequest } | { state: typeof AvailabilityReadState.Corrupt; reason: string });
@@ -333,6 +335,14 @@ export class RemoteAvailabilityStore {
     const row = this.db.prepare('SELECT source_revision,result FROM availability_objects WHERE scope=? AND local_id=? AND object_id=?').get(scope, localId, objectId) as { source_revision: string; result: string } | undefined;
     return row ? { sourceRevision: row.source_revision, result: JSON.parse(row.result) } : null;
   }
+  /** Local inspection evidence never changes a sealed publication or a source revision. */
+  markReplyModelDisplayChecked(scope: string, localId: string, objectKey: string, sourceRevision: string): void {
+    const previous = this.object(scope, localId, objectKey);
+    if (!previous || previous.sourceRevision !== sourceRevision) return;
+    assertRemoteSidecarHeadroom(this.db.name, 128, 0);
+    this.db.prepare('UPDATE availability_objects SET result=? WHERE scope=? AND local_id=? AND object_id=? AND source_revision=?')
+      .run(stableJson({ ...previous.result, replyModelDisplayVersion: ReplyModelDisplayVersion }), scope, localId, objectKey, sourceRevision);
+  }
   skipObject(scope: string, localId: string, objectKey: string, sourceRevision: string): void {
     assertRemoteSidecarHeadroom(this.db.name, Buffer.byteLength(objectKey) + 256, RECEIPT_RESERVE_BYTES);
     this.db.prepare(`INSERT INTO availability_objects VALUES(?,?,?,?,?) ON CONFLICT(scope,local_id,object_id)
@@ -346,7 +356,10 @@ export class RemoteAvailabilityStore {
     observeSyncCommit(telemetry, () => this.db.transaction(() => {
       this.db.prepare(`INSERT INTO availability_objects VALUES(?,?,?,?,?) ON CONFLICT(scope,local_id,object_id)
         DO UPDATE SET source_revision=excluded.source_revision,result=excluded.result`).run(request.scope, request.localId,
-          `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, stableJson({ ...result, representation: request.body.representation }));
+          `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, stableJson({ ...result,
+            representation: request.body.representation === 'repair' ? request.body.payload?.contentState || 'unknown' : request.body.representation,
+            ...(request.replyModelDisplayVersion === ReplyModelDisplayVersion && ['accepted', 'superseded'].includes(result.state)
+              ? { replyModelDisplayVersion: ReplyModelDisplayVersion } : {}) }));
       if (result.state === 'accepted' || result.state === 'superseded') this.db.prepare('DELETE FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?')
         .run(request.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`);
       this.complete(request.key);

@@ -9,14 +9,13 @@ import {
   isInternalCompactionSystemText,
 } from '../../../common/coworkSystemMessages';
 import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
+import { getMessageModelLabel as getSharedMessageModelLabel } from '../../../shared/cowork/messageModelLabel';
 import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
-import { parseModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
 import { modelPresetName } from '../../services/modelPresets';
 import type { Artifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
-import { formatModelDisplayName } from '../../utils/modelDisplayName';
 import { ActivityStepKind } from './constants';
 import type { MediaPollingGroup } from './MediaPollingIndicator';
 import type { MediaTaskPresentations } from './mediaTaskPresentation';
@@ -931,20 +930,8 @@ export const buildConversationTurns = (
 
 // ── Metadata helpers ─────────────────────────────────────────────────────────
 
-export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null => {
-  const modelPresetId = parseModelPresetId(metadata?.modelPresetId);
-  const resolved = typeof metadata?.resolvedModelId === 'string' ? metadata.resolvedModelId.trim() : '';
-  if (modelPresetId && resolved && !parseModelPresetModelId(resolved)) {
-    return `${modelPresetName(modelPresetId)}（${formatModelDisplayName(resolved.split('/').pop() || resolved)}）`;
-  }
-  const model = typeof metadata?.model === 'string' ? metadata.model.trim() : '';
-  const actualModel = model && !parseModelPresetModelId(model) ? model
-    : resolved && !parseModelPresetModelId(resolved) ? resolved : '';
-  if (!actualModel) return null;
-  const label = formatModelDisplayName(actualModel.split('/').pop() || actualModel);
-  const presetId = modelPresetId ?? parseModelPresetModelId(model);
-  return presetId ? `${modelPresetName(presetId)}（${label}）` : label;
-};
+export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null =>
+  getSharedMessageModelLabel(metadata, modelPresetName);
 
 export const messageMetaClassName = (visible: boolean, align: 'left' | 'right' = 'left'): string => [
   'flex items-center gap-2 mt-1 text-[11px] text-zinc-400 dark:text-zinc-500 select-none transition-opacity duration-200',
