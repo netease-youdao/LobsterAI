@@ -234,6 +234,28 @@ export const useAgentSidebarState = ({
   const activeAgentIdsRef = useRef(new Set<string>());
   const loggedScheduledMarkerSignatureByAgentIdRef = useRef(new Map<string, string>());
   const initializedDefaultExpansionRef = useRef(false);
+  // Explicit deletion facts outlive pending preview requests within this mounted sidebar.
+  // Redux only contains a partial task list, so absence there is not proof of deletion.
+  const deletedTaskIdsRef = useRef(new Set<string>());
+
+  const removeTaskPreviews = useCallback((sessionIds: string[]) => {
+    sessionIds.forEach((id) => deletedTaskIdsRef.current.add(id));
+    setTaskPreviewsByAgentId((previous) => (
+      removeAgentSidebarTaskPreviews(previous, sessionIds)
+    ));
+  }, []);
+
+  const removeTaskPreview = useCallback((sessionId: string) => {
+    removeTaskPreviews([sessionId]);
+  }, [removeTaskPreviews]);
+
+  useEffect(() => {
+    return window.electron?.cowork?.onSessionsChanged?.((payload) => {
+      if (payload?.deletedSessionIds?.length) {
+        removeTaskPreviews(payload.deletedSessionIds);
+      }
+    });
+  }, [removeTaskPreviews]);
 
   useEffect(() => {
     return () => {
@@ -390,7 +412,8 @@ export const useAgentSidebarState = ({
         const current = replace ? [] : previous[agentId] ?? [];
         return {
           ...previous,
-          [agentId]: mergeSessions(current, result.sessions ?? []),
+          [agentId]: mergeSessions(current, result.sessions ?? [])
+            .filter((session) => !deletedTaskIdsRef.current.has(session.id)),
         };
       });
       setHasMoreTasksByAgentId((previous) => ({
@@ -487,6 +510,7 @@ export const useAgentSidebarState = ({
       const next = { ...previous };
 
       sessions.forEach((session) => {
+        if (deletedTaskIdsRef.current.has(session.id)) return;
         const agentId = normalizeAgentId(session.agentId);
         const existingTasks = next[agentId];
         if (!existingTasks) return;
@@ -567,7 +591,8 @@ export const useAgentSidebarState = ({
         loadedAgentIdsRef.current.add(agentId);
         setTaskPreviewsByAgentId((previous) => ({
           ...previous,
-          [agentId]: mergeSessions(previous[agentId] ?? [], result.sessions ?? []),
+          [agentId]: mergeSessions(previous[agentId] ?? [], result.sessions ?? [])
+            .filter((session) => !deletedTaskIdsRef.current.has(session.id)),
         }));
         setHasMoreTasksByAgentId((previous) => ({
           ...previous,
@@ -671,18 +696,6 @@ export const useAgentSidebarState = ({
         changed = true;
       });
       return changed ? next : previous;
-    });
-  }, []);
-
-  const removeTaskPreview = useCallback((sessionId: string) => {
-    setTaskPreviewsByAgentId((previous) => {
-      return removeAgentSidebarTaskPreviews(previous, [sessionId]);
-    });
-  }, []);
-
-  const removeTaskPreviews = useCallback((sessionIds: string[]) => {
-    setTaskPreviewsByAgentId((previous) => {
-      return removeAgentSidebarTaskPreviews(previous, sessionIds);
     });
   }, []);
 

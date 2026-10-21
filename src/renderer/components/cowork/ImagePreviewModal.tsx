@@ -1,11 +1,12 @@
 import { XMarkIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 
 export interface ImagePreviewSource {
   src: string;
+  localPath?: string;
   alt?: string | null;
   title?: string | null;
   name?: string | null;
@@ -23,6 +24,26 @@ function getImageLabel(image: ImagePreviewSource): string {
 
 const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({ image, onClose }) => {
   const mouseDownOnBackdropRef = useRef(false);
+  const [original, setOriginal] = useState<{ image: ImagePreviewSource; src: string } | null>(null);
+
+  useEffect(() => {
+    setOriginal(null);
+    if (!image?.localPath) return;
+
+    let cancelled = false;
+    const loadOriginal = async () => {
+      try {
+        const result = await window.electron.dialog.readFileAsDataUrl(image.localPath!);
+        if (!cancelled && result.success && result.dataUrl) {
+          setOriginal({ image, src: result.dataUrl });
+        }
+      } catch {
+        // Historical messages can outlive their local files; keep the thumbnail.
+      }
+    };
+    void loadOriginal();
+    return () => { cancelled = true; };
+  }, [image]);
 
   useEffect(() => {
     if (!image) return;
@@ -89,7 +110,8 @@ const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({ image, onClose })
           </div>
           <div className="flex max-h-full max-w-full items-center justify-center rounded-xl bg-white/95 p-1 shadow-2xl ring-1 ring-white/15">
             <img
-              src={image.src}
+              src={original?.image === image ? original.src : image.src}
+              onError={() => setOriginal(current => current?.image === image ? null : current)}
               alt={image.alt ?? label}
               className="block max-h-[calc(100vh-11rem)] max-w-[calc(100vw-3.5rem)] object-contain rounded-lg"
               draggable={false}

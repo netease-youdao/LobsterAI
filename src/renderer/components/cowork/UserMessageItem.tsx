@@ -354,6 +354,7 @@ const UserMessageItem: React.FC<{
                           title={img.name}
                           onClick={() => handleImagePreviewOpen({
                             src: `data:${img.mimeType};base64,${img.base64Data}`,
+                            localPath: img.localPath,
                             alt: img.name,
                             name: img.name,
                           })}

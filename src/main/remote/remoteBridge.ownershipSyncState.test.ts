@@ -103,3 +103,30 @@ describe('task detail synchronization state', () => {
     expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Pending);
   });
 });
+
+describe('ownership task retry routing', () => {
+  function isolatedTask() {
+    const f = fixture();
+    f.bridge.schedule = () => undefined;
+    const context = f.bridge.taskContext();
+    f.bridge.taskSync.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'REMOTE_BATCH_ACK_INVALID' });
+    f.store.put('syncFailure:task', { blocked: true, code: 47019 });
+    return { ...f, context };
+  }
+  it('keeps task safety blocks intact during a global reconnect', async () => {
+    const f = isolatedTask(), before = f.bridge.taskSync.get(f.context, 'task');
+    await f.bridge.configure({ retry: true });
+    expect(f.bridge.taskSync.get(f.context, 'task')).toEqual(before);
+    expect(f.bridge.taskSync.eligible(f.context, 'task')).toBe(false);
+    expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Failed);
+  });
+  it('schedules the identified task for reconciliation without clearing its failure evidence or granting an ACK', async () => {
+    const f = isolatedTask(), before = f.store.sync('task');
+    await f.bridge.configure({ retrySessionId: 'task' });
+    expect(f.bridge.taskSync.get(f.context, 'task').phase).toBe('reconciling');
+    expect(f.bridge.taskSync.eligible(f.context, 'task')).toBe(true);
+    expect(f.store.get('syncFailure:task')).toEqual({ blocked: true, code: 47019 });
+    expect(f.store.sync('task')).toEqual(before);
+    expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Failed);
+  });
+});

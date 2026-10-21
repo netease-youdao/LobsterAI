@@ -136,7 +136,16 @@ export const ownershipService = {
         notify();
         return;
       }
-      await window.electron.remote.configure({ retry: true });
+      const issue = panel.target.kind === OwnershipTargetKind.Task
+        ? remote.syncHealth?.taskIssues?.find(item => item.localSessionId === panel!.target.id) : undefined;
+      if (issue && (!issue.retryable || !remote.accountEpoch)) {
+        panel = { ...panel, notice: 'remoteTaskSyncWaiting' };
+        notify();
+        return;
+      }
+      await window.electron.remote.configure(issue
+        ? { retrySessionId: panel.target.id, expectedAccountEpoch: remote.accountEpoch! }
+        : { retry: true, ...(remote.accountEpoch ? { expectedAccountEpoch: remote.accountEpoch } : {}) });
       if (requestSequence !== sequence || generation !== identity() || !panel) return;
       panel = { ...panel, notice: 'ownershipRetryScheduled' };
       notify();

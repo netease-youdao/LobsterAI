@@ -134,6 +134,61 @@ describe('ownership confirmation and recovery', () => {
     expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retry: true });
     expect(api.commit).toHaveBeenCalledTimes(1);
   });
+  test.each([true, false])('retries the identified task with the current account epoch (explicit target=%s)', async explicitTarget => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch: 'main-epoch',
+      syncHealth: { taskIssues: [{ localSessionId: target.id, retryable: true, status: 'isolated' }] } });
+    if (!explicitTarget) await ownershipService.open(target);
+    await ownershipService.retrySync(explicitTarget ? target : undefined);
+    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retrySessionId: target.id, expectedAccountEpoch: 'main-epoch' });
+    expect(ownershipService.getSnapshot()?.notice).toBe('ownershipRetryScheduled');
+  });
+  test.each([
+    { retryable: false, accountEpoch: 'main-epoch' },
+    { retryable: true, accountEpoch: undefined },
+  ])('does not claim a task retry when admission is unavailable: %j', async ({ retryable, accountEpoch }) => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch,
+      syncHealth: { taskIssues: [{ localSessionId: target.id, retryable, status: 'isolated' }] } });
+    await ownershipService.retrySync(target);
+    expect(remote.configure).not.toHaveBeenCalled();
+    expect(ownershipService.getSnapshot()?.notice).toBe('remoteTaskSyncWaiting');
+  });
+  test('retains account-fenced global recovery for a task without a task-level issue', async () => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch: 'main-epoch',
+      syncHealth: { taskIssues: [{ localSessionId: 'another-task', retryable: true, status: 'isolated' }] } });
+    await ownershipService.retrySync(target);
+    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retry: true, expectedAccountEpoch: 'main-epoch' });
+  });
+  test('keeps Agent catalog retry global even when a task has the same ID', async () => {
+    const agent = { ...target, kind: OwnershipTargetKind.Agent };
+    api.getDetail.mockResolvedValue({ success: true, data: { ...failedDetail, ...agent } });
+    remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch: 'main-epoch',
+      syncHealth: { taskIssues: [{ localSessionId: agent.id, retryable: false, status: 'isolated' }] } });
+    await ownershipService.retrySync(agent);
+    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retry: true, expectedAccountEpoch: 'main-epoch' });
+  });
+  test('does not issue a retry when the account changes while reading remote state', async () => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    let resolve!: (value: unknown) => void;
+    remote.state.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const retrying = ownershipService.retrySync(target);
+    await settle();
+    switchAccount(2);
+    resolve({ owner: { userId: 'A' }, enabled: true, accountEpoch: 'old-epoch',
+      syncHealth: { taskIssues: [{ localSessionId: target.id, retryable: true, status: 'isolated' }] } });
+    await retrying;
+    expect(remote.configure).not.toHaveBeenCalled();
+  });
+  test('shows a rejected task retry without claiming it was scheduled', async () => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch: 'main-epoch',
+      syncHealth: { taskIssues: [{ localSessionId: target.id, retryable: true, status: 'isolated' }] } });
+    remote.configure.mockRejectedValueOnce(new Error('Task synchronization retry is unavailable'));
+    await ownershipService.retrySync(target);
+    expect(ownershipService.getSnapshot()?.notice).toBe('remoteUnavailable');
+  });
   test('a stale failure toast cannot retry after switching accounts', async () => {
     api.commit.mockResolvedValue({ success: true, data: { ...result, syncState: OwnershipSyncState.Failed } });
     await ownershipService.open(target, OwnershipView.Preview);

@@ -783,6 +783,9 @@ export class RemoteAvailabilityPublisher {
         const candidates = recentLiveCandidates(this.deps.store.db, row.local_id);
         // Corrupt body bytes cannot hide the original operation or let a newer version bypass it.
         const page = this.ledger.scanPending(context.scope, 'live', row.local_id, this.pendingCursors.get(taskKey));
+        // A successful task scan clears only its earlier read/admission failure.
+        // Object publication and any later fault-persistence failure keep their own evidence.
+        this.failures.delete(taskKey);
         if (page.nextCursor) this.pendingCursors.set(taskKey, page.nextCursor); else this.pendingCursors.delete(taskKey);
         for (const item of page.rows) {
           if (sent > rowStart || sent >= 2 || !this.current(context)) break;
@@ -799,11 +802,13 @@ export class RemoteAvailabilityPublisher {
               objectId: item.objectId, lane: 'live', reason: item.reason }, 'warn');
             continue;
           }
-          const request = item.value;
-          if (!this.eligible(request.key)) continue;
+          const request = item.value, key = `${taskKey}:${request.body.objectKind}:${request.body.objectId}`;
+          if (!this.eligible(key) || !this.eligible(request.key)) continue;
           sent++;
-          try { await this.publishLive(context, request); this.failures.delete(request.key); }
-          catch (error) { if (this.current(context)) this.fail(request.key, error); }
+          try {
+            await this.publishLive(context, request);
+            this.failures.delete(key); this.failures.delete(request.key);
+          } catch (error) { if (this.current(context)) this.fail(key, error); }
         }
         for (const candidate of candidates) {
           if (sent > rowStart || sent >= 2 || encoded >= 4 || !this.current(context)) break;

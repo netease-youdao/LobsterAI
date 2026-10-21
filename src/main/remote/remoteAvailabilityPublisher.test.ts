@@ -196,6 +196,87 @@ describe('availability-first control and current messages', () => {
     expect(f.store.sync('local')).toMatchObject({ source_seq: 332, ack_seq: 159 });
     expect(f.db.prepare('SELECT event_json FROM remote_outbox').get()).toEqual({ event_json: '{' });
   });
+  it('clears the exact live failure after an automatic replay receives a valid ACK', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!; let failOnce = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && failOnce) { failOnce = false; throw new TypeError('fetch failed'); }
+      return ordinary(...args);
+    });
+    await f.live();
+    const original = f.publisher.ledger.pending(f.context.scope, 'live', 'local')[0];
+    expect(original).toBeDefined();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+    now += 1001;
+    await f.live();
+    expect(f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').map(call => call[2].publicationId))
+      .toEqual([original.key, original.key]);
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toEqual([]);
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: false, degraded: false });
+  });
+  it('clears a recovered task scan failure only after a successful scan', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    vi.spyOn(f.publisher.ledger, 'scanPending').mockImplementationOnce(() => { throw new Error('Temporary ledger read failure'); });
+    await f.live();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+    now += 1001;
+    await f.live();
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.state).toBe('accepted');
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: false, degraded: false });
+  });
+  it.each(['invalid receipt', 'changed connection'])('retains a live failure after replay with %s', async failure => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!; let first = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') {
+        if (first) { first = false; throw new TypeError('fetch failed'); }
+        if (failure === 'invalid receipt') return { publicationId: 'wrong-publication', state: 'accepted' };
+        f.setContext({ ...f.context, generation: '2' });
+      }
+      return ordinary(...args);
+    });
+    await f.live(); now += 1001; await f.live();
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toHaveLength(1);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')).toBeNull();
+    expect((f.publisher as any).failures.has(`${f.context.scope}:live:local:message:message`)).toBe(true);
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+  });
+  it('keeps other object, task and persisted faults when a live replay succeeds', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!; let first = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && first) { first = false; throw new TypeError('fetch failed'); }
+      return ordinary(...args);
+    });
+    await f.live();
+    const publisher = f.publisher as any;
+    const otherKeys = [`${f.context.scope}:live:local:message:other`, `${f.context.scope}:live:other-task`, `${f.context.scope}:control:local`];
+    for (const key of otherKeys) publisher.fail(key, new TypeError('fetch failed'));
+    f.publisher.ledger.objectFault(f.context.scope, 'local', 'message:other', 'other-fault');
+    now += 1001; await f.live();
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toEqual([]);
+    expect(publisher.failures.has(`${f.context.scope}:live:local:message:message`)).toBe(false);
+    for (const key of otherKeys) expect(publisher.failures.has(key)).toBe(true);
+    expect(f.publisher.ledger.db.prepare('SELECT object_key FROM availability_faults WHERE scope=? AND local_id=?').get(f.context.scope, 'local'))
+      .toEqual({ object_key: 'message:other' });
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+  });
+  it('keeps a fault persistence failure recorded after the task scan succeeds', async () => {
+    const f = fixture(); await f.controls();
+    vi.spyOn((f.publisher as any).encoder, 'project').mockRejectedValueOnce(new Error('Invalid object encoding'));
+    vi.spyOn(f.publisher.ledger, 'objectFault').mockImplementationOnce(() => { throw new Error('Fault ledger write unavailable'); });
+    await f.live();
+    expect((f.publisher as any).failures.has(`${f.context.scope}:live:local`)).toBe(true);
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+  });
   it('replays a lost live response with the original ID and body before publishing a newer core revision', async () => {
     const f = fixture(); await f.controls();
     const ordinary = f.request.getMockImplementation()!; let first = true;

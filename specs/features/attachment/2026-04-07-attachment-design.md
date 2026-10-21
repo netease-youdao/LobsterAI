@@ -257,6 +257,12 @@ IM 网关（WeChat、Feishu、DingTalk 等）的附件处理独立于 Cowork 直
   - 加载中显示蓝色图标 + spinner
 - **文件卡片**: 40×16 水平卡片 + 文件类型图标 + 文件名 + 悬浮删除按钮
 
+### 已发送图片的大图预览（2026-10-21）
+
+消息列表可使用 `imageAttachmentPreviews` 中的小尺寸预览；点击进入大图时，若 metadata 保留 `localPath`，通过现有 `readFileAsDataUrl` IPC 按需读取本地原图。读取失败、原文件缺失或解码失败时回退缩略图；无路径的旧消息保持原有行为。完整原图只保存在当前弹窗状态中，关闭或切图后不保留，旧请求结果不得覆盖新图片。
+
+根因、兼容性和验收见 [手机图片桌面大图预览修复](../../bugfixes/mobile-image-preview/2026-10-21-mobile-image-preview.md)。
+
 ### 草稿生命周期
 
 1. 用户添加附件 → `addDraftAttachment()` → Redux
@@ -276,3 +282,4 @@ IM 网关（WeChat、Feishu、DingTalk 等）的附件处理独立于 Cowork 直
 | 编号 | 日期 | 说明 | 文档 |
 |------|------|------|------|
 | 001 | 2026-04-07 | 修复 clipboard 图片不写磁盘导致第二轮对话找不到文件 | [clipboard-image-persistence](../../bugfixes/clipboard-image-persistence/2026-04-07-clipboard-image-persistence-design.md) |
+| 002 | 2026-10-21 | 手机上传图片大图预览按需读取原文件，避免使用 256px 缩略图 | [mobile-image-preview](../../bugfixes/mobile-image-preview/2026-10-21-mobile-image-preview.md) |
