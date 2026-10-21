@@ -151,6 +151,7 @@ export class SessionCommandService {
         if (oldWriterStopped) {
           this.store.remote.transaction(() => {
             this.store.updateSession(sessionId, { modelOverride: config.modelOverride,
+              ...(this.store.getSession(sessionId, 0)?.modelOverride !== config.modelOverride ? { modelPresetId: null } : {}),
               thinkingLevel: parseModelThinkingLevel(config.thinkingLevel) || '' }, { touchUpdatedAt: false });
             this.store.remote.inputVersion(sessionId); this.recordCurrentInputModel(sessionId);
             this.store.remote.put(inputOperationKey(fence.operationId, fence.syncTargetId), { phase: 'reconciled', afterVersion: this.store.remote.inputVersion(sessionId) });
@@ -275,7 +276,7 @@ export class SessionCommandService {
   private startHandler: ((options: any) => Promise<any>) | null = null;
   private continueHandler: ((options: any) => Promise<any>) | null = null;
   constructor(private readonly store: CoworkStore, private readonly runtime: CoworkRuntime, private readonly getOwner: () => RemoteOwner | null,
-    private readonly ownershipOptions: { gate?: OwnershipOperationGate; getGeneration?: () => number | string; onRecovered?: (sessionId: string) => void } = {}) {
+    private readonly ownershipOptions: { gate?: OwnershipOperationGate; getGeneration?: () => number | string; onRecovered?: (sessionId: string) => void; onInputConfigurationChanged?: (sessionId: string) => void } = {}) {
     runtime.on('sessionStatus', (id, status) => this.observeControl(id, () => {
       if (status !== 'running' || !store.remote.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(id)) return;
       // Anonymous tasks also need per-run approval identity; ownership still controls upload.
@@ -485,13 +486,22 @@ export class SessionCommandService {
           const beforeVersion = this.store.remote.inputVersion(localId);
           if (entry.command.type === 'send_message' && request.expectedInputVersion !== beforeVersion) throw new RemoteInputError(RemoteInputReason.Version);
           if (entry.command.type === 'send_message') {
+            const previousSession = this.store.getSession(localId, 0);
+            const modelChanged = previousSession?.modelOverride !== options.modelOverride;
+            const patch = { model: options.modelOverride, thinkingLevel: options.thinkingLevel || null,
+              ...(modelChanged && previousSession?.modelPresetId ? { contextWindow: null } : {}) };
             this.store.remote.put(`inputFence:${localId}`, { schemaVersion: 2, preparedProcessId: inputPreparationProcessId, operationId: entry.command.commandId, phase: RemoteInputOperationPhase.Prepared, beforeVersion, remoteRunId: entry.runId,
               ...(syncTargetId ? { syncTargetId } : {}),
-              target: { model: options.modelOverride, thinkingLevel: options.thinkingLevel || null }, gatewayBootId: '', gatewayProcessPid: null });
-            await this.runtime.patchSession(localId, { model: options.modelOverride, thinkingLevel: options.thinkingLevel || null });
+              target: patch, gatewayBootId: '', gatewayProcessPid: null });
+            await this.runtime.patchSession(localId, patch);
             // A confirmed patch remains a fact even if the send permit expires during the await.
             if (!sameOwner(entry.owner, this.getOwner())) throw new Error('Account changed during model application');
-            this.store.updateSession(localId, { modelOverride: options.modelOverride, thinkingLevel: parseModelThinkingLevel(options.thinkingLevel) || '' }, { touchUpdatedAt: false });
+            this.store.updateSession(localId, { modelOverride: options.modelOverride,
+              ...(modelChanged ? { modelPresetId: null } : {}),
+              thinkingLevel: parseModelThinkingLevel(options.thinkingLevel) || '' }, { touchUpdatedAt: false });
+            // Notify only after the confirmed local configuration has been persisted.
+            // A later send failure must not hide an already applied model change.
+            try { this.ownershipOptions.onInputConfigurationChanged?.(localId); } catch { /* UI notification cannot undo confirmed local state. */ }
           }
           this.store.remote.transaction(() => {
             const afterVersion = sameInputTarget() ? this.store.remote.setInputModel(localId, inputModel) : this.store.remote.inputVersion(localId);

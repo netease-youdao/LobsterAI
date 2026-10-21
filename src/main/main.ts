@@ -6512,13 +6512,16 @@ if (!gotTheLock) {
     // Store-backed services and listeners must wait for initApp's database initialization.
     getCoworkStore().remoteCreationOwner = getCurrentRemoteOwner;
     getSessionDeletionService();
+    const notifySessionConfigurationChanged = (sessionId: string): void => {
+      if (!getCoworkStore().canReadSession(sessionId, getCurrentRemoteOwner())) return;
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(CoworkIpcChannel.SessionsChanged, { sessionIds: [sessionId] });
+      }
+    };
     remoteSessionCommands = new SessionCommandService(getCoworkStore(), getCoworkEngineRouter(), getCurrentRemoteOwner,
-      { getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}`, onRecovered: sessionId => {
-        if (!getCoworkStore().canReadSession(sessionId, getCurrentRemoteOwner())) return;
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(CoworkIpcChannel.SessionsChanged, { sessionIds: [sessionId] });
-        }
-      } });
+      { getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}`,
+        onRecovered: notifySessionConfigurationChanged,
+        onInputConfigurationChanged: notifySessionConfigurationChanged });
     remoteSessionCommands.configure(submitStart, submitContinue);
     ownershipAssociations = new OwnershipAssociationService({
       store: getCoworkStore(), gate: ownershipOperationGate,

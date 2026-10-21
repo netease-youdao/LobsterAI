@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { afterEach, expect, it, vi } from 'vitest';
 
+import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { RemoteInputOperationPhase, RemoteInputReason, type RemoteResolvedInput } from '../../shared/remote/input';
 import type { CoworkStore } from '../coworkStore';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
@@ -18,14 +19,14 @@ import { assertRemoteExecutionPermit, markRemoteExecutionDispatched, SessionComm
 const owner = { userId: 'A', scopeKey: 'personal' };
 const resources: Array<() => void> = [];
 afterEach(() => { for (const dispose of resources.splice(0)) dispose(); });
-function fixture(create = false, initialTargetId: string | null = null) {
+function fixture(create = false, initialTargetId: string | null = null, initialModel = 'provider/old', initialPreset: ModelPresetId | null = null) {
   let targetId = initialTargetId;
   const cwd = mkdtempSync(path.join(tmpdir(), 'input-command-'));
   const db = new Database(':memory:'); resources.push(() => { db.close(); rmSync(cwd, { recursive: true, force: true }); });
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,agent_id TEXT,model_override TEXT,thinking_level TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const remote = new RemoteStore(db);
-  let modelOverride = 'provider/old'; let thinkingLevel = 'low';
+  let modelOverride = initialModel; let thinkingLevel = 'low'; let modelPresetId = initialPreset;
   const insert = (model: string, thinking: string): { id: string } => {
     modelOverride = model; thinkingLevel = thinking;
     db.prepare("INSERT INTO cowork_sessions VALUES('local','Task',1,1,'idle','main',?,?)").run(model, thinking);
@@ -33,16 +34,19 @@ function fixture(create = false, initialTargetId: string | null = null) {
   };
   if (!create) remote.transaction(() => insert(modelOverride, thinkingLevel));
   const store = { remote, getConfig: () => ({ systemPrompt: '' }), assertAgentAccess: vi.fn(),
-    getSession: () => ({ id: 'local', agentId: 'main', cwd, modelOverride, thinkingLevel }),
+    getSession: () => ({ id: 'local', agentId: 'main', cwd, modelOverride, thinkingLevel, modelPresetId }),
     getAgent: () => ({ enabled: true, model: 'provider/new' }),
     agentOwnership: { get: () => ({ version: '1', ownerKind: 'default', deletedAt: null }), canView: () => true },
     createSession: (_title: string, _cwd: string, _prompt: string, _mode: string, _skills: string[], _agent: string, model: string, options: any) => insert(model, options.thinkingLevel),
     updateSession: (_id: string, patch: any) => {
       modelOverride = patch.modelOverride ?? modelOverride; thinkingLevel = patch.thinkingLevel ?? thinkingLevel;
+      if (patch.modelPresetId !== undefined) modelPresetId = patch.modelPresetId;
       remote.transaction(() => db.prepare('UPDATE cowork_sessions SET model_override=?,thinking_level=? WHERE id=?').run(modelOverride, thinkingLevel, 'local'));
     } } as unknown as CoworkStore;
   const runtime = Object.assign(new EventEmitter(), { patchSession: vi.fn(async (): Promise<any> => ({ modelOverride: 'provider/new' })) });
-  const service = new SessionCommandService(store, runtime as unknown as CoworkRuntime, () => owner);
+  const onInputConfigurationChanged = vi.fn();
+  const onRecovered = vi.fn();
+  const service = new SessionCommandService(store, runtime as unknown as CoworkRuntime, () => owner, { onInputConfigurationChanged, onRecovered });
   const input: RemoteResolvedInput = { text: 'hello', agentId: 'main', expectedAgentVersion: '1', workspaceId: 'ws',
     model: { modelRef: 'new-model', version: '1' }, options: { thinkingLevel: 'high' }, attachments: [] };
   const manifest = { preparationId: 'prep', deviceId: 'pc', owner, targetId: targetId ?? undefined, resolvedInput: input, inputDigest: payloadHash(input), runtimeRef: 'provider/new', cwd } as LocalPreparedInput;
@@ -63,7 +67,7 @@ function fixture(create = false, initialTargetId: string | null = null) {
     status: 'claimed', statusVersion: '1', expiresAt: new Date(Date.now() + 60000).toISOString() };
   const binding = remote.transaction(() => service.prepare(command, owner, create ? cwd : null));
   const entry: InboxEntry = { targetId: targetId ?? undefined, command, owner, ...binding, state: 'executing', result: null };
-  return { service, remote, runtime, send, entry, store, resolveModel, resolveRuntimeModel, switchTarget(next: string | null) { targetId = next; } };
+  return { service, remote, runtime, send, entry, store, onInputConfigurationChanged, onRecovered, resolveModel, resolveRuntimeModel, switchTarget(next: string | null) { targetId = next; } };
 }
 it('starts a v2 task with the frozen session model and thinking override', async () => {
   const { service, entry, store, runtime, send } = fixture(true);
@@ -162,4 +166,58 @@ it('refreshes the desktop model catalog summary at a new input version', () => {
   expect(f.service.recordCurrentInputModel('local')).toEqual({ ...first, version: '2' });
   expect(f.remote.inputVersion('local')).toBe('2');
   expect(f.remote.get('inputModel:local')).toEqual({ ...first, version: '2' });
+});
+
+it('refreshes the desktop with the persisted mobile selection and clears the old preset', async () => {
+  const f = fixture(false, null, 'provider/old', ModelPresetId.Balanced);
+  f.onInputConfigurationChanged.mockImplementation(sessionId => ({
+    session: f.store.getSession(sessionId, 0), sendCount: f.send.mock.calls.length,
+  }));
+  await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
+  expect(f.runtime.patchSession).toHaveBeenCalledWith('local', { model: 'provider/new', thinkingLevel: 'high', contextWindow: null });
+  expect(f.onInputConfigurationChanged).toHaveBeenCalledExactlyOnceWith('local');
+  expect(f.onInputConfigurationChanged.mock.results[0].value).toMatchObject({
+    session: { modelOverride: 'provider/new', modelPresetId: null, thinkingLevel: 'high' }, sendCount: 0,
+  });
+  expect(f.store.getSession('local', 0)).toMatchObject({ modelOverride: 'provider/new', modelPresetId: null });
+});
+it('preserves the bound preset and context window when mobile continues with the same model', async () => {
+  const f = fixture(false, null, 'provider/new', ModelPresetId.Ultimate);
+  await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
+  expect(f.runtime.patchSession).toHaveBeenCalledWith('local', { model: 'provider/new', thinkingLevel: 'high' });
+  expect(f.store.getSession('local', 0)?.modelPresetId).toBe(ModelPresetId.Ultimate);
+  expect(f.onInputConfigurationChanged).toHaveBeenCalledExactlyOnceWith('local');
+});
+it('does not change the preset or refresh the desktop before model application is confirmed', async () => {
+  const f = fixture(false, null, 'provider/old', ModelPresetId.Balanced);
+  f.runtime.patchSession.mockRejectedValue(new Error('patch failed'));
+  await expect(f.service.execute(f.entry, () => true)).rejects.toThrow('patch failed');
+  expect(f.store.getSession('local', 0)).toMatchObject({ modelOverride: 'provider/old', modelPresetId: ModelPresetId.Balanced });
+  expect(f.onInputConfigurationChanged).not.toHaveBeenCalled();
+  expect(f.send).not.toHaveBeenCalled();
+});
+it('refreshes a confirmed model change even if the send permit expires during patch', async () => {
+  const f = fixture(false, null, 'provider/old', ModelPresetId.Balanced);
+  let permitted = true;
+  f.runtime.patchSession.mockImplementation(async () => { permitted = false; });
+  await expect(f.service.execute(f.entry, () => permitted)).rejects.toThrow(RemoteInputReason.Expired);
+  expect(f.store.getSession('local', 0)).toMatchObject({ modelOverride: 'provider/new', modelPresetId: null });
+  expect(f.onInputConfigurationChanged).toHaveBeenCalledExactlyOnceWith('local');
+  expect(f.send).not.toHaveBeenCalled();
+});
+it('does not turn a desktop notification failure into a failed remote send', async () => {
+  const f = fixture();
+  f.onInputConfigurationChanged.mockImplementation(() => { throw new Error('window closed'); });
+  await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
+  expect(f.send).toHaveBeenCalledOnce();
+});
+it.each([true, false])('reconciles the preset with the confirmed gateway model after an unknown patch (changed=%s)', async changed => {
+  const f = fixture(false, null, 'provider/old', ModelPresetId.Balanced);
+  f.remote.put('inputFence:local', { operationId: 'unknown', phase: RemoteInputOperationPhase.Unknown, gatewayProcessPid: 123 });
+  Object.assign(f.runtime, { querySessionRecovery: vi.fn(async () => ({ hasActiveRun: false, previousWriterStopped: true,
+    configuration: { modelOverride: changed ? 'provider/new' : 'provider/old', thinkingLevel: 'high' } })) });
+  await f.service.reconcileSession('local');
+  expect(f.store.getSession('local', 0)?.modelPresetId).toBe(changed ? null : ModelPresetId.Balanced);
+  expect(f.onRecovered).toHaveBeenCalledExactlyOnceWith('local');
+  expect(f.remote.get('inputFence:local')).toBeNull();
 });
