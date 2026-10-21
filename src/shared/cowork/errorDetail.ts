@@ -43,6 +43,8 @@ export interface CoworkErrorDetail {
   rawErrorPreview?: string;
   failoverReason?: string;
   providerRuntimeFailureKind?: string;
+  /** Model stop reason reported with the failure, e.g. `length` at the output limit. */
+  stopReason?: string;
 }
 
 const COWORK_ERROR_DETAIL_METADATA_KEYS = [
@@ -54,6 +56,7 @@ const COWORK_ERROR_DETAIL_METADATA_KEYS = [
   'rawErrorPreview',
   'failoverReason',
   'providerRuntimeFailureKind',
+  'stopReason',
 ] as const;
 
 type CoworkErrorDetailMetadataKey = typeof COWORK_ERROR_DETAIL_METADATA_KEYS[number];
@@ -112,6 +115,7 @@ const COWORK_ERROR_DETAIL_DISPLAY_ORDER: Array<keyof CoworkErrorDetail> = [
   'providerErrorType',
   'failoverReason',
   'providerRuntimeFailureKind',
+  'stopReason',
   'providerErrorMessagePreview',
   'rawErrorMessage',
   'rawErrorPreview',

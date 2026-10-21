@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { OpenClawEngineErrorCode } from '../../shared/openclawEngine/constants';
 import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
 import {
+  isOpenClawDiscoverableAgentDirName,
   LEGACY_SESSION_SQLITE_IMPORT_MODE,
   type LegacySessionMigrationRunner,
   type LegacySessionMigrationRunResult,
@@ -135,6 +136,41 @@ describe('openclawSessionLegacyMigration', () => {
     writeFile(workerPath);
 
     expect(listLegacySessionStorePaths(stateDir)).toEqual([sharedPath, mainPath, workerPath]);
+  });
+
+  // Observed with the pinned v2026.8.1 doctor: skipped directories keep their sessions.json.
+  test.each([
+    ['main', true], ['content-writer', true], ['efa723bc-8bff-4763-8748-ec0099d51e0e', true],
+    ['Main-', true], ['设计expert', true], ['Retired Agent', true], ['a.b', true], ['-x-', true],
+    ['内容创作', false], ['设计专家', false], ['主main', false], ['###', false], ['_old', false],
+  ])('matches OpenClaw discovery for agent directory %s', (dirName, discoverable) => {
+    expect(isOpenClawDiscoverableAgentDirName(dirName)).toBe(discoverable);
+  });
+
+  test('does not count stores in agent directories that OpenClaw never discovers', () => {
+    const mainPath = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
+    writeFile(mainPath);
+    writeFile(path.join(stateDir, 'agents', '内容创作', 'sessions', 'sessions.json'));
+    writeFile(path.join(stateDir, 'agents', '设计专家', 'sessions', 'sessions.json'));
+
+    expect(listLegacySessionStorePaths(stateDir)).toEqual([mainPath]);
+  });
+
+  test('starts without doctor when only stores that OpenClaw cannot own exist', async () => {
+    const orphanPath = path.join(stateDir, 'agents', '内容创作', 'sessions', 'sessions.json');
+    const orphanStore = '{"agent:content-writer:main":{"sessionId":"orphan"}}\n';
+    writeFile(orphanPath, orphanStore);
+    const logWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>();
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result).toEqual({ status: 'skipped', reason: 'no-legacy-session-files' });
+    expect(runner).not.toHaveBeenCalled();
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify(orphanPath)));
+    expect(fs.readFileSync(orphanPath, 'utf8')).toBe(orphanStore);
   });
 
   test('normal migration preserves an unreadable store and reports the failure for explicit repair', async () => {
@@ -299,6 +335,27 @@ describe('openclawSessionLegacyMigration', () => {
     expect(fs.readFileSync(fixture.archivePath, 'utf8')).toBe('{}\n');
   });
 
+  test('accepts a warning-only import while stores that OpenClaw cannot own stay in place', async () => {
+    const fixture = createWarningImportFixture();
+    const orphanPaths = ['内容创作', '设计专家']
+      .map(name => path.join(stateDir, 'agents', name, 'sessions', 'sessions.json'));
+    for (const orphanPath of orphanPaths) writeFile(orphanPath);
+    const logWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockImplementation(async () => {
+      archiveWarningFixture(fixture);
+      return { code: 1, stdout: JSON.stringify(fixture.report), stderr: '' };
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result).toEqual({ status: 'migrated', code: 1, migratedPaths: [fixture.legacyPath] });
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('completed with warnings'));
+    for (const orphanPath of orphanPaths) expect(fs.readFileSync(orphanPath, 'utf8')).toBe('{}\n');
+  });
+
   test('shows a blocking issue from a later target before an invalid-entry warning and logs issue counts', async () => {
     const fixture = createWarningImportFixture();
     const blockerCode = 'sqlite_transcript_count_mismatch';
@@ -407,6 +464,25 @@ describe('openclawSessionLegacyMigration', () => {
     expect(logError).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify(legacyPath)));
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('modifiedAt'));
     expect(logError).toHaveBeenCalledWith(expect.stringContaining('A legacy store was retained by doctor.'));
+  });
+
+  test('keeps failing closed when doctor reports no targets but a discoverable store remains', async () => {
+    // Doctor discovery skips EACCES/EPERM, so an empty report does not prove a store is unowned.
+    writeFile(path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json'));
+    writeFile(path.join(stateDir, 'agents', '内容创作', 'sessions', 'sessions.json'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = vi.fn<LegacySessionMigrationRunner>().mockResolvedValue({
+      code: 0, stdout: JSON.stringify({ mode: 'import', targets: [], totals: { issues: 0, targets: 0 } }), stderr: '',
+    });
+
+    const result = await migrateLegacySessionStorageWithDoctor({
+      stateDir, configPath, runtimeRoot, electronNodeRuntimePath: process.execPath, env: {}, runner,
+    });
+
+    expect(result).toEqual({
+      status: 'failed', code: 0, error: 'OpenClaw doctor completed but 1 legacy session store(s) remain.',
+    });
   });
 
   test('records lock owner and residual stores when doctor reports contention', async () => {

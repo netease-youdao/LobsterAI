@@ -192,6 +192,7 @@ export function extractMediaReferencesFromPrompt(
       localPath: item.attachment.path.startsWith('inline:') ? undefined : item.attachment.path,
       dataUrl: item.attachment.dataUrl,
       role: MEDIA_ROLE_BY_TYPE[item.mediaType],
+      ...(item.attachment.imageEdit ? { imageEdit: item.attachment.imageEdit } : {}),
     });
   }
 

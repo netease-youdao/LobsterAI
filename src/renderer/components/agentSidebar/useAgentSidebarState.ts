@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { coworkService } from '../../services/cowork';
 import { localStore } from '../../services/store';
@@ -10,6 +10,7 @@ import {
   selectCurrentSessionId,
   selectPendingPermissionSessionIds,
 } from '../../store/selectors/coworkSelectors';
+import { setSidebarRevealAgentId } from '../../store/slices/agentSlice';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 import {
@@ -207,9 +208,14 @@ export const useAgentSidebarState = ({
 }: {
   includeActivityTasks?: boolean;
 } = {}) => {
+  const dispatch = useDispatch();
   const agents = useSelector((state: RootState) => state.agent.agents);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const sidebarRevealAgentId = useSelector((state: RootState) => state.agent.sidebarRevealAgentId);
   const currentSessionId = useSelector(selectCurrentSessionId);
+  const currentSessionAgentId = useSelector((state: RootState) => (
+    state.cowork.currentSession ? normalizeAgentId(state.cowork.currentSession.agentId) : null
+  ));
   const sessions = useSelector(selectCoworkSessions);
   const completedUnreadSessionIds = useSelector(selectCompletedUnreadSessionIds);
   const pendingPermissionSessionIds = useSelector(selectPendingPermissionSessionIds);
@@ -242,6 +248,8 @@ export const useAgentSidebarState = ({
         id: agent.id,
         name: agent.name,
         icon: agent.icon,
+        iconCustomized: agent.iconCustomized,
+        source: agent.source,
         enabled: agent.enabled,
         pinned: agent.pinned ?? false,
         pinOrder: agent.pinOrder ?? null,
@@ -597,6 +605,22 @@ export const useAgentSidebarState = ({
       return previous.includes(agentId) ? previous : [...previous, agentId];
     });
   }, []);
+
+  const canRevealAgent = enabledAgents.some((agent) => agent.id === sidebarRevealAgentId);
+  const canRevealSession = enabledAgents.some((agent) => agent.id === currentSessionAgentId);
+
+  useEffect(() => {
+    if (!preferenceLoaded || !sidebarRevealAgentId || !canRevealAgent) return;
+    // Consume the intent after preferences load, including repeated summons of the same expert.
+    expandAgent(sidebarRevealAgentId);
+    dispatch(setSidebarRevealAgentId(null));
+  }, [canRevealAgent, dispatch, expandAgent, preferenceLoaded, sidebarRevealAgentId]);
+
+  useEffect(() => {
+    if (!preferenceLoaded || !currentSessionId || !currentSessionAgentId || !canRevealSession) return;
+    // Only navigation reveals the group. Streaming updates must respect a manual collapse.
+    expandAgent(currentSessionAgentId);
+  }, [canRevealSession, currentSessionAgentId, currentSessionId, expandAgent, preferenceLoaded]);
 
   const collapseAgent = useCallback((agentId: string) => {
     setExpandedAgentIds((previous) => {

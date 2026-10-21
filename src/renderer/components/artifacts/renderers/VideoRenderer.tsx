@@ -1,4 +1,4 @@
-import { ArtifactPreviewProtocol } from '@shared/artifactPreview/constants';
+import { ArtifactPreviewHost, ArtifactPreviewProtocol } from '@shared/artifactPreview/constants';
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
@@ -36,16 +36,14 @@ function normalizeLocalPath(filePath: string): string {
   return normalized.replace(/\\/g, '/');
 }
 
-function buildLocalFileSrc(filePath: string, cacheKey: number): string {
+export function buildLocalFileSrc(filePath: string, cacheKey: number): string {
   const normalized = normalizeLocalPath(filePath);
-  const pathForUrl = /^[A-Za-z]:/.test(normalized) || normalized.startsWith('/')
+  const pathForUrl = normalized.startsWith('/')
     ? normalized
     : `/${normalized}`;
   const encoded = pathForUrl.split('/').map(encodeURIComponent).join('/');
-  const prefix = /^[A-Za-z]:/.test(pathForUrl)
-    ? `${ArtifactPreviewProtocol.LocalFile}:///`
-    : `${ArtifactPreviewProtocol.LocalFile}://`;
-  return `${prefix}${encoded}?v=${cacheKey}`;
+  // Standard custom schemes need an authority; an empty host is rejected by Chromium media loading.
+  return `${ArtifactPreviewProtocol.LocalFile}://${ArtifactPreviewHost.LocalFile}${encoded}?v=${cacheKey}`;
 }
 
 function buildFileUrlSrc(filePath: string): string {
@@ -132,7 +130,12 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
             setVideoAspectRatio(`${videoWidth} / ${videoHeight}`);
           }
         }}
-        onError={() => {
+        onError={(event) => {
+          window.electron?.log?.fromRenderer?.('warn', 'ArtifactPreview', `Video source failed: ${JSON.stringify({
+            sourceIndex: activeSourceIndex,
+            code: event.currentTarget.error?.code,
+            message: event.currentTarget.error?.message,
+          })}`);
           if (activeSourceIndex < sources.length - 1) {
             setActiveSourceIndex(index => index + 1);
             return;

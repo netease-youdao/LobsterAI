@@ -52,6 +52,8 @@ export interface LocalFileContextMenuProps {
   filePath: string;
   isDirectory?: boolean;
   position: { x: number; y: number };
+  /** Replaces the default open action (the system default app), e.g. to open the file inside the app. */
+  onOpen?: () => void;
   onClose: () => void;
 }
 
@@ -59,6 +61,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
   filePath,
   isDirectory = false,
   position,
+  onOpen,
   onClose,
 }) => {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -174,10 +177,19 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
     });
   }, [submenuOpen, apps, loadingApps]);
 
-  const handleOpen = useCallback(async () => {
+  const handleOpenWithSystemApp = useCallback(async () => {
     onClose();
     await openLocalPathWithToast(normalizedPath);
   }, [normalizedPath, onClose]);
+
+  const handleOpen = useCallback(() => {
+    if (!onOpen) {
+      void handleOpenWithSystemApp();
+      return;
+    }
+    onClose();
+    onOpen();
+  }, [handleOpenWithSystemApp, onClose, onOpen]);
 
   const handleOpenWithApp = useCallback(async (appItem: ShellAppInfo) => {
     onClose();
@@ -356,7 +368,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
               </button>
             ))
           ) : (
-            <button type="button" onClick={handleOpen} className={MENU_ITEM_CLASS}>
+            <button type="button" onClick={handleOpenWithSystemApp} className={MENU_ITEM_CLASS}>
               <span className="truncate">{t('artifactOpenWithApp')}</span>
             </button>
           )}

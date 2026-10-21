@@ -1,6 +1,7 @@
 import { OpenClawProviderId, ProviderName, ProviderRegistry } from '@shared/providers/constants';
 
 import type { Model } from '../store/slices/modelSlice';
+import { logModelSelectionOnce } from './modelSelectionLog';
 
 type ModelRefInput = Pick<Model, 'id' | 'providerKey' | 'openClawProviderId' | 'isServerModel'>;
 
@@ -13,6 +14,29 @@ function resolveModelOpenClawProviderId(model: ModelRefInput): string {
 
 export function toOpenClawModelRef(model: ModelRefInput): string {
   return `${resolveModelOpenClawProviderId(model)}/${model.id}`;
+}
+
+/** Plan models bill the LobsterAI plan; every other provider bills the user's own account. */
+export const ModelBillingSide = {
+  Plan: 'plan',
+  Custom: 'custom',
+} as const;
+export type ModelBillingSide = typeof ModelBillingSide[keyof typeof ModelBillingSide];
+
+export function getModelBillingSide(model: ModelRefInput): ModelBillingSide {
+  return resolveModelOpenClawProviderId(model) === OpenClawProviderId.LobsteraiServer
+    ? ModelBillingSide.Plan
+    : ModelBillingSide.Custom;
+}
+
+/** Null for a bare model id, whose provider (and so billing side) is unknown. */
+export function getModelRefBillingSide(modelRef: string): ModelBillingSide | null {
+  const normalizedRef = modelRef.trim();
+  const slashIndex = normalizedRef.indexOf('/');
+  if (slashIndex <= 0) return null;
+  return normalizedRef.slice(0, slashIndex) === OpenClawProviderId.LobsteraiServer
+    ? ModelBillingSide.Plan
+    : ModelBillingSide.Custom;
 }
 
 export function matchesOpenClawModelRef(
@@ -38,7 +62,11 @@ export function resolveOpenClawModelRef<T extends ModelRefInput>(
     const exact = availableModels.find((model) => toOpenClawModelRef(model) === normalizedRef) ?? null;
     if (exact) return exact;
 
-    console.log('[openclawModelRef] exact match failed for', normalizedRef, 'available refs:', availableModels.map(m => toOpenClawModelRef(m)));
+    logModelSelectionOnce(
+      'debug',
+      `exact-miss:${normalizedRef}`,
+      `exact match failed for ${normalizedRef}; available refs: ${availableModels.map(m => toOpenClawModelRef(m)).join(', ') || 'none'}`,
+    );
 
     const slashIndex = normalizedRef.indexOf('/');
     const providerId = normalizedRef.slice(0, slashIndex);
@@ -58,11 +86,26 @@ export function resolveOpenClawModelRef<T extends ModelRefInput>(
       if (migratedMatch) return migratedMatch;
     }
 
-    // Generic provider fallback: match by model ID if unique
+    // Generic provider fallback: match by model ID if unique. It follows renamed
+    // providers, so it must never swap a plan model and a user's own model that
+    // share an ID: they bill different accounts.
+    const refBillingSide = getModelRefBillingSide(normalizedRef);
     const idMatches = availableModels.filter((model) => model.id === modelId);
-    if (idMatches.length === 1) {
-      console.log('[openclawModelRef] provider fallback: resolved', normalizedRef, 'to', toOpenClawModelRef(idMatches[0]));
-      return idMatches[0];
+    const sameSideMatches = idMatches.filter((model) => getModelBillingSide(model) === refBillingSide);
+    if (sameSideMatches.length === 1) {
+      logModelSelectionOnce(
+        'warn',
+        `id-fallback:${normalizedRef}`,
+        `provider fallback resolved ${normalizedRef} to ${toOpenClawModelRef(sameSideMatches[0])}`,
+      );
+      return sameSideMatches[0];
+    }
+    if (sameSideMatches.length === 0 && idMatches.length > 0) {
+      logModelSelectionOnce(
+        'warn',
+        `id-fallback-blocked:${normalizedRef}`,
+        `did not resolve ${normalizedRef} to ${idMatches.map(m => toOpenClawModelRef(m)).join(', ')} across plan and custom billing`,
+      );
     }
     return null;
   }

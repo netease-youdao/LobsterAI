@@ -20,12 +20,17 @@ import {
   CoworkOnboardingMessageKind,
 } from '../../shared/cowork/constants';
 import { normalizeCoworkGoal } from '../../shared/cowork/goal';
+import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
 import {
   type CoworkSteerRequest,
   CoworkSteerStatus,
 } from '../../shared/cowork/steer';
+import { MediaProtocol } from '../../shared/media/constants';
+import type { ModelPresetId } from '../../shared/modelPresets/constants';
+import { OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
+import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import { store } from '../store';
 import {
   addMessage,
@@ -53,6 +58,7 @@ import {
   setHasMoreSessions,
   setMessageRailIndex,
   setMessageRailIndexLoading,
+  setMessageTurnUsage,
   setMessageWindow,
   setOpenClawRepairing,
   setRemoteManaged,
@@ -70,7 +76,6 @@ import {
 } from '../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type {
-  CoworkApiConfig,
   CoworkConfigUpdate,
   CoworkContextUsage,
   CoworkContinueOptions,
@@ -83,6 +88,7 @@ import type {
   CoworkUserMemoryEntry,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
+  OpenClawLoopbackRepairResult,
   OpenClawSessionPolicyConfig,
 } from '../types/cowork';
 import { CoworkSessionStatusValue } from '../types/cowork';
@@ -94,7 +100,9 @@ import {
 import { i18nService } from './i18n';
 import { restoreNativeQuestionPermissions } from './nativeQuestionRecovery';
 import { reportOnboardingAction } from './onboardingAnalytics';
+import { isConfigApplyPendingStatus, resolveEngineNotReadyMessage } from './openclawEngineStatus';
 import { resolveOpenClawRepairHistoryWarning } from './openclawRepair';
+import { beginTaskSubmission, finishTaskSubmission, resetDraftAnalytics } from './usageAnalytics';
 
 const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
@@ -334,7 +342,7 @@ class CoworkService {
 
     const mediaStatusPollCleanup = cowork.onMediaStatusPollUpdate?.(({ sessionId, toolCallId, details }) => {
       const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
-      if (session?.status !== 'completed') {
+      if (details.protocolVersion !== MediaProtocol.Durable && session?.status !== 'completed') {
         store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
         this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
       }
@@ -388,6 +396,13 @@ class CoworkService {
     });
     if (goalCleanup) {
       this.streamListenerCleanups.push(goalCleanup);
+    }
+
+    const turnUsageCleanup = cowork.onStreamTurnUsage?.(({ sessionId, messageId, turnUsage }) => {
+      store.dispatch(setMessageTurnUsage({ sessionId, messageId, turnUsage }));
+    });
+    if (turnUsageCleanup) {
+      this.streamListenerCleanups.push(turnUsageCleanup);
     }
 
     const btwResultCleanup = cowork.onStreamBtwResult?.(({ sessionId, result }) => {
@@ -779,6 +794,9 @@ class CoworkService {
   }
 
   private notifyOpenClawStatus(status: OpenClawEngineStatus): void {
+    // Describes one refused request while the gateway keeps running; broadcasting
+    // it as "starting" would pin the global startup overlay until a later event.
+    if (isConfigApplyPendingStatus(status)) return;
     this.openClawStatus = status;
     this.openClawStatusListeners.forEach((listener) => {
       listener(status);
@@ -1070,7 +1088,16 @@ class CoworkService {
 
     store.dispatch(setStreaming(true));
 
-    const result = await cowork.startSession(options);
+    const analytics = beginTaskSubmission(options.agentId);
+    let result: Awaited<ReturnType<typeof cowork.startSession>>;
+    try {
+      result = await cowork.startSession({ ...options, analytics });
+    } catch (error) {
+      finishTaskSubmission(analytics, undefined, error);
+      store.dispatch(setStreaming(false));
+      throw error;
+    }
+    finishTaskSubmission(analytics, result.success ? result.session?.id : undefined, result.code ?? result.error);
     if (result.success && result.session) {
       store.dispatch(addSession(result.session));
       if (result.session.status !== 'running') {
@@ -1086,7 +1113,7 @@ class CoworkService {
     // Show a user-visible error when session start fails
     if (result.error) {
       const errorContent = result.code === 'ENGINE_NOT_READY'
-        ? i18nService.t('coworkErrorEngineNotReady')
+        ? resolveEngineNotReadyMessage(result.engineStatus)
         : classifyError(result.error);
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
     }
@@ -1115,11 +1142,14 @@ class CoworkService {
     this.setCurrentSessionStreaming(options.sessionId, true, 'continue_session_requested');
     store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
 
+    const analytics = beginTaskSubmission(undefined, options.sessionId);
     const result = await cowork.continueSession({
+      analytics,
       sessionId: options.sessionId,
       prompt: options.prompt,
       systemPrompt: options.systemPrompt,
       activeSkillIds: options.activeSkillIds,
+      inheritedSkillIds: options.inheritedSkillIds,
       runtimeSkillIds: options.runtimeSkillIds,
       kitIds: options.kitIds,
       kitReferences: options.kitReferences,
@@ -1129,7 +1159,12 @@ class CoworkService {
       mediaReferences: options.mediaReferences,
       selectedTextSnippets: options.selectedTextSnippets,
       browserAnnotations: options.browserAnnotations,
+    }).catch(error => {
+      finishTaskSubmission(analytics, undefined, error);
+      this.setCurrentSessionStreaming(options.sessionId, false, 'continue_session_failed');
+      throw error;
     });
+    finishTaskSubmission(analytics, result.success ? options.sessionId : undefined, result.code ?? result.error);
     if (!result.success) {
       this.setCurrentSessionStreaming(options.sessionId, false, 'continue_session_failed');
       if (result.engineStatus) {
@@ -1152,7 +1187,7 @@ class CoworkService {
       // Show a user-visible error message in the session
       if (result.error) {
         const errorContent = result.code === 'ENGINE_NOT_READY'
-          ? i18nService.t('coworkErrorEngineNotReady')
+          ? resolveEngineNotReadyMessage(result.engineStatus)
           : classifyError(result.error);
         store.dispatch(addMessage({
           sessionId: options.sessionId,
@@ -1464,6 +1499,17 @@ class CoworkService {
     }
   }
 
+  /** Re-fetches a finished turn's credit usage from the server ledger. */
+  async refreshTurnUsage(sessionId: string, messageId: string): Promise<CoworkTurnUsage | null> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.refreshTurnUsage) return null;
+    const turnUsage = await cowork.refreshTurnUsage({ sessionId, messageId });
+    if (turnUsage) {
+      store.dispatch(setMessageTurnUsage({ sessionId, messageId, turnUsage }));
+    }
+    return turnUsage;
+  }
+
   async runGoalCommand(options: { sessionId: string; command: string }): Promise<boolean> {
     const cowork = window.electron?.cowork;
     if (!cowork?.runGoalCommand) {
@@ -1510,7 +1556,7 @@ class CoworkService {
         this.notifyOpenClawStatus(result.engineStatus);
       }
       const errorContent = result.code === 'ENGINE_NOT_READY'
-        ? i18nService.t('coworkErrorEngineNotReady')
+        ? resolveEngineNotReadyMessage(result.engineStatus)
         : classifyError(result.error || 'Failed to run goal command');
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
       console.error('[CoworkGoal] goal command failed:', result.error);
@@ -1813,6 +1859,7 @@ class CoworkService {
                 messagesOffset: returnedOffset,
                 totalMessages: pageResult.total ?? session.totalMessages,
                 leadingTurnStartTimestamp: pageResult.leadingTurnStartTimestamp ?? null,
+                leadingTurnUsage: pageResult.leadingTurnUsage ?? null,
               };
               this.logDiagnostic(
                 'debug',
@@ -1940,6 +1987,7 @@ class CoworkService {
         messagesOffset: result.offset ?? offset,
         totalMessages: result.total ?? totalMessages,
         leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
+        leadingTurnUsage: result.leadingTurnUsage ?? null,
         preserveCurrentTotal: store.getState().cowork.currentSession!.totalMessages > totalMessages,
       }));
       return true;
@@ -1996,6 +2044,7 @@ class CoworkService {
         messages: result.messages,
         newOffset,
         leadingTurnStartTimestamp: result.leadingTurnStartTimestamp ?? null,
+        leadingTurnUsage: result.leadingTurnUsage ?? null,
       }));
       const nextCount = store.getState().cowork.currentSession?.messages.length ?? currentMessageCount;
       this.logDiagnostic(
@@ -2166,6 +2215,15 @@ class CoworkService {
     return Boolean(finalView && finalView.offset <= 0 && finalView.loaded >= finalView.total);
   }
 
+  async selectSessionModelPreset(sessionId: string, presetId: ModelPresetId, thinkingLevel?: ModelThinkingLevel): Promise<CoworkSession> {
+    const result = await window.electron.modelPresets.selectSession(sessionId, presetId, thinkingLevel);
+    if (!result.success || !result.data) throw new Error(result.error || i18nService.t('coworkModelSwitchFailed'));
+    if (store.getState().cowork.currentSessionId === sessionId) {
+      store.dispatch(setCurrentSession(result.data));
+    }
+    return result.data;
+  }
+
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSession | null> {
     const sessionApi = window.electron?.openclaw?.session;
     if (!sessionApi?.patch) {
@@ -2241,25 +2299,11 @@ class CoworkService {
     return false;
   }
 
-  async getApiConfig(): Promise<CoworkApiConfig | null> {
-    if (!window.electron?.getApiConfig) {
-      return null;
-    }
-    return window.electron.getApiConfig();
-  }
-
-  async checkApiConfig(options?: { probeModel?: boolean }): Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string } | null> {
+  async checkApiConfig(): Promise<{ hasConfig: boolean; error?: string } | null> {
     if (!window.electron?.checkApiConfig) {
       return null;
     }
-    return window.electron.checkApiConfig(options);
-  }
-
-  async saveApiConfig(config: CoworkApiConfig): Promise<{ success: boolean; error?: string } | null> {
-    if (!window.electron?.saveApiConfig) {
-      return null;
-    }
-    return window.electron.saveApiConfig(config);
+    return window.electron.checkApiConfig();
   }
 
   async listMemoryEntries(input: {
@@ -2402,6 +2446,19 @@ class CoworkService {
     return this.openClawStatus;
   }
 
+  // Raises a UAC prompt; on success the main process restarts the gateway.
+  async repairOpenClawLoopbackFirewall(): Promise<OpenClawLoopbackRepairResult> {
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.repairLoopbackFirewall) {
+      return { outcome: OpenClawLoopbackRepairOutcome.Unsupported };
+    }
+    const result = await engineApi.repairLoopbackFirewall();
+    if (result?.status) {
+      this.notifyOpenClawStatus(result.status);
+    }
+    return result ?? { outcome: OpenClawLoopbackRepairOutcome.Failed };
+  }
+
   async repairOpenClawGatewayState(): Promise<OpenClawGatewayRepairResult> {
     if (this.openClawRepairPromise) return this.openClawRepairPromise;
 
@@ -2448,11 +2505,21 @@ class CoworkService {
     }
   }
 
-  async generateSessionTitle(prompt: string | null): Promise<string | null> {
-    if (!window.electron?.generateSessionTitle) {
-      return null;
+  async generateSessionTitle(sessionId: string, text: string, expectedTitle: string): Promise<void> {
+    if (!text || !window.electron?.generateSessionTitle) return;
+    const accountGeneration = store.getState().auth.accountGeneration;
+    try {
+      const title = await window.electron.generateSessionTitle({ sessionId, text, expectedTitle });
+      const state = store.getState();
+      const session = state.cowork.currentSession?.id === sessionId
+        ? state.cowork.currentSession
+        : state.cowork.sessions.find(item => item.id === sessionId);
+      if (title && state.auth.accountGeneration === accountGeneration && session?.title === expectedTitle) {
+        store.dispatch(updateSessionTitle({ sessionId, title }));
+      }
+    } catch {
+      // Optional helper: never surface errors or retry a failed title request.
     }
-    return window.electron.generateSessionTitle(prompt);
   }
 
   async getRecentCwds(limit?: number): Promise<string[]> {
@@ -2463,6 +2530,7 @@ class CoworkService {
   }
 
   clearSession(options: { restoreAgentSkills?: boolean } = {}): void {
+    resetDraftAnalytics();
     // Invalidate an in-flight load so an old history/IM session cannot replace
     // the new-task view after the user has explicitly left that session.
     this.latestLoadSessionRequestId += 1;

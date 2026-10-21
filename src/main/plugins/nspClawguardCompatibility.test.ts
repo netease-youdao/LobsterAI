@@ -46,7 +46,8 @@ const startupSource = pluginSource.replace(
 
 const roots: string[] = [];
 function createRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-nsp-compat-'));
+  // Node resolves import.meta.url to the real path, e.g. macOS /var -> /private/var.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-nsp-compat-')));
   roots.push(root);
   return root;
 }

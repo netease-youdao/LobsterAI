@@ -1,10 +1,12 @@
 import mermaid from 'mermaid';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import type { Artifact } from '@/types/artifact';
 
 import { i18nService } from '../../../services/i18n';
 import { startMermaidRender } from './mermaidRenderLifecycle';
+import { getZoomedSize, MAX_ZOOM_SCALE, MIN_ZOOM_SCALE, stepZoomScale } from './zoomPan';
+import { useInjectedSvgSize, useZoomPan, ZoomPanViewport } from './ZoomPanViewport';
 
 let mermaidInitialized = false;
 
@@ -36,28 +38,20 @@ interface MermaidRendererProps {
 }
 
 const MermaidRenderer: React.FC<MermaidRendererProps> = ({ artifact }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  const zoomPan = useZoomPan();
+  const { scale } = zoomPan;
   const [error, setError] = useState<string | null>(null);
   const [svg, setSvg] = useState<string>('');
 
-  const handleWheel = useCallback((e: WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      setScale(prev => Math.max(0.1, Math.min(5, prev - e.deltaY * 0.001)));
-    }
-  }, []);
-
-  const resetZoom = useCallback(() => setScale(1), []);
-  const zoomIn = useCallback(() => setScale(prev => Math.min(5, prev + 0.1)), []);
-  const zoomOut = useCallback(() => setScale(prev => Math.max(0.1, prev - 0.1)), []);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener('wheel', handleWheel, { passive: false });
-    return () => el.removeEventListener('wheel', handleWheel);
-  }, [handleWheel]);
+  const svgSize = useInjectedSvgSize(zoomPan.contentElement, svg);
+  const displaySize = svgSize
+    ? getZoomedSize({
+      intrinsicWidth: svgSize.width,
+      aspectRatio: svgSize.aspectRatio,
+      availableWidth: zoomPan.availableWidth,
+      scale,
+    })
+    : null;
 
   useEffect(() => {
     const isDark = document.documentElement.classList.contains('dark');
@@ -83,45 +77,55 @@ const MermaidRenderer: React.FC<MermaidRendererProps> = ({ artifact }) => {
     return task.cancel;
   }, [artifact.content, artifact.id]);
 
-  return (
-    <div className="relative w-full h-full">
-      <div className="w-full h-full overflow-auto" ref={containerRef}>
-        {error ? (
-          <div role="alert" className="p-4 text-sm text-red-500">
-            <p className="font-medium">{i18nService.t('artifactMermaidRenderError')}</p>
-            <pre className="mt-2 text-xs whitespace-pre-wrap">{error}</pre>
-          </div>
-        ) : (
-          <div
-            className="flex items-center justify-center min-h-full p-4"
-            style={{ transform: `scale(${scale})`, transformOrigin: 'center center' }}
-            dangerouslySetInnerHTML={{ __html: svg }}
-          />
-        )}
+  if (error) {
+    return (
+      <div className="w-full h-full overflow-auto">
+        <div role="alert" className="p-4 text-sm text-red-500">
+          <p className="font-medium">{i18nService.t('artifactMermaidRenderError')}</p>
+          <pre className="mt-2 text-xs whitespace-pre-wrap">{error}</pre>
+        </div>
       </div>
-      {!error && <div className="absolute bottom-3 right-3 flex items-center gap-1">
-        <button
-          onClick={zoomOut}
-          disabled={scale <= 0.1}
-          className="w-6 h-6 flex items-center justify-center text-xs rounded bg-surface text-secondary hover:bg-surface-hover disabled:opacity-30"
-        >
-          −
-        </button>
-        <button
-          onClick={resetZoom}
-          className="px-1.5 py-0.5 text-xs rounded bg-surface text-secondary hover:bg-surface-hover tabular-nums"
-        >
-          {Math.round(scale * 100)}%
-        </button>
-        <button
-          onClick={zoomIn}
-          disabled={scale >= 5}
-          className="w-6 h-6 flex items-center justify-center text-xs rounded bg-surface text-secondary hover:bg-surface-hover disabled:opacity-30"
-        >
-          +
-        </button>
-      </div>}
-    </div>
+    );
+  }
+
+  return (
+    <ZoomPanViewport
+      zoomPan={zoomPan}
+      isContentSized={displaySize !== null}
+      overlay={(
+        <div className="absolute bottom-3 right-3 flex items-center gap-1">
+          <button
+            onClick={() => zoomPan.zoomTo(prev => stepZoomScale(prev, -1))}
+            disabled={scale <= MIN_ZOOM_SCALE}
+            className="w-6 h-6 flex items-center justify-center text-xs rounded bg-surface text-secondary hover:bg-surface-hover disabled:opacity-30"
+          >
+            −
+          </button>
+          <button
+            onClick={zoomPan.resetZoom}
+            className="px-1.5 py-0.5 text-xs rounded bg-surface text-secondary hover:bg-surface-hover tabular-nums"
+          >
+            {Math.round(scale * 100)}%
+          </button>
+          <button
+            onClick={() => zoomPan.zoomTo(prev => stepZoomScale(prev, 1))}
+            disabled={scale >= MAX_ZOOM_SCALE}
+            className="w-6 h-6 flex items-center justify-center text-xs rounded bg-surface text-secondary hover:bg-surface-hover disabled:opacity-30"
+          >
+            +
+          </button>
+        </div>
+      )}
+    >
+      <div
+        ref={zoomPan.setContentElement}
+        className={`m-auto shrink-0 ${displaySize
+          ? '[&>svg]:block [&>svg]:!h-full [&>svg]:!w-full [&>svg]:!max-w-none'
+          : '[&>svg]:max-w-full [&>svg]:h-auto'}`}
+        style={displaySize ?? undefined}
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    </ZoomPanViewport>
   );
 };
 

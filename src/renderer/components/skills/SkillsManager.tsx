@@ -2,6 +2,7 @@ import { ArrowPathIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react
 import {
   ArrowDownTrayIcon,
   CheckIcon,
+  ExclamationTriangleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -34,6 +35,7 @@ import {
   reportSkillAction,
 } from './analytics';
 import SkillIconTile from './SkillIconTile';
+import { SKILL_LOAD_ISSUE_I18N_KEYS } from './skillLoadIssue';
 import SkillSecurityReport from './SkillSecurityReport';
 import { SKILL_TAB_LABEL_KEYS, SKILL_TAB_ORDER, SkillTab } from './skillTabs';
 
@@ -1133,6 +1135,16 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 {i18nService.t('official')}
               </span>
             )}
+            {/* The agent skips this skill even though it is enabled here; the
+                detail dialog explains why. */}
+            {skill.loadIssue && (
+              <span
+                className="flex-shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 dark:text-amber-400"
+                title={i18nService.t(SKILL_LOAD_ISSUE_I18N_KEYS[skill.loadIssue].detail)}
+              >
+                {i18nService.t(SKILL_LOAD_ISSUE_I18N_KEYS[skill.loadIssue].label)}
+              </span>
+            )}
             <span className="truncate">{formatSkillDate(skill.updatedAt)}</span>
           </div>
           {hasUpdate && marketplaceSkill && (
@@ -1841,6 +1853,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             })()}
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              {selectedSkill.loadIssue && (
+                <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                  <span>{i18nService.t(SKILL_LOAD_ISSUE_I18N_KEYS[selectedSkill.loadIssue].detail)}</span>
+                </div>
+              )}
               <h3 className={`mb-2 ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground`}>
                 {i18nService.t('skillDetailAbout')}
               </h3>

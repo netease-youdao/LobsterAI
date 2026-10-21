@@ -65,7 +65,7 @@ const groupRecentItems = (items: AgentSidebarActivityItem[]): RecentDateGroup[] 
 };
 
 const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <h2 className="px-2 pb-1 pt-2 text-[13px] font-medium text-secondary">
+  <h2 className="px-0 pb-1 pt-2 text-[13px] font-medium text-secondary">
     {children}
   </h2>
 );
@@ -89,7 +89,7 @@ const AgentSidebarActivityView: React.FC<AgentSidebarActivityViewProps> = ({
             {activity.priority.map(renderTask)}
           </div>
         ) : (
-          <p className="px-2 py-2 text-[13px] text-secondary/70">
+          <p className="px-0 py-2 text-[13px] text-secondary/70">
             {i18nService.t('sidebarActivityNoPriority')}
           </p>
         )}
@@ -101,7 +101,7 @@ const AgentSidebarActivityView: React.FC<AgentSidebarActivityViewProps> = ({
         </SectionHeading>
         {recentGroups.length > 0 ? recentGroups.map((group) => (
           <div key={group.key} className="mb-2">
-            <h3 className="px-2 py-1 text-[12px] font-normal text-secondary/70">
+            <h3 className="px-0 py-1 text-[12px] font-normal text-secondary/70">
               {group.label}
             </h3>
             <div className="space-y-0.5">
@@ -109,7 +109,7 @@ const AgentSidebarActivityView: React.FC<AgentSidebarActivityViewProps> = ({
             </div>
           </div>
         )) : (
-          <p className="px-2 py-2 text-[13px] text-secondary/70">
+          <p className="px-0 py-2 text-[13px] text-secondary/70">
             {i18nService.t('sidebarActivityNoRecent')}
           </p>
         )}

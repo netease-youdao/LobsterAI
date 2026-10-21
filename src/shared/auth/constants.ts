@@ -9,6 +9,7 @@ export const AuthIpcChannel = {
   GetProfileSummary: 'auth:getProfileSummary',
   GetQuota: 'auth:getQuota',
   GetUser: 'auth:getUser',
+  HasCredentials: 'auth:hasCredentials',
   LifecycleEvent: 'auth:lifecycleEvent',
   Login: 'auth:login',
   LoginViewChanged: 'auth:loginViewChanged',
@@ -56,6 +57,7 @@ export type AuthSessionStatus = typeof AuthSessionStatus[keyof typeof AuthSessio
 export const AuthSessionChangeReason = {
   EnterpriseMembershipRevoked: 'enterprise_membership_revoked',
   RefreshRejected: 'refresh_rejected',
+  UserLogin: 'user_login',
   UserLogout: 'user_logout',
 } as const;
 
@@ -88,7 +90,6 @@ export type AuthRefreshFailureKind =
   typeof AuthRefreshFailureKind[keyof typeof AuthRefreshFailureKind];
 
 export const AuthRefreshReason = {
-  CompatProxy: 'compat-proxy',
   Manual: 'manual',
   OpenClawProxy: 'openclaw-proxy',
   Passive: 'passive',

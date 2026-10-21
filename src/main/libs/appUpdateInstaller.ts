@@ -1052,7 +1052,7 @@ export function buildWindowsInstallerLaunchScript(
   );
 }
 
-function execFileWithExitCode(
+export function execFileWithExitCode(
   file: string,
   args: string[],
   timeoutMs: number,

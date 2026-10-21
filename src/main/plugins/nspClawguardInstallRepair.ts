@@ -58,7 +58,7 @@ export async function repairNspClawguardInstall(
     && (samePath(value, pluginDir) || samePath(value, path.dirname(pluginDir))))) return [];
 
   const oldPath = path.join(stateDir, 'extensions', id);
-  if (!isMissingUnaliasedPluginPath(oldPath)) return [];
+  if (!isMissingUnaliasedPluginPath(oldPath, stateDir)) return [];
   const payloadPaths = ['package.json', 'openclaw.plugin.json', NSP_CLAWGUARD.Entry]
     .map(file => path.join(pluginDir, file));
   const readRepairPackage = () => {
@@ -81,7 +81,7 @@ export async function repairNspClawguardInstall(
       || !NSP_CLAWGUARD.Releases.some(release => record.spec === `${id}@${release.version}`)
       || (record.resolvedName !== undefined && record.resolvedName !== id)
       || typeof record.installPath !== 'string' || !path.isAbsolute(record.installPath)
-      || !samePath(record.installPath, oldPath) || !isMissingUnaliasedPluginPath(oldPath)) return [];
+      || !samePath(record.installPath, oldPath) || !isMissingUnaliasedPluginPath(oldPath, stateDir)) return [];
 
     const pkg = readRepairPackage();
     if (!pkg) return [];
@@ -107,7 +107,7 @@ export async function repairNspClawguardInstall(
 
     if (!fs.readFileSync(configPath).equals(configRaw)
       || !isDeepStrictEqual(owners.read(), records)
-      || !isMissingUnaliasedPluginPath(oldPath)
+      || !isMissingUnaliasedPluginPath(oldPath, stateDir)
       || payloadPaths.some((file, index) => !fs.readFileSync(file).equals(payload[index]))) {
       throw new Error('Clawguard installation changed during startup repair; retry with the latest state.');
     }

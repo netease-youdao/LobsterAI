@@ -24,7 +24,7 @@ export const getModelThinkingLevelLabel = (level: ModelThinkingLevel): string =>
 
 interface ModelThinkingMenuProps {
   config: ModelThinkingConfig;
-  selectedLevel: ModelThinkingLevel;
+  selectedLevel?: ModelThinkingLevel;
   onSelect: (level: ModelThinkingLevel) => void;
   onEscape: () => void;
 }
@@ -39,7 +39,7 @@ const ModelThinkingMenu: React.FC<ModelThinkingMenuProps> = ({
   const levels = getModelThinkingLevels(config);
   const supportsOff = levels.includes(ModelThinkingLevel.Off);
   const enabledLevels = levels.filter(level => level !== ModelThinkingLevel.Off);
-  const thinkingEnabled = selectedLevel !== ModelThinkingLevel.Off;
+  const thinkingEnabled = (selectedLevel ?? config.defaultLevel) !== ModelThinkingLevel.Off;
   const enabledFallback = config.defaultLevel !== ModelThinkingLevel.Off
     ? config.defaultLevel
     : enabledLevels[0];

@@ -6,6 +6,7 @@ import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { Skill } from '../../types/skill';
+import { PROMPT_SUBMENU_POSITION_CLASS, PromptSubmenuSide } from '../common/promptSubmenu';
 import Cog6ToothIcon from '../icons/Cog6ToothIcon';
 import SearchIcon from '../icons/SearchIcon';
 import SkillIconTile from './SkillIconTile';
@@ -17,6 +18,8 @@ interface SkillsPopoverProps {
   onManageSkills: () => void;
   anchorRef: React.RefObject<HTMLElement>;
   asSubmenu?: boolean;
+  /** The side of the add menu a submenu opens on. */
+  side?: PromptSubmenuSide;
   autoFocusSearch?: boolean;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -29,6 +32,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   onManageSkills,
   anchorRef,
   asSubmenu = false,
+  side = PromptSubmenuSide.Right,
   autoFocusSearch = true,
   onMouseEnter,
   onMouseLeave,
@@ -196,7 +200,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   if (!isOpen) return null;
 
   const popoverClassName = asSubmenu
-    ? 'absolute bottom-0 left-[calc(100%-1px)] z-[60] w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover'
+    ? `${PROMPT_SUBMENU_POSITION_CLASS[side]} z-[60] w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover`
     : 'absolute bottom-full left-0 z-50 mb-2 w-72 rounded-xl border border-border bg-surface shadow-xl';
   const searchWrapperClassName = asSubmenu
     ? 'px-3 py-2 border-b border-border'

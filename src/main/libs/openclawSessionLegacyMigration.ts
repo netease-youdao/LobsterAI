@@ -21,6 +21,9 @@ export const LegacySessionMigrationWarningCode = {
   UnreferencedJsonlArchiveFailed: 'unreferenced_jsonl_archive_failed',
 } as const;
 const WARNING_ISSUE_CODES = new Set<string>(Object.values(LegacySessionMigrationWarningCode));
+// OpenClaw v2026.8.1 packages/normalization-core/src/agent-id.ts.
+const OPENCLAW_DEFAULT_AGENT_ID = 'main';
+const OPENCLAW_VALID_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const DOCTOR_EXCEPTION_LINE = /^(?:\w*Error\b|Cannot\b|Failed\b|Fatal\b|ERR_|file lock timeout|Config validation failed)/i;
 const doctorReportSchema = z.object({
   mode: z.string().optional(),
@@ -66,8 +69,30 @@ function fileExists(filePath: string): boolean {
   }
 }
 
-export function listLegacySessionStorePaths(stateDir: string): string[] {
-  const candidates = [path.join(stateDir, 'sessions', 'sessions.json')];
+function normalizeOpenClawAgentId(value: string): string {
+  const trimmed = value.trim();
+  const lowercased = trimmed.toLowerCase();
+  if (OPENCLAW_VALID_AGENT_ID.test(trimmed)) return lowercased;
+  return lowercased.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '').slice(0, 64)
+    || OPENCLAW_DEFAULT_AGENT_ID;
+}
+
+/**
+ * Mirrors OpenClaw v2026.8.1 shouldSkipDiscoveredAgentDirName(). Doctor never
+ * migrates stores under other names (for example Chinese display names that
+ * would collapse into "main"), and the gateway never reads them. Recheck with
+ * tests/openclawLegacySessionOrphanStores.integration.test.ts when bumping OpenClaw.
+ */
+export function isOpenClawDiscoverableAgentDirName(dirName: string): boolean {
+  const agentId = normalizeOpenClawAgentId(dirName);
+  return /[a-z0-9]/i.test(dirName)
+    && OPENCLAW_VALID_AGENT_ID.test(agentId)
+    && (agentId !== OPENCLAW_DEFAULT_AGENT_ID || dirName.toLowerCase() === OPENCLAW_DEFAULT_AGENT_ID);
+}
+
+function scanLegacySessionStores(stateDir: string): { paths: string[]; ignoredPaths: string[] } {
+  const paths = [path.join(stateDir, 'sessions', 'sessions.json')];
+  const ignoredPaths: string[] = [];
   const agentsDir = path.join(stateDir, 'agents');
 
   try {
@@ -77,13 +102,23 @@ export function listLegacySessionStorePaths(stateDir: string): string[] {
       if (!entry.isDirectory()) {
         continue;
       }
-      candidates.push(path.join(agentsDir, entry.name, 'sessions', 'sessions.json'));
+      const storePath = path.join(agentsDir, entry.name, 'sessions', 'sessions.json');
+      if (isOpenClawDiscoverableAgentDirName(entry.name)) {
+        paths.push(storePath);
+      } else {
+        ignoredPaths.push(storePath);
+      }
     }
   } catch {
     // A missing or unreadable agents directory has no discoverable default stores.
   }
 
-  return candidates.filter(fileExists);
+  return { paths: paths.filter(fileExists), ignoredPaths: ignoredPaths.filter(fileExists) };
+}
+
+/** Stores that OpenClaw doctor migrates and that must be gone before startup. */
+export function listLegacySessionStorePaths(stateDir: string): string[] {
+  return scanLegacySessionStores(stateDir).paths;
 }
 
 function tailLog(text: string): string {
@@ -203,7 +238,12 @@ export async function migrateLegacySessionStorageWithDoctor(params: {
   env: NodeJS.ProcessEnv;
   runner?: LegacySessionMigrationRunner;
 }): Promise<LegacySessionMigrationResult> {
-  const legacyPaths = listLegacySessionStorePaths(params.stateDir);
+  const { paths: legacyPaths, ignoredPaths } = scanLegacySessionStores(params.stateDir);
+  if (ignoredPaths.length > 0) {
+    // Blocking on these would fail every startup, because doctor never removes them.
+    console.warn(`[OpenClaw] Ignoring session stores in agent directories that OpenClaw does not own: ${
+      JSON.stringify(ignoredPaths.map(inspectOpenClawPath))}`);
+  }
   if (legacyPaths.length === 0) {
     return { status: 'skipped', reason: 'no-legacy-session-files' };
   }

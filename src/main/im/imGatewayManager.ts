@@ -1,19 +1,17 @@
 /**
  * IM Gateway Manager
- * Unified manager for DingTalk, Feishu, NIM gateways
- * and Telegram, Discord, QQ, WeCom, Weixin, POPO, NeteaseBee via OpenClaw
+ * Unified manager for DingTalk, Feishu, NIM, Telegram, Discord, QQ, WeCom,
+ * Weixin, POPO and NeteaseBee, all of which run via OpenClaw
  */
 
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
 
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
 import { WeixinPlugin, WeixinQrLoginTimeout } from '../../shared/im/weixin';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { fetchJsonWithTimeout } from './http';
-import { IMChatHandler } from './imChatHandler';
 import { IMCoworkHandler } from './imCoworkHandler';
 import {
   buildDingTalkSendParamsFromRoute,
@@ -22,20 +20,13 @@ import {
   resolveManagedSessionDeliveryRoute,
   resolveOpenClawDeliveryRouteForSessionKeys,
 } from './imDeliveryRoute';
-import type {
-  IMScheduledTaskCreationResult,
-  ParsedIMScheduledTaskRequest,
-} from './imScheduledTaskHandler';
-import { createIMScheduledTaskRequestDetector } from './imScheduledTaskHandler';
 import { IMStore } from './imStore';
-import { NimGateway } from './nimGateway';
 import {
   IMConnectivityCheck,
   IMConnectivityTestResult,
   IMConnectivityVerdict,
   IMGatewayConfig,
   IMGatewayStatus,
-  IMMessage,
   Platform,
 } from './types';
 import { WeixinPluginActivation } from './weixinPluginActivation';
@@ -128,11 +119,6 @@ export interface IMGatewayManagerOptions {
   getOpenClawGatewayClient?: () => GatewayClientLike | null;
   ensureOpenClawGatewayReady?: () => Promise<void>;
   getOpenClawSessionKeysForCoworkSession?: (sessionId: string) => string[];
-  createScheduledTask?: (params: {
-    sessionId: string;
-    message: IMMessage;
-    request: ParsedIMScheduledTaskRequest;
-  }) => Promise<IMScheduledTaskCreationResult>;
 }
 
 export class IMGatewayManager extends EventEmitter {
@@ -141,12 +127,8 @@ export class IMGatewayManager extends EventEmitter {
       await this.syncOpenClawConfig?.('weixin-qr-plugin-activation', { restartGatewayIfRunning: true, requireSuccess: true });
     }
   });
-  private nimGateway: NimGateway;
   private imStore: IMStore;
-  private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
-  private getLLMConfig: (() => Promise<any>) | null = null;
-  private getSkillsPrompt: (() => Promise<string | null>) | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
   private syncOpenClawConfig:
     | ((reason?: string, options?: { restartGatewayIfRunning?: boolean; requireSuccess?: boolean }) => Promise<void>)
@@ -155,13 +137,6 @@ export class IMGatewayManager extends EventEmitter {
   private getOpenClawGatewayClient: (() => GatewayClientLike | null) | null = null;
   private ensureOpenClawGatewayReady: (() => Promise<void>) | null = null;
   private getOpenClawSessionKeysForCoworkSession: ((sessionId: string) => string[]) | null = null;
-  private createScheduledTask:
-    | ((params: {
-        sessionId: string;
-        message: IMMessage;
-        request: ParsedIMScheduledTaskRequest;
-      }) => Promise<IMScheduledTaskCreationResult>)
-    | null = null;
 
   // Cowork dependencies
   private coworkRuntime: CoworkRuntime | null = null;
@@ -176,7 +151,6 @@ export class IMGatewayManager extends EventEmitter {
     super();
 
     this.imStore = new IMStore(db);
-    this.nimGateway = new NimGateway();
 
     // Store Cowork dependencies if provided
     if (options?.coworkRuntime && options?.coworkStore) {
@@ -189,7 +163,6 @@ export class IMGatewayManager extends EventEmitter {
     this.getOpenClawGatewayClient = options?.getOpenClawGatewayClient ?? null;
     this.ensureOpenClawGatewayReady = options?.ensureOpenClawGatewayReady ?? null;
     this.getOpenClawSessionKeysForCoworkSession = options?.getOpenClawSessionKeysForCoworkSession ?? null;
-    this.createScheduledTask = options?.createScheduledTask ?? null;
 
     // Forward gateway events
     this.setupGatewayEventForwarding();
@@ -237,154 +210,16 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   /**
-   * Initialize the manager with LLM and skills providers
-   */
-  initialize(options: {
-    getLLMConfig: () => Promise<any>;
-    getSkillsPrompt?: () => Promise<string | null>;
-  }): void {
-    this.getLLMConfig = options.getLLMConfig;
-    this.getSkillsPrompt = options.getSkillsPrompt ?? null;
-
-    // Set up message handlers for gateways
-    this.setupMessageHandlers();
-  }
-
-  /**
-   * Set up message handlers for both gateways
-   */
-  private setupMessageHandlers(): void {
-    const messageHandler = async (
-      message: IMMessage,
-      replyFn: (text: string) => Promise<void>
-    ): Promise<void> => {
-      // Persist notification target whenever we receive a message
-      this.persistNotificationTarget(message.platform);
-
-      try {
-        let response: string;
-
-        // Always use Cowork mode if handler is available
-        if (this.coworkHandler) {
-          if (this.ensureCoworkReady) {
-            await this.ensureCoworkReady();
-          }
-          console.log('[IMGatewayManager] Using Cowork mode for message processing');
-          response = await this.coworkHandler.processMessage(message);
-        } else {
-          // Fallback to regular chat handler
-          if (!this.chatHandler) {
-            this.updateChatHandler();
-          }
-
-          if (!this.chatHandler) {
-            throw new Error('Chat handler not available');
-          }
-
-          response = await this.chatHandler.processMessage(message);
-        }
-
-        await replyFn(response);
-      } catch (error: any) {
-        console.error(`[IMGatewayManager] Error processing message: ${error.message}`);
-        // Don't send "Replaced by a newer IM request" error to user, just log it
-        if (error.message === 'Replaced by a newer IM request') {
-          return;
-        }
-        // Send error message to user
-        try {
-          const errorKey = classifyErrorKey(error.message);
-          const friendlyMessage = errorKey ? t(errorKey) : error.message;
-          await replyFn(`${t('imErrorPrefix')}: ${friendlyMessage}`);
-        } catch (replyError) {
-          console.error(`[IMGatewayManager] Failed to send error reply: ${replyError}`);
-        }
-      }
-    };
-
-    this.nimGateway.setMessageCallback(messageHandler);
-  }
-
-  /**
-   * Persist the notification target for a platform after receiving a message.
-   */
-  private persistNotificationTarget(platform: Platform): void {
-    try {
-      let target: any = null;
-      if (platform === 'nim') {
-        target = this.nimGateway.getNotificationTarget();
-      }
-      // WeCom runs via OpenClaw; notification target not managed locally
-      // Weixin runs via OpenClaw; notification target not managed locally
-      // POPO runs via OpenClaw; notification target not managed locally
-      if (target != null) {
-        this.imStore.setNotificationTarget(platform, target);
-      }
-    } catch (err: any) {
-      console.warn(`[IMGatewayManager] Failed to persist notification target for ${platform}:`, err.message);
-    }
-  }
-
-  /**
-   * Restore notification target from SQLite after gateway starts.
-   */
-  private restoreNotificationTarget(platform: Platform): void {
-    try {
-      const target = this.imStore.getNotificationTarget(platform);
-      if (target == null) return;
-
-      if (platform === 'nim') {
-        this.nimGateway.setNotificationTarget(target);
-      }
-      // WeCom runs via OpenClaw; notification target not managed locally
-      // Weixin runs via OpenClaw; notification target not managed locally
-      // POPO runs via OpenClaw; notification target not managed locally
-      console.log(`[IMGatewayManager] Restored notification target for ${platform}`);
-    } catch (err: any) {
-      console.warn(`[IMGatewayManager] Failed to restore notification target for ${platform}:`, err.message);
-    }
-  }
-
-  /**
-   * Update chat handler with current settings
-   */
-  private updateChatHandler(): void {
-    if (!this.getLLMConfig) {
-      console.warn('[IMGatewayManager] LLM config provider not set');
-      return;
-    }
-
-    const imSettings = this.imStore.getIMSettings();
-
-    this.chatHandler = new IMChatHandler({
-      getLLMConfig: this.getLLMConfig,
-      getSkillsPrompt: this.getSkillsPrompt || undefined,
-      imSettings,
-    });
-
-    // Update or create Cowork handler if dependencies are available
-    this.updateCoworkHandler();
-  }
-
-  /**
    * Update or create Cowork handler
    * Always creates handler if dependencies are available (Cowork mode is always enabled for IM)
    */
   private updateCoworkHandler(): void {
     // Always create Cowork handler if we have the required dependencies
     if (this.coworkRuntime && this.coworkStore && !this.coworkHandler) {
-      const detectScheduledTaskRequest = this.getLLMConfig && this.createScheduledTask
-        ? createIMScheduledTaskRequestDetector({
-            getLLMConfig: this.getLLMConfig,
-          })
-        : undefined;
       this.coworkHandler = new IMCoworkHandler({
         coworkRuntime: this.coworkRuntime,
         coworkStore: this.coworkStore,
         imStore: this.imStore,
-        getSkillsPrompt: this.getSkillsPrompt || undefined,
-        detectScheduledTaskRequest,
-        createScheduledTask: this.createScheduledTask || undefined,
         sendAsyncReply: async (platform, conversationId, text) => {
           return this.sendConversationReply(platform, conversationId, text);
         },
@@ -410,9 +245,9 @@ export class IMGatewayManager extends EventEmitter {
     this.imStore.setConfig(config);
     if (config.weixin?.enabled === false) this.weixinPluginActivation.cancel();
 
-    // Update chat handler if settings changed
+    // Make sure the Cowork handler exists once IM settings are saved
     if (config.settings) {
-      this.updateChatHandler();
+      this.updateCoworkHandler();
     }
 
 
@@ -909,8 +744,8 @@ export class IMGatewayManager extends EventEmitter {
 
   // ==================== Gateway Control ====================
   async startGateway(platform: Platform): Promise<void> {
-    // Ensure chat handler is ready
-    this.updateChatHandler();
+    // Ensure Cowork handler is ready
+    this.updateCoworkHandler();
 
     if (platform === 'dingtalk') {
       // DingTalk runs via OpenClaw gateway (dingtalk-connector plugin)
@@ -974,9 +809,6 @@ export class IMGatewayManager extends EventEmitter {
       await this.ensureOpenClawGatewayConnected?.();
       return;
     }
-
-    // Restore persisted notification target
-    this.restoreNotificationTarget(platform);
   }
 
   async stopGateway(platform: Platform): Promise<void> {
@@ -1045,8 +877,8 @@ export class IMGatewayManager extends EventEmitter {
   async startAllEnabled(): Promise<void> {
     const config = this.getConfig();
 
-    // Ensure chat handler is ready (called once instead of per-platform)
-    this.updateChatHandler();
+    // Ensure Cowork handler is ready (called once instead of per-platform)
+    this.updateCoworkHandler();
 
     // --- OpenClaw platforms: collect and batch into a single sync ---
 

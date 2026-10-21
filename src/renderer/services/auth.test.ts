@@ -1,6 +1,5 @@
 import {
   AuthLoginFailureReason,
-  type AuthSessionChangedEvent,
   AuthSessionChangeReason,
   AuthSessionStatus,
 } from '@shared/auth/constants';
@@ -766,6 +765,88 @@ describe('server model loading', () => {
     await vi.advanceTimersByTimeAsync(12_000);
   });
 
+  test('retries the logged-out public catalog in the background after a transient failure', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getPricingCatalog = vi.fn()
+      .mockRejectedValueOnce(new Error('net::ERR_INTERNET_DISCONNECTED'))
+      .mockResolvedValueOnce({
+        success: true,
+        textModels: [{ modelId: 'deepseek-v4-pro', modelName: 'DeepSeek-V4-Pro' }],
+      });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getPricingCatalog },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    // Logged out, the network-recovery refresh reloads the public catalog.
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    expect(planModelIds()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(getPricingCatalog).toHaveBeenCalledTimes(2);
+    expect(planModelIds()).toEqual(['deepseek-v4-pro']);
+    expect(store.getState().model.availableModels.find(model => model.isServerModel)?.accessible)
+      .toBe(false);
+  });
+
+  test('stops retrying the public catalog once the user logs in', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getPricingCatalog = vi.fn().mockRejectedValue(new Error('offline'));
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getPricingCatalog },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    signIn();
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(getPricingCatalog).toHaveBeenCalledOnce();
+  });
+
+  test('falls back to the public catalog when an inconsistent login is cleared', async () => {
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          login: vi.fn().mockResolvedValue({
+            success: true,
+            user: {
+              yid: 'enterprise-user',
+              accountMode: 'enterprise',
+              nickname: 'Enterprise User',
+              avatarUrl: null,
+            },
+            quota: null,
+            enterpriseContext: null,
+          }),
+          getPricingCatalog: vi.fn().mockResolvedValue({
+            success: true,
+            textModels: [{ modelId: 'deepseek-v4-pro', modelName: 'DeepSeek-V4-Pro' }],
+          }),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn();
+
+    await expect(authService.login()).resolves.toEqual({
+      success: false,
+      reason: AuthLoginFailureReason.ExchangeFailed,
+    });
+
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    await vi.waitFor(() => expect(planModelIds()).toEqual(['deepseek-v4-pro']));
+  });
+
   test('still loads plan models when the quota refresh fails', async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'debug').mockImplementation(() => {});
@@ -889,6 +970,106 @@ describe('auth state restoration', () => {
     creditsRemaining: 900,
   };
 
+  test('restores a secondary window after another window signs in without exchanging the code again', async () => {
+    const exchange = vi.fn();
+    const getModels = vi.fn().mockResolvedValue({
+      success: true,
+      models: [{ modelId: 'signed-in-model', modelName: 'Signed-in Model', accessible: true }],
+    });
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          exchange,
+          getModels,
+          getUser: vi.fn().mockResolvedValue({ success: true, user, quota, enterpriseContext: null }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+
+    await authService.handleSessionChanged({
+      status: AuthSessionStatus.Authenticated,
+      reason: AuthSessionChangeReason.UserLogin,
+    });
+
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: true,
+      sessionStatus: AuthSessionStatus.Authenticated,
+      user,
+      quota,
+    });
+    expect(getModels).toHaveBeenCalledOnce();
+    expect(store.getState().model.availableModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'signed-in-model', accessible: true }),
+    ]));
+    expect(exchange).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])('logout clears the window and rejects a pending restore (initially signed in: %s)', async initiallySignedIn => {
+    const response = { success: true, user, quota, enterpriseContext: null };
+    let resolveUser!: (value: typeof response) => void;
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal('window', {
+      dispatchEvent,
+      electron: {
+        auth: {
+          getUser: vi.fn(() => new Promise<typeof response>(resolve => { resolveUser = resolve; })),
+          getPricingCatalog: vi.fn().mockResolvedValue({ success: true, textModels: [] }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+    if (initiallySignedIn) {
+      store.dispatch(setLoggedIn({ user, quota, ownerAccountKey: 'personal:user@example.com' }));
+    }
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    const logout = authService.handleSessionChanged({
+      status: AuthSessionStatus.Unauthenticated,
+      reason: AuthSessionChangeReason.UserLogout,
+    });
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    resolveUser(response);
+    await Promise.all([refresh, logout]);
+
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: false,
+      sessionStatus: AuthSessionStatus.Unauthenticated,
+      user: null,
+      quota: null,
+    });
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  test('a newer login event supersedes a pending restore in a signed-out window', async () => {
+    const oldResponse = { success: true, user, quota, enterpriseContext: null };
+    let resolveUser!: (value: typeof oldResponse) => void;
+    const nextUser = { ...user, yid: 'next@example.com' };
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          getModels: vi.fn().mockResolvedValue({ success: true, models: [] }),
+          getUser: vi.fn()
+            .mockImplementationOnce(() => new Promise<typeof oldResponse>(resolve => { resolveUser = resolve; }))
+            .mockResolvedValue({ ...oldResponse, user: nextUser }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    const login = authService.handleSessionChanged({
+      status: AuthSessionStatus.Authenticated,
+      reason: AuthSessionChangeReason.UserLogin,
+    });
+    resolveUser(oldResponse);
+    await Promise.all([refresh, login]);
+
+    expect(store.getState().auth.user).toEqual(nextUser);
+  });
+
   test('preserves the current login snapshot for a temporary verification failure', async () => {
     store.dispatch(setLoggedIn({
       user,
@@ -972,10 +1153,7 @@ describe('auth state restoration', () => {
       },
     });
 
-    const serviceWithSessionHandler = authService as unknown as {
-      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
-    };
-    await serviceWithSessionHandler.handleSessionChanged({
+    await authService.handleSessionChanged({
       status: AuthSessionStatus.Expired,
       reason: AuthSessionChangeReason.RefreshRejected,
     });
@@ -1007,10 +1185,7 @@ describe('auth state restoration', () => {
       },
     });
 
-    const serviceWithSessionHandler = authService as unknown as {
-      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
-    };
-    await serviceWithSessionHandler.handleSessionChanged({
+    await authService.handleSessionChanged({
       status: AuthSessionStatus.Expired,
       reason: AuthSessionChangeReason.EnterpriseMembershipRevoked,
     });

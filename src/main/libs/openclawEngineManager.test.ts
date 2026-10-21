@@ -1,5 +1,8 @@
 import { type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { OpenClawEngineErrorCode, OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
@@ -102,6 +105,21 @@ describe('probeOpenClawGatewayStartup', () => {
     });
   });
 
+  test('names the socket error behind fetch failed', async () => {
+    // A dropped loopback connect (firewall) and a closed port both surface as
+    // "fetch failed"; only the cause tells them apart.
+    const fetcher = vi.fn(async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ETIMEDOUT 127.0.0.1:18789'), { code: 'ETIMEDOUT' }),
+      });
+    });
+
+    await expect(probeOpenClawGatewayStartup(18789, 25, fetcher)).resolves.toEqual({
+      ready: false,
+      detail: '/startupz → fetch failed (ETIMEDOUT)',
+    });
+  });
+
   test('falls back to the legacy ready contract only when startupz is unavailable', async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response('{}', { status: 404 }))
@@ -115,6 +133,67 @@ describe('probeOpenClawGatewayStartup', () => {
     expect(result.ready).toBe(true);
     expect(fetcher).toHaveBeenNthCalledWith(1, 'http://127.0.0.1:18789/startupz', 25);
     expect(fetcher).toHaveBeenNthCalledWith(2, 'http://127.0.0.1:18789/ready', 25);
+  });
+});
+
+describe('gateway startup wait across system sleep', () => {
+  const EIGHT_POINT_SEVEN_HOURS_MS = 31_200_000;
+  let ready: boolean;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-10T01:30:04+08:00'));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    ready = false;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const startWaiting = () => {
+    const child = Object.assign(new EventEmitter(), { pid: 4242, exitCode: null, signalCode: null });
+    const manager = Object.assign(Object.create(OpenClawEngineManager.prototype), {
+      gatewayProcess: child,
+      shutdownRequested: false,
+      expectedGatewayExits: new WeakSet(),
+      gatewayReadyProcesses: new WeakSet(),
+      gatewayLastOutputAt: new WeakMap([[child, Date.now()]]),
+      status: { phase: OpenClawEnginePhase.Starting, version: '2026.8.1', canRetry: false, gatewayPort: 18789 },
+      isGatewayStartupReady: async () => ready,
+    });
+    return (manager as unknown as { waitForGatewayReady(port: number, timeoutMs: number): Promise<boolean> })
+      .waitForGatewayReady(18789, 300_000);
+  };
+
+  test('resumes a startup frozen by system sleep instead of timing it out on wake', async () => {
+    // 2026-10-10 E2E: the gateway was 67s into startup when the machine slept for 8.7 hours.
+    const waiting = startWaiting();
+    let settled = false;
+    void waiting.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(67_000);
+    vi.setSystemTime(Date.now() + EIGHT_POINT_SEVEN_HOURS_MS);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(settled).toBe(false);
+
+    ready = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(waiting).resolves.toBe(true);
+  });
+
+  test('still gives up on a silent gateway once the awake deadline passes', async () => {
+    const waiting = startWaiting();
+    let settled = false;
+    void waiting.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(100_000);
+    vi.setSystemTime(Date.now() + EIGHT_POINT_SEVEN_HOURS_MS);
+    // About 194s awake: the 300s base deadline is measured in awake time.
+    await vi.advanceTimersByTimeAsync(195_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(107_000);
+    await expect(waiting).resolves.toBe(false);
   });
 });
 
@@ -273,6 +352,8 @@ describe('gateway terminal startup failures', () => {
       gatewayFailureByProcess: new WeakMap(),
       expectedGatewayExits: new WeakSet(),
       gatewayReadyProcesses: new WeakSet(),
+      startupPrepSkippedProcesses: new WeakSet(),
+      startupPrepMarker: { check: vi.fn(() => ({ valid: false, reason: 'test' })), record: vi.fn(), clear: vi.fn() },
       gatewayRestartTimer: null,
       gatewayRestartWait: null,
       gatewayRestartAttempt: 0,
@@ -344,6 +425,22 @@ describe('gateway terminal startup failures', () => {
     expect(internals.gatewayRestartTimer).toBeNull();
     expect(internals.gatewayRestartAttempt).toBe(0);
   });
+  test('retries with the startup helpers instead of blocking when a refusal follows skipped preparation', async () => {
+    const { child, manager, start } = makeSupervisor(`${MIGRATION_REFUSAL}\n${MIGRATION_WARNING}`);
+    const internals = manager as unknown as {
+      startupPrepSkippedProcesses: WeakSet<ChildProcess>;
+      startupPrepMarker: { clear: ReturnType<typeof vi.fn> };
+    };
+    internals.startupPrepSkippedProcesses.add(child);
+
+    child.emit('close', 1);
+
+    expect(internals.startupPrepMarker.clear).toHaveBeenCalledOnce();
+    expect(manager.isGatewayStartupBlocked()).toBe(false);
+    expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Starting });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(start).toHaveBeenCalledExactlyOnceWith('auto-restart-after-crash');
+  });
   test('retains automatic retries for plugin warnings followed by a transient crash', async () => {
     const { child, manager, start } = makeSupervisor('[config] warnings: plugins.allow: plugin not installed: qqbot\nPlugin download failed: ECONNRESET');
     child.emit('close', 1);
@@ -367,5 +464,95 @@ describe('gateway terminal startup failures', () => {
     expect(manager.getStatus()).toMatchObject({ phase: OpenClawEnginePhase.Error, canRetry: true });
     expect(manager.getStatus().message).toContain('openclaw.json is invalid');
     expect(manager.getStatus().message).not.toContain(PLUGIN_FAILURE);
+  });
+});
+
+describe('orphaned config lock cleanup', () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-manager-config-lock-')));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const makeManager = () => Object.assign(Object.create(OpenClawEngineManager.prototype), {
+    configPath: path.join(stateDir, 'openclaw.json'),
+    stateDir,
+    gatewayProcess: null,
+    resolveRuntimeMetadata: () => ({ version: '2026.8.1' }),
+  }) as OpenClawEngineManager;
+
+  const writeOrphanedLock = (): string => {
+    const lockPath = path.join(stateDir, 'openclaw.json.lock');
+    fs.writeFileSync(lockPath, '');
+    const killedAt = new Date('2026-09-07T12:45:01.758Z');
+    fs.utimesSync(lockPath, killedAt, killedAt);
+    return lockPath;
+  };
+
+  test('reclaims an empty lock before spawning, so config writes cannot time out forever', () => {
+    const lockPath = writeOrphanedLock();
+    const manager = makeManager();
+
+    (manager as unknown as { cleanupStaleGatewayLocksSafely: (context: string) => void })
+      .cleanupStaleGatewayLocksSafely('pre-spawn');
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('stale config lock reclaimed (removed-unreadable)'));
+  });
+
+  test('lets config delivery reclaim the orphan while the gateway keeps running', () => {
+    const lockPath = writeOrphanedLock();
+    const manager = makeManager();
+
+    expect(manager.reclaimStaleConfigLock('config-delivery:agent-updated')).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(manager.reclaimStaleConfigLock('config-delivery:agent-updated')).toBe(false);
+  });
+});
+
+describe('config apply stall status', () => {
+  const STALL = 'The latest configuration still could not be applied (config.apply failed: gateway request timeout).';
+
+  const makeRunningManager = () => Object.assign(Object.create(OpenClawEngineManager.prototype), {
+    status: { phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false, gatewayPort: 18789 },
+    resolveRuntimeMetadata: () => ({ version: '2026.8.1' }),
+  }) as OpenClawEngineManager;
+
+  test('marks a running gateway without turning the stall into an engine failure', () => {
+    const manager = makeRunningManager();
+    const emitted: OpenClawEngineStatus[] = [];
+    manager.on('status', (status: OpenClawEngineStatus) => emitted.push(status));
+
+    manager.setConfigApplyStall(STALL);
+    manager.setConfigApplyStall(STALL);
+
+    expect(emitted).toHaveLength(1);
+    expect(manager.getStatus()).toMatchObject({
+      phase: OpenClawEnginePhase.Running,
+      configApplyStalled: { detail: STALL },
+    });
+    expect(manager.getStatus().errorCode).toBeUndefined();
+  });
+
+  test('keeps the stall on lifecycle updates until it is cleared', () => {
+    const manager = makeRunningManager();
+    const emitted: OpenClawEngineStatus[] = [];
+    manager.on('status', (status: OpenClawEngineStatus) => emitted.push(status));
+    manager.setConfigApplyStall(STALL);
+
+    // A restart or failure in between must not hide a stall still in effect.
+    manager.setExternalError('OpenClaw gateway failed to become healthy in time.');
+    expect(emitted.at(-1)).toMatchObject({ phase: OpenClawEnginePhase.Error, configApplyStalled: { detail: STALL } });
+
+    manager.setConfigApplyStall(null);
+    expect(emitted.at(-1)?.configApplyStalled).toBeUndefined();
+    expect(manager.getStatus().configApplyStalled).toBeUndefined();
   });
 });

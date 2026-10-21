@@ -1,7 +1,8 @@
 import { Type } from '@sinclair/typebox';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
-import { isLobsterAiDesktopSessionKey } from './sessionKey';
+import { MediaRunContexts } from './runContext';
+import { isLobsterAiDesktopSessionKey, isLobsterAiMediaSessionKey } from './sessionKey';
 import {
   type MediaStatusPollPolicy,
   type MediaStatusResponse,
@@ -22,6 +23,7 @@ type MediaToolRequest = {
   context: {
     sessionKey: string;
     toolCallId: string;
+    runId?: string;
   };
 };
 
@@ -125,7 +127,10 @@ async function callMediaBridge(
   request: MediaToolRequest,
 ): Promise<MediaToolResponse> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  // Reserve a separate confirmation budget; it must not consume the submission budget.
+  const confirmationBudget = request.tool === MediaToolName.VideoGenerate
+    && (request.args.action == null || request.args.action === MediaToolAction.Generate) ? 120_000 : 0;
+  const timer = setTimeout(() => controller.abort(), config.requestTimeoutMs + confirmationBudget);
 
   try {
     const response = await fetch(config.callbackUrl, {
@@ -175,9 +180,11 @@ async function executeMediaStatusPolling(options: {
   taskId: string;
   toolCallId: string;
   sessionKey: string;
+  runId?: string;
   signal?: AbortSignal;
   onUpdate?: (result: MediaStatusUpdate) => void;
   log: (message: string) => void;
+  waitForResult?: boolean;
 }): Promise<MediaToolResponse> {
   const statusConfig: PluginConfig = {
     ...options.config,
@@ -188,13 +195,14 @@ async function executeMediaStatusPolling(options: {
     taskId: options.taskId,
     toolCallId: options.toolCallId,
     policy: options.policy,
+    waitForResult: options.waitForResult,
     signal: options.signal,
     onUpdate: options.onUpdate,
     log: message => options.log(`[lobster-media-generation] ${message}`),
     requestStatus: () => callMediaBridge(statusConfig, {
       tool: options.tool,
       args: { action: MediaToolAction.Status, taskId: options.taskId },
-      context: { sessionKey: options.sessionKey, toolCallId: options.toolCallId },
+      context: { sessionKey: options.sessionKey, toolCallId: options.toolCallId, runId: options.runId },
     }),
   });
 }
@@ -221,6 +229,7 @@ const ImageGenerateSchema = Type.Object({
   temperature: Type.Optional(Type.Number({ description: 'Sampling temperature for image models that support it.', minimum: 0, maximum: 2 })),
   filename: Type.Optional(Type.String({ description: 'Suggested filename for the output.' })),
   taskId: Type.Optional(Type.String({ description: 'Task ID for status queries.' })),
+  waitForResult: Type.Optional(Type.Boolean({ description: 'For status: wait for the saved result when later steps depend on it, including AI skin creation. Otherwise return to the conversation after a short observation.' })),
   providerOptions: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: 'Model-specific options passed through to the provider.' })),
 });
 
@@ -253,6 +262,7 @@ const VideoGenerateSchema = Type.Object({
   cameraFixed: Type.Optional(Type.Boolean({ description: 'Fix camera position (no movement). Not supported by all models.' })),
   filename: Type.Optional(Type.String({ description: 'Suggested filename for the output.' })),
   taskId: Type.Optional(Type.String({ description: 'Task ID for status/cancel queries.' })),
+  waitForResult: Type.Optional(Type.Boolean({ description: 'For status: wait for completion when subsequent work needs the generated file.' })),
   providerOptions: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: 'Model-specific options passed through to the provider (e.g. prompt_optimizer, fast_pretreatment, priority, draft).' })),
 });
 
@@ -330,9 +340,29 @@ const plugin = {
       return;
     }
 
+    const runs = new MediaRunContexts(request => callMediaBridge(
+      { ...config, requestTimeoutMs: 10_000 }, request,
+    ));
+    api.on('before_model_resolve', async (_event, ctx) => {
+      if (isLobsterAiMediaSessionKey(ctx.sessionKey)) await runs.begin(ctx);
+    });
+    api.on('before_tool_call', async (event, ctx) => {
+      if (event.toolName !== MediaToolName.ImageGenerate && event.toolName !== MediaToolName.VideoGenerate) return;
+      if (!await runs.bindTool({
+        sessionKey: ctx.sessionKey, runId: ctx.runId ?? event.runId,
+        toolCallId: ctx.toolCallId ?? event.toolCallId,
+      })) {
+        return { block: true, blockReason: 'Media tool has no authenticated run context' };
+      }
+    });
+    api.on('agent_end', async (event, ctx) => {
+      // Failed attempts may be retried under the same runId. Keep their original owner.
+      if (event.success) await runs.end({ sessionKey: ctx.sessionKey, runId: ctx.runId ?? event.runId });
+    });
+
     api.registerTool((ctx) => {
       const sessionKey = ctx.sessionKey ?? '';
-      if (!isLobsterAiDesktopSessionKey(sessionKey)) {
+      if (!isLobsterAiMediaSessionKey(sessionKey)) {
         return null;
       }
 
@@ -344,7 +374,7 @@ const plugin = {
           'Supports text-to-image and image-to-image generation.',
           'If the system prompt includes a LobsterAI media reference mapping, use mapped file paths or URLs in image/images arguments and never pass @ media tokens as tool argument values.',
           'Use action="list" to see available models and their capabilities.',
-          'Use action="status" with taskId once; that call adaptively polls until the task reaches a terminal state. Do not busy-poll status yourself.',
+          'Use action="status" with taskId to observe the task. It can continue in the background. If later work needs the output (especially AI skins), set waitForResult=true and wait for a saved file. Never treat task acceptance as a completed image or regenerate a pending task.',
           'Requires an active subscription with available image generation quota.',
         ].join(' '),
         parameters: ImageGenerateSchema,
@@ -370,7 +400,9 @@ const plugin = {
                 taskId,
                 toolCallId: id,
                 sessionKey,
+                ...runs.forTool(sessionKey, id),
                 signal,
+                waitForResult: args.waitForResult === true,
                 onUpdate,
                 log: message => api.logger.info(message),
               });
@@ -387,7 +419,7 @@ const plugin = {
             const result = await callMediaBridge(config, {
               tool: MediaToolName.ImageGenerate,
               args,
-              context: { sessionKey, toolCallId: id },
+              context: { sessionKey, toolCallId: id, ...runs.forTool(sessionKey, id) },
             });
             api.logger.info(`[lobster-media-generation] image tool (${action}) completed: toolCallId=${id} elapsedMs=${Date.now() - startedAt} isError=${result.isError === true}`);
             return result;
@@ -402,7 +434,7 @@ const plugin = {
 
     api.registerTool((ctx) => {
       const sessionKey = ctx.sessionKey ?? '';
-      if (!isLobsterAiDesktopSessionKey(sessionKey)) {
+      if (!isLobsterAiMediaSessionKey(sessionKey)) {
         return null;
       }
 
@@ -448,7 +480,9 @@ const plugin = {
                 taskId,
                 toolCallId: id,
                 sessionKey,
+                ...runs.forTool(sessionKey, id),
                 signal,
+                waitForResult: args.waitForResult === true,
                 onUpdate,
                 log: message => api.logger.info(message),
               });
@@ -466,7 +500,7 @@ const plugin = {
             const result = await callMediaBridge(config, {
               tool: MediaToolName.VideoGenerate,
               args,
-              context: { sessionKey, toolCallId: id },
+              context: { sessionKey, toolCallId: id, ...runs.forTool(sessionKey, id) },
             });
             api.logger.info(`[lobster-media-generation] video tool (${action}) completed: toolCallId=${id} elapsedMs=${Date.now() - startedAt} isError=${result.isError === true}`);
             return result;

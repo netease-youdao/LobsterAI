@@ -1,10 +1,13 @@
 import { LogReporterAction, reportYdAnalyzer } from '@/services/logReporter';
 import type { Artifact } from '@/types/artifact';
 
+import { getArtifactUsageParams } from '../../services/usageAnalytics';
+
 type ArtifactAnalyticsValue = string | number | boolean | null | undefined;
 
 export const ArtifactPreviewActionSource = {
   ConversationArtifactCard: 'conversation_artifact_card',
+  ConversationMessageLink: 'conversation_message_link',
   ArtifactPanel: 'artifact_panel',
   ArtifactBrowser: 'artifact_browser',
   LibraryList: 'library_list',
@@ -26,6 +29,15 @@ export const ArtifactPublishEntryPoint = {
 
 export type ArtifactPublishEntryPoint =
   (typeof ArtifactPublishEntryPoint)[keyof typeof ArtifactPublishEntryPoint];
+
+/** What refreshed a preview: the user, or a change to its file on disk. */
+export const ArtifactRefreshTrigger = {
+  Manual: 'manual',
+  FileChange: 'file_change',
+} as const;
+
+export type ArtifactRefreshTrigger =
+  (typeof ArtifactRefreshTrigger)[keyof typeof ArtifactRefreshTrigger];
 
 const bucketLength = (length: number): string => {
   if (length <= 0) return '0';
@@ -102,6 +114,7 @@ export const reportArtifactPreviewAction = (options: ReportArtifactPreviewAction
     source: options.source,
     actionType: options.actionType,
     ...getArtifactAnalyticsParams(options.artifact),
+    ...getArtifactUsageParams(options.artifact),
     ...options.params,
   });
 };

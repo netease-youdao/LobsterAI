@@ -1,4 +1,5 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { catalogAnalyticsId, UsageAnalytics, UsageStage } from '@shared/analytics/usage';
 import {
   createAccountOwnerKey,
   isEnterpriseAccountOwnerKey,
@@ -8,10 +9,11 @@ import { EnterpriseAccountMode } from '@shared/enterpriseAccount/constants';
 import { canonicalizeMediaModelId, GPT_IMAGE_2_MODEL_ID, mediaModelDisplayName } from '@shared/mediaModelAliases';
 import { ProviderName } from '@shared/providers';
 import Lottie from 'lottie-react';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { MediaPreferenceMode, MediaSelectionSource } from '../../../shared/media/defaultPolicy';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
 import {
   enterpriseMediaAccountSnapshotsMatch,
@@ -22,19 +24,28 @@ import { openPurchase } from '../../features/payment/purchaseEntry';
 import { getProviderIcon, ProviderIconId } from '../../providers/uiRegistry';
 import { authService } from '../../services/auth';
 import { i18nService } from '../../services/i18n';
-import { localStore } from '../../services/store';
-import { RootState, store } from '../../store';
-import { setMediaModels, setMediaSelection } from '../../store/slices/coworkSlice';
-import type { MediaGenerationMode, MediaModel } from '../../types/mediaGeneration';
+import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
+import {
+  isMediaAccountScopeCurrent,
+  setMediaPreference,
+  toggleMediaModelSelection,
+} from '../../services/mediaPreferences';
+import { getDraftAnalytics, getSessionUsageContext } from '../../services/usageAnalytics';
+import { type AppDispatch, RootState, store } from '../../store';
+import { setMediaModels } from '../../store/slices/coworkSlice';
+import type { MediaModel } from '../../types/mediaGeneration';
+import { PROMPT_MENU_ROW_CLASS, PROMPT_SUBMENU_POSITION_CLASS, type PromptMenuItemControl } from '../common/promptSubmenu';
 import MagicIcon from '../icons/MagicIcon';
 import mediaGenAnimation from '../icons/MediaGenIcon.json';
+import { resolvePopoverPlacement } from './popoverPlacement';
 
-interface SavedMediaSelection {
-  image?: { modelId: string; modelName: string };
-  video?: { modelId: string; modelName: string };
-}
+export { type MediaSelectionScope, toggleMediaModelSelection } from '../../services/mediaPreferences';
 
-const MEDIA_SELECTION_KV_KEY = 'media_selection';
+// The model list needs room for the longest name next to a price such as
+// "x30-60 积分/张输出图"; the login/subscribe prompt cards keep a compact width.
+const MEDIA_MODEL_LIST_PANEL_WIDTH = 400;
+const MEDIA_PROMPT_PANEL_WIDTH = 240;
+const MEDIA_PANEL_ESTIMATED_HEIGHT = 380;
 const EMPTY_MEDIA_MODELS: { image: MediaModel[]; video: MediaModel[] } = {
   image: [],
   video: [],
@@ -70,77 +81,6 @@ const normalizeMediaModel = (model: MediaModel): MediaModel => {
     return model;
   }
   return { ...model, modelId, displayName };
-};
-
-const normalizeSavedMediaSelectionEntry = (
-  entry: { modelId: string; modelName: string } | undefined,
-): { modelId: string; modelName: string } | undefined => {
-  if (!entry) return undefined;
-  const modelId = canonicalizeMediaModelId(entry.modelId);
-  return {
-    modelId,
-    modelName: mediaModelDisplayName(modelId, entry.modelName),
-  };
-};
-
-const normalizeSavedMediaSelection = (saved: SavedMediaSelection | null | undefined): SavedMediaSelection => {
-  const image = normalizeSavedMediaSelectionEntry(saved?.image);
-  const video = normalizeSavedMediaSelectionEntry(saved?.video);
-  return {
-    ...(image ? { image } : {}),
-    ...(video ? { video } : {}),
-  };
-};
-
-const isSameSavedMediaSelection = (
-  left: SavedMediaSelection | null | undefined,
-  right: SavedMediaSelection,
-): boolean => (
-  left?.image?.modelId === right.image?.modelId
-  && left?.image?.modelName === right.image?.modelName
-  && left?.video?.modelId === right.video?.modelId
-  && left?.video?.modelName === right.video?.modelName
-);
-
-const pendingSavedMediaSelectionLoads = new Map<
-  string,
-  Promise<SavedMediaSelection | null>
->();
-
-const getMediaSelectionStoreKey = (ownerAccountKey: string): string => (
-  `${MEDIA_SELECTION_KV_KEY}:${ownerAccountKey}`
-);
-
-const loadSavedMediaSelection = (
-  ownerAccountKey: string,
-): Promise<SavedMediaSelection | null> => {
-  const pending = pendingSavedMediaSelectionLoads.get(ownerAccountKey);
-  if (pending) return pending;
-
-  const selectionStoreKey = getMediaSelectionStoreKey(ownerAccountKey);
-  const load = (async () => {
-    const scopedSelection = await localStore.getItem<SavedMediaSelection>(selectionStoreKey);
-    if (scopedSelection !== null) return scopedSelection;
-
-    const legacySelection = await localStore.getItem<SavedMediaSelection>(MEDIA_SELECTION_KV_KEY);
-    if (legacySelection === null) return null;
-
-    const normalizedSelection = normalizeSavedMediaSelection(legacySelection);
-    try {
-      await localStore.setItem(selectionStoreKey, normalizedSelection);
-      await localStore.removeItem(MEDIA_SELECTION_KV_KEY);
-      logMediaModelPickerDiagnostic('debug', 'migrated legacy media selection to the current account');
-    } catch (error) {
-      logMediaModelPickerDiagnostic('warn', 'failed to persist account-scoped media selection', error);
-    }
-    return normalizedSelection;
-  })().finally(() => {
-    if (pendingSavedMediaSelectionLoads.get(ownerAccountKey) === load) {
-      pendingSavedMediaSelectionLoads.delete(ownerAccountKey);
-    }
-  });
-  pendingSavedMediaSelectionLoads.set(ownerAccountKey, load);
-  return load;
 };
 
 const MEDIA_ICON_HINTS: Array<{ pattern: RegExp; iconKey: MediaIconKey }> = [
@@ -628,11 +568,19 @@ const resolveMediaModelIcon = (model: MediaModel): React.ReactNode => {
 interface MediaModelPickerProps {
   draftKey: string;
   disabled?: boolean;
+  /** Shows the picker as a row of the prompt's add menu, with the model list as its submenu. */
+  menuItem?: PromptMenuItemControl;
 }
 
-const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled }) => {
-  const dispatch = useDispatch();
-  const [isOpen, setIsOpen] = useState(false);
+const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled, menuItem }) => {
+  const dispatch = useDispatch<AppDispatch>();
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isOpen = menuItem ? menuItem.open : uncontrolledOpen;
+  const onMenuOpenChange = menuItem?.onOpenChange;
+  const setIsOpen = useCallback((open: boolean) => {
+    if (onMenuOpenChange) onMenuOpenChange(open);
+    else setUncontrolledOpen(open);
+  }, [onMenuOpenChange]);
   const [activeTab, setActiveTab] = useState<'image' | 'video'>('image');
   const [isLoading, setIsLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -678,6 +626,29 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     enterpriseQuotaAvailable: enterpriseContext?.quotaStatus.available,
   });
   const canUseMediaGeneration = mediaAccess.allowed;
+  const mediaExposureRef = useRef<string>();
+  const reportMedia = useCallback((stage: string, params: Record<string, string | number | boolean | undefined> = {}) => {
+    const state = store.getState();
+    void reportYdAnalyzer({ action: LogReporterAction.MediaLifecycle, schemaVersion: UsageAnalytics.SchemaVersion,
+      ...getDraftAnalytics(state.agent.currentAgentId),
+      ...(draftKey !== '__home__' ? getSessionUsageContext(draftKey) : {}),
+      stage, entry: 'model_picker', mediaType: activeTab, accessAllowed: mediaAccess.allowed,
+      blockedReason: mediaAccess.reason, ...params });
+  }, [draftKey, activeTab, mediaAccess.allowed, mediaAccess.reason]);
+  useEffect(() => {
+    if (!isOpen) { mediaExposureRef.current = undefined; return; }
+    const key = activeTab + ':' + mediaAccess.reason + ':' + mediaAccess.allowed;
+    if (mediaExposureRef.current === key) return;
+    mediaExposureRef.current = key;
+    reportMedia(UsageStage.View);
+  }, [isOpen, activeTab, mediaAccess.reason, mediaAccess.allowed, reportMedia]);
+  const showsModelList = isLoggedIn && canUseMediaGeneration;
+  const desiredPanelWidth = showsModelList ? MEDIA_MODEL_LIST_PANEL_WIDTH : MEDIA_PROMPT_PANEL_WIDTH;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [panelPlacement, setPanelPlacement] = useState(() => ({
+    alignEnd: false,
+    width: desiredPanelWidth,
+  }));
 
   const cachedMediaModels = useSelector((state: RootState) => state.cowork.mediaModels);
   const mediaModelsOwnerAccountKey = useSelector(
@@ -690,25 +661,11 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   mediaModelsRef.current = mediaModels;
   const selection = useSelector((state: RootState) => state.cowork.mediaSelection[draftKey]);
 
-  const selectionRef = useRef(selection);
-  selectionRef.current = selection;
-  const isAccountScopeCurrent = useCallback((
-    expectedOwnerAccountKey: string,
-    expectedGeneration: number,
-  ): boolean => {
-    const currentAuthState = store.getState().auth;
-    return (
-      currentAuthState.ownerAccountKey === expectedOwnerAccountKey
-      && currentAuthState.accountGeneration === expectedGeneration
-    );
-  }, []);
-
   const fetchModels = useCallback(async () => {
     if (!ownerAccountKey) return;
     const requestOwnerAccountKey = ownerAccountKey;
     const requestGeneration = accountGeneration;
     const requestId = ++fetchRequestIdRef.current;
-    const selectionStoreKey = getMediaSelectionStoreKey(requestOwnerAccountKey);
     const currentMediaModels = mediaModelsRef.current;
     const hasCachedModels = currentMediaModels.image.length > 0
       || currentMediaModels.video.length > 0;
@@ -722,7 +679,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       ]);
       if (
         fetchRequestIdRef.current !== requestId
-        || !isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
+        || !isMediaAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
       ) return;
       if (!imageResult.success) {
         logMediaModelPickerDiagnostic('warn', 'image models fetch failed', imageResult.error);
@@ -737,52 +694,12 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
         video: videoModels,
         ownerAccountKey: requestOwnerAccountKey,
       }));
-      const currentSelection = selectionRef.current;
-      if (!currentSelection || currentSelection.mode === 'none') {
-        const rawSaved = await loadSavedMediaSelection(requestOwnerAccountKey);
-        if (
-          fetchRequestIdRef.current !== requestId
-          || !isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
-        ) return;
-        const saved = normalizeSavedMediaSelection(rawSaved);
-        if (!isSameSavedMediaSelection(rawSaved, saved)) {
-          await localStore.setItem(selectionStoreKey, saved);
-        }
-        const imageEntry = saved?.image;
-        const videoEntry = saved?.video;
-        const imageValid = imageEntry && imageModels.some(m => m.modelId === imageEntry.modelId);
-        const videoValid = videoEntry && videoModels.some(m => m.modelId === videoEntry.modelId);
-
-        if (imageValid && videoValid) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: {
-              mode: 'auto',
-              modelId: imageEntry.modelId,
-              modelName: imageEntry.modelName,
-              imageModelId: imageEntry.modelId,
-              videoModelId: videoEntry!.modelId,
-            },
-          }));
-        } else if (imageValid) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: { mode: 'image', modelId: imageEntry.modelId, modelName: imageEntry.modelName },
-          }));
-        } else if (videoValid) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: { mode: 'video', modelId: videoEntry!.modelId, modelName: videoEntry!.modelName },
-          }));
-          setActiveTab('video');
-        }
-      }
     } catch (err) {
       logMediaModelPickerDiagnostic('warn', 'failed to fetch models', err);
     } finally {
       if (
         fetchRequestIdRef.current === requestId
-        && isAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
+        && isMediaAccountScopeCurrent(requestOwnerAccountKey, requestGeneration)
       ) {
         setIsLoading(false);
       }
@@ -790,8 +707,6 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   }, [
     accountGeneration,
     dispatch,
-    draftKey,
-    isAccountScopeCurrent,
     ownerAccountKey,
   ]);
 
@@ -806,6 +721,43 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     }
   }, [isOpen, canUseMediaGeneration, fetchModels]);
 
+  // In the add menu, the prompt's badges name the chosen models; a remembered
+  // image and video pair needs the model list for the second name.
+  const inMenu = !!menuItem;
+  const needsModelNames = inMenu
+    && selection?.mode === 'auto'
+    && mediaModels.image.length === 0
+    && mediaModels.video.length === 0;
+  useEffect(() => {
+    if (needsModelNames && canUseMediaGeneration) void fetchModels();
+  }, [canUseMediaGeneration, fetchModels, needsModelNames]);
+
+  useLayoutEffect(() => {
+    // A submenu's side is set by the add menu.
+    if (!isOpen || inMenu) return;
+    // The panel grows rightward from the trigger; flip it (or cap its width)
+    // when a clipping ancestor such as a narrow chat pane cannot fit it.
+    const updatePlacement = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      const placement = resolvePopoverPlacement(container, {
+        preferredAlign: 'left',
+        estimatedHeight: MEDIA_PANEL_ESTIMATED_HEIGHT,
+        desiredWidth: desiredPanelWidth,
+      });
+      const next = {
+        alignEnd: placement.alignSide === 'right',
+        width: placement.maxWidth ?? desiredPanelWidth,
+      };
+      setPanelPlacement(current => (
+        current.alignEnd === next.alignEnd && current.width === next.width ? current : next
+      ));
+    };
+    updatePlacement();
+    window.addEventListener('resize', updatePlacement);
+    return () => window.removeEventListener('resize', updatePlacement);
+  }, [inMenu, isOpen, desiredPanelWidth]);
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
@@ -817,141 +769,31 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [isOpen]);
+  }, [isOpen, setIsOpen]);
 
-  useEffect(() => {
-    if (
-      !ownerAccountKey
-      || !canUseMediaGeneration
-      || (selection && selection.mode !== 'none')
-    ) {
-      return;
-    }
+  const [preferenceError, setPreferenceError] = useState(false);
 
-    let cancelled = false;
-    const restoreOwnerAccountKey = ownerAccountKey;
-    const restoreGeneration = accountGeneration;
-    const selectionStoreKey = getMediaSelectionStoreKey(restoreOwnerAccountKey);
-    void (async () => {
-      try {
-        const rawSaved = await loadSavedMediaSelection(restoreOwnerAccountKey);
-        const saved = normalizeSavedMediaSelection(rawSaved);
-        if (!isSameSavedMediaSelection(rawSaved, saved)) {
-          await localStore.setItem(selectionStoreKey, saved);
-        }
-        if (
-          cancelled
-          || !isAccountScopeCurrent(restoreOwnerAccountKey, restoreGeneration)
-        ) {
-          return;
-        }
-        const imageEntry = saved.image;
-        const videoEntry = saved.video;
-        if (imageEntry && videoEntry) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: {
-              mode: 'auto',
-              modelId: imageEntry.modelId,
-              modelName: imageEntry.modelName,
-              imageModelId: imageEntry.modelId,
-              videoModelId: videoEntry.modelId,
-            },
-          }));
-        } else if (imageEntry) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: { mode: 'image', modelId: imageEntry.modelId, modelName: imageEntry.modelName },
-          }));
-        } else if (videoEntry) {
-          dispatch(setMediaSelection({
-            draftKey,
-            selection: { mode: 'video', modelId: videoEntry.modelId, modelName: videoEntry.modelName },
-          }));
-          setActiveTab('video');
-        }
-      } catch (error) {
-        logMediaModelPickerDiagnostic('warn', 'failed to restore saved media selection', error);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [
-    accountGeneration,
-    canUseMediaGeneration,
-    dispatch,
-    draftKey,
-    isAccountScopeCurrent,
-    ownerAccountKey,
-    selection,
-  ]);
-
-  const handleSelect = async (mode: MediaGenerationMode, model?: MediaModel) => {
+  const handlePreferenceMode = async (mode: typeof MediaPreferenceMode.Off | typeof MediaPreferenceMode.Inherit) => {
     if (!ownerAccountKey) return;
-    const selectionOwnerAccountKey = ownerAccountKey;
-    const selectionGeneration = accountGeneration;
-    const selectionStoreKey = getMediaSelectionStoreKey(selectionOwnerAccountKey);
-    let saved: SavedMediaSelection;
-    try {
-      saved = normalizeSavedMediaSelection(
-        await loadSavedMediaSelection(selectionOwnerAccountKey),
-      );
-    } catch (error) {
-      logMediaModelPickerDiagnostic('warn', 'failed to load saved media selection', error);
-      saved = {};
-    }
-    if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
-    const currentModelId = mode === 'image'
-      ? canonicalizeMediaModelId(selection?.imageModelId ?? (selection?.mode === 'image' ? selection?.modelId : undefined))
-      : canonicalizeMediaModelId(selection?.videoModelId ?? (selection?.mode === 'video' ? selection?.modelId : undefined));
-    const isDeselect = model && currentModelId === model.modelId;
+    const saved = await setMediaPreference(dispatch, { draftKey, ownerAccountKey, accountGeneration }, activeTab, { mode });
+    if (isMediaAccountScopeCurrent(ownerAccountKey, accountGeneration)) setPreferenceError(!saved);
+  };
 
-    if (isDeselect) {
-      delete saved[mode as 'image' | 'video'];
-    } else if (model) {
-      saved[mode as 'image' | 'video'] = { modelId: model.modelId, modelName: model.displayName };
-    }
-    try {
-      await localStore.setItem(selectionStoreKey, saved);
-    } catch (error) {
-      logMediaModelPickerDiagnostic('warn', 'failed to save media selection', error);
-    }
-    if (!isAccountScopeCurrent(selectionOwnerAccountKey, selectionGeneration)) return;
-
-    const hasImage = !!saved.image;
-    const hasVideo = !!saved.video;
-
-    if (hasImage && hasVideo) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: {
-          mode: 'auto',
-          modelId: saved[mode as 'image' | 'video']?.modelId,
-          modelName: saved[mode as 'image' | 'video']?.modelName,
-          imageModelId: saved.image!.modelId,
-          videoModelId: saved.video!.modelId,
-        },
-      }));
-    } else if (hasImage) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: { mode: 'image', modelId: saved.image!.modelId, modelName: saved.image!.modelName },
-      }));
-    } else if (hasVideo) {
-      dispatch(setMediaSelection({
-        draftKey,
-        selection: { mode: 'video', modelId: saved.video!.modelId, modelName: saved.video!.modelName },
-      }));
-    } else {
-      dispatch(setMediaSelection({ draftKey, selection: { mode: 'none' } }));
-    }
+  const handleSelect = (mode: 'image' | 'video', model: MediaModel) => {
+    reportMedia(UsageStage.Select, { mediaType: mode, modelId: catalogAnalyticsId(model.modelId) });
+    if (!ownerAccountKey) return;
+    void toggleMediaModelSelection(dispatch, { draftKey, ownerAccountKey, accountGeneration }, selection, mode, model)
+      .then(saved => { if (isMediaAccountScopeCurrent(ownerAccountKey, accountGeneration)) setPreferenceError(!saved); });
   };
 
   const handleLogin = async () => {
+    reportMedia(UsageStage.Login);
     setIsOpen(false);
     await authService.login();
   };
 
   const handleSubscribe = async () => {
+    reportMedia(UsageStage.Subscribe);
     setIsOpen(false);
     await openPurchase();
   };
@@ -1296,8 +1138,21 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
           </div>
         </div>
 
-        {/* Model List */}
-        <div className="max-h-72 overflow-y-auto py-1">
+        <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+          <button type="button" className="text-secondary hover:text-foreground"
+            onClick={() => { void handlePreferenceMode(MediaPreferenceMode.Off); }}>
+            {i18nService.t('mediaDisableType')}
+          </button>
+          <button type="button" className="text-primary hover:underline"
+            onClick={() => { void handlePreferenceMode(MediaPreferenceMode.Inherit); }}>
+            {i18nService.t('mediaRestoreDefaults')}
+          </button>
+        </div>
+        {preferenceError && <div role="alert" className="px-3 pb-2 text-xs text-red-500">
+          {i18nService.t('mediaPreferencesUnavailable')}
+        </div>}
+        {/* Model List: max-h-80 fits eight rows, so a typical list needs no scrollbar. */}
+        <div className="max-h-80 overflow-y-auto px-1.5 py-1">
           {isLoading ? (
             <div className="px-2 py-3 text-center text-xs text-secondary">
               {i18nService.t('mediaLoadingModels')}
@@ -1313,8 +1168,10 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
                   || (selection?.mode === 'image' && canonicalizeMediaModelId(selection?.modelId) === model.modelId))
                 : (canonicalizeMediaModelId(selection?.videoModelId) === model.modelId
                   || (selection?.mode === 'video' && canonicalizeMediaModelId(selection?.modelId) === model.modelId));
-              const priceLabel = getModelPriceLabel(model);
-              const discountLabel = getModelDiscountLabel(model);
+              const priceLabel = activeTab === 'image' ? getModelPriceLabel(model) : null;
+              const discountLabel = activeTab === 'image' ? getModelDiscountLabel(model) : null;
+              // Name and discount tag take the remaining width; the price sits in
+              // a right-aligned column next to a fixed check slot.
               return (
                 <button
                   key={model.modelId}
@@ -1322,24 +1179,36 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
                   onClick={() => handleSelect(activeTab, model)}
                   onMouseEnter={(e) => handleModelHover(model, e)}
                   onMouseLeave={handleModelHoverEnd}
-                  className={`flex w-full items-center gap-2.5 rounded px-2 py-2 text-left text-xs transition-colors hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover ${isSelected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+                    isSelected ? 'bg-surface-raised' : 'hover:bg-surface-raised'
+                  }`}
                 >
-                  <span className="shrink-0 h-4 w-4 [&_svg]:h-4 [&_svg]:w-4">{resolveMediaModelIcon(model)}</span>
-                  <span className="min-w-0 truncate text-[13px] font-normal leading-5">{model.displayName}</span>
-                  {activeTab === 'image' && priceLabel && (
-                    <span className="shrink-0 text-[11px] text-secondary whitespace-nowrap">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center [&_svg]:h-[18px] [&_svg]:w-[18px]">
+                    {resolveMediaModelIcon(model)}
+                  </span>
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className={`min-w-0 truncate text-[13px] leading-5 ${isSelected ? 'font-medium' : 'font-normal'}`}>
+                      {model.displayName}
+                    </span>
+                    {isSelected && (activeTab === 'image' ? selection?.imageSource : selection?.videoSource) === MediaSelectionSource.Default && (
+                      <span className="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary">
+                        {i18nService.t('mediaSystemDefault')}
+                      </span>
+                    )}
+                    {discountLabel && (
+                      <span className="shrink-0 rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-medium leading-3 text-red-500">
+                        {discountLabel}
+                      </span>
+                    )}
+                  </span>
+                  {priceLabel && (
+                    <span className="shrink-0 whitespace-nowrap text-[11px] leading-4 text-secondary tabular-nums">
                       {priceLabel}
                     </span>
                   )}
-                  {activeTab === 'image' && discountLabel && (
-                    <span className="shrink-0 rounded bg-red-500/10 px-1 py-0.5 text-[9px] font-medium leading-3 text-red-500">
-                      {discountLabel}
-                    </span>
-                  )}
-                  <span className="flex-1" />
-                  {isSelected && (
-                    <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" />
-                  )}
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                    {isSelected && <CheckIcon className="h-4 w-4 text-primary" strokeWidth={2.5} />}
+                  </span>
                 </button>
               );
             })
@@ -1349,8 +1218,44 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     );
   };
 
+  if (menuItem) {
+    const openSubmenu = () => { if (!disabled) setIsOpen(true); };
+    // No positioned wrapper: the model list hangs off the add menu itself.
+    return (
+      <>
+        <button
+          ref={buttonRef}
+          type="button"
+          disabled={disabled}
+          onClick={openSubmenu}
+          onMouseEnter={openSubmenu}
+          onFocus={openSubmenu}
+          className={`${PROMPT_MENU_ROW_CLASS} ${isOpen ? 'bg-surface-raised' : 'hover:bg-surface-raised'}`}
+          role="menuitem"
+          aria-haspopup="menu"
+          aria-expanded={isOpen}
+        >
+          <MagicIcon className="h-5 w-5 shrink-0 text-secondary" />
+          <span className="min-w-0 flex-1 truncate">{i18nService.t('mediaGenerationMenuItem')}</span>
+          <ChevronRightIcon className="h-4 w-4 shrink-0 text-secondary" />
+        </button>
+        {isOpen && (
+          <div
+            ref={dropdownRef}
+            style={{ width: desiredPanelWidth }}
+            className={`${PROMPT_SUBMENU_POSITION_CLASS[menuItem.side]} z-[60] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover`}
+            role="menu"
+          >
+            {renderDropdownContent()}
+          </div>
+        )}
+        {renderHoverCard()}
+      </>
+    );
+  }
+
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         ref={buttonRef}
         type="button"
@@ -1368,7 +1273,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
       {isOpen && (
         <div
           ref={dropdownRef}
-          className="absolute bottom-full left-0 z-50 mb-1 w-60 rounded-xl border border-border bg-surface shadow-popover overflow-hidden"
+          style={{ width: panelPlacement.width }}
+          className={`absolute bottom-full ${panelPlacement.alignEnd ? 'right-0' : 'left-0'} z-50 mb-1 rounded-xl border border-border bg-surface shadow-popover overflow-hidden`}
         >
           {renderDropdownContent()}
         </div>

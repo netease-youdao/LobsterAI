@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { ShareDeploymentCandidateSource } from '../../shared/shareDeployment/constants';
+import { type Artifact, ArtifactTypeValue } from '../types/artifact';
 import {
   dedupeArtifactsForDisplay,
   hasToolResultMediaAssets,
@@ -8,6 +9,7 @@ import {
   isPathInsideDirectory,
   normalizeArtifactFilePath,
   normalizeFilePathForDedup,
+  orderArtifactsByReplyReferences,
   parseFileLinksFromMessage,
   parseFilePathsFromText,
   parseLocalServiceUrlsFromText,
@@ -598,6 +600,90 @@ describe('dedupeArtifactsForDisplay', () => {
     ]);
 
     expect(artifacts.map(artifact => artifact.id)).toEqual(['service-3000', 'service-5174']);
+  });
+});
+
+describe('orderArtifactsByReplyReferences', () => {
+  const projectDir = '/Users/admin/claude-3-5-sonnet-ppt';
+  const makeFileArtifact = (
+    id: string,
+    messageId: string,
+    fileName: string,
+    type: Artifact['type'],
+  ): Artifact => ({
+    id,
+    messageId,
+    sessionId: 'sess1',
+    type,
+    title: fileName,
+    content: '',
+    fileName,
+    filePath: `${projectDir}/${fileName}`,
+    createdAt: 1,
+  });
+  const orderForDisplay = (rawArtifacts: Artifact[], replyMessageIds: string[]) =>
+    orderArtifactsByReplyReferences(dedupeArtifactsForDisplay(rawArtifacts), rawArtifacts, replyMessageIds)
+      .map(artifact => artifact.fileName);
+
+  test('puts the files the final reply links ahead of an intermediate generated image', () => {
+    const coverArt = makeFileArtifact('cover', 'image-tool-result', 'sonnet35-cover-art.png', ArtifactTypeValue.Image);
+    const replyLinks = parseFileLinksFromMessage(
+      [
+        'PPT 已完成。',
+        `- [Claude Sonnet 3.5 介绍.pptx](${projectDir}/Claude Sonnet 3.5 介绍.pptx)`,
+        `- [预览 PDF](${projectDir}/preview.pdf)`,
+        `- [缩略图总览](${projectDir}/thumbnails.png)`,
+      ].join('\n'),
+      'final-reply',
+      'sess1',
+    );
+
+    expect(orderForDisplay([coverArt, ...replyLinks], ['final-reply'])).toEqual([
+      'Claude Sonnet 3.5 介绍.pptx',
+      'preview.pdf',
+      'thumbnails.png',
+      'sonnet35-cover-art.png',
+    ]);
+  });
+
+  test('ranks the latest reply first and keeps unreferenced files in detection order', () => {
+    const rawArtifacts = [
+      makeFileArtifact('notes', 'tool-use-1', 'notes.txt', ArtifactTypeValue.Text),
+      makeFileArtifact('draft', 'reply-1', 'draft.md', ArtifactTypeValue.Markdown),
+      makeFileArtifact('chart', 'tool-result-2', 'chart.png', ArtifactTypeValue.Image),
+      makeFileArtifact('report', 'reply-2', 'report.pdf', ArtifactTypeValue.Document),
+    ];
+
+    expect(orderForDisplay(rawArtifacts, ['reply-1', 'reply-2'])).toEqual([
+      'report.pdf',
+      'draft.md',
+      'notes.txt',
+      'chart.png',
+    ]);
+  });
+
+  test('matches a reply link that display dedupe merged into a card from a tool step', () => {
+    const generatedImage = makeFileArtifact('generated', 'image-tool-result', 'hero.png', ArtifactTypeValue.Image);
+    const writtenPage = makeFileArtifact('written', 'tool-use-1', 'index.html', ArtifactTypeValue.Html);
+    const [linkedPage] = parseFileLinksFromMessage(
+      `打开 [index.html](file://${projectDir}/index.html) 查看。`,
+      'final-reply',
+      'sess1',
+    );
+    const rawArtifacts = [generatedImage, writtenPage, linkedPage];
+
+    expect(dedupeArtifactsForDisplay(rawArtifacts)).toHaveLength(2);
+    expect(orderForDisplay(rawArtifacts, ['final-reply'])).toEqual(['index.html', 'hero.png']);
+  });
+
+  test('keeps the detection order when no reply links a file', () => {
+    const artifacts = [
+      makeFileArtifact('first', 'tool-use-1', 'first.png', ArtifactTypeValue.Image),
+      makeFileArtifact('second', 'tool-use-2', 'second.pdf', ArtifactTypeValue.Document),
+    ];
+
+    expect(orderArtifactsByReplyReferences(artifacts, artifacts, ['final-reply'])).toBe(artifacts);
+    expect(orderArtifactsByReplyReferences(artifacts, artifacts, [])).toBe(artifacts);
   });
 });
 

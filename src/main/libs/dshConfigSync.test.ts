@@ -150,6 +150,13 @@ describe('plan provider (token proxy)', () => {
     expect(managed.envVars[route.apiKeyEnv]).toBeTruthy();
   });
 
+  test('passes the loopback proxy token to dsh through the process env', () => {
+    const managed = renderDshManagedSettings({}, { planProvider: { ...plan, apiKey: 'loopback-proxy-token' } });
+    const route = managed.routes[DSH_PLAN_ROUTE_ID];
+    expect(managed.envVars[route.apiKeyEnv]).toBe('loopback-proxy-token');
+    expect(JSON.stringify(managed.routes)).not.toContain('loopback-proxy-token');
+  });
+
   test('marks the plan as LobsterAI-managed in the picker', () => {
     const managed = renderDshManagedSettings({}, { planProvider: plan });
     expect(managed.routes[DSH_PLAN_ROUTE_ID].displayName).toBe(`${DSH_MANAGED_LABEL_PREFIX}套餐`);

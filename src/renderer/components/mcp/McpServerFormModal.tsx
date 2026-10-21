@@ -1,15 +1,44 @@
-import React, { useEffect,useState } from 'react';
+import { ArrowTopRightOnSquareIcon, ChevronRightIcon, EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useMemo, useState } from 'react';
 
+import { McpAuthMode } from '../../../shared/mcp/auth';
+import { McpNodeEnv } from '../../../shared/mcp/constants';
+import {
+  getInitialMcpTokenValues,
+  McpConnectorBuildError,
+  type McpTokenField,
+  McpTokenFieldType,
+  McpTokenValueError,
+} from '../../../shared/mcp/marketplace';
+import type { McpToolDiscoveryRequest } from '../../../shared/mcp/toolDiscovery';
 import { McpUrlValidationError, normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { i18nService } from '../../services/i18n';
 import { McpJsonImportErrorCode, McpJsonImportResult, parseMcpServersJson } from '../../services/mcpJsonImport';
-import { McpRegistryEntry,McpServerConfig, McpServerFormData } from '../../types/mcp';
+import {
+  buildRegistryRemoteServerData,
+  getRegistryInstallDefaults,
+  isRemoteRegistryEntry,
+} from '../../services/mcpMarketplaceInstall';
+import { pickMcpConnectorText } from '../../services/mcpRegistryPresentation';
+import {
+  buildMcpToolFilterFromText,
+  compactMcpToolFilter,
+  formatMcpToolNameList,
+  isPlainExcludeFilter,
+} from '../../services/mcpToolFilter';
+import { McpRegistryEntry,McpServerConfig, McpServerFormData, McpToolFilter } from '../../types/mcp';
 import Modal from '../common/Modal';
+import McpToolPicker from './McpToolPicker';
 
 const TRANSPORT_OPTIONS: { value: 'stdio' | 'sse' | 'http'; label: string; descKey: string }[] = [
   { value: 'stdio', label: 'stdio', descKey: 'mcpTransportStdio' },
   { value: 'sse', label: 'SSE', descKey: 'mcpTransportSse' },
   { value: 'http', label: 'HTTP', descKey: 'mcpTransportHttp' },
+];
+
+const AUTH_MODE_OPTIONS: { value: McpAuthMode; labelKey: string; descKey: string }[] = [
+  { value: McpAuthMode.None, labelKey: 'mcpAuthNone', descKey: 'mcpAuthNoneDesc' },
+  { value: McpAuthMode.OAuth, labelKey: 'mcpAuthOAuth', descKey: 'mcpAuthOAuthDesc' },
 ];
 
 export const McpFormInputMode = {
@@ -38,6 +67,40 @@ const MCP_JSON_EXAMPLE = `{
   }
 }`;
 
+const parseArgsText = (text: string): string[] =>
+  text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0);
+
+const TOKEN_VALUE_ERROR_KEYS: Record<McpTokenValueError, string> = {
+  [McpTokenValueError.Required]: 'mcpTokenFieldRequired',
+  [McpTokenValueError.InvalidUrl]: 'mcpTokenFieldInvalidUrl',
+  [McpTokenValueError.InvalidCharacters]: 'mcpTokenFieldInvalidCharacters',
+};
+
+const rowsToRecord = (rows: { key: string; value: string }[]): Record<string, string> => {
+  const record: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (key) record[key] = row.value;
+  }
+  return record;
+};
+
+/**
+ * A remote marketplace connector owns its URL and auth: the form asks only for
+ * the credentials its tokenSchema declares, on install and again on edit.
+ */
+const getRegistryConnectorEntry = (
+  server: McpServerConfig | null | undefined,
+  registryEntry: McpRegistryEntry | null | undefined,
+): McpRegistryEntry | null => {
+  if (!registryEntry || !isRemoteRegistryEntry(registryEntry)) return null;
+  if (!server) return registryEntry;
+  return server.registryId === registryEntry.id && server.transportType !== 'stdio' ? registryEntry : null;
+};
+
 interface McpServerFormModalProps {
   isOpen: boolean;
   server?: McpServerConfig | null; // null = create mode, defined = edit mode
@@ -61,6 +124,10 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const isRegistry = !!registryEntry && !isEdit;
   // JSON paste mode is only offered when creating from scratch.
   const supportsJsonMode = !isEdit && !isRegistry && !!onImportJson;
+  const registryConnector = getRegistryConnectorEntry(server, registryEntry);
+  const tokenSchema = registryConnector?.connector?.tokenSchema;
+  const isRegistryOAuth = registryConnector?.connector?.auth === McpAuthMode.OAuth;
+  const language = i18nService.getLanguage();
 
   const [inputMode, setInputMode] = useState<McpFormInputMode>(McpFormInputMode.Form);
   const [jsonText, setJsonText] = useState('');
@@ -73,8 +140,16 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const [envRows, setEnvRows] = useState<{ key: string; value: string; required?: boolean }[]>([]);
   const [url, setUrl] = useState('');
   const [headerRows, setHeaderRows] = useState<{ key: string; value: string }[]>([]);
+  const [authMode, setAuthMode] = useState<McpAuthMode>(McpAuthMode.None);
+  const [includeToolsText, setIncludeToolsText] = useState('');
+  const [excludeToolsText, setExcludeToolsText] = useState('');
+  const [parallelToolCalls, setParallelToolCalls] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState('');
   const [envErrors, setEnvErrors] = useState<Record<number, boolean>>({});
+  const [tokenValues, setTokenValues] = useState<Record<string, string>>({});
+  const [tokenErrors, setTokenErrors] = useState<Record<string, McpTokenValueError>>({});
+  const [revealedTokenKeys, setRevealedTokenKeys] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!isOpen) return;
@@ -101,6 +176,12 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           ? Object.entries(server.headers).map(([key, value]) => ({ key, value }))
           : []
       );
+      setAuthMode(server.auth === McpAuthMode.OAuth ? McpAuthMode.OAuth : McpAuthMode.None);
+      setIncludeToolsText(formatMcpToolNameList(server.toolFilter?.include));
+      setExcludeToolsText(formatMcpToolNameList(server.toolFilter?.exclude));
+      setParallelToolCalls(server.supportsParallelToolCalls === true);
+      // Open the advanced section when it holds something the checklist can't show.
+      setShowAdvanced(!isPlainExcludeFilter(server.toolFilter) || server.supportsParallelToolCalls === true);
     } else if (registryEntry) {
       // Registry install mode — pre-fill from template
       setName(registryEntry.name);
@@ -131,6 +212,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setEnvRows(envEntries);
       setUrl('');
       setHeaderRows([]);
+      setAuthMode(McpAuthMode.None);
     } else {
       // Create mode
       setName('');
@@ -142,12 +224,87 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setUrl('');
       setHeaderRows([]);
     }
+    if (!server) {
+      // Marketplace entries may pre-select the tools they are meant to expose.
+      const defaults = registryEntry ? getRegistryInstallDefaults(registryEntry) : {};
+      setIncludeToolsText(formatMcpToolNameList(defaults.toolFilter?.include));
+      setExcludeToolsText('');
+      setParallelToolCalls(false);
+      setShowAdvanced(false);
+    }
+    const schema = getRegistryConnectorEntry(server, registryEntry)?.connector?.tokenSchema;
+    setTokenValues(schema ? getInitialMcpTokenValues(schema, server?.tokenValues) : {});
+    setTokenErrors({});
+    setRevealedTokenKeys({});
     setInputMode(McpFormInputMode.Form);
     setJsonText('');
     setIsImporting(false);
     setError('');
     setEnvErrors({});
   }, [isOpen, server, registryEntry]);
+
+  // The text areas are the source of truth; the checklist reads and rewrites them.
+  const toolFilter = useMemo(
+    () => compactMcpToolFilter(buildMcpToolFilterFromText(includeToolsText, excludeToolsText)),
+    [includeToolsText, excludeToolsText],
+  );
+
+  const handleToolFilterChange = (next: McpToolFilter | undefined) => {
+    setIncludeToolsText(formatMcpToolNameList(next?.include));
+    setExcludeToolsText(formatMcpToolNameList(next?.exclude));
+  };
+
+  const isMissingRequiredEnv = transportType === 'stdio'
+    && envRows.some(row => row.required && !row.value.trim());
+
+  // The connector's URL and headers as the credentials typed so far fill them in.
+  const registryRemoteData = useMemo(
+    () => (registryConnector ? buildRegistryRemoteServerData(registryConnector, tokenValues) : null),
+    [registryConnector, tokenValues],
+  );
+
+  // Tools are listed with what the form holds now, so unsaved edits (a new
+  // API key, a changed URL) are what get tried.
+  const toolDiscoveryRequest = useMemo<McpToolDiscoveryRequest | null>(() => {
+    if (transportType === 'stdio') {
+      if (!command.trim() || isMissingRequiredEnv) return null;
+      return {
+        serverId: server?.id,
+        name: name.trim(),
+        transportType,
+        command: command.trim(),
+        args: parseArgsText(argsText),
+        env: rowsToRecord(envRows),
+      };
+    }
+    if (registryRemoteData) {
+      if (!registryRemoteData.ok || registryRemoteData.data.auth === McpAuthMode.OAuth) return null;
+      return {
+        serverId: server?.id,
+        name: name.trim(),
+        transportType,
+        url: registryRemoteData.data.url,
+        headers: registryRemoteData.data.headers,
+      };
+    }
+    // OAuth servers answer 401 until the user signs in, which only works once the server is saved.
+    if (!url.trim() || authMode === McpAuthMode.OAuth) return null;
+    return {
+      serverId: server?.id,
+      name: name.trim(),
+      transportType,
+      url: url.trim(),
+      headers: rowsToRecord(headerRows),
+    };
+  }, [argsText, authMode, command, envRows, headerRows, isMissingRequiredEnv, name, registryRemoteData, server?.id, transportType, url]);
+
+  const toolDiscoveryBlockedReason = transportType !== 'stdio' && (authMode === McpAuthMode.OAuth || isRegistryOAuth)
+    ? i18nService.t('mcpToolsNeedOAuthSignIn')
+    : registryRemoteData && !registryRemoteData.ok
+      ? i18nService.t('mcpToolsNeedRequiredCredentials')
+      : isMissingRequiredEnv && command.trim()
+        ? i18nService.t('mcpToolsNeedRequiredEnv')
+        : i18nService.t('mcpToolsNeedConnection');
 
   const handleSave = () => {
     const trimmedName = name.trim();
@@ -165,6 +322,11 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
 
     if (transportType === 'stdio' && !command.trim()) {
       setError(i18nService.t('mcpCommandRequired'));
+      return;
+    }
+
+    if (registryConnector) {
+      handleSaveRegistryConnector(trimmedName, registryConnector);
       return;
     }
 
@@ -202,22 +364,9 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       return;
     }
 
-    const args = argsText
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
-
-    const env: Record<string, string> = {};
-    for (const row of envRows) {
-      const k = row.key.trim();
-      if (k) env[k] = row.value;
-    }
-
-    const headers: Record<string, string> = {};
-    for (const row of headerRows) {
-      const k = row.key.trim();
-      if (k) headers[k] = row.value;
-    }
+    const args = parseArgsText(argsText);
+    const env = rowsToRecord(envRows);
+    const headers = rowsToRecord(headerRows);
 
     const data: McpServerFormData = {
       name: trimmedName,
@@ -232,7 +381,11 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     } else {
       data.url = normalizedUrl;
       data.headers = headers;
+      // Always sent for remote servers so switching back to "none" clears a saved OAuth mode.
+      data.auth = authMode;
     }
+
+    applyToolSettings(data);
 
     // Attach registry metadata if installing from registry
     if (isRegistry && registryEntry) {
@@ -242,6 +395,60 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
 
     onSave(data);
   };
+
+  const applyToolSettings = (data: McpServerFormData) => {
+    data.toolFilter = buildMcpToolFilterFromText(includeToolsText, excludeToolsText);
+    // Only write the flag when it is on or was set before, so servers that never
+    // touched it keep OpenClaw's default without an explicit `false`.
+    if (parallelToolCalls || server?.supportsParallelToolCalls !== undefined) {
+      data.supportsParallelToolCalls = parallelToolCalls;
+    }
+  };
+
+  /** URL and headers come from the connector template, filled with the credential form. */
+  const handleSaveRegistryConnector = (trimmedName: string, entry: McpRegistryEntry) => {
+    const result = buildRegistryRemoteServerData(entry, tokenValues);
+    if (!result.ok) {
+      setTokenErrors(result.fieldErrors);
+      setError(result.code === McpConnectorBuildError.InvalidUrl
+        ? i18nService.t('mcpTokenTemplateInvalid')
+        : i18nService.t('mcpTokenFieldsIncomplete'));
+      return;
+    }
+    const data: McpServerFormData = {
+      name: trimmedName,
+      description: description.trim(),
+      ...result.data,
+    };
+    applyToolSettings(data);
+    if (isRegistry) {
+      const { requestTimeoutMs, connectionTimeoutMs } = getRegistryInstallDefaults(entry);
+      Object.assign(data, {
+        ...(requestTimeoutMs ? { requestTimeoutMs } : {}),
+        ...(connectionTimeoutMs ? { connectionTimeoutMs } : {}),
+        isBuiltIn: true,
+        registryId: entry.id,
+      });
+    }
+    onSave(data);
+  };
+
+  const handleUpdateTokenValue = (key: string, value: string) => {
+    setTokenValues(prev => ({ ...prev, [key]: value }));
+    if (tokenErrors[key]) {
+      setTokenErrors(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
+  const getTokenFieldText = (field: McpTokenField) => ({
+    label: pickMcpConnectorText(language, field.label, field.label_en),
+    placeholder: pickMcpConnectorText(language, field.placeholder, field.placeholder_en),
+    description: pickMcpConnectorText(language, field.description, field.description_en),
+  });
 
   const formatJsonImportError = (result: Extract<McpJsonImportResult, { ok: false }>): string => {
     switch (result.code) {
@@ -336,6 +543,113 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const labelClass = 'text-xs font-semibold tracking-wide text-secondary';
   const kvInputClass = 'flex-1 px-2 py-1.5 text-sm rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-1 focus:ring-primary';
 
+  const isTransportLocked = isRegistry || !!registryConnector;
+
+  const renderTokenField = (field: McpTokenField, index: number) => {
+    const text = getTokenFieldText(field);
+    const isSecret = field.type === McpTokenFieldType.Password;
+    const isRevealed = revealedTokenKeys[field.key] === true;
+    const fieldError = tokenErrors[field.key];
+    const inputId = `mcp-token-field-${field.key}`;
+    return (
+      <div key={field.key} className="space-y-1.5">
+        <label htmlFor={inputId} className={labelClass}>
+          {text.label}
+          {field.required && <span className="text-red-500 dark:text-red-400 ml-0.5">*</span>}
+        </label>
+        <div className="relative">
+          <input
+            id={inputId}
+            type={isSecret && !isRevealed ? 'password' : 'text'}
+            inputMode={field.type === McpTokenFieldType.Url ? 'url' : undefined}
+            value={tokenValues[field.key] ?? ''}
+            onChange={(e) => handleUpdateTokenValue(field.key, e.target.value)}
+            placeholder={text.placeholder}
+            autoComplete="off"
+            spellCheck={false}
+            autoFocus={isRegistry && index === 0}
+            aria-invalid={fieldError ? true : undefined}
+            className={`${inputClass}${isSecret ? ' pr-9' : ''}${fieldError ? ' border-red-500 focus:ring-red-500' : ''}`}
+          />
+          {isSecret && (
+            <button
+              type="button"
+              onClick={() => setRevealedTokenKeys(prev => ({ ...prev, [field.key]: !isRevealed }))}
+              aria-label={i18nService.t(isRevealed ? 'mcpTokenHideSecret' : 'mcpTokenShowSecret')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-secondary transition-colors hover:text-foreground"
+            >
+              {isRevealed ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+            </button>
+          )}
+        </div>
+        {fieldError ? (
+          <p className="text-xs text-red-500">
+            {i18nService.t(TOKEN_VALUE_ERROR_KEYS[fieldError]).replace('{label}', text.label)}
+          </p>
+        ) : text.description ? (
+          <p className="text-xs leading-5 text-secondary">{text.description}</p>
+        ) : null}
+      </div>
+    );
+  };
+
+  /** Endpoint (template, so no secret shows) and either the credential form or the OAuth note. */
+  const renderRegistryConnection = (entry: McpRegistryEntry) => {
+    const schema = tokenSchema;
+    const docUrl = schema?.docUrl;
+    const title = schema ? pickMcpConnectorText(language, schema.title, schema.title_en) : '';
+    const schemaDescription = schema ? pickMcpConnectorText(language, schema.description, schema.description_en) : '';
+    const docLabel = schema ? pickMcpConnectorText(language, schema.docLabel, schema.docLabel_en) : '';
+    return (
+      <>
+        <div className="space-y-1.5">
+          <label className={labelClass}>{i18nService.t('mcpUrl')}</label>
+          <input
+            type="text"
+            value={entry.connector?.url ?? ''}
+            readOnly
+            className={readOnlyInputClass + ' font-mono text-xs'}
+          />
+        </div>
+        {isRegistryOAuth && (
+          <div className="space-y-1.5">
+            <label className={labelClass}>{i18nService.t('mcpAuthMode')}</label>
+            <p className="text-xs leading-5 text-secondary">
+              <span className="font-medium text-foreground">{i18nService.t('mcpAuthOAuth')}</span>
+              {' · '}
+              {i18nService.t('mcpAuthOAuthDesc')}
+            </p>
+          </div>
+        )}
+        {schema && (
+          <div className="space-y-3 rounded-xl border border-border bg-surface-raised/40 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 space-y-0.5">
+                <div className="text-sm font-medium text-foreground">
+                  {title || i18nService.t('mcpTokenFormTitle')}
+                </div>
+                {schemaDescription && (
+                  <p className="text-xs leading-5 text-secondary">{schemaDescription}</p>
+                )}
+              </div>
+              {docUrl && (
+                <button
+                  type="button"
+                  onClick={() => { void window.electron.shell.openExternal(docUrl); }}
+                  className="inline-flex flex-shrink-0 items-center gap-1 text-xs text-primary transition-colors hover:text-primary/80"
+                >
+                  {docLabel || i18nService.t('mcpTokenDocLink')}
+                  <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {schema.fields.map(renderTokenField)}
+          </div>
+        )}
+      </>
+    );
+  };
+
   // Title
   const modalTitle = isEdit
     ? i18nService.t('editMcpServer')
@@ -424,18 +738,18 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           {/* Transport Type */}
           <div className="space-y-1.5">
             <label className={labelClass}>{i18nService.t('mcpTransportType')}</label>
-            <div className={`grid grid-cols-3 gap-1 rounded-lg bg-surface-raised p-1 ${isRegistry ? 'opacity-60' : ''}`}>
+            <div className={`grid grid-cols-3 gap-1 rounded-lg bg-surface-raised p-1 ${isTransportLocked ? 'opacity-60' : ''}`}>
               {TRANSPORT_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
                   type="button"
-                  disabled={isRegistry}
+                  disabled={isTransportLocked}
                   onClick={() => setTransportType(opt.value)}
                   className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
                     transportType === opt.value
                       ? 'bg-surface text-foreground shadow-subtle'
                       : 'text-secondary hover:text-foreground'
-                  } ${isRegistry ? 'cursor-not-allowed' : ''}`}
+                  } ${isTransportLocked ? 'cursor-not-allowed' : ''}`}
                 >
                   {opt.label}
                 </button>
@@ -534,14 +848,22 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                         {i18nService.t('mcpEnvRequired')}
                       </p>
                     )}
+                    {row.key.trim().toUpperCase() === McpNodeEnv.Options && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        {i18nService.t('mcpEnvNodeOptionsIgnored')}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
             </>
           )}
 
+          {/* Marketplace connector: fixed endpoint plus its credential form */}
+          {registryConnector && renderRegistryConnection(registryConnector)}
+
           {/* sse / http fields */}
-          {(transportType === 'sse' || transportType === 'http') && (
+          {!registryConnector && (transportType === 'sse' || transportType === 'http') && (
             <>
               <div className="space-y-1.5">
                 <label className={labelClass}>{i18nService.t('mcpUrl')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span></label>
@@ -552,6 +874,30 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                   placeholder={i18nService.t('mcpUrlPlaceholder')}
                   className={inputClass}
                 />
+              </div>
+
+              {/* Authentication: static headers, or MCP OAuth handled by OpenClaw */}
+              <div className="space-y-1.5">
+                <label className={labelClass}>{i18nService.t('mcpAuthMode')}</label>
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-raised p-1">
+                  {AUTH_MODE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setAuthMode(opt.value)}
+                      className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                        authMode === opt.value
+                          ? 'bg-surface text-foreground shadow-subtle'
+                          : 'text-secondary hover:text-foreground'
+                      }`}
+                    >
+                      {i18nService.t(opt.labelKey)}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-secondary">
+                  {i18nService.t((AUTH_MODE_OPTIONS.find(opt => opt.value === authMode) ?? AUTH_MODE_OPTIONS[0]).descKey)}
+                </p>
               </div>
 
               <div className="space-y-1.5">
@@ -595,6 +941,67 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
               </div>
             </>
           )}
+
+          {/* Tool selection: unchecked tools are never sent to the model */}
+          <McpToolPicker
+            request={toolDiscoveryRequest}
+            blockedReason={toolDiscoveryBlockedReason}
+            filter={toolFilter}
+            onChange={handleToolFilterChange}
+            labelClassName={labelClass}
+          />
+
+          {/* Hand-written filter rules and the parallel-calls switch */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(prev => !prev)}
+              aria-expanded={showAdvanced}
+              className="inline-flex items-center gap-1 text-xs font-medium text-secondary transition-colors hover:text-primary"
+            >
+              <ChevronRightIcon className={`h-3.5 w-3.5 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} />
+              {i18nService.t('mcpToolsAdvanced')}
+            </button>
+            {showAdvanced && (
+              <div className="mt-3 space-y-3 border-l-2 border-border-subtle pl-3">
+                <div className="space-y-1.5">
+                  <label className={labelClass}>{i18nService.t('mcpToolFilterInclude')}</label>
+                  <textarea
+                    value={includeToolsText}
+                    onChange={(e) => setIncludeToolsText(e.target.value)}
+                    placeholder={i18nService.t('mcpToolFilterPlaceholder')}
+                    rows={2}
+                    spellCheck={false}
+                    className={inputClass + ' resize-none font-mono text-xs'}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className={labelClass}>{i18nService.t('mcpToolFilterExclude')}</label>
+                  <textarea
+                    value={excludeToolsText}
+                    onChange={(e) => setExcludeToolsText(e.target.value)}
+                    placeholder={i18nService.t('mcpToolFilterPlaceholder')}
+                    rows={2}
+                    spellCheck={false}
+                    className={inputClass + ' resize-none font-mono text-xs'}
+                  />
+                  <p className="text-xs leading-5 text-secondary">{i18nService.t('mcpToolFilterHint')}</p>
+                </div>
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={parallelToolCalls}
+                    onChange={(e) => setParallelToolCalls(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 flex-shrink-0 cursor-pointer accent-primary"
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-sm text-foreground">{i18nService.t('mcpParallelToolCalls')}</span>
+                    <span className="block text-xs leading-5 text-secondary">{i18nService.t('mcpParallelToolCallsHint')}</span>
+                  </span>
+                </label>
+              </div>
+            )}
+          </div>
 
           </>
           )}

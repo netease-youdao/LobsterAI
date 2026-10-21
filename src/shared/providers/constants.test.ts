@@ -54,12 +54,55 @@ describe('ProviderRegistry', () => {
     });
   });
 
-  test('xiaomi default models are limited to MiMo V2.5 models with 1M context', () => {
+  test('xiaomi defaults to MiMo V2.6 Pro with 1M context', () => {
     const xiaomi = ProviderRegistry.get(ProviderName.Xiaomi);
     expect(xiaomi?.defaultModels).toEqual([
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     ]);
+  });
+
+  test('builtin providers list their latest model first', () => {
+    const firstModelIds = [
+      ProviderName.DeepSeek,
+      ProviderName.Moonshot,
+      ProviderName.Qwen,
+      ProviderName.Zhipu,
+      ProviderName.Minimax,
+      ProviderName.Xiaomi,
+    ].map(providerName => ProviderRegistry.get(providerName)?.defaultModels[0]?.id);
+    expect(firstModelIds).toEqual([
+      'deepseek-v4-flash',
+      'kimi-k3',
+      'qwen3.8-max',
+      'glm-5.3',
+      'MiniMax-M3',
+      'mimo-v2.6-pro',
+    ]);
+  });
+
+  test('legacy models are not seeded as defaults but keep their capability metadata', () => {
+    const legacyModels: Array<[string, string]> = [
+      [ProviderName.DeepSeek, 'deepseek-reasoner'],
+      [ProviderName.Moonshot, 'kimi-k2.5'],
+      [ProviderName.Qwen, 'qwen3.6-plus'],
+      [ProviderName.Qwen, 'qwen3.5-plus'],
+      [ProviderName.Zhipu, 'glm-5'],
+      [ProviderName.Zhipu, 'glm-4.7'],
+      [ProviderName.Minimax, 'MiniMax-M2.5'],
+      [ProviderName.Xiaomi, 'mimo-v2.5-pro'],
+    ];
+
+    for (const [providerName, modelId] of legacyModels) {
+      const def = ProviderRegistry.get(providerName);
+      expect(def?.defaultModels.map(model => model.id)).not.toContain(modelId);
+      expect(def?.legacyModels?.map(model => model.id)).toContain(modelId);
+    }
+    expect(ProviderRegistry.getProviderModelContextWindow(ProviderName.Qwen, 'qwen3.6-plus')).toBe(1_000_000);
+    expect(ProviderRegistry.getProviderModelContextWindow(ProviderName.Zhipu, 'glm-4.7')).toBe(204_800);
+    expect(ProviderRegistry.getProviderModelSupportsThinking(ProviderName.Zhipu, 'glm-5')).toBe(true);
+    expect(ProviderRegistry.getProviderModelSupportsImage(ProviderName.Moonshot, 'kimi-k2.5')).toBe(true);
+    expect(ProviderRegistry.getKnownModelContextWindow('MiniMax-M2.5')).toBe(204_800);
   });
 
   test('minimax defaults to MiniMax M3 with 1M context first', () => {

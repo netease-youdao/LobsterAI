@@ -1,6 +1,16 @@
 import { describe, expect, test } from 'vitest';
 
-import { isTextEditingSafeShortcut, matchesShortcut } from './shortcuts';
+import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
+import { formatShortcutForDisplay, isTextEditingSafeShortcut, matchesShortcut } from './shortcuts';
+
+describe('quick panel shortcut display', () => {
+  test.each([
+    { isMac: true, expected: 'Option+Space' },
+    { isMac: false, expected: 'Alt+Space' },
+  ])('formats the default shortcut for isMac=$isMac', ({ isMac, expected }) => {
+    expect(formatShortcutForDisplay(DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut, { isMac })).toBe(expected);
+  });
+});
 
 describe('isTextEditingSafeShortcut', () => {
   test('returns false for empty or missing bindings', () => {
@@ -24,6 +34,21 @@ describe('isTextEditingSafeShortcut', () => {
 });
 
 describe('matchesShortcut', () => {
+  test('matches macOS Option letter bindings when the event key is a symbol', () => {
+    const event = {
+      key: '√', code: 'KeyV', ctrlKey: false, altKey: true, metaKey: false, shiftKey: false,
+    } as KeyboardEvent;
+    expect(matchesShortcut(event, 'Option+V')).toBe(true);
+  });
+
+  test('preserves the typed letter for shortcuts without Alt on other keyboard layouts', () => {
+    const event = {
+      key: 'a', code: 'KeyQ', ctrlKey: true, altKey: false, metaKey: false, shiftKey: false,
+    } as KeyboardEvent;
+    expect(matchesShortcut(event, 'Ctrl+A')).toBe(true);
+    expect(matchesShortcut(event, 'Ctrl+Q')).toBe(false);
+  });
+
   test('does not trigger Ctrl+Alt shortcuts while Windows AltGr is composing text', () => {
     const event = {
       key: 'e',

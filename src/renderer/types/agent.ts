@@ -1,6 +1,7 @@
+import type { AgentSource } from '@shared/agent/constants';
 import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
 
-export type AgentSource = 'custom' | 'preset';
+export type { AgentSource } from '@shared/agent/constants';
 
 export interface Agent {
   id: string;
@@ -12,6 +13,7 @@ export interface Agent {
   thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   icon: string;
+  iconCustomized?: boolean;
   skillIds: string[];
   subagentAllowAgentIds: string[];
   enabled: boolean;
@@ -25,20 +27,7 @@ export interface Agent {
   updatedAt: number;
 }
 
-export interface PresetAgent {
-  id: string;
-  name: string;
-  nameEn: string;
-  icon: string;
-  description: string;
-  descriptionEn: string;
-  identity: string;
-  identityEn: string;
-  systemPrompt: string;
-  systemPromptEn: string;
-  skillIds: string[];
-  installed?: boolean;
-}
+export type { PresetAgent } from '@shared/agent/presets';
 
 export interface CreateAgentRequest {
   id?: string;

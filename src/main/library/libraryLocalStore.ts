@@ -795,13 +795,13 @@ export class LibraryLocalStore {
     })();
   }
 
-  cleanupExpiredMissing(retentionMs: number, now = Date.now()): number {
+  cleanupExpiredMissing(retentionMs: number, now = Date.now()): string[] {
     const rows = this.db.prepare(`
       SELECT id FROM library_local_artifacts
       WHERE availability = ? AND missing_since IS NOT NULL AND missing_since < ?
     `).all(LibraryAvailability.Missing, now - retentionMs) as Array<{ id: string }>;
     for (const row of rows) this.deletePermanently(row.id);
-    return rows.length;
+    return rows.map(row => row.id);
   }
 
   cleanupOrphanRelations(): number {

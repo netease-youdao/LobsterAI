@@ -1,0 +1,1613 @@
+Backport: https://github.com/openclaw/openclaw/commit/3ba0a0b23761ef8209827f7f3dd0f82713c33bbe
+Upstream PR #160297 (v2026.9.7): fix: recheck unfinished plans before an agent stops.
+Also carries the progress_card description sentence from upstream PR #162903
+(b0632d0effc5d0d4aba5d4caa54ba2424b641751, v2026.10.1).
+
+A run can save an unfinished progress_card plan and then end with an ordinary
+visible reply ("I will continue with the rest"). v2026.8.1 treats that reply
+as the end of the turn, so the desktop card stays on "step 3/10 · turn ended"
+and nothing resumes the work. Upstream gives such a run one hidden, same-prompt
+completion check. The model continues feasible work, reconciles the plan, or
+reports the concrete limitation. The check runs at most once per run, keeps
+completed tool results and replays nothing. Old cards, cancelled, timed-out,
+yielded, refused or length-limited runs, queued user messages, optional replies
+and plugin finalize decisions keep their existing behavior.
+
+Adaptations for v2026.8.1:
+- The NO_REPLY clause from upstream PR #164896 (v2026.10.1) is left out. v2026.8.1
+  has no kept-answer delivery, so a silent follow-up could drop the reply that
+  already reported the blocker.
+- Any accepted sessions_spawn child counts as pending work. v2026.8.1 has no
+  expectsCompletionMessage marker.
+- The upstream steering-admission object does not exist here. A subscription
+  that was unsubscribed during the finalize hook, or an attempt that no longer
+  owns the active run, skips the check.
+- Refusals are read from the provider_refusal diagnostic directly.
+- deferTerminalDelivery keeps live assistant streaming unless a
+  before_agent_finalize hook is registered. Without it, every run would buffer
+  its assistant text until the end.
+- LobsterAI addition: when the check continues the run, the runtime emits a
+  `checkpoint` agent event after the finished answer is flushed. The desktop
+  client closes that answer's segment on it, so a short answer followed by more
+  text is not replaced by the follow-up.
+
+Retire when the pinned upstream reaches v2026.10.1, which contains all three
+upstream changes.
+
+diff --git a/src/agents/agent-tools.ts b/src/agents/agent-tools.ts
+index 17169311..9d28519d 100644
+--- a/src/agents/agent-tools.ts
++++ b/src/agents/agent-tools.ts
+@@ -371,6 +371,8 @@ type OpenClawCodingToolsOptions = {
+   authProfileStore?: AuthProfileStore;
+   /** Callback invoked when sessions_yield tool is called. */
+   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
++  /** Host-only observation after a canonical progress-card replacement commits. */
++  onProgressCardPlanSaved?: (unfinished: boolean) => void;
+   /** Side-effect-free runtime completion claimant composed with the durable subagent claim. */
+   claimYieldCompletion?: () => boolean | Promise<boolean>;
+   /** Optional instrumentation callback for tool preparation stage timing. */
+@@ -396,7 +398,9 @@ type OpenClawCodingToolsOptions = {
+   scheduledToolPolicy?: ScheduledToolPolicyContext;
+ };
+ 
+-function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
++export function createOpenClawCodingToolsInternal(
++  options?: OpenClawCodingToolsOptions,
++): AnyAgentTool[] {
+   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
+   const isMemoryFlushRun = options?.trigger === "memory";
+   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
+@@ -913,6 +917,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
+             oneShotCliRun: options?.oneShotCliRun,
+             inheritedToolAllowlist,
+             inheritedToolDenylist,
++            onProgressCardPlanSaved: options?.onProgressCardPlanSaved,
+             onYield: options?.onYield,
+             claimYieldCompletion: options?.claimYieldCompletion,
+             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+@@ -1080,8 +1085,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
+   });
+ }
+ 
+-/** Build the runtime tool list exposed through the public agent harness SDK. */
+-export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
++/** Build the public agent harness SDK tool list without completion observations. */
++export function createOpenClawCodingTools(
++  options?: Omit<OpenClawCodingToolsOptions, "onProgressCardPlanSaved">,
++): AnyAgentTool[] {
+   return createOpenClawCodingToolsInternal(options);
+ }
+ /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+diff --git a/src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts b/src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts
+index 646406cd..09a18fb3 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts
+@@ -310,6 +310,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
+     suppressNextUserMessagePersistence: sessionPromptState.suppressNextUserMessagePersistence,
+     beforeAgentFinalizeRevisionAttempts: terminalRetryState.beforeFinalizeRevisionAttempts,
+     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
++    completionCheck: terminalRetryState.completionCheck,
+   });
+   return { dispatchedAttempt, runtimePlan, startupStagesEmitted };
+ }
+diff --git a/src/agents/embedded-agent-runner/run/attempt-plan-completion.test.ts b/src/agents/embedded-agent-runner/run/attempt-plan-completion.test.ts
+new file mode 100644
+index 00000000..cb13c9cd
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/attempt-plan-completion.test.ts
+@@ -0,0 +1,499 @@
++import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
++// Backport of upstream #160297 for v2026.8.1: one bounded completion check when
++// a run saved an unfinished progress-card plan and then stopped normally.
++import { Type } from "typebox";
++import { afterEach, expect, it, vi } from "vitest";
++import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
++import type { AssistantMessage, Context, Model } from "../../../llm/types.js";
++import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
++import { createHookRunner } from "../../../plugins/hooks.js";
++import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
++import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
++import type { AgentToolResult, AgentToolUpdateCallback } from "../../runtime/index.js";
++import {
++  createAssistant,
++  createAssistantResultStream,
++  createTestSession,
++  registerAgentSessionLoopTestLifecycle,
++  streamMocks,
++  testModel,
++} from "../../sessions/agent-session-loop-correctness.test-support.js";
++import type { AgentSession } from "../../sessions/agent-session.js";
++import type { ToolDefinition } from "../../sessions/index.js";
++import * as gatewayTool from "../../tools/in-process-gateway.js";
++import { createProgressCardTool } from "../../tools/progress-card-tool.js";
++import { clearActiveEmbeddedRun } from "../runs.js";
++import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
++import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
++import { buildEmbeddedRunPayloads } from "./payloads.js";
++
++const SESSION_ID = "session-plan-completion";
++const SESSION_KEY = "agent:main:main";
++const CHECK_TYPE = "openclaw.plan-completion-check";
++
++type StreamRunState = {
++  aborted: boolean;
++  promptError: unknown;
++  timedOut: boolean;
++  yieldDetected: boolean;
++};
++
++type PreparedStream = ReturnType<typeof prepareEmbeddedAttemptStream>;
++
++registerAgentSessionLoopTestLifecycle();
++const streams: PreparedStream[] = [];
++afterEach(() => {
++  for (const stream of streams.splice(0)) {
++    stream.subscription.unsubscribe();
++    clearActiveEmbeddedRun(SESSION_ID, stream.queueHandle, SESSION_KEY);
++  }
++  vi.restoreAllMocks();
++});
++
++function preparePlanCompletionStream(options: {
++  activeSession: AgentSession;
++  attempt?: Partial<EmbeddedRunAttemptInternalParams>;
++  hookRunner?: ReturnType<typeof createHookRunner>;
++  getRunState?: () => StreamRunState;
++  runAbortController?: AbortController;
++  onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
++  streamReplies?: boolean;
++}): PreparedStream {
++  const prepared = prepareEmbeddedAttemptStream({
++    attempt: {
++      runId: "run-plan-completion",
++      sessionId: SESSION_ID,
++      sessionKey: SESSION_KEY,
++      onAgentEvent: options.onAgentEvent,
++      ...options.attempt,
++    } as never,
++    activeSession: options.activeSession,
++    hookRunner: (options.hookRunner ?? null) as never,
++    hookAgentId: "main",
++    diagnosticTrace: {} as never,
++    diagnosticOwner: createDiagnosticEmbeddedRunOwner({
++      sessionId: SESSION_ID,
++      runId: "run-plan-completion",
++    }),
++    clientToolCallSlots: [],
++    nestedToolActivities: [],
++    isReplaySafeTool: () => false,
++    runAbortController: options.runAbortController ?? new AbortController(),
++    abortRun: vi.fn(),
++    markExternalAbort: vi.fn(),
++    getRunState:
++      options.getRunState ??
++      (() => ({ aborted: false, promptError: undefined, timedOut: false, yieldDetected: false })),
++    hasDeliveredSourceReply: () => false,
++    markSourceReplyDelivered: vi.fn(),
++    onBlockReply: options.streamReplies === false ? undefined : vi.fn(),
++    onBlockReplyFlush: options.streamReplies === false ? undefined : vi.fn(),
++    sandboxSessionKey: SESSION_KEY,
++    builtinToolNames: new Set(),
++    replaySafeToolNames: new Set(),
++  });
++  streams.push(prepared);
++  return prepared;
++}
++
++function finalPayloadTexts(prepared: PreparedStream) {
++  const assistant = prepared.subscription.getCurrentAttemptAssistant();
++  return buildEmbeddedRunPayloads({
++    assistantTexts: prepared.subscription.assistantTexts,
++    lastAssistant: assistant,
++    currentAssistant: assistant ?? null,
++    sessionKey: SESSION_KEY,
++  }).map((payload) => payload.text);
++}
++
++function completionChecks(session: AgentSession) {
++  return session.messages.filter(
++    (message) => message.role === "custom" && message.customType === CHECK_TYPE,
++  );
++}
++
++it.each([
++  { nested: false, streamReplies: true },
++  { nested: true, streamReplies: true },
++  { nested: false, streamReplies: false },
++])(
++  "continues a committed unfinished plan without repeating completed effects (nested=$nested, streamReplies=$streamReplies)",
++  async ({ nested, streamReplies }) => {
++    const completionCheck = { unfinishedPlan: false, checked: false };
++    const plan = [
++      { step: "Inspect", status: "completed" as const },
++      { step: "Publish repair", status: "completed" as const },
++      { step: "Repair remaining failure", status: "pending" as const },
++    ];
++    const committed: ProgressCardPutResult = {
++      card: { sessionKey: SESSION_KEY, steps: plan, revision: 1, updatedAt: 1 },
++    };
++    const gatewayCall = vi
++      .spyOn(gatewayTool, "callInProcessGatewayTool")
++      .mockResolvedValue(committed);
++    const progress = createOpenClawCodingToolsInternal({
++      agentId: "main",
++      sessionKey: SESSION_KEY,
++      config: {
++        plugins: { enabled: false },
++        tools: { allow: ["progress_card"], toolSearch: false },
++      },
++      onProgressCardPlanSaved: (unfinished) => {
++        completionCheck.unfinishedPlan = unfinished;
++      },
++    }).find((tool) => tool.name === "progress_card");
++    if (!progress) {
++      throw new Error("The registered progress-card tool is missing");
++    }
++    const repair = vi.fn(async (id: string) => ({
++      content: [{ type: "text" as const, text: "Repaired" }],
++      details: { receipt: id },
++    }));
++    const { session } = await createTestSession({
++      customTools: [
++        {
++          ...progress,
++          name: nested ? "exec" : progress.name,
++          execute: (
++            id: string,
++            args: unknown,
++            signal?: AbortSignal,
++            update?: AgentToolUpdateCallback,
++          ) =>
++            nested
++              ? prepared.toolSearchCatalogExecutor({
++                  tool: progress,
++                  toolName: progress.name,
++                  toolCallId: "nested-plan",
++                  parentToolCallId: id,
++                  source: "openclaw",
++                  sourceName: "core",
++                  input: args,
++                  signal,
++                  onUpdate: update,
++                  acceptResultBeforeProjection: async (result: AgentToolResult<unknown>) =>
++                    structuredClone(result),
++                })
++              : progress.execute(id, args, signal, update),
++        } as ToolDefinition,
++        {
++          name: "repair",
++          label: "Repair",
++          description: "Repair one failure",
++          parameters: Type.Object({}),
++          execute: repair,
++        } as ToolDefinition,
++      ],
++    });
++    const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
++    const prepared = preparePlanCompletionStream({
++      activeSession: session,
++      attempt: { completionCheck },
++      onAgentEvent: (event) => events.push(event),
++      streamReplies,
++    });
++    let requests = 0;
++    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
++      requests += 1;
++      if (requests === 1) {
++        return createAssistantResultStream(
++          createAssistant(
++            model,
++            [
++              { type: "toolCall", id: "first-repair", name: "repair", arguments: {} },
++              {
++                type: "toolCall",
++                id: "save-plan",
++                name: nested ? "exec" : "progress_card",
++                arguments: { plan },
++              },
++            ],
++            "toolUse",
++          ),
++        );
++      }
++      if (requests === 2) {
++        return createAssistantResultStream(
++          createAssistant(model, [{ type: "text", text: "Stopped: one repair remains." }]),
++        );
++      }
++      if (requests === 3) {
++        expect(
++          context.messages.some(
++            (message) =>
++              message.role === "user" &&
++              JSON.stringify(message.content).includes("latest successfully saved plan"),
++          ),
++        ).toBe(true);
++        return createAssistantResultStream(
++          createAssistant(
++            model,
++            [{ type: "toolCall", id: "remaining-repair", name: "repair", arguments: {} }],
++            "toolUse",
++          ),
++        );
++      }
++      return createAssistantResultStream(
++        createAssistant(model, [{ type: "text", text: "Both repairs verified." }]),
++      );
++    });
++
++    await session.prompt("Repair both failures and verify them.");
++    await prepared.subscription.waitForPendingEvents();
++
++    expect(repair.mock.calls.map(([id]) => id)).toEqual(["first-repair", "remaining-repair"]);
++    expect(requests).toBe(4);
++    expect(gatewayCall).toHaveBeenCalledOnce();
++    expect(completionCheck).toEqual({ unfinishedPlan: true, checked: true });
++    expect(completionChecks(session)).toHaveLength(1);
++    expect(completionChecks(session)[0]).toMatchObject({ display: false });
++    expect(
++      events.filter((event) => event.stream === "lifecycle" && event.data.phase === "end"),
++    ).toHaveLength(1);
++    expect(events.filter((event) => event.stream === "checkpoint")).toHaveLength(1);
++    expect(finalPayloadTexts(prepared)).toEqual(["Both repairs verified."]);
++    expect(session.messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
++  },
++);
++
++it.each([
++  { name: "completed replacement", replacement: "completed", checks: 0 },
++  { name: "cleared replacement", replacement: "clear", checks: 0 },
++  { name: "note-only replacement", replacement: "note", checks: 0 },
++  { name: "failed replacement retains pending work", replacement: "failed", checks: 1 },
++  { name: "genuine blocker gets one check", replacement: "pending", checks: 1 },
++  { name: "no plan saved in this run", replacement: "untouched", checks: 0 },
++  { name: "a consumed check is not rearmed by another save", replacement: "recovery", checks: 0 },
++  { name: "status-only refresh", replacement: "status", checks: 0 },
++  { name: "scheduled run without a required reply", replacement: "cron", checks: 0 },
++])("honors $name", async ({ replacement, checks }) => {
++  const completionCheck = { unfinishedPlan: false, checked: replacement === "recovery" };
++  const pending = [{ step: "Await external permission", status: "pending" as const }];
++  const initial = {
++    card: { sessionKey: SESSION_KEY, steps: pending, revision: 1, updatedAt: 1 },
++  };
++  const gateway = vi.fn().mockResolvedValue(initial);
++  const replacementArgs =
++    replacement === "completed"
++      ? { plan: [{ step: "Await external permission", status: "completed" }] }
++      : replacement === "clear"
++        ? {}
++        : { markdown: "Paused awaiting permission." };
++  const writes = ["completed", "clear", "note", "failed"].includes(replacement)
++    ? 2
++    : replacement === "untouched"
++      ? 0
++      : 1;
++  if (writes === 2) {
++    gateway.mockResolvedValueOnce(initial);
++    if (replacement === "failed") {
++      gateway.mockRejectedValueOnce(new Error("Save rejected"));
++    } else {
++      gateway.mockResolvedValueOnce({
++        card:
++          replacement === "clear"
++            ? null
++            : {
++                sessionKey: SESSION_KEY,
++                revision: 2,
++                updatedAt: 2,
++                ...(replacement === "completed"
++                  ? { steps: [{ step: "Await external permission", status: "completed" }] }
++                  : { markdown: "Paused awaiting permission." }),
++              },
++      });
++    }
++  }
++  const progress = createProgressCardTool({
++    agentSessionKey: SESSION_KEY,
++    callGateway: gateway,
++    onPlanSaved: (unfinished) => {
++      completionCheck.unfinishedPlan = unfinished;
++    },
++  });
++  const { session } = await createTestSession({ customTools: [progress as ToolDefinition] });
++  const prepared = preparePlanCompletionStream({
++    activeSession: session,
++    attempt: {
++      completionCheck,
++      ...(replacement === "status"
++        ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
++        : {}),
++      ...(replacement === "cron" ? { trigger: "cron" as const } : {}),
++    },
++  });
++  let requests = 0;
++  streamMocks.streamSimple.mockImplementation((model: Model) => {
++    requests += 1;
++    return createAssistantResultStream(
++      createAssistant(
++        model,
++        requests <= writes
++          ? [
++              {
++                type: "toolCall",
++                id: "save-" + requests,
++                name: "progress_card",
++                arguments: requests === 1 ? { plan: pending } : replacementArgs,
++              },
++            ]
++          : [
++              {
++                type: "text",
++                text: "Waiting for the user's permission; no more authorized actions.",
++              },
++            ],
++        requests <= writes ? "toolUse" : "stop",
++      ),
++    );
++  });
++  await session.prompt("Investigate the failure, but do not proceed without permission.");
++  await prepared.subscription.waitForPendingEvents();
++  expect(requests).toBe(writes + 1 + checks);
++  expect(completionChecks(session)).toHaveLength(checks);
++  expect(gateway).toHaveBeenCalledTimes(writes);
++});
++
++it.each([
++  { owner: "plugin finalize", checks: 0 },
++  { owner: "closed during hook", checks: 0 },
++  { owner: "cancelled", checks: 0 },
++  { owner: "timed out", checks: 0 },
++  { owner: "yielded", checks: 0 },
++  { owner: "provider refusal", checks: 0 },
++  { owner: "output limited", checks: 0 },
++  { owner: "hook budget exhausted", checks: 1 },
++  { owner: "side-effecting hook revision", checks: 1 },
++])("preserves $owner policy with $checks completion checks", async ({ owner, checks }) => {
++  const completionCheck = { unfinishedPlan: false, checked: false };
++  const plan = [{ step: "Remaining repair", status: "pending" as const }];
++  const progress = createProgressCardTool({
++    agentSessionKey: SESSION_KEY,
++    callGateway: vi.fn().mockResolvedValue({
++      card: { sessionKey: SESSION_KEY, steps: plan, revision: 1, updatedAt: 1 },
++    }),
++    onPlanSaved: (unfinished) => {
++      completionCheck.unfinishedPlan = unfinished;
++    },
++  });
++  const { session } = await createTestSession({ customTools: [progress as ToolDefinition] });
++  const controller = new AbortController();
++  let requests = 0;
++  const onFinalize = vi.fn(async () => {
++    if (owner === "closed during hook") {
++      prepared.subscription.unsubscribe();
++      return undefined;
++    }
++    return owner === "side-effecting hook revision"
++      ? { action: "revise", reason: "Check the remaining work" }
++      : { action: "finalize" };
++  });
++  const hookRunner =
++    owner.includes("hook") || owner === "plugin finalize"
++      ? createHookRunner(
++          createMockPluginRegistry([
++            { hookName: "before_agent_finalize", handler: onFinalize as never },
++          ]),
++        )
++      : undefined;
++  const prepared = preparePlanCompletionStream({
++    activeSession: session,
++    hookRunner,
++    runAbortController: controller,
++    attempt: {
++      completionCheck,
++      provider: testModel.provider,
++      modelId: testModel.id,
++      ...(owner === "hook budget exhausted"
++        ? { beforeAgentFinalizeRevisionAttempts: 3, maxBeforeAgentFinalizeRevisions: 3 }
++        : {}),
++    },
++    getRunState: () => ({
++      aborted: controller.signal.aborted,
++      timedOut: owner === "timed out" && requests > 1,
++      yieldDetected: owner === "yielded" && requests > 1,
++      promptError: undefined,
++    }),
++  });
++  streamMocks.streamSimple.mockImplementation((model: Model) => {
++    requests += 1;
++    if (requests > 1 && owner === "cancelled") {
++      controller.abort();
++    }
++    const assistant = createAssistant(
++      model,
++      requests === 1
++        ? [{ type: "toolCall", id: "save", name: "progress_card", arguments: { plan } }]
++        : [{ type: "text", text: "The owner stopped this work." }],
++      requests === 1 ? "toolUse" : owner === "output limited" ? "length" : "stop",
++    );
++    if (requests > 1 && owner === "provider refusal") {
++      assistant.diagnostics = [
++        {
++          type: "provider_refusal",
++          timestamp: 0,
++          details: { provider: model.provider, category: "refusal" },
++        },
++      ];
++    }
++    return createAssistantResultStream(assistant);
++  });
++  await session.prompt("Repair the remaining failure.");
++  await prepared.subscription.waitForPendingEvents();
++  expect(requests).toBe(2 + checks);
++  expect(completionCheck.checked).toBe(checks > 0);
++  if (owner === "hook budget exhausted") {
++    expect(onFinalize).not.toHaveBeenCalled();
++  }
++  if (checks > 0) {
++    expect(prepared.getBeforeAgentFinalizeRevisionReason()).toBeUndefined();
++    expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toBeUndefined();
++    expect(session.messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
++  }
++});
++
++it("streams assistant text live when only the completion check is armed", async () => {
++  const completionCheck = { unfinishedPlan: false, checked: false };
++  const { session } = await createTestSession();
++  const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
++  const prepared = preparePlanCompletionStream({
++    activeSession: session,
++    attempt: { completionCheck },
++    onAgentEvent: (event) => events.push(event),
++  });
++  let release: () => void = () => {};
++  const released = new Promise<void>((resolve) => {
++    release = resolve;
++  });
++  let streamedBeforeRelease = false;
++  streamMocks.streamSimple.mockImplementation((model: Model) => {
++    const stream = createAssistantMessageEventStream();
++    const partial = createAssistant(model, [{ type: "text", text: "" }]);
++    const message: AssistantMessage = createAssistant(model, [{ type: "text", text: "Live." }]);
++    const produce = async () => {
++      stream.push({ type: "start", partial });
++      stream.push({ type: "text_start", contentIndex: 0, partial });
++      stream.push({ type: "text_delta", contentIndex: 0, delta: "Live.", partial: message });
++      // A deferred delivery policy would hold this event until the terminal decision.
++      await vi.waitFor(() => {
++        expect(events.some((event) => event.stream === "assistant")).toBe(true);
++      });
++      streamedBeforeRelease = true;
++      await released;
++      stream.push({ type: "text_end", contentIndex: 0, content: "Live.", partial: message });
++      stream.push({ type: "done", reason: "stop", message });
++      stream.end();
++    };
++    queueMicrotask(() => {
++      void produce();
++    });
++    return stream;
++  });
++  const prompt = session.prompt("Say something.");
++  await vi.waitFor(() => expect(streamedBeforeRelease).toBe(true));
++  release();
++  await prompt;
++  await prepared.subscription.waitForPendingEvents();
++  expect(completionChecks(session)).toHaveLength(0);
++  expect(finalPayloadTexts(prepared)).toEqual(["Live."]);
++});
+diff --git a/src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts b/src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
+index 2c1d1cc7..7cc4a890 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
+@@ -173,6 +173,7 @@ function createSubscriptionMock(): SubscriptionMock {
+       }
+     },
+     unsubscribe: () => {},
++    isUnsubscribed: () => false,
+     setTerminalLifecycleMeta: () => {},
+     waitForCompactionRetry: async () => {},
+     waitForPendingEvents: async () => {},
+@@ -706,6 +707,10 @@ vi.mock("../../cache-trace.js", () => ({
+ vi.mock("../../agent-tools.js", () => ({
+   createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
+     hoisted.createOpenClawCodingToolsMock(options),
++  createOpenClawCodingToolsInternal: (options?: {
++    workspaceDir?: string;
++    spawnWorkspaceDir?: string;
++  }) => hoisted.createOpenClawCodingToolsMock(options),
+   resolveToolLoopDetectionConfig: () => undefined,
+ }));
+ 
+diff --git a/src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts b/src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts
+index 1043c30d..793e9ae5 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts
+@@ -88,6 +88,35 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
+   cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+ };
+ 
++// Backport of upstream #160297. The NO_REPLY clause from #164896 is left out:
++// v2026.8.1 has no kept-answer delivery, so a silent follow-up could drop the
++// reply that already reported the blocker.
++const PLAN_COMPLETION_CHECK_CUSTOM_TYPE = "openclaw.plan-completion-check";
++const PLAN_COMPLETION_CHECK_INSTRUCTION =
++  "This run’s latest successfully saved plan still has unfinished steps. Before ending, check whether those steps remain required and authorized under the latest user instructions. Continue feasible work from the current transcript; do not repeat completed actions, and reconcile uncertain effects before retrying. If work is complete, reconcile the plan. If user input, approval, an external dependency, or an explicit pause prevents further work, report that concrete limitation. Do not invent completion or new authority.";
++
++/** Explicit host requiredness wins; otherwise synthetic and non-user turns may stay silent. */
++function resolveCompletionCheckReplyExpectation(
++  attempt: EmbeddedRunAttemptInternalParams,
++): "required" | "optional" {
++  if (attempt.terminalReplyExpectation) {
++    return attempt.terminalReplyExpectation;
++  }
++  const provenanceKind = attempt.inputProvenance?.kind;
++  const syntheticSourceTurn =
++    provenanceKind === "inter_session" || provenanceKind === "internal_system";
++  const silenceAllowed =
++    attempt.allowEmptyAssistantReplyAsSilent ??
++    (attempt.trigger !== undefined && attempt.trigger !== "user" && attempt.trigger !== "manual");
++  return syntheticSourceTurn || silenceAllowed ? "optional" : "required";
++}
++
++function hasProviderRefusal(message: AssistantMessage | undefined): boolean {
++  return (
++    message?.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal") === true
++  );
++}
++
+ export function prepareEmbeddedAttemptStream(input: {
+   attempt: EmbeddedRunAttemptInternalParams;
+   activeSession: AgentSession;
+@@ -128,151 +157,212 @@ export function prepareEmbeddedAttemptStream(input: {
+   const shouldRunBeforeAgentFinalize =
+     attempt.operation !== "settled-tool-finalization" &&
+     hookRunner?.hasHooks("before_agent_finalize");
+-  const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
+-    ? async (event: {
+-        messages: AgentMessage[];
+-        willRetry: boolean;
+-        assistantEntryId?: string;
+-        lastAssistant?: AgentMessage;
+-        assistantTexts: readonly string[];
+-        hasAssistantVisibleText: boolean;
+-        isError: boolean;
+-        incompleteTerminalAssistant: boolean;
+-        hadDeterministicSideEffect: boolean;
+-      }): Promise<void | { suppressTerminalDelivery: true }> => {
+-        if (
+-          beforeAgentFinalizeRevisionReason ||
+-          event.willRetry ||
+-          event.isError ||
+-          event.incompleteTerminalAssistant ||
+-          !event.hasAssistantVisibleText
+-        ) {
+-          return;
+-        }
+-        const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
+-        const lastAssistantMessage =
+-          normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
+-          normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
+-          normalizeOptionalString(event.assistantTexts.join("\n\n"));
+-        if (!lastAssistantMessage) {
+-          return;
+-        }
+-        const state = input.getRunState();
+-        const hasCompletedClientToolCall = input.clientToolCallSlots.some((slot) => slot.completed);
+-        const silentFinalReply =
+-          attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN);
+-        if (
+-          state.aborted ||
+-          state.promptError ||
+-          state.timedOut ||
+-          hasCompletedClientToolCall ||
+-          state.yieldDetected ||
+-          silentFinalReply
+-        ) {
+-          return;
+-        }
+-        const hookMessages = projectNestedToolActivityForHooks(
+-          input.activeSession.messages.slice(),
+-          input.nestedToolActivities,
+-        );
+-        const reportedModelRef = resolveReportedModelRef({
+-          provider: attempt.provider,
+-          model: attempt.modelId,
+-          assistant: lastAssistant,
+-        });
+-        const maxRevisionAttempts = attempt.maxBeforeAgentFinalizeRevisions ?? 0;
+-        if (
+-          maxRevisionAttempts > 0 &&
+-          (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts
+-        ) {
+-          log.warn(
+-            `before_agent_finalize revision limit reached; finalizing ` +
+-              `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
+-              `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
++  const completionCheck =
++    attempt.operation !== "settled-tool-finalization" &&
++    !attempt.silentExpected &&
++    resolveCompletionCheckReplyExpectation(attempt) === "required"
++      ? attempt.completionCheck
++      : undefined;
++  const onBeforeTerminalDelivery =
++    shouldRunBeforeAgentFinalize || completionCheck
++      ? async (event: {
++          messages: AgentMessage[];
++          willRetry: boolean;
++          assistantEntryId?: string;
++          lastAssistant?: AgentMessage;
++          assistantTexts: readonly string[];
++          hasAssistantVisibleText: boolean;
++          isError: boolean;
++          incompleteTerminalAssistant: boolean;
++          hadDeterministicSideEffect: boolean;
++          hasPendingContinuation: boolean;
++        }): Promise<void | { continueCurrentTurn: true } | { suppressTerminalDelivery: true }> => {
++          // Without finalize hooks, only an unconsumed unfinished-plan check needs this gate.
++          if (
++            !shouldRunBeforeAgentFinalize &&
++            (!completionCheck?.unfinishedPlan || completionCheck.checked)
++          ) {
++            return;
++          }
++          if (
++            beforeAgentFinalizeRevisionReason ||
++            event.willRetry ||
++            event.isError ||
++            event.incompleteTerminalAssistant ||
++            !event.hasAssistantVisibleText
++          ) {
++            return;
++          }
++          const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
++          const lastAssistantMessage =
++            normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
++            normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
++            normalizeOptionalString(event.assistantTexts.join("\n\n"));
++          if (!lastAssistantMessage) {
++            return;
++          }
++          const state = input.getRunState();
++          const hasCompletedClientToolCall = input.clientToolCallSlots.some(
++            (slot) => slot.completed,
+           );
+-          return;
+-        }
+-        // A queued user message wins over finalization. Close admission before
+-        // awaiting the hook so no later steer can become a child of the draft.
+-        acceptingSteerMessages = false;
+-        if (
+-          activeQueueAdmissions > 0 ||
+-          input.activeSession.pendingMessageCount > 0 ||
+-          input.activeSession.agent.hasQueuedMessages()
+-        ) {
+-          acceptingSteerMessages = true;
+-          return;
+-        }
+-        let keepAdmissionClosed = false;
+-        try {
+-          const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+-            event: {
+-              runId: attempt.runId,
+-              sessionId: attempt.sessionId,
+-              ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+-              provider: reportedModelRef.provider,
+-              model: reportedModelRef.model,
+-              ...((attempt.cwd ?? attempt.workspaceDir)
+-                ? { cwd: attempt.cwd ?? attempt.workspaceDir }
+-                : {}),
+-              ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
+-              stopHookActive: false,
+-              lastAssistantMessage,
+-              messages: hookMessages,
+-            },
+-            ctx: {
+-              runId: attempt.runId,
+-              trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
+-              agentId: input.hookAgentId,
+-              sessionKey: attempt.sessionKey,
+-              sessionId: attempt.sessionId,
+-              workspaceDir: attempt.workspaceDir,
+-              modelProviderId: reportedModelRef.provider,
+-              modelId: reportedModelRef.model,
+-              trigger: attempt.trigger,
+-              ...buildAgentHookContextChannelFields(attempt),
+-              ...buildAgentHookContextIdentityFields({
+-                trigger: attempt.trigger,
+-                senderId: attempt.senderId,
+-                chatId: attempt.chatId,
+-                channelContext: attempt.channelContext,
+-              }),
+-            },
+-            hookRunner,
+-          });
+-          if (outcome.action !== "revise") {
++          const silentFinalReply =
++            attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN);
++          if (
++            state.aborted ||
++            input.runAbortController.signal.aborted ||
++            state.promptError ||
++            state.timedOut ||
++            hasCompletedClientToolCall ||
++            state.yieldDetected ||
++            silentFinalReply
++          ) {
+             return;
+           }
+-          if (event.hadDeterministicSideEffect) {
++          const maxRevisionAttempts = attempt.maxBeforeAgentFinalizeRevisions ?? 0;
++          const hookRevisionLimitReached =
++            maxRevisionAttempts > 0 &&
++            (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts;
++          if (shouldRunBeforeAgentFinalize && hookRevisionLimitReached) {
+             log.warn(
+-              `before_agent_finalize requested revision after potential side effects; finalizing ` +
+-                `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
++              `before_agent_finalize revision limit reached; skipping further finalize hooks ` +
++                `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
++                `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
+             );
++          }
++          // A queued user message wins over finalization. Close admission before
++          // awaiting the hook so no later steer can become a child of the draft.
++          acceptingSteerMessages = false;
++          if (
++            activeQueueAdmissions > 0 ||
++            input.activeSession.pendingMessageCount > 0 ||
++            input.activeSession.agent.hasQueuedMessages()
++          ) {
++            acceptingSteerMessages = true;
+             return;
+           }
+-          if (!event.assistantEntryId) {
+-            log.warn(
+-              `before_agent_finalize revision lacks a persisted assistant entry; finalizing ` +
++          let keepAdmissionClosed = false;
++          try {
++            let outcome: Awaited<ReturnType<typeof runAgentHarnessBeforeAgentFinalizeHook>> = {
++              action: "continue",
++            };
++            if (shouldRunBeforeAgentFinalize && !hookRevisionLimitReached) {
++              const hookMessages = projectNestedToolActivityForHooks(
++                input.activeSession.messages.slice(),
++                input.nestedToolActivities,
++              );
++              const reportedModelRef = resolveReportedModelRef({
++                provider: attempt.provider,
++                model: attempt.modelId,
++                assistant: lastAssistant,
++              });
++              outcome = await runAgentHarnessBeforeAgentFinalizeHook({
++                event: {
++                  runId: attempt.runId,
++                  sessionId: attempt.sessionId,
++                  ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
++                  provider: reportedModelRef.provider,
++                  model: reportedModelRef.model,
++                  ...((attempt.cwd ?? attempt.workspaceDir)
++                    ? { cwd: attempt.cwd ?? attempt.workspaceDir }
++                    : {}),
++                  ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
++                  stopHookActive: false,
++                  lastAssistantMessage,
++                  messages: hookMessages,
++                },
++                ctx: {
++                  runId: attempt.runId,
++                  trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
++                  agentId: input.hookAgentId,
++                  sessionKey: attempt.sessionKey,
++                  sessionId: attempt.sessionId,
++                  workspaceDir: attempt.workspaceDir,
++                  modelProviderId: reportedModelRef.provider,
++                  modelId: reportedModelRef.model,
++                  trigger: attempt.trigger,
++                  ...buildAgentHookContextChannelFields(attempt),
++                  ...buildAgentHookContextIdentityFields({
++                    trigger: attempt.trigger,
++                    senderId: attempt.senderId,
++                    chatId: attempt.chatId,
++                    channelContext: attempt.channelContext,
++                  }),
++                },
++                hookRunner,
++              });
++            }
++            if (outcome.action === "finalize") {
++              return;
++            }
++            if (outcome.action === "revise") {
++              if (event.hadDeterministicSideEffect) {
++                log.warn(
++                  `before_agent_finalize requested revision after potential side effects; not rewinding ` +
++                    `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
++                );
++              } else if (!event.assistantEntryId) {
++                log.warn(
++                  `before_agent_finalize revision lacks a persisted assistant entry; not rewinding ` +
++                    `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
++                );
++              } else {
++                keepAdmissionClosed = true;
++                beforeAgentFinalizeRevisionEntryId = event.assistantEntryId;
++                beforeAgentFinalizeRevisionReason = outcome.reason;
++                return { suppressTerminalDelivery: true };
++              }
++            }
++            const currentState = input.getRunState();
++            if (
++              !completionCheck?.unfinishedPlan ||
++              completionCheck.checked ||
++              lastAssistant?.stopReason !== "stop" ||
++              hasProviderRefusal(lastAssistant) ||
++              event.hasPendingContinuation ||
++              input.hasDeliveredSourceReply() ||
++              input.runAbortController.signal.aborted ||
++              currentState.aborted ||
++              currentState.timedOut ||
++              currentState.promptError ||
++              currentState.yieldDetected ||
++              subscription.isUnsubscribed() ||
++              input.activeSession.pendingMessageCount > 0 ||
++              input.activeSession.agent.hasQueuedMessages() ||
++              !hasCurrentRegistration()
++            ) {
++              return;
++            }
++            // This is a same-prompt follow-up, not a replay or draft rewind.
++            // Retain every completed effect and consume the check across retries.
++            completionCheck.checked = true;
++            log.info(
++              `plan completion check continuing run with unfinished plan ` +
+                 `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+             );
+-            return;
+-          }
+-          keepAdmissionClosed = true;
+-          beforeAgentFinalizeRevisionEntryId = event.assistantEntryId;
+-          beforeAgentFinalizeRevisionReason = outcome.reason;
+-          return { suppressTerminalDelivery: true };
+-        } finally {
+-          if (!keepAdmissionClosed) {
+-            acceptingSteerMessages = true;
++            await input.activeSession.sendCustomMessage(
++              {
++                customType: PLAN_COMPLETION_CHECK_CUSTOM_TYPE,
++                display: false,
++                content: PLAN_COMPLETION_CHECK_INSTRUCTION,
++              },
++              { deliverAs: "followUp" },
++            );
++            return { continueCurrentTurn: true };
++          } finally {
++            if (!keepAdmissionClosed) {
++              acceptingSteerMessages = true;
++            }
+           }
+         }
+-      }
+-    : undefined;
++      : undefined;
+ 
+   let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
+   // Terminal callbacks run after queue construction; keep the queue in this
+   // phase so active-run clearing and subscription teardown share one owner.
+   const getQueueHandle = (): AttemptStreamQueueHandle => queueHandle;
++  // The terminal gate awaits hooks first; revalidate that this exact attempt
++  // still owns the session's active run before queueing a follow-up.
++  const hasCurrentRegistration = () => ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle;
+   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
+   const subscription = subscribeEmbeddedAgentSession({
+     session: input.activeSession,
+@@ -299,6 +389,8 @@ export function prepareEmbeddedAttemptStream(input: {
+     onBlockReply: input.onBlockReply,
+     onBlockReplyFlush: input.onBlockReplyFlush,
+     onBeforeTerminalDelivery,
++    // Only finalize hooks may rewrite a draft; the plan check keeps live streaming.
++    deferTerminalDelivery: shouldRunBeforeAgentFinalize === true,
+     blockReplyBreak: attempt.blockReplyBreak,
+     blockReplyChunking: attempt.blockReplyChunking,
+     onPartialReply: attempt.onPartialReply,
+diff --git a/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts b/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts
+index 22f988f8..075d9450 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts
+@@ -13,7 +13,7 @@ import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
+ import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+ import { isSubagentSessionKey } from "../../../routing/session-key.js";
+ import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+-import { createOpenClawCodingTools } from "../../agent-tools.js";
++import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
+ import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
+ import { getChannelAgentToolMeta } from "../../channel-tools.js";
+ import type { CodeModeSkill } from "../../code-mode-skills.js";
+@@ -52,14 +52,17 @@ import {
+ } from "./attempt-tool-construction-plan.js";
+ import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
+ import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt-tool-search-run-plan.js";
++import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+ import type { EmbeddedRunAttemptParams } from "./types.js";
+ 
+-type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
++type OpenClawCodingToolsOptions = NonNullable<
++  Parameters<typeof createOpenClawCodingToolsInternal>[0]
++>;
+ type SkillUsagePaths = OpenClawCodingToolsOptions["skillUsagePaths"];
+ 
+ export function prepareEmbeddedAttemptToolBase(params: {
+   agentDir: string;
+-  attempt: EmbeddedRunAttemptParams;
++  attempt: EmbeddedRunAttemptInternalParams;
+   effectiveCwd: string;
+   effectiveWorkspace: string;
+   markCoreToolStage: (name: string) => void;
+@@ -77,6 +80,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
+   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
+ }) {
+   const { attempt } = params;
++  const completionCheck = attempt.completionCheck;
+   const inspectingCodeModeRecovery = attempt.codeModeRecovery?.kind === "inspect";
+   const forceDirectMessageTool = inspectingCodeModeRecovery
+     ? false
+@@ -370,6 +374,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
+           skillUsagePaths: params.skillUsagePaths,
+           conversationCapabilityProfile: runtimeCapabilityProfile,
+           scheduledToolPolicy: attempt.scheduledToolPolicy,
++          onProgressCardPlanSaved: completionCheck
++            ? (unfinished) => {
++                completionCheck.unfinishedPlan = unfinished;
++              }
++            : undefined,
+           onYield: params.onYield,
+         };
+         const allTools = runWithCronCreatorAuthorityCapabilityResolver({
+@@ -382,7 +391,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
+             }
+             return { tools: [...cronCreatorToolAllowlist], provenance };
+           },
+-          run: () => createOpenClawCodingTools(toolOptions),
++          run: () => createOpenClawCodingToolsInternal(toolOptions),
+         });
+         // The built-in harness retains its existing authoritative wrappers.
+         // Only plugin harnesses receive and require the projected host capability.
+diff --git a/src/agents/embedded-agent-runner/run/internal-params.ts b/src/agents/embedded-agent-runner/run/internal-params.ts
+index 460553f5..9411a734 100644
+--- a/src/agents/embedded-agent-runner/run/internal-params.ts
++++ b/src/agents/embedded-agent-runner/run/internal-params.ts
+@@ -5,6 +5,7 @@ import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-
+ import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+ import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
+ import type { RunEmbeddedAgentParams } from "./params.js";
++import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
+ import type { EmbeddedRunAttemptParams } from "./types.js";
+ 
+ export type CompactionAccountingTarget = Readonly<
+@@ -56,7 +57,10 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams &
+   };
+ 
+ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
+-  Pick<RunEmbeddedAgentInternalParams, "compactionCountOwner" | "onContextAccountingEvent">;
++  Pick<RunEmbeddedAgentInternalParams, "compactionCountOwner" | "onContextAccountingEvent"> & {
++    /** Current-run committed plan facts; retained across attempts, never loaded from history. */
++    completionCheck?: EmbeddedRunCompletionCheck;
++  };
+ 
+ export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
+   sessionFile: string;
+diff --git a/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts b/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts
+index c652579b..7da148d0 100644
+--- a/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts
++++ b/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts
+@@ -33,7 +33,7 @@ import {
+ import type { RunEmbeddedAgentParams } from "./params.js";
+ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
+ import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
+-import type { CodeModeRecoveryState } from "./terminal-retry-state.js";
++import type { CodeModeRecoveryState, EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
+ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
+ 
+ type InternalRunParams = RunEmbeddedAgentInternalParams & {
+@@ -131,6 +131,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
+   suppressNextUserMessagePersistence: boolean;
+   beforeAgentFinalizeRevisionAttempts: number;
+   maxBeforeAgentFinalizeRevisions: number;
++  completionCheck?: EmbeddedRunCompletionCheck;
+ }): Promise<{
+   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+   cancellationRequested: boolean;
+@@ -524,6 +525,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
+       ],
+     suppressNextUserMessagePersistence: input.suppressNextUserMessagePersistence,
+     beforeAgentFinalizeRevisionAttempts: input.beforeAgentFinalizeRevisionAttempts,
++    completionCheck: input.completionCheck,
+     maxBeforeAgentFinalizeRevisions: input.maxBeforeAgentFinalizeRevisions,
+     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
+     suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+diff --git a/src/agents/embedded-agent-runner/run/terminal-retry-state.ts b/src/agents/embedded-agent-runner/run/terminal-retry-state.ts
+index 6a17218c..2e0ea55b 100644
+--- a/src/agents/embedded-agent-runner/run/terminal-retry-state.ts
++++ b/src/agents/embedded-agent-runner/run/terminal-retry-state.ts
+@@ -17,7 +17,13 @@ export type CodeModeRecoveryState =
+       mutationAttempt: "available" | "reserved" | "consumed";
+     };
+ 
++export type EmbeddedRunCompletionCheck = {
++  unfinishedPlan: boolean;
++  checked: boolean;
++};
++
+ export type EmbeddedRunTerminalRetryState = {
++  completionCheck?: EmbeddedRunCompletionCheck;
+   reasoningOnlyAttempts: number;
+   emptyResponseAttempts: number;
+   missingAssistantAttempts: number;
+@@ -30,6 +36,7 @@ export type EmbeddedRunTerminalRetryState = {
+ 
+ export function createEmbeddedRunTerminalRetryState(): EmbeddedRunTerminalRetryState {
+   return {
++    completionCheck: { unfinishedPlan: false, checked: false },
+     reasoningOnlyAttempts: 0,
+     emptyResponseAttempts: 0,
+     missingAssistantAttempts: 0,
+diff --git a/src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts b/src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts
+index 6743b8e6..43b133d3 100644
+--- a/src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts
++++ b/src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts
+@@ -2,6 +2,7 @@
+ // release deferred assistant events and block replies at run completion.
+ import { describe, expect, it, vi } from "vitest";
+ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
++import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
+ import {
+   emitAssistantTextDeltaAndEnd,
+   createSubscribedSessionHarness,
+@@ -284,3 +285,128 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
+     });
+   });
+ });
++
++function assistantEventTexts(calls: Array<unknown[]>): string[] {
++  return calls
++    .map((call) => call[0] as { stream?: string; data?: { text?: unknown } } | undefined)
++    .filter((event) => event?.stream === "assistant")
++    .map((event) => event?.data?.text)
++    .filter((text): text is string => typeof text === "string");
++}
++
++type AgentEventCall = { stream?: string; data?: { text?: unknown } } | undefined;
++
++function eventIndex(calls: Array<unknown[]>, match: (event: AgentEventCall) => boolean): number {
++  return calls.findIndex((call) => match(call[0] as AgentEventCall));
++}
++
++function stopAgentEnd(text: string) {
++  return {
++    type: "agent_end",
++    messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }],
++    willRetry: false,
++  };
++}
++
++describe("plan completion checkpoint delivery", () => {
++  it.each([false, true])(
++    "keeps checkpoint delivery nonterminal (buffered=%s)",
++    async (buffered) => {
++      const onAgentEvent = vi.fn();
++      const decide = vi
++        .fn()
++        .mockResolvedValueOnce({ continueCurrentTurn: true })
++        .mockResolvedValueOnce(undefined);
++      const { emit, subscription } = createSubscribedSessionHarness({
++        runId: `run-plan-checkpoint-${String(buffered)}`,
++        onAgentEvent,
++        onBeforeTerminalDelivery: decide,
++        deferTerminalDelivery: buffered,
++        blockReplyBreak: "message_end",
++      });
++      const checkpoint = "Checkpoint: a repair remains.";
++      const final = "All repairs verified.";
++
++      emit({ type: "agent_start" });
++      emitMessageStartAndEndForAssistantText({ emit, text: checkpoint });
++      expect(assistantEventTexts(onAgentEvent.mock.calls).includes(checkpoint)).toBe(!buffered);
++      emit(stopAgentEnd(checkpoint));
++      await subscription.waitForPendingEvents();
++      expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(false);
++      expect(assistantEventTexts(onAgentEvent.mock.calls).includes(checkpoint)).toBe(true);
++      // Live clients start a new message after the published checkpoint.
++      const checkpointIndex = eventIndex(
++        onAgentEvent.mock.calls,
++        (event) => event?.stream === "checkpoint",
++      );
++      expect(checkpointIndex).toBeGreaterThan(
++        eventIndex(
++          onAgentEvent.mock.calls,
++          (event) => event?.stream === "assistant" && event.data?.text === checkpoint,
++        ),
++      );
++
++      emit({ type: "agent_start" });
++      emitMessageStartAndEndForAssistantText({ emit, text: final });
++      expect(assistantEventTexts(onAgentEvent.mock.calls).includes(final)).toBe(!buffered);
++      emit(stopAgentEnd(final));
++      await subscription.waitForPendingEvents();
++      expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
++      expect(decide).toHaveBeenCalledTimes(2);
++      expect(
++        onAgentEvent.mock.calls.filter(
++          ([event]) => (event as AgentEventCall)?.stream === "checkpoint",
++        ),
++      ).toHaveLength(1);
++      expect(
++        eventIndex(
++          onAgentEvent.mock.calls,
++          (event) => event?.stream === "assistant" && event.data?.text === final,
++        ),
++      ).toBeGreaterThan(checkpointIndex);
++
++      const assistant = subscription.getCurrentAttemptAssistant();
++      const payloads = buildEmbeddedRunPayloads({
++        assistantTexts: subscription.assistantTexts,
++        lastAssistant: assistant,
++        currentAssistant: assistant ?? null,
++        sessionKey: "agent:main:main",
++      });
++      expect(payloads.map((payload) => payload.text)).toEqual([final]);
++    },
++  );
++
++  it("treats an accepted child session as pending work at the natural stop", async () => {
++    const decide = vi.fn(async () => undefined);
++    const { emit, subscription } = createSubscribedSessionHarness({
++      runId: "run-plan-child-session",
++      onBeforeTerminalDelivery: decide,
++      deferTerminalDelivery: false,
++    });
++    emit({ type: "agent_start" });
++    emit({
++      type: "tool_execution_start",
++      toolName: "sessions_spawn",
++      toolCallId: "spawn-child",
++      args: {},
++    });
++    emit({
++      type: "tool_execution_end",
++      toolName: "sessions_spawn",
++      toolCallId: "spawn-child",
++      isError: false,
++      result: {
++        content: [{ type: "text", text: "Accepted" }],
++        details: {
++          status: "accepted",
++          runId: "child-run",
++          childSessionKey: "agent:main:subagent:child",
++        },
++      },
++    });
++    emitMessageStartAndEndForAssistantText({ emit, text: "The child is working." });
++    emit(stopAgentEnd("The child is working."));
++    await subscription.waitForPendingEvents();
++    expect(decide).toHaveBeenCalledWith(expect.objectContaining({ hasPendingContinuation: true }));
++  });
++});
+diff --git a/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts b/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
+index c06287b3..793f8f67 100644
+--- a/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
++++ b/src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
+@@ -18,7 +18,10 @@ import {
+   GENERIC_ASSISTANT_ERROR_TEXT,
+ } from "./embedded-agent-helpers.js";
+ import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
+-import { hasAttemptTerminalState } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
++import {
++  hasAsyncActivity,
++  hasAttemptTerminalState,
++} from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
+ import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
+ import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
+ import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+@@ -37,6 +40,10 @@ export {
+ } from "./embedded-agent-subscribe.handlers.compaction.js";
+ 
+ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
++  // A same-prompt follow-up starts another core loop under the same delivery policy.
++  ctx.state.deferBlockReplyDelivery =
++    typeof ctx.params.onBeforeTerminalDelivery === "function" &&
++    ctx.params.deferTerminalDelivery !== false;
+   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+   const data = { phase: "start", startedAt: Date.now() };
+   emitAgentEvent({
+@@ -61,12 +68,44 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
+   });
+ }
+ 
++/**
++ * LobsterAI: marks a finished answer that the same run continues past, so live
++ * clients start a new assistant message instead of streaming the follow-up
++ * over the published checkpoint.
++ */
++function emitAssistantCheckpoint(ctx: EmbeddedAgentSubscribeContext) {
++  const data = { reason: "continue_current_turn" };
++  emitAgentEvent({
++    runId: ctx.params.runId,
++    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
++    ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
++    ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
++    ...(ctx.params.lifecycleGeneration
++      ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
++      : {}),
++    stream: "checkpoint",
++    data,
++  });
++  runBestEffortCallback({
++    label: "checkpoint agent event",
++    log: ctx.log,
++    callback: () =>
++      ctx.params.onAgentEvent?.({
++        stream: "checkpoint",
++        data,
++      }),
++  });
++}
++
+ export function handleAgentEnd(
+   ctx: EmbeddedAgentSubscribeContext,
+   evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
+ ): void | Promise<void> {
+   ctx.state.liveEditDiffStateById.clear();
+-  type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
++  type BeforeTerminalDeliveryDecision = void | {
++    suppressTerminalDelivery?: boolean;
++    continueCurrentTurn?: boolean;
++  };
+   const lastAssistant = ctx.state.lastAssistant;
+   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+   let lifecycleErrorText: string | undefined;
+@@ -337,8 +376,16 @@ export function handleAgentEnd(
+       isError,
+       incompleteTerminalAssistant,
+       hadDeterministicSideEffect: hadBeforeFinalizeSideEffect,
++      // Accepted child sessions report back to this session, so they count as
++      // pending work even without the upstream completion-message marker.
++      hasPendingContinuation:
++        ctx.state.yielded ||
++        ctx.state.deterministicApprovalPromptPending ||
++        ctx.state.deterministicApprovalPromptSent ||
++        hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
++        hasAsyncActivity(ctx.state.toolMetas),
+     });
+-    if (isPromiseLike<void | { suppressTerminalDelivery?: boolean }>(result)) {
++    if (isPromiseLike<BeforeTerminalDeliveryDecision>(result)) {
+       return result;
+     }
+     return result;
+@@ -391,6 +438,17 @@ export function handleAgentEnd(
+     finalizeAgentEnd();
+   };
+ 
++  const continueCurrentTurn = () => {
++    // Publish this checkpoint normally, but keep the run and its delivery owner
++    // alive until the already-queued same-prompt follow-up settles.
++    ctx.state.deferBlockReplyDelivery = false;
++    ctx.flushDeferredAssistantEvents();
++    ctx.flushDeferredBlockReplies();
++    finalizeAgentEnd();
++    emitAssistantCheckpoint(ctx);
++    return ctx.flushBlockReplyBuffer();
++  };
++
+   let lifecycleTerminalEmitted = false;
+   const emitLifecycleTerminalOnce = (): void | Promise<void> => {
+     if (lifecycleTerminalEmitted) {
+@@ -425,7 +483,7 @@ export function handleAgentEnd(
+     return deliverTerminalWithLifecycleErrorFallback();
+   }
+ 
+-  if (isPromiseLike<void | { suppressTerminalDelivery?: boolean }>(beforeTerminalDelivery)) {
++  if (isPromiseLike<BeforeTerminalDeliveryDecision>(beforeTerminalDelivery)) {
+     return Promise.resolve(beforeTerminalDelivery)
+       .catch((error: unknown) => {
+         ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
+@@ -436,6 +494,9 @@ export function handleAgentEnd(
+           suppressTerminalDelivery();
+           return undefined;
+         }
++        if (decision?.continueCurrentTurn === true) {
++          return continueCurrentTurn();
++        }
+         return deliverTerminalWithLifecycleErrorFallback();
+       });
+   }
+@@ -443,6 +504,9 @@ export function handleAgentEnd(
+     suppressTerminalDelivery();
+     return undefined;
+   }
++  if (beforeTerminalDelivery?.continueCurrentTurn === true) {
++    return continueCurrentTurn();
++  }
+   return deliverTerminalWithLifecycleErrorFallback();
+ }
+ function resolveTerminalToolMediaTrust(params: {
+diff --git a/src/agents/embedded-agent-subscribe.run-state.ts b/src/agents/embedded-agent-subscribe.run-state.ts
+index b054a5e6..9cde8215 100644
+--- a/src/agents/embedded-agent-subscribe.run-state.ts
++++ b/src/agents/embedded-agent-subscribe.run-state.ts
+@@ -47,7 +47,9 @@ export function createEmbeddedAgentSubscribeState(
+     lastStreamedReasoning: undefined,
+     lastBlockReplyText: undefined,
+     lastDeliveredBlockReplyText: undefined,
+-    deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
++    deferBlockReplyDelivery:
++      typeof params.onBeforeTerminalDelivery === "function" &&
++      params.deferTerminalDelivery !== false,
+     deferredBlockReplies: [],
+     deferredAssistantEvents: [],
+     toolExecutionSinceLastBlockReply: false,
+diff --git a/src/agents/embedded-agent-subscribe.ts b/src/agents/embedded-agent-subscribe.ts
+index d2b808c4..97475c8c 100644
+--- a/src/agents/embedded-agent-subscribe.ts
++++ b/src/agents/embedded-agent-subscribe.ts
+@@ -432,7 +432,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
+     state.pendingToolAudioAsVoice = false;
+     state.pendingToolMediaDeliveryFailed = false;
+     state.visibleBlockReplyCount = 0;
+-    state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
++    state.deferBlockReplyDelivery =
++      typeof params.onBeforeTerminalDelivery === "function" &&
++      params.deferTerminalDelivery !== false;
+     clearDeferredAssistantEvents();
+     clearDeferredBlockReplies();
+     state.pendingAssistantReplyDirectives = undefined;
+@@ -600,6 +602,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
+       state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
+     runToolLifecycle: createEmbeddedToolLifecycleRunner(ctx),
+     unsubscribe,
++    isUnsubscribed: () => state.unsubscribed,
+     setTerminalLifecycleMeta: (meta: {
+       replayInvalid?: boolean;
+       livenessState?: EmbeddedRunLivenessState;
+diff --git a/src/agents/embedded-agent-subscribe.types.ts b/src/agents/embedded-agent-subscribe.types.ts
+index 80ba27cd..296bb66c 100644
+--- a/src/agents/embedded-agent-subscribe.types.ts
++++ b/src/agents/embedded-agent-subscribe.types.ts
+@@ -85,6 +85,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
+   isTerminalAborted?: () => boolean | undefined;
+   /** Override the terminal stop reason from the current abort owner. */
+   resolveTerminalStopReason?: () => string | undefined;
++  /** Same-prompt checks can retain ordinary streaming instead of buffering a draft. */
++  deferTerminalDelivery?: boolean;
+   /** Gate final block delivery/lifecycle after the natural answer is known. */
+   onBeforeTerminalDelivery?: (event: {
+     messages: AgentMessage[];
+@@ -96,7 +98,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
+     isError: boolean;
+     incompleteTerminalAssistant: boolean;
+     hadDeterministicSideEffect: boolean;
+-  }) => void | Promise<void | { suppressTerminalDelivery?: boolean }>;
++    hasPendingContinuation: boolean;
++  }) => void | Promise<void | {
++    suppressTerminalDelivery?: boolean;
++    continueCurrentTurn?: boolean;
++  }>;
+   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
+   onBeforeLifecycleTerminal?: () => void | Promise<void>;
+   enforceFinalTag?: boolean;
+diff --git a/src/agents/harness/selection.test.ts b/src/agents/harness/selection.test.ts
+index c1cc6cb9..d811b89f 100644
+--- a/src/agents/harness/selection.test.ts
++++ b/src/agents/harness/selection.test.ts
+@@ -106,6 +106,7 @@ const privateHarnessParamCases = [
+     value: { kind: "resume", blockedActionKeys: new Set<string>(), mutationAttempt: "available" },
+   },
+   { field: "compactionCountOwner", value: "caller" },
++  { field: "completionCheck", value: { unfinishedPlan: true, checked: false } },
+   { field: "onContextAccountingEvent", value: () => undefined },
+ ] as const;
+ 
+diff --git a/src/agents/harness/selection.ts b/src/agents/harness/selection.ts
+index 272dd0bf..b8b0fad3 100644
+--- a/src/agents/harness/selection.ts
++++ b/src/agents/harness/selection.ts
+@@ -660,6 +660,7 @@ function withoutPluginHarnessPrivateState(
+     admittedRunContext: _admittedRunContext,
+     codeModeRecovery: _codeModeRecovery,
+     compactionCountOwner: _compactionCountOwner,
++    completionCheck: _completionCheck,
+     onContextAccountingEvent: _onContextAccountingEvent,
+     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+     hostCapabilities: _hostCapabilities,
+diff --git a/src/agents/openclaw-tools.ts b/src/agents/openclaw-tools.ts
+index ccdd9a4f..fc14ed58 100644
+--- a/src/agents/openclaw-tools.ts
++++ b/src/agents/openclaw-tools.ts
+@@ -324,6 +324,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
+   })
+     ? createProgressCardTool({
+         agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
++        onPlanSaved: options?.onProgressCardPlanSaved,
+       })
+     : null;
+   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+diff --git a/src/agents/openclaw-tools.types.ts b/src/agents/openclaw-tools.types.ts
+index 1108dfc4..95653f45 100644
+--- a/src/agents/openclaw-tools.types.ts
++++ b/src/agents/openclaw-tools.types.ts
+@@ -153,6 +153,8 @@ export type OpenClawToolsOptions = {
+   spawnWorkspaceDir?: string;
+   /** Current runtime directory used as the default project for follow-up suggestions. */
+   cwd?: string;
++  /** Host-only observation after a canonical progress-card replacement commits. */
++  onProgressCardPlanSaved?: (unfinished: boolean) => void;
+   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+   claimYieldCompletion?: () => boolean | Promise<boolean>;
+   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
+diff --git a/src/agents/tools/progress-card-tool.test.ts b/src/agents/tools/progress-card-tool.test.ts
+index 6f73f859..f096757e 100644
+--- a/src/agents/tools/progress-card-tool.test.ts
++++ b/src/agents/tools/progress-card-tool.test.ts
+@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
+ import { createProgressCardTool } from "./progress-card-tool.js";
+ 
+ const DESCRIPTION =
+-  'Maintain this session\'s progress card: the single durable status surface shown next to the session in OpenClaw\'s UIs, for someone who is not reading the transcript. Keep it current on any task that takes more than a moment — it is how the user watches you work without scrolling. Each call replaces the whole card. Pick the representation that fits the work, using either or both parts: `markdown` — a compact note; tables for comparisons or metrics, <progress value="3" max="7"></progress> bars for one long operation, a bold one-liner for simple state; other raw HTML is stripped. Known URL? Link it. Don’t leave PRs or issues as bare IDs. And `plan` — an ordered step checklist (pending | in_progress | completed, at most one in_progress) for genuinely sequential work. The checklist is optional: omit it whenever a table, bar, or sentence says it better, and never repeat the same facts in both parts. Call with both parts empty to clear. Update on meaningful change — a step done, a blocker, results in — not every message. Max 8 KB markdown, 50 steps.';
++  'Maintain this session\'s progress card: the single durable status surface shown next to the session in OpenClaw\'s UIs, for someone who is not reading the transcript. Keep it current on any task that takes more than a moment — it is how the user watches you work without scrolling. Each call replaces the whole card. Pick the representation that fits the work, using either or both parts: `markdown` — a compact note; tables for comparisons or metrics, <progress value="3" max="7"></progress> bars for one long operation, a bold one-liner for simple state; other raw HTML is stripped. Known URL? Link it. Don’t leave PRs or issues as bare IDs. And `plan` — an ordered step checklist (pending | in_progress | completed, at most one in_progress) for genuinely sequential work. The checklist is optional: omit it whenever a table, bar, or sentence says it better, and never repeat the same facts in both parts. If no authorized step can proceed because of a pause or external dependency, preserve the unfinished work, blocker, owner, and resume condition in markdown and omit plan; do not mark blocked work completed. Call with both parts empty to clear. Update on meaningful change — a step done, a blocker, results in — not every message. Max 8 KB markdown, 50 steps.';
+ 
+ describe("progress_card tool", () => {
+   it("replaces the card and returns compact progress receipts", async () => {
+@@ -31,9 +31,11 @@ describe("progress_card tool", () => {
+         },
+       })
+       .mockResolvedValueOnce({ card: null });
++    const savedPlans: boolean[] = [];
+     const tool = createProgressCardTool({
+       agentSessionKey: "agent:main:main",
+       callGateway,
++      onPlanSaved: (unfinished) => savedPlans.push(unfinished),
+     });
+ 
+     expect(tool.description).toBe(DESCRIPTION);
+@@ -63,6 +65,11 @@ describe("progress_card tool", () => {
+     });
+     expect(cleared.details).toEqual({ revision: null, steps: null });
+     expect(cleared.content[0]).toEqual({ type: "text", text: "Progress card cleared" });
++    expect(savedPlans).toEqual([true, false, false]);
++
++    callGateway.mockRejectedValueOnce(new Error("save rejected"));
++    await expect(tool.execute("call-failed", { plan: steps })).rejects.toThrow("save rejected");
++    expect(savedPlans).toEqual([true, false, false]);
+   });
+ 
+   it.each([
+diff --git a/src/agents/tools/progress-card-tool.ts b/src/agents/tools/progress-card-tool.ts
+index e07730b1..9c608034 100644
+--- a/src/agents/tools/progress-card-tool.ts
++++ b/src/agents/tools/progress-card-tool.ts
+@@ -24,6 +24,7 @@ const ProgressCardToolSchema = Type.Object(
+ type ProgressCardToolOptions = {
+   agentSessionKey?: string;
+   callGateway?: InProcessGatewayCaller;
++  onPlanSaved?: (unfinished: boolean) => void;
+ };
+ 
+ export function createProgressCardTool(options: ProgressCardToolOptions = {}): AnyAgentTool {
+@@ -32,7 +33,7 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
+     name: "progress_card",
+     label: "Progress Card",
+     description:
+-      'Maintain this session\'s progress card: the single durable status surface shown next to the session in OpenClaw\'s UIs, for someone who is not reading the transcript. Keep it current on any task that takes more than a moment — it is how the user watches you work without scrolling. Each call replaces the whole card. Pick the representation that fits the work, using either or both parts: `markdown` — a compact note; tables for comparisons or metrics, <progress value="3" max="7"></progress> bars for one long operation, a bold one-liner for simple state; other raw HTML is stripped. Known URL? Link it. Don’t leave PRs or issues as bare IDs. And `plan` — an ordered step checklist (pending | in_progress | completed, at most one in_progress) for genuinely sequential work. The checklist is optional: omit it whenever a table, bar, or sentence says it better, and never repeat the same facts in both parts. Call with both parts empty to clear. Update on meaningful change — a step done, a blocker, results in — not every message. Max 8 KB markdown, 50 steps.',
++      'Maintain this session\'s progress card: the single durable status surface shown next to the session in OpenClaw\'s UIs, for someone who is not reading the transcript. Keep it current on any task that takes more than a moment — it is how the user watches you work without scrolling. Each call replaces the whole card. Pick the representation that fits the work, using either or both parts: `markdown` — a compact note; tables for comparisons or metrics, <progress value="3" max="7"></progress> bars for one long operation, a bold one-liner for simple state; other raw HTML is stripped. Known URL? Link it. Don’t leave PRs or issues as bare IDs. And `plan` — an ordered step checklist (pending | in_progress | completed, at most one in_progress) for genuinely sequential work. The checklist is optional: omit it whenever a table, bar, or sentence says it better, and never repeat the same facts in both parts. If no authorized step can proceed because of a pause or external dependency, preserve the unfinished work, blocker, owner, and resume condition in markdown and omit plan; do not mark blocked work completed. Call with both parts empty to clear. Update on meaningful change — a step done, a blocker, results in — not every message. Max 8 KB markdown, 50 steps.',
+     parameters: ProgressCardToolSchema,
+     execute: async (_toolCallId, rawArgs) => {
+       const sessionKey = options.agentSessionKey?.trim();
+@@ -57,6 +58,9 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
+         ...(input.markdown ? { markdown: input.markdown } : {}),
+         ...(input.steps ? { plan: input.steps } : {}),
+       });
++      options.onPlanSaved?.(
++        result.card?.steps?.some((step) => step.status !== "completed") === true,
++      );
+       const completed =
+         result.card?.steps?.filter((step) => step.status === "completed").length ?? 0;
+       const total = result.card?.steps?.length ?? 0;

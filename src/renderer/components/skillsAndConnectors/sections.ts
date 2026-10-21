@@ -1,23 +1,22 @@
 /**
- * Top-level sections of the merged Skills & Connectors page.
- *
- * Skills and MCP servers ("connectors") share one sidebar entry; the page
- * anchors on Skills and switches sections without leaving the view. The two
- * managers underneath stay independent — this is navigation state only.
+ * Kits, skills and connectors share a directory; their managers stay independent.
  */
 export const SkillsConnectorsSection = {
+  Kits: 'kits',
   Skills: 'skills',
   Connectors: 'connectors',
 } as const;
 export type SkillsConnectorsSection = typeof SkillsConnectorsSection[keyof typeof SkillsConnectorsSection];
 
-/** Skills first: it is the default anchor when the sidebar entry is opened. */
+/** Kits is the default section when opening the directory from the sidebar. */
 export const SKILLS_CONNECTORS_SECTION_ORDER: readonly SkillsConnectorsSection[] = [
+  SkillsConnectorsSection.Kits,
   SkillsConnectorsSection.Skills,
   SkillsConnectorsSection.Connectors,
 ];
 
 export const SKILLS_CONNECTORS_SECTION_LABEL_KEYS: Record<SkillsConnectorsSection, string> = {
+  [SkillsConnectorsSection.Kits]: 'kits',
   [SkillsConnectorsSection.Skills]: 'skills',
   [SkillsConnectorsSection.Connectors]: 'connectors',
 };

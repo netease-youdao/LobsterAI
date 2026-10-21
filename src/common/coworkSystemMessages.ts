@@ -2,6 +2,7 @@ export const CoworkSystemMessageKind = {
   EmptyResponse: 'empty_response',
   ContextCompaction: 'context_compaction',
   ForkCompactionSummary: 'fork_compaction_summary',
+  ModelChanged: 'model_changed',
 } as const;
 export type CoworkSystemMessageKind =
   typeof CoworkSystemMessageKind[keyof typeof CoworkSystemMessageKind];

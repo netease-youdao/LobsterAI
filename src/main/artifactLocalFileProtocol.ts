@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
 
+import { ArtifactPreviewHost } from '../shared/artifactPreview/constants';
+
 const LOCAL_FILE_MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -52,7 +54,7 @@ export function getLocalFileProtocolPath(requestUrl: string): string {
   if (process.platform === 'win32' && /^[A-Za-z]$/.test(url.host) && filePath.startsWith('/')) {
     return `${url.host}:${filePath}`;
   }
-  if (url.host && process.platform !== 'win32') {
+  if (url.host && url.host !== ArtifactPreviewHost.LocalFile && process.platform !== 'win32') {
     filePath = stripMediaTokenPrefix(`/${safeDecodeURIComponent(url.host)}${filePath}`);
   }
   if (process.platform === 'win32' && /^\/[A-Za-z]:/.test(filePath)) {

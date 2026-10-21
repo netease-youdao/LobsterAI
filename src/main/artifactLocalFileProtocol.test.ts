@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { ArtifactPreviewHost, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import {
   createLocalFileProtocolResponse,
   getLocalFileProtocolPath,
@@ -44,6 +45,16 @@ describe('artifact local file protocol', () => {
   test('resolves localfile URLs back to absolute file paths', () => {
     const filePath = createTempFile('generated video.mp4', '0123456789');
     expect(path.normalize(getLocalFileProtocolPath(toLocalFileUrl(filePath)))).toBe(path.normalize(filePath));
+  });
+
+  test('serves media through a standard URL with an explicit local authority', async () => {
+    const filePath = createTempFile('generated video.mp4', '0123456789');
+    const encodedPath = `/${filePath.replace(/\\/g, '/').replace(/^\//, '')}`.split('/').map(encodeURIComponent).join('/');
+    const url = `${ArtifactPreviewProtocol.LocalFile}://${ArtifactPreviewHost.LocalFile}${encodedPath}?v=1`;
+    expect(path.normalize(getLocalFileProtocolPath(url))).toBe(path.normalize(filePath));
+    const response = await createLocalFileProtocolResponse(new Request(url, { headers: { Range: 'bytes=2-5' } }));
+    expect(response.status).toBe(206);
+    expect(await response.text()).toBe('2345');
   });
 
   test('recovers paths that were previously prefixed with cwd and MEDIA marker', () => {

@@ -17,6 +17,17 @@ import {
 } from './openclawHistory';
 
 describe('openclawHistory', () => {
+  test('omits leaked image-history diagnostics only from assistant answers', () => {
+    const diagnostic = '[session:history] omitted image payload: missing data or mimeType';
+    const content = [{ type: 'text', text: 'Image ready.' }, { type: 'text', text: diagnostic }];
+    expect(extractGatewayMessageText({ role: 'assistant', content })).toBe('Image ready.');
+    expect(extractGatewayHistoryEntry({ role: 'assistant', content })).toEqual({ role: 'assistant', text: 'Image ready.' });
+    expect(extractGatewayHistoryEntry({ role: 'assistant', content: diagnostic })).toBeNull();
+    for (const role of ['user', 'toolResult', 'system']) {
+      expect(extractGatewayMessageText({ role, content: diagnostic })).toBe(diagnostic);
+    }
+  });
+
   test('extracts plain text content blocks', () => {
     expect(
       extractGatewayMessageText({

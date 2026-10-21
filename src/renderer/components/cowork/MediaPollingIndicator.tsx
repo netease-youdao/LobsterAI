@@ -1,8 +1,10 @@
 import Lottie from 'lottie-react';
 import React, { useEffect, useState } from 'react';
 
+import { MediaTaskStatus } from '../../../shared/media/constants';
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
 import { i18nService } from '../../services/i18n';
+import { mediaTaskLabelKey } from './MediaTaskCard';
 import type { ToolGroupItem } from './messageDisplayUtils';
 
 export type MediaPollingGroup = {
@@ -30,7 +32,7 @@ const MediaPollingIndicator: React.FC<{
     && (group.lastStatus === 'queued' || (group.lastStatus == null && collapsedPollCount <= 1));
 
   const label = group.isComplete
-    ? i18nService.t('mediaGenerationComplete')
+    ? i18nService.t(mediaTaskLabelKey({ status: group.lastStatus }))
     : isVideo
       ? i18nService.t('mediaGeneratingVideo')
       : i18nService.t('mediaGeneratingImage');
@@ -69,7 +71,7 @@ const MediaPollingIndicator: React.FC<{
       <div className="w-full flex items-start gap-2 relative z-10">
         <span className="mt-0.5 w-[36px] h-[36px] flex-shrink-0 flex items-center justify-center">
           {group.isComplete ? (
-            <span className="w-2 h-2 rounded-full bg-green-500" />
+            <span className={`w-2 h-2 rounded-full ${group.lastStatus === MediaTaskStatus.Succeeded ? 'bg-green-500' : 'bg-amber-500'}`} />
           ) : (
             <Lottie
               animationData={mediaGeneratingAnimation}

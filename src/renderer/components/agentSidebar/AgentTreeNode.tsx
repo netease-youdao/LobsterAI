@@ -1,7 +1,8 @@
+import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
-import { getAgentDisplayName, isDefaultAgentId, shouldUseDefaultAgentIcon } from '../../utils/agentDisplay';
+import { getAgentDisplayName, isDefaultAgentId, shouldUseDefaultAgentIcon, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
 import AgentConfirmDialog from '../agent/AgentConfirmDialog';
 import { AgentConfirmDialogVariant } from '../agent/constants';
@@ -65,16 +66,15 @@ const AGENT_TASKS_TRANSITION_MS = 200;
 
 const AgentAvatar: React.FC<{ agent: AgentSidebarAgentNode }> = ({ agent }) => {
   if (shouldUseDefaultAgentIcon(agent)) {
-    return <DefaultAgentIcon className="h-4 w-4" />;
+    return <DefaultAgentIcon className="h-[18px] w-[18px]" />;
   }
 
   return (
     <AgentAvatarIcon
       value={agent.icon}
-      className="h-4 w-4"
-      iconClassName="h-4 w-4"
-      legacyClassName="text-[14px]"
-      fallbackText={getAgentDisplayName(agent).trim().slice(0, 1).toUpperCase() || 'A'}
+      expertFallback={usesManagedPresetAvatar(agent)}
+      className="h-[18px] w-[18px]"
+      iconClassName="h-[18px] w-[18px]"
     />
   );
 };
@@ -264,6 +264,17 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
     handleCreateTask(event);
   };
 
+  // The disclosure only folds the task list; unlike the row it does not start a new task.
+  const handleToggleExpanded = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    onSidebarAction?.('agent_expand_toggle', {
+      agentType: isMainAgent ? 'main' : 'custom',
+      isExpanded: agent.isExpanded,
+      isPinned: agent.pinned,
+    });
+    onToggleExpanded(agent.id);
+  };
+
   const handleDeleteMenuClick = (event: React.MouseEvent) => {
     event.stopPropagation();
     if (isMainAgent) return;
@@ -284,21 +295,36 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
 
   return (
     <div className="space-y-0.5">
-      <div className={`group sticky top-10 ${isMenuOpen ? 'z-50' : 'z-20'} -ml-[6px] h-7 w-[calc(100%+12px)] bg-surface-raised`}>
+      <div className={`group sticky top-10 ${isMenuOpen ? 'z-50' : 'z-20'} -ml-[6px] h-9 w-[calc(100%+12px)] bg-surface-raised`}>
         <button
           type="button"
           onClick={handleAgentClick}
-          className="flex h-full w-full items-center gap-2 rounded-md py-0 pl-3.5 pr-12 text-left text-sm font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+          className="flex h-full w-full items-center gap-2.5 rounded-full py-0 pl-2 pr-12 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors group-hover:bg-black/[0.03] dark:group-hover:bg-white/[0.04]"
           role="treeitem"
           aria-level={1}
           aria-expanded={agent.isExpanded}
         >
-          <span className="flex h-4 w-4 shrink-0 items-center justify-center leading-none text-foreground">
+          <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none text-foreground transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0">
             <AgentAvatar agent={agent} />
           </span>
           <span className="min-w-0 flex-1 truncate">
             {agentName}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleToggleExpanded}
+          className="absolute left-[3px] top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-foreground/60 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 group-has-[:focus-visible]:opacity-100"
+          aria-label={agent.isExpanded ? i18nService.t('collapse') : i18nService.t('expand')}
+          aria-expanded={agent.isExpanded}
+        >
+          <ChevronRightIcon
+            className={`h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none ${
+              agent.isExpanded ? 'rotate-90' : ''
+            }`}
+            strokeWidth={2}
+          />
         </button>
 
         <div
@@ -431,25 +457,26 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             role="group"
             aria-hidden={!agent.isExpanded}
           >
-            <div className="min-w-0 max-w-full space-y-0.5">
+            {/* Bottom padding closes the group so the next agent reads as a new section. */}
+            <div className="min-w-0 max-w-full space-y-0.5 pb-2">
               {agent.hasLoadError && !hasVisibleTasks && (
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center rounded-md pl-[38px] pr-2.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center rounded-full pl-9 pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>
               )}
 
               {agent.isLoadingTasks && !hasVisibleTasks && (
-                <div className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center pl-[38px] pr-2.5 text-[13px] text-secondary">
+                <div className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center pl-9 pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
                   {i18nService.t('loading')}
                 </div>
               )}
 
               {!agent.isLoadingTasks && !agent.hasLoadError && !hasVisibleTasks && (
-                <div className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarCompact)] text-secondary">
+                <div className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center pl-9 pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
                   {i18nService.t('myAgentSidebarNoTasks')}
                 </div>
               )}
@@ -478,7 +505,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="-ml-[6px] flex h-7 w-[calc(100%+12px)] items-center rounded-md pl-[38px] pr-2.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center rounded-full pl-9 pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>

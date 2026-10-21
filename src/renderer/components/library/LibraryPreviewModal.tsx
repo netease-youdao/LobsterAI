@@ -11,7 +11,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarSolidIcon } from '@heroicons/react/24/solid';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import {
   LibraryAvailability,
@@ -53,7 +53,11 @@ import ShareUploadIcon from '../icons/ShareUploadIcon';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import { LIBRARY_ACTION_MENU_WIDTH_PX } from './libraryActionMenuPresentation';
 import { LibraryAnalyticsSurface } from './libraryAnalytics';
-import { createLibraryArtifactCandidate } from './libraryArtifactCandidate';
+import {
+  createLibraryArtifactCandidate,
+  getLibraryPreviewContentKey,
+  getLibraryPreviewKey,
+} from './libraryArtifactCandidate';
 import {
   getLibraryPreviewActionIds,
   LibraryItemAction,
@@ -78,6 +82,12 @@ interface LibraryPreviewModalProps {
   onCopyLink: () => void;
   onOpenSession: (session: LibrarySessionRef) => void;
   onShowSites: () => void;
+}
+
+/** The artifact read for a preview key; null when its file could not be read. */
+interface LoadedLibraryPreview {
+  key: string;
+  artifact: Artifact | null;
 }
 
 const HeaderIcon: React.FC<{ item: LibraryItem }> = ({ item }) => {
@@ -183,31 +193,31 @@ const LibraryPreviewModalContent: React.FC<LibraryPreviewModalProps> = ({
   onShowSites,
 }) => {
   const artifactFileShare = useOptionalArtifactFileShare();
-  const [artifact, setArtifact] = useState<Artifact | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<LoadedLibraryPreview>();
   const [activePopover, setActivePopover] = useState<HeaderPopover>();
   const [isSessionsExpanded, setIsSessionsExpanded] = useState(false);
   const localItem = item.itemKind === LibraryItemKind.LocalArtifact ? item : undefined;
+  const localItemRef = useRef(localItem);
+  localItemRef.current = localItem;
+  const previewKey = localItem ? getLibraryPreviewKey(localItem) : undefined;
+  const contentKey = localItem ? getLibraryPreviewContentKey(localItem) : undefined;
+  const shownPreview = previewKey && preview?.key === previewKey ? preview : undefined;
+  const artifact = shownPreview?.artifact ?? null;
+  const loading = Boolean(previewKey) && !shownPreview;
 
-  const candidate = useMemo<Artifact | null>(() => (
-    localItem ? createLibraryArtifactCandidate(localItem) : null
-  ), [localItem]);
-
+  // Only another file opens the preview anew. A new version of the same file is read behind the
+  // preview shown, so an editor in it stays mounted and keeps its place, as in the artifact panel.
   useEffect(() => {
+    const current = localItemRef.current;
+    if (!previewKey || !contentKey || !current) return undefined;
     let active = true;
-    setArtifact(null);
-    if (!candidate || localItem?.availability !== LibraryAvailability.Available) {
-      setLoading(false);
-      return () => { active = false; };
-    }
-    setLoading(true);
-    void loadDetectedFileArtifact(candidate).then(loaded => {
+    void loadDetectedFileArtifact(createLibraryArtifactCandidate(current)).then(loaded => {
       if (!active) return;
-      setArtifact(loaded);
-      setLoading(false);
+      // A failed re-read keeps what is shown; a file that is gone arrives as an unavailable item.
+      setPreview(shown => (!loaded && shown?.key === previewKey ? shown : { key: previewKey, artifact: loaded }));
     });
     return () => { active = false; };
-  }, [candidate, localItem?.availability]);
+  }, [contentKey, previewKey]);
 
   useEffect(() => {
     if (!activePopover) return undefined;

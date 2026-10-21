@@ -2,6 +2,7 @@ import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLe
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import {
@@ -11,6 +12,7 @@ import {
 } from '../../shared/browserWebAccess/constants';
 import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
 import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
+import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
 import {
   normalizeNotificationSettings,
   TaskCompletionNotificationMode,
@@ -26,14 +28,14 @@ import {
   ProviderRegistry,
   resolveCodingPlanBaseUrl,
   resolveModelRuntimeProfile,
+  supportsGeminiApiFormatSelection,
 } from '../../shared/providers';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
-import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { OPEN_SOURCE_ENTERPRISE_UI_KEY } from '../constants/openSource';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
-import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPassword, PasswordEncryptedPayload } from '../services/encryption';
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
@@ -65,8 +67,12 @@ import DreamingRecoveryNotice from './cowork/DreamingRecoveryNotice';
 import DreamingSettingsSection from './cowork/DreamingSettingsSection';
 import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
+import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
+import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
+import { useDesktopCompanionState } from './desktopCompanion/useDesktopCompanionState';
 import DshExperimentalSettings from './DshExperimentalSettings';
 import ErrorMessage from './ErrorMessage';
+import FeedbackDialog from './feedback/FeedbackDialog';
 import BrainIcon from './icons/BrainIcon';
 import EditIcon from './icons/EditIcon';
 import MessageCopyIcon from './icons/MessageCopyIcon';
@@ -74,8 +80,10 @@ import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
+import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
+  buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
   buildOpenAIConnectionTestRequestBody,
   buildOpenAIResponsesUrl,
@@ -88,7 +96,9 @@ import {
   getProviderDefaultBaseUrl,
   hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
-  type Model,
+  MAX_OUTPUT_TOKENS_MAX,
+  MAX_OUTPUT_TOKENS_MIN,
+  parseMaxOutputTokensInput,
   type ProviderConfig,
   providerKeys,
   providerRequiresApiKey,
@@ -100,13 +110,16 @@ import {
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
+import OpenClawUserConfigRow from './settings/OpenClawUserConfigRow';
+import ProviderTransferDialog from './settings/ProviderTransferDialog';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
+import { useProviderTransfer } from './settings/useProviderTransfer';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'experimental' | 'about';
+type TabType = 'general' | 'appearance' | 'desktopCompanion' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'experimental' | 'about';
 
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
   window.requestAnimationFrame(() => {
@@ -167,8 +180,12 @@ const resolvePrimaryProviderForSettingsSave = (
     : providers[activeProvider];
 };
 
+// The global shortcut stays in companion preferences so existing bindings are preserved.
+const SettingsShortcutAction = { ...ShortcutAction, QuickPanel: 'quickPanel' } as const;
+type SettingsShortcutAction = typeof SettingsShortcutAction[keyof typeof SettingsShortcutAction];
+
 type ShortcutCommandDefinition = {
-  key: ShortcutAction;
+  key: SettingsShortcutAction;
   labelKey: string;
   descriptionKey: string;
   inputType?: 'recorder' | 'send';
@@ -176,9 +193,10 @@ type ShortcutCommandDefinition = {
   tabLabelKey?: string;
 };
 
-const SETTINGS_TAB_SHORTCUT_ACTIONS: Partial<Record<ShortcutAction, TabType>> = {
+const SETTINGS_TAB_SHORTCUT_ACTIONS: Partial<Record<SettingsShortcutAction, TabType>> = {
   [ShortcutAction.OpenSettingsGeneral]: 'general',
   [ShortcutAction.OpenSettingsAppearance]: 'appearance',
+  [ShortcutAction.OpenSettingsDesktopCompanion]: OpenSettingsTab.DesktopCompanion,
   [ShortcutAction.OpenSettingsAgentEngine]: 'coworkAgentEngine',
   [ShortcutAction.OpenSettingsModel]: 'model',
   [ShortcutAction.OpenSettingsIm]: 'im',
@@ -698,6 +716,10 @@ const reportAboutAction = (
   });
 };
 
+const reportAboutOpenSourceAction = (action: AboutOpenSourceAction): void => {
+  reportAboutAction(action, 'success');
+};
+
 const reportAgentEngineSettingChanged = (
   settingKey: string,
   settingValue: SettingsAnalyticsValue,
@@ -775,6 +797,7 @@ const AGENT_TASK_SLOT_COMMANDS: ShortcutCommandDefinition[] = [
 const SETTINGS_TAB_SHORTCUT_COMMANDS: ShortcutCommandDefinition[] = [
   { key: ShortcutAction.OpenSettingsGeneral, tabLabelKey: 'general' },
   { key: ShortcutAction.OpenSettingsAppearance, tabLabelKey: 'appearance' },
+  { key: ShortcutAction.OpenSettingsDesktopCompanion, tabLabelKey: 'desktopCompanionTitle' },
   { key: ShortcutAction.OpenSettingsAgentEngine, tabLabelKey: 'coworkAgentEngine' },
   { key: ShortcutAction.OpenSettingsModel, tabLabelKey: 'settingsCustomModel' },
   { key: ShortcutAction.OpenSettingsIm, tabLabelKey: 'imBot' },
@@ -799,6 +822,7 @@ const SHORTCUT_COMMAND_GROUPS: Array<{
     commands: [
       { key: ShortcutAction.NewChat, labelKey: 'newChat', descriptionKey: 'shortcutDescNewChat' },
       { key: ShortcutAction.FocusPrompt, labelKey: 'shortcutFocusPrompt', descriptionKey: 'shortcutDescFocusPrompt' },
+      { key: ShortcutAction.VoiceInput, labelKey: 'shortcutVoiceInput', descriptionKey: 'shortcutDescVoiceInput' },
       { key: ShortcutAction.StopCurrentTask, labelKey: 'shortcutStopCurrentTask', descriptionKey: 'shortcutDescStopCurrentTask' },
       { key: ShortcutAction.Search, labelKey: 'search', descriptionKey: 'shortcutDescSearch' },
       { key: ShortcutAction.ToggleArtifacts, labelKey: 'shortcutToggleArtifacts', descriptionKey: 'shortcutDescToggleArtifacts' },
@@ -824,6 +848,7 @@ const SHORTCUT_COMMAND_GROUPS: Array<{
   {
     titleKey: 'shortcutGroupApp',
     commands: [
+      { key: SettingsShortcutAction.QuickPanel, labelKey: 'shortcutQuickPanel', descriptionKey: 'shortcutDescQuickPanel' },
       { key: ShortcutAction.Settings, labelKey: 'openSettings', descriptionKey: 'shortcutDescSettings' },
       { key: ShortcutAction.ShowShortcuts, labelKey: 'shortcutShowShortcuts', descriptionKey: 'shortcutDescShowShortcuts' },
     ],
@@ -899,7 +924,28 @@ const DreamingTabIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
+// A desktop screen with the floating orb docked on its corner.
+const FloatingOrbTabIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <path d="M21 11.25v-4.5A2.25 2.25 0 0 0 18.75 4.5H5.25A2.25 2.25 0 0 0 3 6.75V15a2.25 2.25 0 0 0 2.25 2.25h8.25" />
+    <path d="M9.75 20.25h4.5M12 17.25v3" />
+    <circle cx="18.75" cy="16.5" r="3" />
+    <circle cx="18.75" cy="16.5" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 export type SettingsOpenOptions = {
+  openFeedback?: boolean;
   initialTab?: TabType;
   notice?: string;
   noticeI18nKey?: string;
@@ -923,49 +969,6 @@ type ProviderConnectionTestResult = {
   message: string;
   provider: ProviderType;
 };
-
-interface ProviderExportEntry {
-  enabled: boolean;
-  apiKey: PasswordEncryptedPayload;
-  baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai' | 'gemini';
-  codingPlanEnabled?: boolean;
-  models?: Model[];
-}
-
-interface ProvidersExportPayload {
-  type: typeof EXPORT_FORMAT_TYPE;
-  version: 2;
-  exportedAt: string;
-  encryption: {
-    algorithm: 'AES-GCM';
-    keySource: 'password';
-    keyDerivation: 'PBKDF2';
-  };
-  providers: Record<string, ProviderExportEntry>;
-}
-
-interface ProvidersImportEntry {
-  enabled?: boolean;
-  apiKey?: EncryptedPayload | PasswordEncryptedPayload | string;
-  apiKeyEncrypted?: string;
-  apiKeyIv?: string;
-  baseUrl?: string;
-  apiFormat?: 'anthropic' | 'openai' | 'native';
-  codingPlanEnabled?: boolean;
-  models?: Model[];
-}
-
-interface ProvidersImportPayload {
-  type?: string;
-  version?: number;
-  encryption?: {
-    algorithm?: string;
-    keySource?: string;
-    keyDerivation?: string;
-  };
-  providers?: Record<string, ProvidersImportEntry>;
-}
 
 const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
 const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
@@ -1103,7 +1106,9 @@ const formatShortcutFromEvent = (e: React.KeyboardEvent): string | null => {
     ' ': 'Space', Escape: 'Esc', Enter: 'Enter', Backspace: 'Backspace',
     Delete: 'Delete', Tab: 'Tab',
   };
-  const key = keyMap[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+  const key = keyMap[e.key]
+    ?? (e.altKey && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3) : undefined)
+    ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
   parts.push(key);
   return parts.join('+');
 };
@@ -1120,8 +1125,10 @@ const isMacPlatform = navigator.platform.includes('Mac');
 const ShortcutRecorder: React.FC<{
   value: string;
   label: string;
+  global?: boolean;
+  disabled?: boolean;
   onChange: (v: string) => void;
-}> = ({ value, label, onChange }) => {
+}> = ({ value, label, global = false, disabled = false, onChange }) => {
   const [recording, setRecording] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<HTMLButtonElement>(null);
@@ -1129,12 +1136,12 @@ const ShortcutRecorder: React.FC<{
   const editLabel = i18nService.t('shortcutEditCommand').replace('{command}', label);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!recording) return;
+    if (!recording || disabled) return;
     e.preventDefault();
     e.stopPropagation();
     if (e.key === 'Escape') { setRecording(false); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') { onChange(''); setRecording(false); return; }
-    const shortcut = formatShortcutFromEvent(e);
+    const shortcut = global ? companionShortcutFromKeys(e) : formatShortcutFromEvent(e);
     if (shortcut) { onChange(shortcut); setRecording(false); }
   };
 
@@ -1158,6 +1165,7 @@ const ShortcutRecorder: React.FC<{
         <button
           ref={recorderRef}
           type="button"
+          disabled={disabled}
           data-shortcut-input="true"
           onKeyDown={handleKeyDown}
           className="h-8 min-w-[8rem] rounded-xl border border-border bg-surface px-4 text-xs font-medium text-foreground shadow-sm outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/25"
@@ -1187,6 +1195,7 @@ const ShortcutRecorder: React.FC<{
       <button
         type="button"
         onClick={() => setRecording(true)}
+        disabled={disabled}
         title={editLabel}
         aria-label={editLabel}
         className="pointer-events-none inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary opacity-0 transition-colors hover:bg-surface-raised hover:text-foreground group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
@@ -1383,6 +1392,7 @@ const Settings: React.FC<SettingsProps> = ({
   onStartAiSkin,
   initialTab,
   initialTabRequestId,
+  openFeedback,
   notice,
   noticeI18nKey,
   noticeExtra,
@@ -1398,6 +1408,7 @@ const Settings: React.FC<SettingsProps> = ({
   } = useSkin();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
+  const [feedbackOpen, setFeedbackOpen] = useState(Boolean(openFeedback));
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [themeId, setThemeId] = useState<string>(themeService.getDefaultThemeId());
   const [uiFontSize, setUiFontSize] = useState<number>(FontPreferences.UiFontSizeDefault);
@@ -1434,8 +1445,6 @@ const Settings: React.FC<SettingsProps> = ({
   const [isTestResultModalOpen, setIsTestResultModalOpen] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<ProviderType | null>(null);
-  const [isImportingProviders, setIsImportingProviders] = useState(false);
-  const [isExportingProviders, setIsExportingProviders] = useState(false);
   const initialThemeIdRef = useRef<string>(themeService.getDefaultThemeId());
   const initialUiFontSizeRef = useRef<number>(FontPreferences.UiFontSizeDefault);
   const initialCodeFontSizeRef = useRef<number>(FontPreferences.CodeFontSizeDefault);
@@ -1502,6 +1511,19 @@ const Settings: React.FC<SettingsProps> = ({
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const providerTransfer = useProviderTransfer({
+    providers,
+    onError: setError,
+    onImport: (next, legacy) => {
+      setProviders(next);
+      setIsTestResultModalOpen(false);
+      setTestResult(null);
+      setNoticeMessage(i18nService.t(legacy ? 'providersLegacyImported' : 'providersImported'));
+    },
+  });
+  const isImportingProviders = providerTransfer.reading || providerTransfer.busy;
+  const isExportingProviders = providerTransfer.busy;
+
 
 
   // authType defaults to undefined on first open, which should behave as OAuth mode
@@ -1523,6 +1545,12 @@ const Settings: React.FC<SettingsProps> = ({
 
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState<ShortcutConfig>(() => ({ ...defaultConfig.shortcuts! }));
+  const { state: companionState, error: companionLoadError } = useDesktopCompanionState();
+  const [quickPanelShortcutDraft, setQuickPanelShortcutDraft] = useState<string | null>(null);
+  const shortcutBindings = useMemo(() => ({
+    ...shortcuts,
+    [SettingsShortcutAction.QuickPanel]: quickPanelShortcutDraft ?? companionState?.preferences.shortcut ?? '',
+  }), [shortcuts, quickPanelShortcutDraft, companionState?.preferences.shortcut]);
   const [shortcutSearchQuery, setShortcutSearchQuery] = useState('');
 
   // GitHub Copilot device code auth state
@@ -1541,6 +1569,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [newModelSupportsThinking, setNewModelSupportsThinking] = useState(false);
   const [newModelContextWindow, setNewModelContextWindow] = useState<number | undefined>(undefined);
+  const [newModelMaxTokens, setNewModelMaxTokens] = useState<string>('');
   const [newModelCustomParams, setNewModelCustomParams] = useState<string>('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
 
@@ -1553,6 +1582,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
   const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready'>('idle');
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState | null>(null);
+  const showOpenSourceEntries = enterpriseConfig?.ui?.[OPEN_SOURCE_ENTERPRISE_UI_KEY] !== 'hide';
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -2300,6 +2330,10 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [initialTab, initialTabRequestId]);
 
+  useEffect(() => {
+    if (openFeedback) setFeedbackOpen(true);
+  }, [openFeedback, initialTabRequestId]);
+
   // Subscribe to language changes
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {
@@ -2368,6 +2402,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -3456,6 +3491,12 @@ const Settings: React.FC<SettingsProps> = ({
       );
       let savedPluginPendingChanges: PluginPendingChanges | null = null;
 
+      if (quickPanelShortcutDraft !== null) {
+        const result = await window.electron.desktopCompanion.setPreferences({ shortcut: quickPanelShortcutDraft });
+        if (!result.success) throw new Error(result.error || i18nService.t('desktopCompanionShortcutConflict'));
+        setQuickPanelShortcutDraft(null);
+      }
+
       await configService.updateConfig({
         api: {
           key: primaryProvider.apiKey,
@@ -3792,24 +3833,24 @@ const Settings: React.FC<SettingsProps> = ({
           const haystack = [
             getShortcutCommandText(command, 'labelKey'),
             getShortcutCommandText(command, 'descriptionKey'),
-            shortcuts[command.key] ?? '',
-            formatShortcutForDisplay(shortcuts[command.key], { isMac: isMacPlatform }),
+            shortcutBindings[command.key] ?? '',
+            formatShortcutForDisplay(shortcutBindings[command.key], { isMac: isMacPlatform }),
           ].join(' ').toLowerCase();
           return haystack.includes(query);
         }),
       }))
       .filter(group => group.commands.length > 0);
-  }, [shortcutSearchQuery, shortcuts]);
+  }, [shortcutSearchQuery, shortcutBindings]);
 
   // 快捷键更新处理
-  const handleShortcutChange = (key: ShortcutAction, value: string) => {
+  const handleShortcutChange = (key: SettingsShortcutAction, value: string) => {
     const normalizedValue = value.trim();
     // Check for conflicts with other shortcuts
     const normalizedSignature = getShortcutConflictSignature(normalizedValue, { isMac: isMacPlatform });
     const conflictKey = normalizedSignature
-      ? Object.values(ShortcutAction).find((action) => {
+      ? Object.values(SettingsShortcutAction).find((action) => {
           if (action === key) return false;
-          return getShortcutConflictSignature(shortcuts[action], { isMac: isMacPlatform }) === normalizedSignature;
+          return getShortcutConflictSignature(shortcutBindings[action], { isMac: isMacPlatform }) === normalizedSignature;
         })
       : undefined;
     if (conflictKey) {
@@ -3825,6 +3866,10 @@ const Settings: React.FC<SettingsProps> = ({
       );
       return;
     }
+    if (key === SettingsShortcutAction.QuickPanel) {
+      setQuickPanelShortcutDraft(normalizedValue);
+      return;
+    }
     setShortcuts(prev => ({
       ...prev,
       [key]: normalizedValue
@@ -3833,6 +3878,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleResetShortcuts = () => {
     setShortcuts({ ...defaultConfig.shortcuts! });
+    if (companionState) setQuickPanelShortcutDraft(DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut);
   };
 
   // 阻止点击设置窗口时事件传播到背景
@@ -3850,6 +3896,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -3861,6 +3908,7 @@ const Settings: React.FC<SettingsProps> = ({
     supportsThinking?: boolean,
     contextWindow?: number,
     customParams?: Record<string, unknown>,
+    maxTokens?: number,
   ) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
@@ -3870,6 +3918,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(!!supportsImage);
     setNewModelSupportsThinking(!!supportsThinking);
     setNewModelContextWindow(contextWindow);
+    setNewModelMaxTokens(maxTokens !== undefined ? String(maxTokens) : '');
     setNewModelCustomParams(
       customParams && Object.keys(customParams).length > 0
         ? JSON.stringify(customParams, null, 2)
@@ -3971,6 +4020,19 @@ const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
+    // Runtime profiles own the output cap, so the (hidden) field is ignored there.
+    const parsedMaxTokens = runtimeProfile
+      ? undefined
+      : parseMaxOutputTokensInput(newModelMaxTokens);
+    if (parsedMaxTokens === null) {
+      setModelFormError(
+        i18nService.t('maxOutputTokensInvalid')
+          .replace('{min}', String(MAX_OUTPUT_TOKENS_MIN))
+          .replace('{max}', String(MAX_OUTPUT_TOKENS_MAX)),
+      );
+      return;
+    }
+
     const editingModel = currentModels.find(model => model.id === editingModelId);
     const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
@@ -3989,10 +4051,11 @@ const Settings: React.FC<SettingsProps> = ({
         newModelSupportsThinking,
       ),
       contextWindow: newModelContextWindow,
-      maxTokens: ProviderRegistry.resolveModelMaxTokens(
+      // An empty field falls back to the registry default instead of the
+      // previously saved value, so clearing it restores automatic inference.
+      maxTokens: parsedMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
         activeProvider,
         modelId,
-        editingModel?.maxTokens,
       ),
     }, runtimeProfile);
     const nextModel = {
@@ -4031,6 +4094,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -4044,6 +4108,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
     setNewModelContextWindow(undefined);
+    setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
   };
@@ -4200,8 +4265,21 @@ const Settings: React.FC<SettingsProps> = ({
       // - openai provider: /v1/responses
       // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = effectiveApiFormat === 'anthropic';
+      const useCustomGeminiFormat = effectiveApiFormat === 'gemini'
+        && supportsGeminiApiFormatSelection(testingProvider);
 
-      if (useAnthropicFormat) {
+      if (useCustomGeminiFormat) {
+        const geminiRequest = buildGeminiConnectionTestRequest(normalizedBaseUrl, firstModel.id);
+        response = await window.electron.api.fetch({
+          url: geminiRequest.url,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': effectiveApiKey,
+          },
+          body: JSON.stringify(geminiRequest.body),
+        });
+      } else if (useAnthropicFormat) {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
           ? `${normalizedBaseUrl}/messages`
           : `${normalizedBaseUrl}/v1/messages`;
@@ -4220,7 +4298,10 @@ const Settings: React.FC<SettingsProps> = ({
           }),
         });
       } else {
-        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider);
+        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider, {
+          ...providerConfig,
+          apiFormat: effectiveApiFormat,
+        });
         const openaiUrl = useResponsesApi
           ? buildOpenAIResponsesUrl(normalizedBaseUrl)
           : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, testingProvider);
@@ -4283,300 +4364,8 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const buildProvidersExport = async (password: string): Promise<ProvidersExportPayload> => {
-    const entries = await Promise.all(
-      Object.entries(providers).map(async ([providerKey, providerConfig]) => {
-        const apiKey = await encryptWithPassword(providerConfig.apiKey, password);
-        const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
-        return [
-          providerKey,
-          {
-            enabled: providerConfig.enabled,
-            apiKey,
-            baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
-            apiFormat,
-            codingPlanEnabled: (providerConfig as ProviderConfig).codingPlanEnabled,
-            models: normalizeModels(providerKey, providerConfig.models),
-          },
-        ] as const;
-      })
-    );
-
-    return {
-      type: EXPORT_FORMAT_TYPE,
-      version: 2,
-      exportedAt: new Date().toISOString(),
-      encryption: {
-        algorithm: 'AES-GCM',
-        keySource: 'password',
-        keyDerivation: 'PBKDF2',
-      },
-      providers: Object.fromEntries(entries),
-    };
-  };
-
-  const normalizeModels = (providerKey: string, models?: Model[]) =>
-    models?.map(model => ({
-      ...model,
-      supportsImage: resolveModelSupportsImageForProvider(providerKey, model),
-    }));
-
-  const DEFAULT_EXPORT_PASSWORD = EXPORT_PASSWORD;
-
-  const handleExportProviders = async () => {
-    setError(null);
-    setIsExportingProviders(true);
-
-    try {
-      const payload = await buildProvidersExport(DEFAULT_EXPORT_PASSWORD);
-      const json = JSON.stringify(payload, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const date = new Date().toISOString().slice(0, 10);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${APP_ID}-providers-${date}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(url), 0);
-    } catch (err) {
-      console.error('Failed to export providers:', err);
-      setError(i18nService.t('exportProvidersFailed'));
-    } finally {
-      setIsExportingProviders(false);
-    }
-  };
-
   const handleImportProvidersClick = () => {
     importInputRef.current?.click();
-  };
-
-  const handleImportProviders = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) {
-      return;
-    }
-
-    setError(null);
-
-    try {
-      const raw = await file.text();
-      console.log(`[Settings] importing providers from file: ${file.name}, size: ${file.size}`);
-      let payload: ProvidersImportPayload;
-      try {
-        payload = JSON.parse(raw) as ProvidersImportPayload;
-      } catch {
-        console.warn('[Settings] import failed: invalid JSON in file');
-        setError(i18nService.t('invalidProvidersFile'));
-        return;
-      }
-
-      if (!payload || payload.type !== EXPORT_FORMAT_TYPE || !payload.providers) {
-        console.warn(`[Settings] import failed: invalid format, type=${payload?.type}, hasProviders=${!!payload?.providers}`);
-        setError(i18nService.t('invalidProvidersFile'));
-        return;
-      }
-
-      // Check if it's version 2 (password-based encryption)
-      if (payload.version === 2 && payload.encryption?.keySource === 'password') {
-        console.log('[Settings] import: detected v2 password-based encryption');
-        await processImportPayloadWithPassword(payload);
-        return;
-      }
-
-      // Version 1 (legacy local-store key) - try to decrypt with local key
-      if (payload.version === 1) {
-        console.log('[Settings] import: detected v1 local-key encryption');
-        await processImportPayloadWithLocalKey(payload);
-        return;
-      }
-
-      console.warn(`[Settings] import failed: unsupported version=${payload.version}`);
-      setError(i18nService.t('invalidProvidersFile'));
-    } catch (err) {
-      console.error('[Settings] import failed:', err);
-      setError(i18nService.t('importProvidersFailed'));
-    }
-  };
-
-  const processImportPayloadWithLocalKey = async (payload: ProvidersImportPayload) => {
-    setIsImportingProviders(true);
-    try {
-      const fileKeys = Object.keys(payload.providers ?? {});
-      console.log(`[Settings] v1 import: processing ${fileKeys.length} providers from file`);
-      const providerUpdates: Partial<ProvidersConfig> = {};
-      let hadDecryptFailure = false;
-      for (const providerKey of providerKeys) {
-        const providerData = payload.providers?.[providerKey];
-        if (!providerData) {
-          continue;
-        }
-
-        let apiKey: string | undefined;
-        if (typeof providerData.apiKey === 'string') {
-          apiKey = providerData.apiKey;
-        } else if (providerData.apiKey && typeof providerData.apiKey === 'object') {
-          try {
-            apiKey = await decryptSecret(providerData.apiKey as EncryptedPayload);
-            console.log(`[Settings] v1 import: decrypted key for ${providerKey}`);
-          } catch (error) {
-            hadDecryptFailure = true;
-            console.warn(`[Settings] v1 import: failed to decrypt key for ${providerKey}`, error);
-          }
-        } else if (typeof providerData.apiKeyEncrypted === 'string' && typeof providerData.apiKeyIv === 'string') {
-          try {
-            apiKey = await decryptSecret({ encrypted: providerData.apiKeyEncrypted, iv: providerData.apiKeyIv });
-            console.log(`[Settings] v1 import: decrypted key for ${providerKey}`);
-          } catch (error) {
-            hadDecryptFailure = true;
-            console.warn(`[Settings] v1 import: failed to decrypt key for ${providerKey}`, error);
-          }
-        }
-
-        const models = normalizeModels(providerKey, providerData.models);
-        const existing = providers[providerKey];
-
-        providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : existing?.enabled ?? false,
-          apiKey: apiKey ?? existing?.apiKey ?? '',
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : existing?.baseUrl ?? '',
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existing?.apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existing as ProviderConfig)?.codingPlanEnabled,
-          models: models ?? existing?.models,
-        };
-      }
-
-      if (Object.keys(providerUpdates).length === 0) {
-        console.warn(`[Settings] v1 import failed: no matching providers found, file keys: ${fileKeys.join(', ')}`);
-        setError(i18nService.t('invalidProvidersFile'));
-        return;
-      }
-
-      setProviders(prev => {
-        const next = { ...prev };
-        Object.entries(providerUpdates).forEach(([providerKey, update]) => {
-          next[providerKey] = {
-            ...prev[providerKey],
-            ...update,
-          };
-        });
-        return next;
-      });
-      setIsTestResultModalOpen(false);
-      setTestResult(null);
-      console.log(`[Settings] v1 import complete: updated ${Object.keys(providerUpdates).length} providers`);
-      if (hadDecryptFailure) {
-        setNoticeMessage(i18nService.t('decryptProvidersPartial'));
-      }
-    } catch (err) {
-      console.error('[Settings] v1 import failed:', err);
-      const isDecryptError = err instanceof Error
-        && (err.message === 'Invalid encrypted payload' || err.name === 'OperationError');
-      const message = isDecryptError
-        ? i18nService.t('decryptProvidersFailed')
-        : i18nService.t('importProvidersFailed');
-      setError(message);
-    } finally {
-      setIsImportingProviders(false);
-    }
-  };
-
-  const processImportPayloadWithPassword = async (payload: ProvidersImportPayload) => {
-    if (!payload.providers) {
-      return;
-    }
-
-    setIsImportingProviders(true);
-
-    try {
-      const fileKeys = Object.keys(payload.providers);
-      console.log(`[Settings] v2 import: processing ${fileKeys.length} providers from file`);
-      const providerUpdates: Partial<ProvidersConfig> = {};
-      let hadDecryptFailure = false;
-
-      for (const providerKey of providerKeys) {
-        const providerData = payload.providers[providerKey];
-        if (!providerData) {
-          continue;
-        }
-
-        let apiKey: string | undefined;
-        if (typeof providerData.apiKey === 'string') {
-          apiKey = providerData.apiKey;
-        } else if (providerData.apiKey && typeof providerData.apiKey === 'object') {
-          const apiKeyObj = providerData.apiKey as PasswordEncryptedPayload;
-          if (apiKeyObj.salt) {
-            // Version 2 password-based encryption
-            try {
-              apiKey = await decryptWithPassword(apiKeyObj, DEFAULT_EXPORT_PASSWORD);
-              console.log(`[Settings] v2 import: decrypted key for ${providerKey}`);
-            } catch (error) {
-              hadDecryptFailure = true;
-              console.warn(`[Settings] v2 import: failed to decrypt key for ${providerKey}`, error);
-            }
-          }
-        }
-
-        const models = normalizeModels(providerKey, providerData.models);
-        const existing = providers[providerKey];
-
-        providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : existing?.enabled ?? false,
-          apiKey: apiKey ?? existing?.apiKey ?? '',
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : existing?.baseUrl ?? '',
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existing?.apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existing as ProviderConfig)?.codingPlanEnabled,
-          models: models ?? existing?.models,
-        };
-      }
-
-      if (Object.keys(providerUpdates).length === 0) {
-        console.warn(`[Settings] v2 import failed: no matching providers found, file keys: ${fileKeys.join(', ')}`);
-        setError(i18nService.t('invalidProvidersFile'));
-        return;
-      }
-
-      // Check if any key was successfully decrypted
-      const anyKeyDecrypted = Object.entries(providerUpdates).some(
-        ([key, update]) => update?.apiKey && update.apiKey !== providers[key]?.apiKey
-      );
-
-      if (!anyKeyDecrypted && hadDecryptFailure) {
-        // All decryptions failed - likely wrong password
-        console.warn('[Settings] v2 import failed: all key decryptions failed, likely wrong password');
-        setError(i18nService.t('decryptProvidersFailed'));
-        return;
-      }
-
-      setProviders(prev => {
-        const next = { ...prev };
-        Object.entries(providerUpdates).forEach(([providerKey, update]) => {
-          next[providerKey] = {
-            ...prev[providerKey],
-            ...update,
-          };
-        });
-        return next;
-      });
-      setIsTestResultModalOpen(false);
-      setTestResult(null);
-      console.log(`[Settings] v2 import complete: updated ${Object.keys(providerUpdates).length} providers`);
-      if (hadDecryptFailure) {
-        setNoticeMessage(i18nService.t('decryptProvidersPartial'));
-      }
-    } catch (err) {
-      console.error('[Settings] v2 import failed:', err);
-      const isDecryptError = err instanceof Error
-        && (err.message === 'Invalid encrypted payload' || err.name === 'OperationError');
-      const message = isDecryptError
-        ? i18nService.t('decryptProvidersFailed')
-        : i18nService.t('importProvidersFailed');
-      setError(message);
-    } finally {
-      setIsImportingProviders(false);
-    }
   };
 
   // 渲染标签页
@@ -4584,6 +4373,7 @@ const Settings: React.FC<SettingsProps> = ({
     const allTabs = [
       { key: 'general' as TabType,        label: i18nService.t('general'),        icon: <SettingsSlidersIcon className="h-5 w-5" /> },
       { key: 'appearance' as TabType,     label: i18nService.t('appearance'),     icon: <SunIcon className="h-5 w-5" /> },
+      { key: 'desktopCompanion' as TabType, label: i18nService.t('desktopCompanionTitle'), icon: <FloatingOrbTabIcon className="h-5 w-5" /> },
       { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
       { key: 'model' as TabType,          label: i18nService.t('settingsCustomModel'), icon: <CubeIcon className="h-5 w-5" /> },
       { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
@@ -4701,20 +4491,20 @@ const Settings: React.FC<SettingsProps> = ({
                 <svg viewBox="0 0 120 80" className="w-full h-auto rounded-md mb-2 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
                   {mode === 'light' && (
                     <>
-                      <rect width="120" height="80" fill="#F8F9FB" />
-                      <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                      <rect width="120" height="80" fill="#F9F9F9" />
+                      <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                      <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                      <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                      <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                       <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E2E4E7" />
+                      <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                      <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                      <rect x="42" y="60" width="58" height="3" rx="1.5" fill="#E5E5E5" />
                     </>
                   )}
                   {mode === 'dark' && (
@@ -4746,19 +4536,19 @@ const Settings: React.FC<SettingsProps> = ({
                         </clipPath>
                       </defs>
                       <g clipPath="url(#left-half)">
-                        <rect width="120" height="80" fill="#F8F9FB" />
-                        <rect x="0" y="0" width="30" height="80" fill="#EBEDF0" />
-                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#C8CBD0" />
-                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D5D7DB" />
-                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D5D7DB" />
+                        <rect width="120" height="80" fill="#F9F9F9" />
+                        <rect x="0" y="0" width="30" height="80" fill="#EDEDED" />
+                        <rect x="4" y="8" width="22" height="4" rx="2" fill="#CBCBCB" />
+                        <rect x="4" y="16" width="18" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="22" width="20" height="3" rx="1.5" fill="#D8D8D8" />
+                        <rect x="4" y="28" width="16" height="3" rx="1.5" fill="#D8D8D8" />
                         <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
-                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E2E4E7" />
-                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D5D7DB" />
-                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E2E4E7" />
+                        <rect x="42" y="16" width="50" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="24" width="66" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="30" width="60" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="36" width="55" height="3" rx="1.5" fill="#E5E5E5" />
+                        <rect x="42" y="46" width="40" height="4" rx="2" fill="#D8D8D8" />
+                        <rect x="42" y="54" width="66" height="3" rx="1.5" fill="#E5E5E5" />
                       </g>
                       <g clipPath="url(#right-half)">
                         <rect width="120" height="80" fill="#0F1117" />
@@ -5136,6 +4926,9 @@ const Settings: React.FC<SettingsProps> = ({
       case 'appearance':
         return renderAppearanceSettings();
 
+      case 'desktopCompanion':
+        return <DesktopCompanionSettings />;
+
       case 'email':
         return <EmailSkillConfig />;
 
@@ -5346,6 +5139,8 @@ const Settings: React.FC<SettingsProps> = ({
                           : i18nService.t('openClawRepairConfirmAction')}
                       </button>
                     </div>
+
+                    <OpenClawUserConfigRow />
 
                     {openClawDataBackupResult && (
                       <div className="flex flex-col gap-3 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
@@ -5771,8 +5566,8 @@ const Settings: React.FC<SettingsProps> = ({
             setIsTestResultModalOpen={setIsTestResultModalOpen}
             importInputRef={importInputRef}
             handleImportProvidersClick={handleImportProvidersClick}
-            handleExportProviders={handleExportProviders}
-            handleImportProviders={handleImportProviders}
+            handleExportProviders={providerTransfer.openExport}
+            handleImportProviders={providerTransfer.readImport}
             handleProviderChange={handleProviderChange}
             toggleProviderEnabled={toggleProviderEnabled}
             handleAddCustomProvider={handleAddCustomProvider}
@@ -5822,7 +5617,8 @@ const Settings: React.FC<SettingsProps> = ({
                     {i18nService.t(group.titleKey)}
                   </div>
                   {group.commands.map((command, commandIndex) => {
-                    const value = shortcuts[command.key] ?? '';
+                    const value = shortcutBindings[command.key] ?? '';
+                    const isQuickPanel = command.key === SettingsShortcutAction.QuickPanel;
                     const commandLabel = getShortcutCommandText(command, 'labelKey');
                     return (
                       <div
@@ -5838,6 +5634,11 @@ const Settings: React.FC<SettingsProps> = ({
                           <div className="mt-0.5 line-clamp-2 text-xs text-secondary">
                             {getShortcutCommandText(command, 'descriptionKey')}
                           </div>
+                          {isQuickPanel && (companionLoadError || companionState?.shortcutUnavailable) && (
+                            <p role="alert" className="mt-1 text-xs text-red-500">
+                              {i18nService.t(companionLoadError ? 'desktopCompanionRequestFailed' : 'desktopCompanionShortcutUnavailable')}
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center justify-end gap-2">
                           {command.inputType === 'send' ? (
@@ -5849,6 +5650,8 @@ const Settings: React.FC<SettingsProps> = ({
                             <ShortcutRecorder
                               value={value}
                               label={commandLabel}
+                              global={isQuickPanel}
+                              disabled={isSaving || (isQuickPanel && !companionState)}
                               onChange={(nextValue) => handleShortcutChange(command.key, nextValue)}
                             />
                           )}
@@ -5856,6 +5659,7 @@ const Settings: React.FC<SettingsProps> = ({
                             <button
                               type="button"
                               onClick={() => handleShortcutChange(command.key, '')}
+                              disabled={isSaving || (isQuickPanel && !companionState)}
                               title={i18nService.t('shortcutClear')}
                               aria-label={i18nService.t('shortcutClear')}
                               className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
@@ -5945,6 +5749,7 @@ const Settings: React.FC<SettingsProps> = ({
                   )}
                 </div>
               </div>
+              {showOpenSourceEntries && <AboutOpenSourceRows onAction={reportAboutOpenSourceAction} />}
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 border-b border-border">
                 <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutContactEmail')}</span>
                 <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
@@ -6014,6 +5819,8 @@ const Settings: React.FC<SettingsProps> = ({
               )}
             </div>
 
+            {showOpenSourceEntries && <AboutOpenSourceStarPrompt onAction={reportAboutOpenSourceAction} />}
+
             {/* Footer */}
             <div className="mt-auto w-full pt-14 pb-2 flex flex-col items-center">
               <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm text-secondary">
@@ -6075,19 +5882,27 @@ const Settings: React.FC<SettingsProps> = ({
             <h2 className="text-lg font-semibold text-foreground">{i18nService.t('settings')}</h2>
           </div>
           <nav className="flex flex-col gap-0.5 px-3 pb-4">
-            {sidebarTabs.map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => handleTabChange(tab.key)}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
-                  activeTab === tab.key
-                    ? 'bg-primary-muted text-primary'
-                    : 'text-secondary hover:text-foreground hover:bg-surface-raised'
-                }`}
-              >
-                <span className="shrink-0">{tab.icon}</span>
-                <span className="min-w-0 truncate">{tab.label}</span>
-              </button>
+            {sidebarTabs.map((tab, index) => (
+              <React.Fragment key={tab.key}>
+                {(tab.key === 'about' || (index === sidebarTabs.length - 1 && !sidebarTabs.some(item => item.key === 'about'))) && (
+                  <button type="button" onClick={() => setFeedbackOpen(true)} className="flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground">
+                    <ChatBubbleLeftIcon className="h-5 w-5 shrink-0" />
+                    {i18nService.t('feedbackTitle')}
+                  </button>
+                )}
+                <button
+                  key={tab.key}
+                  onClick={() => handleTabChange(tab.key)}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
+                    activeTab === tab.key
+                      ? 'bg-primary-muted text-primary'
+                      : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                  }`}
+                >
+                  <span className="shrink-0">{tab.icon}</span>
+                  <span className="min-w-0 truncate">{tab.label}</span>
+                </button>
+              </React.Fragment>
             ))}
           </nav>
         </div>
@@ -6162,6 +5977,15 @@ const Settings: React.FC<SettingsProps> = ({
 
         </div>
 
+        {providerTransfer.dialog && (
+          <ProviderTransferDialog
+            state={providerTransfer.dialog}
+            busy={providerTransfer.busy}
+            onClose={providerTransfer.close}
+            onSubmit={providerTransfer.submit}
+          />
+        )}
+
         <ModelEditorDialog
           activeProvider={activeProvider}
           isAddingModel={isAddingModel}
@@ -6176,6 +6000,8 @@ const Settings: React.FC<SettingsProps> = ({
           setNewModelSupportsThinking={setNewModelSupportsThinking}
           newModelContextWindow={newModelContextWindow}
           setNewModelContextWindow={setNewModelContextWindow}
+          newModelMaxTokens={newModelMaxTokens}
+          setNewModelMaxTokens={setNewModelMaxTokens}
           newModelCustomParams={newModelCustomParams}
           setNewModelCustomParams={setNewModelCustomParams}
           activeProviderConfig={providers[activeProvider]}
@@ -6492,6 +6318,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
+          {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} />}
       </SkinPresentationScope>
     </Modal>
   );

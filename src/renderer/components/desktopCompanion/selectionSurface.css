@@ -1,0 +1,248 @@
+/*
+ * Selection toolbar, its menu, and the answer, translate and read-aloud cards.
+ * Neutral surfaces with near-black primary controls, like the main window;
+ * a small LobsterAI mark identifies the result cards.
+ */
+
+.sel-surface {
+  --s-bg: #ffffff;
+  --s-fill: rgba(0, 0, 0, 0.045);
+  --s-fill-strong: rgba(0, 0, 0, 0.08);
+  --s-field: #f4f4f5;
+  --s-line: rgba(0, 0, 0, 0.12);
+  --s-line-strong: rgba(0, 0, 0, 0.2);
+  --s-divider: rgba(0, 0, 0, 0.08);
+  --s-ink: #1a1a1a;
+  --s-ink-2: #545454;
+  --s-ink-3: #8a8a8a;
+  --s-ink-4: #b8b8b8;
+  --s-primary: #1a1a1a;
+  --s-primary-ink: #ffffff;
+  --s-primary-hover: #3d3d3d;
+  --s-accent: #3b82f6;
+  --s-ok: #16a34a;
+  --s-danger: #dc4545;
+  /* Fits inside --surface-pad so the transparent window never clips it. */
+  --s-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 16px rgba(0, 0, 0, 0.1);
+  /* The toolbar and its menu float over any page, often a white one: a tinted fill and a firmer edge keep them visible. */
+  --s-bar-bg: #f3f3f5;
+  --s-bar-line: rgba(0, 0, 0, 0.14);
+  --s-bar-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 6px 16px -2px rgba(0, 0, 0, 0.22);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  color: var(--s-ink);
+  font-size: 13px;
+}
+:root[data-appearance="dark"] .sel-surface {
+  --s-bg: #2b2b2e;
+  --s-fill: rgba(255, 255, 255, 0.07);
+  --s-fill-strong: rgba(255, 255, 255, 0.12);
+  --s-field: rgba(255, 255, 255, 0.06);
+  --s-line: rgba(255, 255, 255, 0.13);
+  --s-line-strong: rgba(255, 255, 255, 0.24);
+  --s-divider: rgba(255, 255, 255, 0.09);
+  --s-ink: #f1f1f2;
+  --s-ink-2: #bcbcc1;
+  --s-ink-3: #8d8d93;
+  --s-ink-4: #5f5f66;
+  --s-primary: #f1f1f2;
+  --s-primary-ink: #1a1a1a;
+  --s-primary-hover: #ffffff;
+  --s-accent: #60a5fa;
+  --s-ok: #4ade80;
+  --s-danger: #ff7b7b;
+  --s-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 16px rgba(0, 0, 0, 0.45);
+  --s-bar-bg: #323236;
+  --s-bar-line: rgba(255, 255, 255, 0.16);
+  --s-bar-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 6px 16px -2px rgba(0, 0, 0, 0.55);
+}
+.sel-surface :focus-visible { outline: 2px solid color-mix(in srgb, var(--s-accent) 60%, transparent); outline-offset: 1px; }
+.sel-surface button:disabled { opacity: 1; color: var(--s-ink-4); }
+
+/* ── Toolbar ───────────────────────────────────────────── */
+
+/* The window reserves menu space from the start, so opening it never moves the toolbar. */
+.sel-stack {
+  position: absolute; left: var(--surface-pad); top: var(--surface-pad);
+}
+.sel-surface[data-menu="up"] .sel-stack { top: auto; bottom: var(--surface-pad); }
+.sel-toolbar {
+  display: flex; align-items: center; gap: 6px; width: max-content; height: 48px; padding: 8px;
+  background: var(--s-bar-bg); border: 1px solid var(--s-bar-line); border-radius: 12px; box-shadow: var(--s-bar-shadow);
+  /* Continuous top/bottom rails and the spaces between actions move the native window. */
+  -webkit-app-region: drag; cursor: default; user-select: none;
+  animation: sel-in 0.14s cubic-bezier(0.2, 0, 0, 1);
+}
+.sel-toolbar button { -webkit-app-region: no-drag; cursor: pointer; }
+.sel-tool {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border-radius: 7px;
+  color: var(--s-ink); font-size: 14px; font-weight: 500; line-height: 1; white-space: nowrap; transition: background-color 0.12s;
+}
+.sel-tool svg { width: 18px; height: 18px; color: var(--s-ink); stroke-width: 1.8; transition: color 0.12s, transform 0.15s; }
+.sel-tool:hover { background: var(--s-fill); }
+.sel-tool:active { background: var(--s-fill-strong); }
+.sel-tool[data-done="true"], .sel-tool[data-done="true"] svg { color: var(--s-ok); }
+/* Stacked labels: the wider one sets the width, only the current one shows. */
+.sel-swap { display: inline-grid; }
+.sel-swap > span { grid-area: 1 / 1; }
+.sel-swap > span[aria-hidden="true"] { visibility: hidden; }
+.sel-sep { width: 1px; height: 18px; margin: 0 3px; background: var(--s-line); }
+.sel-more { width: 30px; padding: 0; justify-content: center; }
+.sel-more svg { width: 16px; height: 16px; stroke-width: 2; }
+.sel-more[data-active="true"] { background: var(--s-fill-strong); }
+
+.sel-copy-notice { width: 580px; max-width: calc(100vw - var(--surface-pad) * 2); gap: 8px; padding: 4px 10px; }
+.sel-copy-notice > svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--s-danger); }
+.sel-copy-notice > span { flex: 1; min-width: 0; font-size: 12px; line-height: 16px; }
+
+.sel-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); width: 200px; padding: 4px;
+  background: var(--s-bar-bg); border: 1px solid var(--s-bar-line); border-radius: 12px; box-shadow: var(--s-bar-shadow);
+  animation: sel-menu-in 0.12s cubic-bezier(0.2, 0, 0, 1);
+}
+.sel-surface[data-menu="up"] .sel-menu { top: auto; bottom: calc(100% + 6px); }
+.sel-menu-group[data-divided="true"] { margin-top: 4px; padding-top: 4px; border-top: 0.5px solid var(--s-line); }
+.sel-menu-item {
+  display: flex; align-items: center; gap: 9px; width: 100%; height: 32px; padding: 0 8px; border-radius: 8px;
+  color: var(--s-ink); font-size: 14px; text-align: left; white-space: nowrap; transition: background-color 0.1s;
+}
+.sel-menu-item span { overflow: hidden; text-overflow: ellipsis; }
+.sel-menu-item svg { width: 17px; height: 17px; color: var(--s-ink); stroke-width: 1.7; }
+.sel-menu-item:hover { background: var(--s-fill); }
+.sel-menu-item:active { background: var(--s-fill-strong); }
+.sel-menu-item[data-secondary="true"] { color: var(--s-ink-2); }
+.sel-menu-item[data-secondary="true"] svg { color: var(--s-ink-3); }
+
+/* ── Cards ─────────────────────────────────────────────── */
+
+.sel-card {
+  position: absolute; left: var(--surface-pad); top: var(--surface-pad);
+  /* On a screen shorter than the card, the main process sends a lower max-height; the card scrolls inside it. */
+  width: 400px; max-height: 600px; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--s-bg); border: 0.5px solid var(--s-line); border-radius: 14px; box-shadow: var(--s-shadow);
+  animation: sel-card-in 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+/* The title bar moves the window. */
+.sel-head {
+  position: relative; display: flex; align-items: center; gap: 2px; flex-shrink: 0; height: 44px; padding: 0 8px 0 12px;
+  -webkit-app-region: drag; user-select: none;
+}
+.sel-head-grip {
+  position: absolute; top: 2px; left: 50%; width: 18px; height: 18px; transform: translateX(-50%);
+  color: var(--s-ink-3); stroke-width: 1.8; pointer-events: none;
+}
+.sel-head button, .sel-head select, .sel-head label { -webkit-app-region: no-drag; }
+.sel-head-icon { width: 16px; height: 16px; margin-right: 7px; flex-shrink: 0; color: var(--s-ink-2); stroke-width: 1.7; }
+.sel-head-brand { display: inline-flex; width: 20px; height: 20px; margin-right: 7px; flex-shrink: 0; opacity: 0.9; }
+.sel-head-title { color: var(--s-ink); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.sel-head-fill { flex: 1; }
+.sel-icon {
+  width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; border-radius: 7px;
+  color: var(--s-ink-3); transition: background-color 0.12s, color 0.12s;
+}
+.sel-icon svg { width: 16px; height: 16px; stroke-width: 1.6; }
+.sel-icon:hover:not(:disabled) { background: var(--s-fill); color: var(--s-ink); }
+.sel-icon:active:not(:disabled) { background: var(--s-fill-strong); }
+.sel-icon[data-on="true"] { color: var(--s-ink); }
+.sel-icon[data-done="true"] { color: var(--s-ok); }
+
+.sel-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 16px 12px; overflow-wrap: anywhere; scrollbar-width: thin; }
+.sel-scroll::-webkit-scrollbar { width: 6px; }
+.sel-scroll::-webkit-scrollbar-thumb { border-radius: 3px; background: transparent; }
+.sel-scroll:hover::-webkit-scrollbar-thumb { background: var(--s-fill-strong); }
+
+/* The selected text: clamped until clicked when there is hidden content. */
+.sel-quote {
+  margin: 0 0 12px; padding: 1px 0 1px 10px; border-left: 2px solid var(--s-line-strong);
+  color: var(--s-ink-3); font-size: 12.5px; line-height: 1.6;
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+  cursor: auto; user-select: text; transition: color 0.12s;
+}
+.sel-quote[data-expandable="true"] { cursor: pointer; }
+.sel-quote[data-expandable="true"]:hover { color: var(--s-ink-2); }
+.sel-quote[data-expanded="true"] { display: block; max-height: 160px; overflow-y: auto; white-space: pre-wrap; cursor: auto; scrollbar-width: thin; }
+
+.sel-markdown { color: var(--s-ink); font-size: 14px; line-height: 1.7; user-select: text; }
+.sel-markdown > :first-child { margin-top: 0; }
+.sel-markdown > :last-child { margin-bottom: 0; }
+.sel-markdown + .sel-markdown { margin-top: 10px; }
+.sel-markdown p { margin: 0 0 8px; }
+.sel-markdown ul, .sel-markdown ol { margin: 0 0 8px; padding-left: 20px; }
+.sel-markdown li { margin: 3px 0; }
+.sel-markdown li::marker { color: var(--s-ink-3); }
+.sel-markdown strong { font-weight: 600; }
+.sel-markdown h1, .sel-markdown h2, .sel-markdown h3, .sel-markdown h4 { margin: 12px 0 6px; font-size: 14px; font-weight: 600; }
+.sel-markdown code { padding: 1px 5px; border-radius: 5px; background: var(--s-fill); font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.sel-markdown pre { margin: 0 0 8px; padding: 10px 12px; overflow-x: auto; border-radius: 8px; background: var(--s-field); }
+.sel-markdown pre code { padding: 0; background: none; }
+.sel-markdown a { color: var(--s-accent); text-decoration: none; }
+.sel-markdown a:hover { text-decoration: underline; }
+.sel-markdown blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--s-line-strong); color: var(--s-ink-2); }
+.sel-markdown table { margin: 6px 0 10px; border-collapse: collapse; font-size: 12.5px; }
+.sel-markdown th, .sel-markdown td { padding: 5px 8px; border: 0.5px solid var(--s-line); }
+.sel-markdown th { background: var(--s-field); font-weight: 600; }
+.sel-markdown hr { margin: 12px 0; border: 0; border-top: 0.5px solid var(--s-divider); }
+/* While an answer streams, a caret follows its last line. */
+.sel-markdown[data-streaming] > :not(ol):not(ul):not(pre):not(table):last-child::after,
+.sel-markdown[data-streaming] > :is(ol, ul):last-child > li:last-child::after,
+.sel-caret {
+  content: ""; display: inline-block; width: 2px; height: 1.05em; margin-left: 2px; vertical-align: -0.16em;
+  border-radius: 1px; background: var(--s-ink-2); animation: sel-caret 1s steps(2, start) infinite;
+}
+
+.sel-question {
+  width: fit-content; max-width: 88%; margin: 14px 0 10px auto; padding: 7px 11px; border-radius: 12px 12px 4px 12px;
+  background: var(--s-field); color: var(--s-ink); font-size: 13px; line-height: 1.55; white-space: pre-wrap; user-select: text;
+}
+.sel-thinking { display: flex; align-items: center; gap: 8px; margin: 2px 0; color: var(--s-ink-3); font-size: 13px; line-height: 1.7; }
+.sel-dots { display: inline-flex; gap: 3px; }
+.sel-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: sel-dots 1.1s ease-in-out infinite; }
+.sel-dots i:nth-child(2) { animation-delay: 0.15s; }
+.sel-dots i:nth-child(3) { animation-delay: 0.3s; }
+.sel-error {
+  display: flex; align-items: flex-start; gap: 7px; margin: 8px 0 2px; padding: 8px 10px; border-radius: 9px;
+  background: var(--s-field); color: var(--s-ink-2); font-size: 12.5px; line-height: 1.55;
+}
+.sel-error svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; color: var(--s-danger); stroke-width: 1.7; }
+.sel-error span { flex: 1; min-width: 0; }
+.sel-error button { flex-shrink: 0; color: var(--s-ink); font-weight: 500; text-decoration: underline; text-underline-offset: 2px; }
+
+/* Under the newest answer: quiet icon actions, and the hand-off to a task at the end. */
+.sel-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; padding: 0 10px 4px; }
+.sel-action {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 7px;
+  color: var(--s-ink-2); font-size: 12.5px; white-space: nowrap; transition: background-color 0.12s, color 0.12s;
+}
+.sel-action svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.sel-action:hover:not(:disabled) { background: var(--s-fill); color: var(--s-ink); }
+.sel-action-end { margin-left: auto; }
+
+.sel-composer { flex-shrink: 0; padding: 4px 12px 12px; }
+.sel-field {
+  display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 5px 0 12px; border-radius: 12px;
+  background: var(--s-field); border: 0.5px solid transparent; transition: background-color 0.15s, border-color 0.15s;
+}
+.sel-field:focus-within { background: var(--s-bg); border-color: var(--s-line-strong); }
+.sel-field input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--s-ink); font-size: 13px; }
+.sel-field input:focus-visible { outline: none; }
+.sel-field input::placeholder { color: var(--s-ink-3); }
+.sel-field input:disabled { cursor: default; }
+.sel-field input:disabled::placeholder { color: var(--s-ink-4); }
+.sel-send {
+  width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%;
+  background: var(--s-primary); color: var(--s-primary-ink); transition: background-color 0.15s, transform 0.1s;
+}
+.sel-send svg { width: 15px; height: 15px; }
+.sel-send:hover:not(:disabled) { background: var(--s-primary-hover); }
+.sel-send:active:not(:disabled) { transform: scale(0.94); }
+.sel-surface .sel-send:disabled { background: var(--s-fill-strong); color: var(--s-ink-4); }
+.sel-stop-glyph { display: block; width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
+.sel-action .sel-stop-glyph { width: 8px; height: 8px; margin: 0 3px; }
+
+@keyframes sel-in { from { opacity: 0; transform: translateY(3px); } }
+/* No scale: the card measures itself to size its window. */
+@keyframes sel-card-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes sel-menu-in { from { opacity: 0; } }
+@keyframes sel-caret { to { opacity: 0; } }
+@keyframes sel-dots { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }

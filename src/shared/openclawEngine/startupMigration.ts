@@ -29,4 +29,6 @@ export interface OpenClawStartupMigrationReport {
   notices: string[];
   warnings: string[];
   remainingPaths: string[];
+  /** Legacy locations the owners inspected, present or not (absent from older helper builds). */
+  probePaths?: string[];
 }

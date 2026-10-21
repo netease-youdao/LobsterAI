@@ -213,6 +213,17 @@ test('gateway: heap OOM is not classified as a generic disconnect', () => {
   )).toBe('coworkErrorGatewayHeapOutOfMemory');
 });
 
+test('gateway: a repointed workspace folder has a dedicated recovery message', () => {
+  for (const error of [
+    'Error: Error: workspace path alias points to a different current target',
+    'workspace path aliases resolve to conflicting state',
+    'workspace path alias conflicts with canonical state',
+  ]) {
+    expect(classifyError(error)).toBe(CoworkErrorI18nKey.WorkspaceAliasRepointed);
+  }
+  expect(classifyError('workspace path alias key collision')).toBe('workspace path alias key collision');
+});
+
 test('gateway: session patch timeout before send', () => {
   expect(classifyError('gateway request timeout for sessions.patch')).toBe('coworkGatewaySessionSyncTimeout');
 });
@@ -319,6 +330,21 @@ test('network: provider network request failed', () => {
 
 test('network: socket hang up', () => {
   expect(classifyError('request failed: socket hang up')).toBe('coworkErrorNetworkError');
+});
+
+test('network: Chromium net error relayed by the token proxy as HTTP 502', () => {
+  expect(classifyError(
+    'HTTP 502: LobsterAI proxy upstream request failed: net::ERR_HTTP2_PING_FAILED',
+  )).toBe('coworkErrorNetworkError');
+  expect(classifyError(
+    '502 LobsterAI proxy upstream request failed: net::ERR_PROXY_CONNECTION_FAILED',
+  )).toBe('coworkErrorNetworkError');
+});
+
+test('network: Chromium certificate error is not mistaken for an invalid credential', () => {
+  expect(classifyError(
+    'HTTP 502: LobsterAI proxy upstream request failed: net::ERR_CERT_AUTHORITY_INVALID',
+  )).toBe('coworkErrorNetworkError');
 });
 
 // ==================== Server errors ====================

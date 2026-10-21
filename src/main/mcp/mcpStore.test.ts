@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { McpStore } from './mcpStore';
+import { McpStore, normalizeMcpToolFilter } from './mcpStore';
 
 describe('McpStore', () => {
   let db: Database.Database | undefined;
@@ -49,6 +49,31 @@ describe('McpStore', () => {
     db = undefined;
   });
 
+  test('keeps connector credentials and timeouts, and drops credentials on a switch to stdio', () => {
+    const server = store.createServer({
+      name: 'baidu-maps',
+      description: '',
+      transportType: 'http',
+      url: 'https://mcp.map.baidu.com/mcp?ak=abc',
+      tokenValues: { BAIDU_MAP_AK: 'abc', IGNORED: 42 as unknown as string },
+      requestTimeoutMs: 60000,
+      connectionTimeoutMs: -1,
+      isBuiltIn: true,
+      registryId: 'baidu-maps',
+    });
+    expect(server.tokenValues).toEqual({ BAIDU_MAP_AK: 'abc' });
+    expect(server.requestTimeoutMs).toBe(60000);
+    expect(server.connectionTimeoutMs).toBeUndefined();
+
+    const updated = store.updateServer(server.id, { tokenValues: { BAIDU_MAP_AK: 'next' } });
+    expect(updated?.tokenValues).toEqual({ BAIDU_MAP_AK: 'next' });
+    expect(updated?.requestTimeoutMs).toBe(60000);
+
+    const stdio = store.updateServer(server.id, { transportType: 'stdio', command: 'node' });
+    expect(stdio?.tokenValues).toBeUndefined();
+    expect(stdio?.url).toBeUndefined();
+  });
+
   test('clears remote headers when update passes an empty headers object', () => {
     const server = store.createServer({
       name: 'remote',
@@ -65,6 +90,49 @@ describe('McpStore', () => {
 
     expect(updated?.headers).toBeUndefined();
     expect(updated?.url).toBe('https://mcp.example.com');
+  });
+
+  test('roundtrips toolFilter and supportsParallelToolCalls, surviving unrelated updates', () => {
+    const server = store.createServer({
+      name: 'docs-server',
+      description: '',
+      transportType: 'http',
+      url: 'https://mcp.example.com/mcp',
+      toolFilter: { include: ['doc.get', ' sheet.* ', ''], exclude: [] },
+      supportsParallelToolCalls: true,
+    });
+
+    // Normalized on write: names are trimmed, blanks dropped, and an empty exclude list is not stored.
+    expect(server.toolFilter).toEqual({ include: ['doc.get', 'sheet.*'] });
+    expect(server.supportsParallelToolCalls).toBe(true);
+
+    // Updating an unrelated field must keep both knobs; updateServer rebuilds the record field by field.
+    const updated = store.updateServer(server.id, { description: 'renamed' });
+    expect(updated?.toolFilter).toEqual({ include: ['doc.get', 'sheet.*'] });
+    expect(updated?.supportsParallelToolCalls).toBe(true);
+
+    // An all-empty filter clears the setting.
+    const cleared = store.updateServer(server.id, { toolFilter: { include: [], exclude: [] } });
+    expect(cleared?.toolFilter).toBeUndefined();
+  });
+
+  test('roundtrips the OAuth auth mode and clears it on demand or when switching to stdio', () => {
+    const server = store.createServer({
+      name: 'oauth-server',
+      description: '',
+      transportType: 'http',
+      url: 'https://mcp.example.com/mcp',
+      auth: 'oauth',
+    });
+    expect(server.auth).toBe('oauth');
+
+    // Unrelated updates keep the mode; an explicit `none` turns it off.
+    expect(store.updateServer(server.id, { description: 'renamed' })?.auth).toBe('oauth');
+    expect(store.updateServer(server.id, { auth: 'none' })?.auth).toBeUndefined();
+
+    store.updateServer(server.id, { auth: 'oauth' });
+    const stdio = store.updateServer(server.id, { transportType: 'stdio', command: 'npx', args: ['-y', 'x'] });
+    expect(stdio?.auth).toBeUndefined();
   });
 
   test('drops stale remote fields when switching to stdio', () => {
@@ -117,5 +185,19 @@ describe('McpStore', () => {
     expect(updated?.command).toBeUndefined();
     expect(updated?.args).toBeUndefined();
     expect(updated?.env).toBeUndefined();
+  });
+});
+
+// Pure function, independent of sqlite: still runs when the better-sqlite3 native
+// binding is built for the Electron ABI and the store tests above are skipped.
+describe('normalizeMcpToolFilter', () => {
+  test('trims names, drops empties, and collapses an all-empty filter to undefined', () => {
+    expect(normalizeMcpToolFilter(undefined)).toBeUndefined();
+    expect(normalizeMcpToolFilter({})).toBeUndefined();
+    expect(normalizeMcpToolFilter({ include: ['', '  '], exclude: [] })).toBeUndefined();
+    expect(normalizeMcpToolFilter({ include: [' doc.get ', 'sheet.*', ''] }))
+      .toEqual({ include: ['doc.get', 'sheet.*'] });
+    expect(normalizeMcpToolFilter({ exclude: ['dangerous_delete'] }))
+      .toEqual({ exclude: ['dangerous_delete'] });
   });
 });

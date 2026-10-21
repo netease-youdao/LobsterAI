@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, net } from 'electron';
 import extractZip from 'extract-zip';
 import fs from 'fs';
 import http from 'http';
@@ -7,25 +7,29 @@ import https from 'https';
 import path from 'path';
 
 import {
-  ComputerUseKitBundle,
-  ComputerUseKitBundleIntegrity,
   ComputerUseKitId,
 } from '../../../shared/computerUse/constants';
 import type {
   InstalledKitRecord,
   KitSkillMetadata,
   KitStoreKey,
+  KitStoreResponse,
   LocalizedText,
 } from '../../../shared/kit/constants';
-import { KitStoreKey as KitStoreKeyValue } from '../../../shared/kit/constants';
+import { KitIpcChannel, KitStoreKey as KitStoreKeyValue } from '../../../shared/kit/constants';
 import {
   buildComputerUseMarketplaceKit,
   buildInstalledComputerUseKitRecord,
+  type ComputerUseKitBundleDescriptor,
+  getCurrentComputerUseKitBundleDescriptor,
   getInstalledKitsMap,
   isComputerUseKitSupportedPlatform,
+  promptComputerUseAccessibilityPermission,
   removeComputerUseSkillArtifacts,
+  resolveBundledComputerUseKitArchivePath,
 } from '../../computerUse/computerUseKit';
 import {
+  getComputerUseSupportedPlatformLabel,
   installComputerUseRuntime,
   uninstallComputerUseRuntime,
 } from '../../computerUse/computerUseRuntime';
@@ -38,6 +42,7 @@ import type { SqliteStore } from '../../sqliteStore';
 const KITS_INSTALLED_KEY: KitStoreKey = KitStoreKeyValue.Installed;
 const SKILLS_DIR_NAME = 'SKILLs';
 const SKILL_FILE_NAME = 'SKILL.md';
+const KIT_STORE_REQUEST_TIMEOUT_MS = 10_000;
 
 function downloadBuffer(url: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -62,6 +67,19 @@ function downloadBuffer(url: string): Promise<Buffer> {
     req.on('error', reject);
     req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
   });
+}
+
+async function loadComputerUseKitBundle(
+  descriptor: ComputerUseKitBundleDescriptor,
+): Promise<Buffer> {
+  const bundledArchivePath = resolveBundledComputerUseKitArchivePath(descriptor);
+  if (bundledArchivePath) {
+    return fs.promises.readFile(bundledArchivePath);
+  }
+  if (descriptor.archiveName) {
+    throw new Error(`Computer Use kit bundle archive is not bundled: ${descriptor.archiveName}`);
+  }
+  return downloadBuffer(descriptor.bundle);
 }
 
 export interface KitHandlerDeps {
@@ -215,27 +233,17 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
   );
 
   // Fetch kit store catalog from overmind
-  ipcMain.handle('kits:fetchStore', async () => {
+  ipcMain.handle(KitIpcChannel.FetchStore, async (): Promise<KitStoreResponse> => {
     const url = getKitStoreUrl();
     console.log(`[KitStore] fetching from: ${url}`);
     try {
-      const https = await import('https');
-      const data = await new Promise<string>((resolve, reject) => {
-        const req = https.get(url, { timeout: 10000 }, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            res.resume();
-            return;
-          }
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk: string) => { body += chunk; });
-          res.on('end', () => resolve(body));
-          res.on('error', reject);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+      const response = await net.fetch(url, {
+        signal: AbortSignal.timeout(KIT_STORE_REQUEST_TIMEOUT_MS),
       });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.text();
       return {
         success: true,
         data: skinPackKitLifecycle.appendToStoreResponse(data, getAdditionalBuiltInKits()),
@@ -243,9 +251,9 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
     } catch (error) {
       console.error('[KitStore] fetch failed:', error);
       return {
-        success: true,
+        success: false,
         data: skinPackKitLifecycle.buildOfflineStoreResponse(getAdditionalBuiltInKits()),
-        warning: error instanceof Error ? error.message : 'Failed to fetch kit store',
+        error: error instanceof Error ? error.message : 'Failed to fetch kit store',
       };
     }
   });
@@ -278,11 +286,14 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
     let skillWatchingStopped = false;
     let skillWatchingRestarted = false;
     try {
-      if (isComputerUseKit && bundleUrl !== ComputerUseKitBundle.BuiltIn) {
-        throw new Error('Computer Use kit bundle URL does not match the built-in catalog entry');
+      const computerUseBundleDescriptor = isComputerUseKit
+        ? getCurrentComputerUseKitBundleDescriptor()
+        : null;
+      if (isComputerUseKit && !computerUseBundleDescriptor) {
+        throw new Error(`Computer Use kit is only available on ${getComputerUseSupportedPlatformLabel()}.`);
       }
-      if (isComputerUseKit && !isComputerUseKitSupportedPlatform()) {
-        throw new Error('Computer Use kit is only available on Windows x64.');
+      if (computerUseBundleDescriptor && bundleUrl !== computerUseBundleDescriptor.bundle) {
+        throw new Error('Computer Use kit bundle URL does not match the built-in catalog entry');
       }
       const skinPackInstallResult = await skinPackKitLifecycle.installIfHandled({ kitId, bundleUrl });
       if (skinPackInstallResult !== undefined) {
@@ -291,12 +302,14 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
 
       // 1. Download zip
       tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-kit-'));
-      const buffer = await downloadBuffer(bundleUrl);
-      if (isComputerUseKit) {
-        if (buffer.length !== ComputerUseKitBundleIntegrity.SizeBytes) {
+      const buffer = computerUseBundleDescriptor
+        ? await loadComputerUseKitBundle(computerUseBundleDescriptor)
+        : await downloadBuffer(bundleUrl);
+      if (computerUseBundleDescriptor) {
+        if (buffer.length !== computerUseBundleDescriptor.sizeBytes) {
           throw new Error('Computer Use kit bundle size verification failed');
         }
-        if (sha256Buffer(buffer) !== ComputerUseKitBundleIntegrity.Sha256) {
+        if (sha256Buffer(buffer) !== computerUseBundleDescriptor.sha256) {
           throw new Error('Computer Use kit bundle checksum verification failed');
         }
       }
@@ -394,14 +407,17 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
       getStore().set(KITS_INSTALLED_KEY, installedMap);
 
       if (isComputerUseKit) {
+        // The kit only adds an MCP server and a skill: OpenClaw hot-applies
+        // `mcp` by disposing MCP runtimes, and `skills` needs no reload. A
+        // restart would make the user wait for gateway startup before using it.
         const syncResult = await syncOpenClawConfig({
           reason: 'computer-use-kit-installed',
-          restartGatewayIfRunning: true,
-          expectedImpact: OpenClawConfigImpact.Restart,
+          expectedImpact: OpenClawConfigImpact.Sync,
         });
         if (!syncResult.success) {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use install');
         }
+        promptComputerUseAccessibilityPermission();
       }
 
       // 7. Notify after all installation work and Computer Use config sync are complete.
@@ -477,12 +493,14 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
 
       if (kitId === ComputerUseKitId.BuiltIn) {
         removeComputerUseSkillArtifacts(getStore());
-        await uninstallComputerUseRuntime();
+        // Without the kit record the MCP server is no longer resolved. Applying
+        // that first lets OpenClaw dispose the running helper before its
+        // runtime files are removed, without restarting the gateway.
         const syncResult = await syncOpenClawConfig({
           reason: 'computer-use-kit-uninstalled',
-          restartGatewayIfRunning: true,
-          expectedImpact: OpenClawConfigImpact.Restart,
+          expectedImpact: OpenClawConfigImpact.Sync,
         });
+        await uninstallComputerUseRuntime();
         if (!syncResult.success) {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use uninstall');
         }

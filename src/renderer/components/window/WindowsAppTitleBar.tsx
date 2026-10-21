@@ -10,6 +10,9 @@ interface WindowsAppTitleBarProps {
   isOverlayActive?: boolean;
   isSidebarCollapsed?: boolean;
   sidebarWidth?: number;
+  /** Paint the strip above the sidebar in the sidebar color so the gray
+   * sidebar and the white canvas both run up to the window's top edge. */
+  sidebarColumnVisible?: boolean;
   onToggleSidebar?: () => void;
   onSearch?: () => void;
   onNewChat?: () => void;
@@ -28,6 +31,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   isOverlayActive = false,
   isSidebarCollapsed = false,
   sidebarWidth = 244,
+  sidebarColumnVisible = false,
   onToggleSidebar,
   onSearch,
   onNewChat,
@@ -71,7 +75,10 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   return (
     <div
       data-skin-app-titlebar="true"
-      className="draggable flex h-9 shrink-0 items-center justify-between border-b border-border bg-surface-raised pl-3"
+      className="draggable flex h-9 shrink-0 items-center justify-between bg-background pl-3"
+      style={sidebarColumnVisible
+        ? { backgroundImage: `linear-gradient(to right, var(--lobster-surface-raised) ${sidebarWidth}px, transparent ${sidebarWidth}px)` }
+        : undefined}
     >
       <div
         className={`flex h-full shrink-0 items-center ${isSidebarCollapsed ? 'gap-1' : 'justify-between'}`}
@@ -94,7 +101,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
                 aria-label={sidebarToggleLabel}
                 title={sidebarToggleLabel}
               >
@@ -119,7 +126,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <button
                 type="button"
                 onClick={handleNewChatClick}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
                 aria-label={newChatLabel}
                 title={newChatLabel}
               >

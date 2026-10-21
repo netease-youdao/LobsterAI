@@ -12,10 +12,11 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { getCoworkTurnUsage } from '../../../shared/cowork/llmTurnUsage';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
 import { openPurchase } from '../../features/payment/purchaseEntry';
-import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
+import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
 import { type LogEventAction, LogReporterAction } from '../../services/logReporter';
 import { LowCreditOfferVariant, reportLowCreditPurchaseEvent } from '../../services/lowCreditPurchaseAnalytics';
@@ -44,6 +45,7 @@ import AssistantMessageItem from './AssistantMessageItem';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
+import { buildMediaTaskPresentations, type MediaTaskPresentations } from './mediaTaskPresentation';
 import { MessageCopyButton } from './MessageActionButton';
 import {
   canFoldTurnProcess,
@@ -60,6 +62,7 @@ import {
   formatTurnDuration,
   getActivityIndicatorStatusText,
   getActivityLiveStatusText,
+  getAssistantMessageDisplayText,
   getConsolidatedItemKey,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
@@ -72,6 +75,7 @@ import {
   getTurnActivityFingerprint,
   getTurnAnswerStartIndex,
   getTurnEndTimestamp,
+  getTurnReplyMessageIds,
   getTurnStartTimestamp,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
@@ -81,10 +85,14 @@ import {
   isActivityItemLive,
   isContextCompactionMessage,
   isDuplicateGeneratedVideoAssistantMessage,
+  isModelChangeMessage,
   type ToolGroupItem,
+  withTurnModelPreset,
 } from './messageDisplayUtils';
+import ModelChangeDivider from './ModelChangeDivider';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
+import TurnUsageChip from './TurnUsageChip';
 import { useStreamStall } from './useStreamStall';
 
 const encodeLocalPathForUrl = (filePath: string): string => {
@@ -178,6 +186,9 @@ const ContextCompactionDivider: React.FC<{ label: string; active?: boolean }> = 
 // One tick: the first value the user sees is "1s", counting up naturally.
 const ACTIVITY_TIMER_APPEAR_DELAY_MS = 1000;
 const ACTIVITY_LONG_WAIT_HINT_DELAY_MS = 30_000;
+// A start request normally returns within milliseconds; one still pending
+// after this is waiting for the engine (startup, a busy gateway, config).
+const ACTIVITY_RUN_START_WAIT_HINT_DELAY_MS = 2_000;
 
 // Rotate the phase word while the model is still silent, so the row visibly keeps moving.
 const ACTIVITY_PHASE_INTERVAL_MS = 2200;
@@ -195,13 +206,31 @@ export const ActivityIndicator: React.FC<{
   liveStatusText?: string | null;
   /** Whether the turn has shown anything yet; silent gaps after that read as "working". */
   hasContent?: boolean;
-}> = ({ fingerprint, startTimestamp, statusTextOverride, liveStatusText = null, hasContent = false }) => {
+  /** The task's start request is still in flight, so nothing has reached the model yet. */
+  awaitingRunStart?: boolean;
+}> = ({
+  fingerprint,
+  startTimestamp,
+  statusTextOverride,
+  liveStatusText = null,
+  hasContent = false,
+  awaitingRunStart = false,
+}) => {
   const [isLongWaiting, setIsLongWaiting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [phaseIndex, setPhaseIndex] = useState(0);
+  // Elapsed time is anchored to message timestamps so it survives remounts
+  // (switching sessions/views); until the turn has a timestamp, show no
+  // counter rather than one restarted from zero.
+  const elapsedMs = startTimestamp != null ? Math.max(0, now - startTimestamp) : null;
+  // A start that is still pending after the grace period is waiting for the
+  // engine; calling that "thinking" makes a stalled engine look like a slow model.
+  const awaitingEngine = awaitingRunStart
+    && elapsedMs != null
+    && elapsedMs >= ACTIVITY_RUN_START_WAIT_HINT_DELAY_MS;
   // Waiting for the model's first output: nothing overrides the label, no
   // step is running, and the turn has shown nothing yet.
-  const thinking = !statusTextOverride && !liveStatusText && !isLongWaiting && !hasContent;
+  const thinking = !statusTextOverride && !awaitingEngine && !liveStatusText && !isLongWaiting && !hasContent;
 
   useEffect(() => {
     if (!thinking) {
@@ -232,14 +261,11 @@ export const ActivityIndicator: React.FC<{
     return () => window.clearInterval(intervalId);
   }, []);
 
-  // Elapsed time is anchored to message timestamps so it survives remounts
-  // (switching sessions/views); until the turn has a timestamp, show no
-  // counter rather than one restarted from zero.
-  const elapsedMs = startTimestamp != null ? Math.max(0, now - startTimestamp) : null;
   const phases = getThinkingPhaseLabels();
   // A running step always names itself; the long-wait hint only applies to a
   // silent model, never to a command that is simply taking its time.
   const statusText = statusTextOverride
+    ?? (awaitingEngine ? i18nService.t('coworkActivityWaitEngineReady') : null)
     ?? liveStatusText
     ?? (thinking
       ? phases[phaseIndex % phases.length]
@@ -553,6 +579,7 @@ const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) =>
 
 const AssistantTurnBlock: React.FC<{
   turn: ConversationTurn;
+  mediaTaskPresentations?: MediaTaskPresentations;
   artifacts?: Artifact[];
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
@@ -569,9 +596,13 @@ const AssistantTurnBlock: React.FC<{
   renderToolGroupOverride?: (group: ToolGroupItem) => React.ReactNode;
   showActivityIndicator?: boolean;
   activityStatusOverride?: string | null;
+  /** The session's start request is still in flight (optimistic temp session). */
+  awaitingRunStart?: boolean;
   showCopyButtons?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
+  modelSwitchNoticeMessageId?: string | null;
+  onDismissModelSwitchNotice?: () => void;
   searchTargetMessageId?: string | null;
   /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
   isStreamingTurn?: boolean;
@@ -579,6 +610,7 @@ const AssistantTurnBlock: React.FC<{
   hasRunningSubagents?: boolean;
 }> = ({
   turn,
+  mediaTaskPresentations,
   artifacts,
   resolveLocalFilePath,
   mapDisplayText,
@@ -594,9 +626,12 @@ const AssistantTurnBlock: React.FC<{
   renderToolGroupOverride,
   showActivityIndicator = false,
   activityStatusOverride = null,
+  awaitingRunStart = false,
   showCopyButtons = true,
   completedGoal,
   hiddenSystemMessageId,
+  modelSwitchNoticeMessageId,
+  onDismissModelSwitchNotice,
   searchTargetMessageId,
   isStreamingTurn = false,
   hasRunningSubagents = false,
@@ -613,9 +648,13 @@ const AssistantTurnBlock: React.FC<{
     }),
     [turn.assistantItems, hideCreditQuotaBanner, isStreamingTurn],
   );
+  const taskPresentations = useMemo(
+    () => mediaTaskPresentations ?? buildMediaTaskPresentations([turn]),
+    [mediaTaskPresentations, turn],
+  );
   const consolidatedItems = useMemo(
-    () => consolidateMediaPolling(visibleAssistantItems),
-    [visibleAssistantItems],
+    () => consolidateMediaPolling(visibleAssistantItems, taskPresentations),
+    [visibleAssistantItems, taskPresentations],
   );
   const toolGroupOverrides = useMemo(() => {
     const overrides = new Map<string, React.ReactNode>();
@@ -633,12 +672,16 @@ const AssistantTurnBlock: React.FC<{
   );
   const artifactCards = useMemo(
     () => artifacts
-      ? dedupeArtifactsForDisplay(
+      ? orderArtifactsByReplyReferences(
+          dedupeArtifactsForDisplay(
+            artifacts,
+            { defaultProjectDirectory: localServiceDirectory },
+          ),
           artifacts,
-          { defaultProjectDirectory: localServiceDirectory },
+          getTurnReplyMessageIds(turn),
         )
       : [],
-    [artifacts, localServiceDirectory],
+    [artifacts, localServiceDirectory, turn],
   );
   const visibleArtifactCards = useMemo(() => {
     return artifactCardsExpanded ? artifactCards : artifactCards.slice(0, 3);
@@ -666,7 +709,49 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(false);
   }, [turn.id]);
 
+  const turnStartTimestamp = getTurnStartTimestamp(turn);
+  const turnEndTimestamp = getTurnEndTimestamp(turn);
+  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
+    ? turnEndTimestamp - turnStartTimestamp
+    : null;
+  // The user message may be outside the loaded page of a long turn.
+  const turnUsage = isStreamingTurn
+    ? null
+    : getCoworkTurnUsage(turn.userMessage?.metadata) ?? turn.inheritedTurnUsage?.turnUsage;
+  const turnUsageMessageId = turn.userMessage?.id ?? turn.inheritedTurnUsage?.userMessageId;
+  const turnUsageSlot = showCopyButtons && turnUsage && turnUsageMessageId ? (
+    <TurnUsageChip
+      userMessageId={turnUsageMessageId}
+      turnUsage={turnUsage}
+      durationMs={processDurationMs}
+    />
+  ) : null;
+  // Show usage only with the final visible text reply.
+  let turnUsageReplyId: string | null = null;
+  for (let index = consolidatedItems.length - 1; index >= 0; index--) {
+    const item = consolidatedItems[index];
+    if (item.type === 'tool_group' || item.type === 'media_polling_group') break;
+    if (item.type !== 'assistant' || item.message.metadata?.isThinking
+      || isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) continue;
+    const hasInlineImage = artifacts?.some(artifact => artifact.type === 'image' && artifact.messageId === item.message.id);
+    if (hasInlineImage && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) continue;
+    const content = mapDisplayText ? mapDisplayText(item.message.content) : item.message.content;
+    if (hasText(getAssistantMessageDisplayText(content))) {
+      turnUsageReplyId = item.message.id;
+      break;
+    }
+  }
+
   const renderSystemMessage = (message: CoworkMessage) => {
+    if (isModelChangeMessage(message) && message.metadata?.modelChange) {
+      return (
+        <ModelChangeDivider
+          change={message.metadata.modelChange}
+          showNotice={message.id === modelSwitchNoticeMessageId}
+          onDismissNotice={onDismissModelSwitchNotice}
+        />
+      );
+    }
     if (message.id === hiddenSystemMessageId) {
       return null;
     }
@@ -836,6 +921,13 @@ const AssistantTurnBlock: React.FC<{
         );
       }
 
+      const hasToolGroupAfter = consolidatedItems
+        .slice(index + 1)
+        .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
+      const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
+      const hasAssistantAfter = consolidatedItems
+        .slice(index + 1)
+        .some(laterItem => laterItem.type === 'assistant');
       if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
         return null;
       }
@@ -846,17 +938,11 @@ const AssistantTurnBlock: React.FC<{
       );
       if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
         return (
-          <MediaImageInline key={item.message.id} artifacts={imageArtifacts} />
+          <div key={item.message.id}>
+            <MediaImageInline artifacts={imageArtifacts} />
+          </div>
         );
       }
-
-      const hasToolGroupAfter = consolidatedItems
-        .slice(index + 1)
-        .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
-      const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
-      const hasAssistantAfter = consolidatedItems
-        .slice(index + 1)
-        .some(laterItem => laterItem.type === 'assistant');
 
       return (
         <AssistantMessageItem
@@ -866,8 +952,14 @@ const AssistantTurnBlock: React.FC<{
           mapDisplayText={mapDisplayText}
           showCopyButton={isLastAssistant}
           onFork={isLastAssistant ? onForkMessage : undefined}
-          turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
+          turnMetadata={isLastAssistant
+            ? withTurnModelPreset(
+              item.message.metadata as CoworkMessageMetadata,
+              turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+            )
+            : undefined}
           completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
+          turnUsageSlot={item.message.id === turnUsageReplyId ? turnUsageSlot : null}
           planConfirmationMessageId={planConfirmationMessageId}
           onConfirmPlan={onConfirmPlan}
           onAdjustPlan={onAdjustPlan}
@@ -890,6 +982,7 @@ const AssistantTurnBlock: React.FC<{
         <ToolCallGroup
           key={`tool-${item.group.toolUse.id}`}
           group={item.group}
+          mediaTaskPresentation={taskPresentations.get(item.group.toolUse.id)}
           isLastInSequence={isLastInSequence}
           mapDisplayText={mapDisplayText}
           retainedMediaPollCounts={retainedMediaPollCounts}
@@ -970,11 +1063,6 @@ const AssistantTurnBlock: React.FC<{
   // Tool errors stay on their own step row (Codex app behavior); they do not
   // color this duration line or force the fold open.
   const isProcessExpanded = processExpanded || processContainsSearchTarget;
-  const turnStartTimestamp = getTurnStartTimestamp(turn);
-  const turnEndTimestamp = getTurnEndTimestamp(turn);
-  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
-    ? turnEndTimestamp - turnStartTimestamp
-    : null;
   const processBaseLabel = processDurationMs != null && processDurationMs >= 1000
     ? i18nService.t('coworkTurnProcessDuration').replace('{duration}', formatTurnDuration(processDurationMs))
     : i18nService.t('coworkTurnProcess');
@@ -1009,11 +1097,15 @@ const AssistantTurnBlock: React.FC<{
     return null;
   }
 
+  const hasModelSwitchNotice = consolidatedItems.some(item => item.type === 'system'
+    && item.message.id === modelSwitchNoticeMessageId
+    && isModelChangeMessage(item.message));
+
   return (
-    <div className={`py-2 ${COWORK_DETAIL_GUTTER_CLASS}`}>
+    <div className={`${hasModelSwitchNotice ? 'pb-2' : 'py-2'} ${COWORK_DETAIL_GUTTER_CLASS}`}>
       <div className={COWORK_DETAIL_CONTENT_CLASS}>
         <div className="flex items-start gap-3">
-          <div className="flex-1 min-w-0 py-3 space-y-3">
+          <div className={`flex-1 min-w-0 ${hasModelSwitchNotice ? 'pb-3' : 'py-3'} space-y-3`}>
             {shouldFoldProcess ? (
               <>
                 {/* Unlike step lines, the duration line keeps its arrow: it is
@@ -1044,6 +1136,7 @@ const AssistantTurnBlock: React.FC<{
                 statusTextOverride={activityStatusOverride}
                 liveStatusText={liveStatusText}
                 hasContent={visibleAssistantItems.length > 0}
+                awaitingRunStart={awaitingRunStart}
               />
             )}
             {artifacts && artifacts.length > 0 && (

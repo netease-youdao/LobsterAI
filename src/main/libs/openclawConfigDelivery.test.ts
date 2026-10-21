@@ -1,18 +1,19 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
-  __resetOpenClawConfigDeliveryStateForTests,
   CONFIG_DELIVERY_FALLBACK_REASON_PREFIX,
   DEFERRED_SYNC_REASON_PREFIX,
   deliverOpenClawConfigToGateway,
   isConfigDeliveryFallbackReason,
+  isPersistentConfigDeliveryFailure,
   mergeDeferredGatewayRestartReason,
   OpenClawConfigDeliveryMode,
   type OpenClawConfigRpcClient,
   OpenClawConfigRpcMethod,
   stripPluginIndexManagedKeysFromRawConfig,
 } from './openclawConfigDelivery';
+import { ConfigDiagnosticErrorKind } from './openclawConfigObservation';
 
 const FILE_CONTENT = '{"models":{"providers":{"p":{"models":[{"id":"m-b"}]}}},"meta":{"lastTouchedVersion":"2026.8.1"}}\n';
 
@@ -24,15 +25,18 @@ function createClient(handlers: {
 }): { client: OpenClawConfigRpcClient; calls: RpcCall[] } {
   const calls: RpcCall[] = [];
   let setCalls = 0;
+  let appliedRaw: string | undefined;
   const client: OpenClawConfigRpcClient = {
     request: async <T,>(method: string, params?: unknown): Promise<T> => {
       calls.push({ method, params });
       if (method === OpenClawConfigRpcMethod.Get) {
-        return { hash: handlers.hash ? handlers.hash() : 'hash-1' } as T;
+        return { hash: handlers.hash ? handlers.hash() : 'hash-1', valid: true, raw: appliedRaw ?? '{}', configRevisionHash: 'resolved', appliedConfigHash: 'resolved' } as T;
       }
-      if (method === OpenClawConfigRpcMethod.Set) {
+      if (method === OpenClawConfigRpcMethod.Apply) {
         setCalls += 1;
-        return (handlers.set ? handlers.set(params, setCalls) : { ok: true }) as T;
+        const result = handlers.set ? handlers.set(params, setCalls) : { ok: true };
+        appliedRaw = (params as { raw: string }).raw;
+        return result as T;
       }
       throw new Error(`unexpected method ${method}`);
     },
@@ -51,16 +55,12 @@ function baseInput(overrides: Partial<Parameters<typeof deliverOpenClawConfigToG
   };
 }
 
-beforeEach(() => {
-  __resetOpenClawConfigDeliveryStateForTests();
-});
-
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe('deliverOpenClawConfigToGateway', () => {
-  test('running gateway with healthy rpc acks via config.set and schedules no restart', async () => {
+  test('running gateway with healthy rpc acks via config.apply and schedules no restart', async () => {
     const { client, calls } = createClient({});
     const scheduleDeferredRestart = vi.fn();
     const result = await deliverOpenClawConfigToGateway(baseInput({
@@ -68,10 +68,10 @@ describe('deliverOpenClawConfigToGateway', () => {
       scheduleDeferredRestart,
     }));
 
-    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
     expect(result.restartScheduled).toBe(false);
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
-    expect(calls.map((call) => call.method)).toEqual([OpenClawConfigRpcMethod.Get, OpenClawConfigRpcMethod.Set]);
+    expect(calls.map((call) => call.method)).toEqual([OpenClawConfigRpcMethod.Get, OpenClawConfigRpcMethod.Apply, OpenClawConfigRpcMethod.Get]);
     const setParams = calls[1].params as { raw: string; baseHash?: string };
     expect(setParams.raw).toBe(FILE_CONTENT);
     expect(setParams.baseHash).toBe('hash-1');
@@ -100,12 +100,13 @@ describe('deliverOpenClawConfigToGateway', () => {
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
-    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
     expect(calls.map((call) => call.method)).toEqual([
       OpenClawConfigRpcMethod.Get,
-      OpenClawConfigRpcMethod.Set,
+      OpenClawConfigRpcMethod.Apply,
       OpenClawConfigRpcMethod.Get,
-      OpenClawConfigRpcMethod.Set,
+      OpenClawConfigRpcMethod.Apply,
+      OpenClawConfigRpcMethod.Get,
     ]);
     const retryParams = calls[3].params as { baseHash?: string };
     expect(retryParams.baseHash).toBe('hash-2');
@@ -134,11 +135,11 @@ describe('deliverOpenClawConfigToGateway', () => {
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
-    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
     expect(result.elapsedMs).toBeGreaterThanOrEqual(6_000);
     expect(result.restartScheduled).toBe(false);
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
-    const writes = calls.filter(call => call.method === OpenClawConfigRpcMethod.Set);
+    const writes = calls.filter(call => call.method === OpenClawConfigRpcMethod.Apply);
     expect(writes.length).toBeGreaterThan(2);
     expect(writes.at(-1)?.params).toMatchObject({ baseHash: 'after-model-switch' });
   });
@@ -167,8 +168,8 @@ describe('deliverOpenClawConfigToGateway', () => {
     }));
     await vi.runAllTimersAsync();
 
-    expect((await resultPromise).mode).toBe(OpenClawConfigDeliveryMode.Rpc);
-    const lastWrite = calls.filter(call => call.method === OpenClawConfigRpcMethod.Set).at(-1);
+    expect((await resultPromise).mode).toBe(OpenClawConfigDeliveryMode.Applied);
+    const lastWrite = calls.filter(call => call.method === OpenClawConfigRpcMethod.Apply).at(-1);
     expect(lastWrite?.params).toEqual({
       raw: stripPluginIndexManagedKeysFromRawConfig(migrated),
       baseHash: 'after-migration',
@@ -221,7 +222,7 @@ describe('deliverOpenClawConfigToGateway', () => {
       ensureRpcClient: async () => client,
       scheduleDeferredRestart: undefined,
     }));
-    expect(recheck.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
+    expect(recheck.mode).toBe(OpenClawConfigDeliveryMode.Applied);
     expect(recheck.restartScheduled).toBe(false);
     expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
   });
@@ -256,27 +257,22 @@ describe('deliverOpenClawConfigToGateway', () => {
     );
   });
 
-  test('second fallback within the rate-limit window does not schedule another restart', async () => {
+  test('every unresolved delivery retains recovery; only the supervisor limits actual restarts', async () => {
     const scheduleDeferredRestart = vi.fn();
-    let fakeNow = 1_000_000;
     const input = baseInput({
       ensureRpcClient: async () => null,
       scheduleDeferredRestart,
-      nowMs: () => fakeNow,
     });
 
     const first = await deliverOpenClawConfigToGateway(input);
-    fakeNow += 60_000;
     const second = await deliverOpenClawConfigToGateway(input);
-    fakeNow += 11 * 60_000;
     const third = await deliverOpenClawConfigToGateway(input);
 
     expect(first.mode).toBe(OpenClawConfigDeliveryMode.Fallback);
     expect(first.restartScheduled).toBe(true);
-    expect(second.restartScheduled).toBe(false);
-    expect(second.detail).toContain('rate-limited');
+    expect(second.restartScheduled).toBe(true);
     expect(third.restartScheduled).toBe(true);
-    expect(scheduleDeferredRestart).toHaveBeenCalledTimes(2);
+    expect(scheduleDeferredRestart).toHaveBeenCalledTimes(3);
   });
 
   test('starting gateway still attempts rpc delivery', async () => {
@@ -288,8 +284,8 @@ describe('deliverOpenClawConfigToGateway', () => {
     }));
 
     expect(ensureRpcClient).toHaveBeenCalledTimes(1);
-    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
-    expect(calls.map((call) => call.method)).toEqual([OpenClawConfigRpcMethod.Get, OpenClawConfigRpcMethod.Set]);
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
+    expect(calls.map((call) => call.method)).toEqual([OpenClawConfigRpcMethod.Get, OpenClawConfigRpcMethod.Apply, OpenClawConfigRpcMethod.Get]);
   });
 
   test('stopped gateway skips delivery without touching the rpc client', async () => {
@@ -325,8 +321,6 @@ describe('deliverOpenClawConfigToGateway', () => {
     }));
     expect(readFailure.mode).toBe(OpenClawConfigDeliveryMode.Fallback);
     expect(readFailure.detail).toContain('config file read failed');
-
-    __resetOpenClawConfigDeliveryStateForTests();
     const emptyFile = await deliverOpenClawConfigToGateway(baseInput({
       readConfigFile: () => '   ',
     }));
@@ -334,7 +328,7 @@ describe('deliverOpenClawConfigToGateway', () => {
     expect(emptyFile.detail).toContain('config file is empty');
   });
 
-  test('config.set payload is the exact file content, never config.get output', async () => {
+  test('config.apply payload is the exact file content, never config.get output', async () => {
     const { client, calls } = createClient({
       hash: () => 'hash-x',
     });
@@ -342,12 +336,12 @@ describe('deliverOpenClawConfigToGateway', () => {
       ensureRpcClient: async () => client,
     }));
 
-    const setParams = calls.find((call) => call.method === OpenClawConfigRpcMethod.Set)?.params as { raw: string };
+    const setParams = calls.find((call) => call.method === OpenClawConfigRpcMethod.Apply)?.params as { raw: string };
     expect(setParams.raw).toBe(FILE_CONTENT);
     expect(setParams.raw).not.toContain('__OPENCLAW_REDACTED__');
   });
 
-  test('plugins.installs is stripped from the config.set payload, other keys survive', async () => {
+  test('plugins.installs is stripped from the config.apply payload, other keys survive', async () => {
     const fileWithInstalls = JSON.stringify({
       plugins: {
         entries: { xai: { enabled: true } },
@@ -362,8 +356,8 @@ describe('deliverOpenClawConfigToGateway', () => {
       ensureRpcClient: async () => client,
     }));
 
-    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Rpc);
-    const setParams = calls.find((call) => call.method === OpenClawConfigRpcMethod.Set)?.params as { raw: string };
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
+    const setParams = calls.find((call) => call.method === OpenClawConfigRpcMethod.Apply)?.params as { raw: string };
     const sent = JSON.parse(setParams.raw) as {
       plugins: Record<string, unknown>;
       meta: Record<string, unknown>;
@@ -444,11 +438,40 @@ describe('deliverOpenClawConfigToGateway', () => {
     expect(result.restartScheduled).toBe(false);
     expect(result.detail).toContain('agents.ownership');
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
-    expect(calls.filter(call => call.method === OpenClawConfigRpcMethod.Set)).toHaveLength(retry ? 2 : 1);
+    expect(calls.filter(call => call.method === OpenClawConfigRpcMethod.Apply)).toHaveLength(retry ? 2 : 1);
   });
 });
 
 describe('config application confirmation', () => {
+  test('a saved APPLY receipt with an older active revision remains pending', async () => {
+    vi.useFakeTimers();
+    let saved = false;
+    const request = vi.fn(async <T,>(method: string): Promise<T> => {
+      if (method === OpenClawConfigRpcMethod.Apply) {
+        saved = true;
+        return { ok: true, hash: 'saved' } as T;
+      }
+      return {
+        hash: saved ? 'saved' : 'before', valid: true, raw: saved ? FILE_CONTENT : '{}',
+        configRevisionHash: saved ? 'target' : 'before', appliedConfigHash: 'before',
+      } as T;
+    });
+    const pending = deliverOpenClawConfigToGateway(baseInput({ ensureRpcClient: async () => ({ request }) }));
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ mode: OpenClawConfigDeliveryMode.Fallback, restartScheduled: true });
+    expect(request.mock.calls.filter(([method]) => method === OpenClawConfigRpcMethod.Apply)).toHaveLength(1);
+  });
+
+  test('native throttling retains its retry deadline for the recovery owner', async () => {
+    vi.useFakeTimers();
+    const { client } = createClient({
+      set: () => { throw Object.assign(new Error('rate limit exceeded for config.apply'), { retryAfterMs: 45_000 }); },
+    });
+    const pending = deliverOpenClawConfigToGateway(baseInput({ ensureRpcClient: async () => client }));
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ mode: OpenClawConfigDeliveryMode.Fallback, retryAfterMs: 45_000 });
+  });
+
   test('a deferred restart is satisfied by the applied current target without another write', async () => {
     const request = vi.fn(async <T,>(): Promise<T> => ({
       valid: true, parsed: JSON.parse(FILE_CONTENT),
@@ -465,16 +488,16 @@ describe('config application confirmation', () => {
     expect(request.mock.calls[0]).toEqual([OpenClawConfigRpcMethod.Get, {}, { timeoutMs: 10_000 }]);
   });
 
-  test.each([true, false])('SET timeout checks the target and applied version before fallback (current=%s)', async current => {
+  test.each([true, false])('APPLY timeout checks the target and applied version before fallback (current=%s)', async current => {
     vi.useFakeTimers();
     let setSent = false;
     const calls: string[] = [];
     const client: OpenClawConfigRpcClient = {
       request: async <T,>(method: string): Promise<T> => {
         calls.push(method);
-        if (method === OpenClawConfigRpcMethod.Set) {
+        if (method === OpenClawConfigRpcMethod.Apply) {
           setSent = true;
-          throw new Error('config.set timeout');
+          throw new Error('config.apply timeout');
         }
         return {
           hash: 'revision', valid: true,
@@ -492,8 +515,110 @@ describe('config application confirmation', () => {
     expect(result.mode).toBe(current ? OpenClawConfigDeliveryMode.Applied : OpenClawConfigDeliveryMode.Fallback);
     expect(result.restartScheduled).toBe(!current);
     expect(scheduleDeferredRestart).toHaveBeenCalledTimes(current ? 0 : 1);
-    expect(calls.filter(method => method === OpenClawConfigRpcMethod.Set)).toHaveLength(1);
+    expect(calls.filter(method => method === OpenClawConfigRpcMethod.Apply)).toHaveLength(1);
     expect(calls.filter(method => method === OpenClawConfigRpcMethod.Get)).toHaveLength(current ? 2 : 4);
+  });
+});
+
+describe('orphaned config lock recovery', () => {
+  // The gateway waits ~19.5s for openclaw.json's lock; the host gives up first.
+  const lockedClient = (unlockAfterRecovery: { unlocked: boolean }) => {
+    const calls: string[] = [];
+    let appliedRaw: string | undefined;
+    const client: OpenClawConfigRpcClient = {
+      request: async <T,>(method: string, params?: unknown): Promise<T> => {
+        calls.push(method);
+        if (method === OpenClawConfigRpcMethod.Get) {
+          return { hash: 'revision', valid: true, raw: appliedRaw ?? '{}', configRevisionHash: 'r', appliedConfigHash: 'r' } as T;
+        }
+        if (!unlockAfterRecovery.unlocked) throw new Error('gateway request timeout for config.apply');
+        appliedRaw = (params as { raw: string }).raw;
+        return { hash: 'written' } as T;
+      },
+    };
+    return { client, calls };
+  };
+
+  test('retries at once after reclaiming an orphaned lock instead of falling back', async () => {
+    vi.useFakeTimers();
+    const lock = { unlocked: false };
+    const { client, calls } = lockedClient(lock);
+    const recoverConfigLock = vi.fn(() => { lock.unlocked = true; return true; });
+    const scheduleDeferredRestart = vi.fn();
+
+    const pending = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client, recoverConfigLock, scheduleDeferredRestart,
+    }));
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
+    expect(recoverConfigLock).toHaveBeenCalledTimes(1);
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+    expect(calls.filter(method => method === OpenClawConfigRpcMethod.Apply)).toHaveLength(2);
+  });
+
+  test('without an orphaned lock the timeout falls back once, as a persistent failure', async () => {
+    vi.useFakeTimers();
+    const { client } = lockedClient({ unlocked: false });
+    const recoverConfigLock = vi.fn(() => false);
+    const scheduleDeferredRestart = vi.fn();
+
+    const pending = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client, recoverConfigLock, scheduleDeferredRestart,
+    }));
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toMatchObject({ mode: OpenClawConfigDeliveryMode.Fallback, errorKind: ConfigDiagnosticErrorKind.Timeout });
+    expect(isPersistentConfigDeliveryFailure(result)).toBe(true);
+    expect(recoverConfigLock).toHaveBeenCalledTimes(1);
+    expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
+  });
+
+  test('a reclaimed lock is retried only once per delivery', async () => {
+    vi.useFakeTimers();
+    const { client, calls } = lockedClient({ unlocked: false });
+    const recoverConfigLock = vi.fn(() => true);
+
+    const pending = deliverOpenClawConfigToGateway(baseInput({
+      ensureRpcClient: async () => client, recoverConfigLock, scheduleDeferredRestart: undefined,
+    }));
+    await vi.runAllTimersAsync();
+
+    expect((await pending).mode).toBe(OpenClawConfigDeliveryMode.Fallback);
+    expect(recoverConfigLock).toHaveBeenCalledTimes(1);
+    expect(calls.filter(method => method === OpenClawConfigRpcMethod.Apply)).toHaveLength(2);
+  });
+
+  test('classifies the gateway lock error and other outcomes for the recovery owner', async () => {
+    vi.useFakeTimers();
+    const failing = (error: Error): OpenClawConfigRpcClient => ({
+      request: async <T,>(method: string): Promise<T> => {
+        if (method === OpenClawConfigRpcMethod.Get) return { hash: 'revision', valid: true, raw: '{}' } as T;
+        throw error;
+      },
+    });
+    const run = async (client: OpenClawConfigRpcClient | null) => {
+      const pending = deliverOpenClawConfigToGateway(baseInput({
+        ensureRpcClient: async () => client, scheduleDeferredRestart: undefined,
+      }));
+      await vi.runAllTimersAsync();
+      return pending;
+    };
+
+    const locked = await run(failing(new Error('UNAVAILABLE: file lock timeout for C:\\state\\openclaw.json')));
+    expect(locked.errorKind).toBe(ConfigDiagnosticErrorKind.LockTimeout);
+    expect(isPersistentConfigDeliveryFailure(locked)).toBe(true);
+
+    const disconnected = await run(failing(new Error('gateway connection closed')));
+    expect(disconnected.errorKind).toBe(ConfigDiagnosticErrorKind.Unavailable);
+    expect(isPersistentConfigDeliveryFailure(disconnected)).toBe(false);
+
+    const throttled = await run(failing(Object.assign(new Error('rate limited request timeout'), { retryAfterMs: 5_000 })));
+    expect(isPersistentConfigDeliveryFailure(throttled)).toBe(false);
+
+    expect(isPersistentConfigDeliveryFailure(await run(null))).toBe(false);
   });
 });
 

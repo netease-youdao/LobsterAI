@@ -1,4 +1,3 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
 import Lottie from 'lottie-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -6,6 +5,7 @@ import { useSelector } from 'react-redux';
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
 import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
+import { ActivityPlanDetail } from './ActivityPlanDetail';
 import { ActivityLiveDetailLine, ActivityStepLine } from './ActivityStepLine';
 import { ActivityEntryVariant, ActivityStepKind } from './constants';
 import {
@@ -14,6 +14,8 @@ import {
   reportConversationBlockAction,
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
+import MediaTaskCard from './MediaTaskCard';
+import type { MediaTaskPresentation } from './mediaTaskPresentation';
 import {
   type ConsolidatedItem,
   formatElapsedDuration,
@@ -35,58 +37,16 @@ import {
   isMediaGenerateRunning,
   isMediaStatusPoll,
   isMediaStatusPollRunning,
+  isPlanToolName,
   isTodoWriteToolName,
   isToolGroupSettled,
   normalizeToolName,
-  type ParsedTodoItem,
+  parseActivityPlan,
   parseMediaStreamingInfo,
-  parseTodoWriteItems,
-  type TodoStatus,
   type ToolGroupItem,
   truncatePreview,
 } from './messageDisplayUtils';
 import { DiffStatsBadge, getToolGroupDiffStats } from './toolDiffStats';
-
-// ── TodoWriteInputView ───────────────────────────────────────────────────────
-
-const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) => {
-  const getStatusCheckboxClass = (status: TodoStatus): string => {
-    switch (status) {
-      case 'completed':
-        return 'bg-green-500/10 border-green-500 text-green-500';
-      case 'in_progress':
-        return 'bg-transparent border-blue-500';
-      case 'pending':
-      case 'unknown':
-      default:
-        return 'bg-transparent border-border';
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      {items.map((item, index) => (
-        <div
-          key={`todo-item-${index}`}
-          className="flex items-start gap-2"
-        >
-          <span className={`mt-0.5 h-4 w-4 rounded-[4px] border flex-shrink-0 inline-flex items-center justify-center ${getStatusCheckboxClass(item.status)}`}>
-            {item.status === 'completed' && <CheckIcon className="h-3 w-3 stroke-[2.5]" />}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className={`text-xs whitespace-pre-wrap break-words leading-5 ${
-              item.status === 'completed'
-                ? 'text-muted'
-                : 'text-foreground'
-            }`}>
-              {item.primaryText}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
 
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
 
@@ -109,6 +69,7 @@ const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimesta
 
 const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
+  mediaTaskPresentation?: MediaTaskPresentation;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
   retainedMediaPollCounts?: Map<string, number>;
@@ -123,6 +84,7 @@ const ToolCallGroup: React.FC<{
   isLive?: boolean;
 }> = ({
   group,
+  mediaTaskPresentation,
   isLastInSequence = true,
   mapDisplayText,
   retainedMediaPollCounts,
@@ -131,14 +93,17 @@ const ToolCallGroup: React.FC<{
   isLive,
 }) => {
   const { toolUse, toolResult } = group;
-  const shouldExpandByDefault = isMediaStatusPoll(group);
+  const shouldExpandByDefault = isMediaStatusPoll(group) && !mediaTaskPresentation;
+  const mediaCallLabel = mediaTaskPresentation && !mediaTaskPresentation.showCard
+    ? i18nService.t('mediaTaskCallDetails').replace('{taskId}', String(mediaTaskPresentation.details.taskId))
+    : null;
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
   const toolName = getToolDisplayName(rawToolName);
   const toolInput = toolUse.metadata?.toolInput;
   const isCronTool = isCronToolName(rawToolName);
   const isTodoWriteTool = isTodoWriteToolName(rawToolName);
-  const todoItems = isTodoWriteTool ? parseTodoWriteItems(toolInput) : null;
+  const activityPlan = isPlanToolName(rawToolName) ? parseActivityPlan(rawToolName, toolInput) : null;
   const mapText = mapDisplayText ?? ((value: string) => value);
   const toolInputDisplayRaw = formatToolInput(rawToolName, toolInput);
   const toolInputDisplay = toolInputDisplayRaw ? mapText(toolInputDisplayRaw) : null;
@@ -220,7 +185,7 @@ const ToolCallGroup: React.FC<{
     setIsExpanded(nextExpanded);
   };
 
-  const renderMediaRunningIndicators = (containerClass: string) => (
+  const renderMediaRunningIndicators = (containerClass: string) => mediaTaskPresentation ? null : (
     <>
       {isMediaGenerateRunning(group) && isSessionStreaming && (() => {
         const streamingInfo = parseMediaStreamingInfo(group);
@@ -313,8 +278,8 @@ const ToolCallGroup: React.FC<{
                 )}
               </div>
             </div>
-          ) : isTodoWriteTool && todoItems ? (
-            <TodoWriteInputView items={todoItems} />
+          ) : activityPlan ? (
+            <ActivityPlanDetail plan={activityPlan} mapDisplayText={mapDisplayText} />
           ) : isEditWithDiff && diffDataList ? (
             <div className="space-y-2">
               {diffDataList.map((diff, idx) => (
@@ -381,6 +346,10 @@ const ToolCallGroup: React.FC<{
     </>
   );
 
+  if (mediaTaskPresentation?.showCard) {
+    return <MediaTaskCard details={mediaTaskPresentation.details} startedAt={mediaTaskPresentation.startedAt} />;
+  }
+
   if (variant === ActivityEntryVariant.Row) {
     const stepItem: ConsolidatedItem = { type: 'tool_group', group };
     const isRowLive = isLive ?? isRunning;
@@ -396,7 +365,7 @@ const ToolCallGroup: React.FC<{
       <div>
         <ActivityStepLine
           kind={stepKind}
-          label={mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
+          label={mediaCallLabel ?? mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
           isLive={isRowLive}
           hasError={isToolError}
           isExpanded={isExpanded}
@@ -454,7 +423,7 @@ const ToolCallGroup: React.FC<{
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-sm font-medium text-secondary ${isRunning ? 'shimmer-text' : ''}`}>
-              {toolName}
+              {mediaCallLabel ?? toolName}
             </span>
             {toolInputSummary && (
               <code className="text-code text-muted font-mono truncate max-w-full">

@@ -70,6 +70,7 @@ describe('state migration before gateway startup', () => {
     const params = options();
     expect(await migrateLegacyStateBeforeStartup({ ...params, runner })).toEqual({
       status: OpenClawStartupMigrationStatus.Migrated,
+      settled: false,
     });
     expect(runner).toHaveBeenCalledWith('/electron/node', [path.join(tempDir, OPENCLAW_STARTUP_MIGRATION_ENTRY)], {
       cwd: tempDir,
@@ -82,12 +83,41 @@ describe('state migration before gateway startup', () => {
     });
   });
 
+  test('reports probed legacy paths and treats notice-only retained sources as settled', async () => {
+    const retired = path.join(tempDir, 'identity', 'device.json');
+    const runner = vi.fn(async () => ({
+      code: 0,
+      stdout: report({
+        status: OpenClawStartupMigrationStatus.Migrated, sourceCount: 1, changes: [],
+        notices: ['[device-identity] Preserved retired device identity'],
+        probePaths: [retired, 'relative/ignored.json'],
+      }),
+      stderr: '',
+    }));
+    expect(await migrateLegacyStateBeforeStartup({ ...options(), runner })).toEqual({
+      status: OpenClawStartupMigrationStatus.Migrated,
+      settled: true,
+      probePaths: [retired],
+    });
+  });
+
+  test('rejects a report with malformed probe paths', async () => {
+    const runner = vi.fn(async () => ({
+      code: 0,
+      stdout: report({ changes: [], probePaths: [42] as unknown as string[] }),
+      stderr: '',
+    }));
+    expect((await migrateLegacyStateBeforeStartup({ ...options(), runner })).status)
+      .toBe(OpenClawStartupMigrationStatus.Failed);
+  });
+
   test('logs the checked inventory without reporting changes on an already migrated installation', async () => {
     const runner = vi.fn(async () => ({
       code: 0, stdout: report({ status: OpenClawStartupMigrationStatus.Skipped, sourceCount: 0, changes: [] }), stderr: '',
     }));
     expect(await migrateLegacyStateBeforeStartup({ ...options(), runner })).toEqual({
       status: OpenClawStartupMigrationStatus.Skipped,
+      settled: true,
     });
     expect(console.log).toHaveBeenCalledExactlyOnceWith('[OpenClaw] Startup state migration checked:', {
       status: OpenClawStartupMigrationStatus.Skipped,

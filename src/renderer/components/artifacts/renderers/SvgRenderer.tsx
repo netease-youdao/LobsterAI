@@ -1,15 +1,17 @@
 import DOMPurify from 'dompurify';
-import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import React, { useMemo } from 'react';
 
 import type { Artifact } from '@/types/artifact';
+
+import { getZoomedSize } from './zoomPan';
+import { useInjectedSvgSize, useZoomPan, ZoomPanViewport, ZoomResetBadge } from './ZoomPanViewport';
 
 interface SvgRendererProps {
   artifact: Artifact;
 }
 
 const SvgRenderer: React.FC<SvgRendererProps> = ({ artifact }) => {
-  const [scale, setScale] = useState(1);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const zoomPan = useZoomPan();
 
   const sanitizedSvg = useMemo(() => {
     if (!artifact.content) return '';
@@ -19,38 +21,31 @@ const SvgRenderer: React.FC<SvgRendererProps> = ({ artifact }) => {
     });
   }, [artifact.content]);
 
-  const handleWheel = useCallback((e: WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      setScale(prev => Math.max(0.1, Math.min(5, prev - e.deltaY * 0.001)));
-    }
-  }, []);
-
-  const resetZoom = useCallback(() => setScale(1), []);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener('wheel', handleWheel, { passive: false });
-    return () => el.removeEventListener('wheel', handleWheel);
-  }, [handleWheel]);
+  const svgSize = useInjectedSvgSize(zoomPan.contentElement, sanitizedSvg);
+  const displaySize = svgSize
+    ? getZoomedSize({
+      intrinsicWidth: svgSize.width,
+      aspectRatio: svgSize.aspectRatio,
+      availableWidth: zoomPan.availableWidth,
+      scale: zoomPan.scale,
+    })
+    : null;
 
   return (
-    <div className="relative w-full h-full overflow-auto" ref={containerRef}>
+    <ZoomPanViewport
+      zoomPan={zoomPan}
+      isContentSized={displaySize !== null}
+      overlay={<ZoomResetBadge zoomPan={zoomPan} />}
+    >
       <div
-        className="flex items-center justify-center min-h-full p-4"
-        style={{ transform: `scale(${scale})`, transformOrigin: 'center center' }}
+        ref={zoomPan.setContentElement}
+        className={`m-auto shrink-0 ${displaySize
+          ? '[&>svg]:block [&>svg]:!h-full [&>svg]:!w-full [&>svg]:!max-w-none'
+          : '[&>svg]:max-w-full [&>svg]:h-auto'}`}
+        style={displaySize ?? undefined}
         dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
       />
-      {scale !== 1 && (
-        <button
-          onClick={resetZoom}
-          className="absolute bottom-3 right-3 px-2 py-1 text-xs rounded bg-surface text-secondary hover:bg-surface-hover"
-        >
-          {Math.round(scale * 100)}%
-        </button>
-      )}
-    </div>
+    </ZoomPanViewport>
   );
 };
 

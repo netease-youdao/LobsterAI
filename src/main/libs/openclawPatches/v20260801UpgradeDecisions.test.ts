@@ -19,10 +19,12 @@ const RETAINED_PATCHES = [
   'openclaw-cli-startup-metadata-windows-timeout.patch',
   'openclaw-compaction-summary-format.patch',
   'openclaw-compaction-summary-section-order.patch',
+  'openclaw-config-candidate-cache-invalidation.patch',
   'openclaw-cron-preparation-failure-state.patch',
   'openclaw-cron-skip-missed-jobs.patch',
   'openclaw-device-identity-preservation.patch',
   'openclaw-exec-command-description.patch',
+  'openclaw-gateway-client-request-traceparent.patch',
   'openclaw-gateway-fast-path-rejection-handler.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
   'openclaw-inferred-plugin-install-allowlist.patch',
@@ -31,11 +33,17 @@ const RETAINED_PATCHES = [
   'openclaw-lobsterai-model-compat-api.patch',
   'openclaw-lobsterai-provider-cooldown.patch',
   'openclaw-lobsterai-startup-recovery.patch',
+  'openclaw-malformed-tool-call-continuation.patch',
+  'openclaw-managed-image-replay.patch',
   'openclaw-managed-npm-junction-cleanup.patch',
+  'openclaw-managed-workspace-alias-follow.patch',
   'openclaw-memory-sidecar-archive-generations.patch',
+  'openclaw-model-preset-context-windows.patch',
+  'openclaw-model-preset-window-metadata.patch',
   'openclaw-omit-default-model-from-system-prompt.patch',
   'openclaw-openai-compatible-cache-control.patch',
   'openclaw-openai-completions-output-budget.patch',
+  'openclaw-openai-completions-tool-call-repair.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
   'openclaw-project-memory-negative-probe.patch',
   'openclaw-provider-auth-warm-cooperative-exit.patch',
@@ -48,10 +56,12 @@ const RETAINED_PATCHES = [
   'openclaw-shell-snapshot-electron-node-env.patch',
   'openclaw-skip-disabled-web-search-discovery.patch',
   'openclaw-skip-derive-prompt-segments-deadloop.patch',
+  'openclaw-skip-turn-replay-after-model-call.patch',
   'openclaw-sqlite-readonly-result-file.patch',
   'openclaw-subagent-cleanup-finalize-best-effort.patch',
   'openclaw-subagent-shared-gateway-context.patch',
   'openclaw-subagent-settle-failure-event.patch',
+  'openclaw-tolerate-replaced-thinking-catalog-owner.patch',
   'openclaw-transcript-replay-validation.patch',
   'openclaw-view-image-task-cwd.patch',
   'openclaw-web-login-channel-routing.patch',
@@ -64,6 +74,7 @@ const RETAINED_PATCHES = [
   'zz-openclaw-error-detail-preview.patch',
   'zz-openclaw-lock-owner-recovery.patch',
   'zz-openclaw-marketplace-clone-retry.patch',
+  'zz-openclaw-plan-completion-check.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
   'zzz-openclaw-plugin-degraded-startup.patch',
 ] as const;
@@ -152,6 +163,19 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       'searchEnabled && (search || hasPluginWebSearchConfig)',
       'uses the fast path when web %s is explicitly disabled',
     ]);
+  });
+
+  test('lets the gateway client run a request in the caller trace', () => {
+    expectPatchContains('openclaw-gateway-client-request-traceparent.patch', [
+      '+  traceparent?: string;',
+      '+      traceparent: opts?.traceparent,',
+      '+            ...(options?.traceparent ? { traceparent: options.traceparent } : {}),',
+    ]);
+    const adapter = fs.readFileSync(
+      path.resolve('src/main/libs/agentEngine/openclawRuntimeAdapter.ts'),
+      'utf8',
+    );
+    expect(adapter).toContain('traceparent: createLlmTraceparent(llmTrace.traceId)');
   });
 
   test('uses native chat.send steering instead of the retired custom RPC', () => {

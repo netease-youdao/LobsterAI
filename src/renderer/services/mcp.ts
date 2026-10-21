@@ -1,30 +1,12 @@
-import { McpCategory, McpMarketplaceCategoryInfo, McpMarketplaceServer,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../types/mcp';
+import { type McpOAuthActionResult, McpOAuthErrorCode, type McpOAuthState } from '../../shared/mcp/auth';
+import {
+  McpToolDiscoveryErrorCode,
+  type McpToolDiscoveryRequest,
+  type McpToolDiscoveryResult,
+} from '../../shared/mcp/toolDiscovery';
+import { McpMarketplaceCategoryInfo, McpMarketplaceServer,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../types/mcp';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
-
-/**
- * Convert remote marketplace server data to McpRegistryEntry format.
- */
-function convertMarketplaceToRegistry(
-  servers: McpMarketplaceServer[],
-): McpRegistryEntry[] {
-  return servers.map((s) => ({
-    id: s.id,
-    name: s.name,
-    name_zh: s.name_zh,
-    icon: s.icon,
-    descriptionKey: '',
-    description_zh: s.description_zh,
-    description_en: s.description_en,
-    category: s.category as McpCategory,
-    categoryKey: '',
-    transportType: s.transportType as McpRegistryEntry['transportType'],
-    command: s.command,
-    defaultArgs: s.defaultArgs,
-    requiredEnvKeys: s.requiredEnvKeys,
-    optionalEnvKeys: s.optionalEnvKeys,
-    kind: s.kind,
-  }));
-}
+import { convertMarketplaceToRegistry } from './mcpMarketplaceInstall';
 
 /**
  * Last successful marketplace payload, kept so the page's first frame renders
@@ -117,6 +99,20 @@ class McpService {
       const message = error instanceof Error ? error.message : 'Failed to update MCP server';
       console.error('Failed to update MCP server:', error);
       return { success: false, error: message };
+    }
+  }
+
+  /** Connects to the server described by the form and lists its tools. */
+  async listTools(request: McpToolDiscoveryRequest): Promise<McpToolDiscoveryResult> {
+    try {
+      return await window.electron.mcp.listTools(request);
+    } catch (error) {
+      console.error('Failed to list MCP tools:', error);
+      return {
+        success: false,
+        code: McpToolDiscoveryErrorCode.Failed,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
@@ -214,6 +210,54 @@ class McpService {
       const message = error instanceof Error ? error.message : 'Failed to connect Qichacha MCP';
       console.error('Failed to connect Qichacha MCP:', error);
       return { success: false, error: message };
+    }
+  }
+
+  /** Runs the MCP OAuth sign-in for an `auth: 'oauth'` server; the browser opens on the provider's page. */
+  async oauthLogin(id: string): Promise<McpOAuthActionResult> {
+    try {
+      return await window.electron.mcp.oauthLogin(id);
+    } catch (error) {
+      console.error('Failed to sign in to MCP server:', error);
+      return {
+        success: false,
+        code: McpOAuthErrorCode.Failed,
+        error: error instanceof Error ? error.message : 'Failed to sign in to MCP server',
+      };
+    }
+  }
+
+  /** Stops a sign-in that is waiting for the browser; its `oauthLogin` call then resolves as cancelled. */
+  async oauthCancel(id: string): Promise<boolean> {
+    try {
+      return await window.electron.mcp.oauthCancel(id);
+    } catch (error) {
+      console.error('Failed to cancel MCP sign-in:', error);
+      return false;
+    }
+  }
+
+  async oauthLogout(id: string): Promise<McpOAuthActionResult> {
+    try {
+      return await window.electron.mcp.oauthLogout(id);
+    } catch (error) {
+      console.error('Failed to sign out of MCP server:', error);
+      return {
+        success: false,
+        code: McpOAuthErrorCode.Failed,
+        error: error instanceof Error ? error.message : 'Failed to sign out of MCP server',
+      };
+    }
+  }
+
+  /** OAuth state per server id, for servers configured with `auth: 'oauth'`. */
+  async oauthStatus(): Promise<Record<string, McpOAuthState>> {
+    try {
+      const result = await window.electron.mcp.oauthStatus();
+      return result.success ? result.states : {};
+    } catch (error) {
+      console.error('Failed to read MCP OAuth status:', error);
+      return {};
     }
   }
 

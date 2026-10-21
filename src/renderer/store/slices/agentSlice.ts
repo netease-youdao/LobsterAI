@@ -6,6 +6,7 @@ interface AgentSummary {
   name: string;
   description: string;
   icon: string;
+  iconCustomized?: boolean;
   model: string;
   thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
@@ -15,6 +16,7 @@ interface AgentSummary {
   sortOrder?: number | null;
   isDefault: boolean;
   source: 'custom' | 'preset';
+  presetId?: string;
   skillIds: string[];
   subagentAllowAgentIds: string[];
 }
@@ -23,12 +25,14 @@ interface AgentState {
   agents: AgentSummary[];
   currentAgentId: string;
   loading: boolean;
+  sidebarRevealAgentId: string | null;
 }
 
 const initialState: AgentState = {
   agents: [],
   currentAgentId: 'main',
   loading: false,
+  sidebarRevealAgentId: null,
 };
 
 const agentSlice = createSlice({
@@ -43,12 +47,21 @@ const agentSlice = createSlice({
       state.currentAgentId = action.payload;
     },
 
+    setSidebarRevealAgentId(state, action: PayloadAction<string | null>) {
+      state.sidebarRevealAgentId = action.payload;
+    },
+
     setLoading(state, action: PayloadAction<boolean>) {
       state.loading = action.payload;
     },
 
     addAgent(state, action: PayloadAction<AgentSummary>) {
-      state.agents.push(action.payload);
+      const index = state.agents.findIndex(agent => agent.id === action.payload.id);
+      if (index === -1) {
+        state.agents.push(action.payload);
+      } else {
+        state.agents[index] = action.payload;
+      }
     },
 
     updateAgent(state, action: PayloadAction<{ id: string; updates: Partial<AgentSummary> }>) {
@@ -60,6 +73,9 @@ const agentSlice = createSlice({
 
     removeAgent(state, action: PayloadAction<string>) {
       state.agents = state.agents.filter((a) => a.id !== action.payload);
+      if (state.sidebarRevealAgentId === action.payload) {
+        state.sidebarRevealAgentId = null;
+      }
       if (state.currentAgentId === action.payload) {
         state.currentAgentId = 'main';
       }
@@ -70,6 +86,7 @@ const agentSlice = createSlice({
 export const {
   setAgents,
   setCurrentAgentId,
+  setSidebarRevealAgentId,
   setLoading,
   addAgent,
   updateAgent,

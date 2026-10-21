@@ -1,4 +1,5 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
+import type { GenerateSessionTitleRequest } from '../../common/sessionTitle';
 import type {
   ActivityActionResponse,
   ActivityContextResponse,
@@ -8,6 +9,8 @@ import type {
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
+import type { ExpertCatalog } from '../../shared/agent/presets';
+import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
@@ -65,6 +68,7 @@ import type {
   CoworkSessionsChangedPayload,
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
+import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
@@ -80,6 +84,7 @@ import type {
   DecisionModelConfigView,
   DecisionModelTestResult,
 } from '../../shared/decisionModel/constants';
+import type { DesktopCompanionBridge } from '../../shared/desktopCompanion/constants';
 import type { EnterpriseQuotaRequestType } from '../../shared/enterpriseAccount/constants';
 import type {
   EnterpriseAccountContext,
@@ -87,6 +92,7 @@ import type {
   EnterpriseAccountIdentitiesResult,
   EnterpriseQuotaRequestResult,
 } from '../../shared/enterpriseAccount/types';
+import type { FeedbackBridge } from '../../shared/feedback/constants';
 import type {
   HtmlShareAccessMode,
   HtmlShareAnalyticsInput,
@@ -103,6 +109,7 @@ import type {
   InstalledKitRecord,
   KitReference,
   KitSkillMetadata,
+  KitStoreResponse,
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
 import type {
@@ -130,13 +137,29 @@ import type {
   ListLocalWebServicesOptions,
   LocalWebService,
 } from '../../shared/localWebServices/constants';
+import type { McpAuthMode, McpOAuthActionResult, McpOAuthStatusResult } from '../../shared/mcp/auth';
+import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
+import type {
+  MediaPreference,
+  MediaPreferenceResult,
+  MediaSelection,
+  MediaType,
+} from '../../shared/media/defaultPolicy';
+import type { AvailableModelPreset, ModelPresetId, ModelPresetPreference } from '../../shared/modelPresets/constants';
+import type { OfficeBridges } from '../../shared/office/editors';
 import type {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
+  OpenClawLoopbackRepairOutcome,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
+import type {
+  OpenClawUserConfigActionResult,
+  OpenClawUserConfigStatus,
+} from '../../shared/openclawUserConfig/constants';
 import type { PaymentBridge } from '../../shared/payment/constants';
+import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
   PublishingQuotaErrorData,
@@ -228,6 +251,7 @@ interface CoworkSession {
   totalMessages: number;
   /** Start of the turn the first loaded message belongs to, when it began before messagesOffset. */
   leadingTurnStartTimestamp?: number | null;
+  leadingTurnUsage?: CoworkTurnUsageAnchor | null;
   parentSessionId?: string | null;
   forkedFromMessageId?: string | null;
   forkedAt?: number | null;
@@ -372,13 +396,6 @@ interface CoworkPermissionRequest {
   toolUseId?: string | null;
 }
 
-interface CoworkApiConfig {
-  apiKey: string;
-  baseURL: string;
-  model: string;
-  apiType?: 'anthropic' | 'openai';
-}
-
 type OpenClawEnginePhase = SharedOpenClawEnginePhase;
 
 interface OpenClawEngineStatus {
@@ -403,6 +420,13 @@ interface OpenClawGatewayRepairResult {
   recoverable?: boolean;
   failedStage?: OpenClawRepairStage;
   failurePath?: string;
+}
+
+interface OpenClawLoopbackRepairResult {
+  outcome: OpenClawLoopbackRepairOutcome;
+  status?: OpenClawEngineStatus;
+  detail?: string;
+  manualCommand?: string;
 }
 
 interface OpenClawSessionPolicyConfig {
@@ -495,6 +519,7 @@ interface McpServerConfigIPC {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
   isBuiltIn: boolean;
   githubUrl?: string;
   registryId?: string;
@@ -521,19 +546,6 @@ interface McpServerConfigIPC {
   updatedAt: number;
 }
 
-interface McpMarketplaceServer {
-  id: string;
-  name: string;
-  description_zh: string;
-  description_en: string;
-  category: string;
-  transportType: 'stdio' | 'sse' | 'http';
-  command: string;
-  defaultArgs: string[];
-  requiredEnvKeys?: string[];
-  optionalEnvKeys?: string[];
-}
-
 interface McpMarketplaceCategory {
   id: string;
   name_zh: string;
@@ -549,6 +561,7 @@ import type { AgentLegacyIdentityCleanupResult } from '@shared/agent';
 import type { Platform } from '@shared/platform';
 
 import type { Agent, PresetAgent } from './agent';
+import type { McpMarketplaceServer } from './mcp';
 
 interface CreditItem {
   type: 'subscription' | 'boost' | 'free' | 'bonus' | 'invitation' | 'campaign';
@@ -669,6 +682,7 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  desktopCompanion: DesktopCompanionBridge;
   platform: string;
   arch: string;
   store: {
@@ -763,6 +777,7 @@ interface IElectronAPI {
     retryLaunchResolution: (
       id: string,
     ) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    listTools: (request: McpToolDiscoveryRequest) => Promise<McpToolDiscoveryResult>;
     fetchMarketplace: () => Promise<{
       success: boolean;
       data?: McpMarketplaceData;
@@ -773,10 +788,14 @@ interface IElectronAPI {
       servers?: McpServerConfigIPC[];
       error?: string;
     }>;
+    oauthLogin: (id: string) => Promise<McpOAuthActionResult>;
+    oauthCancel: (id: string) => Promise<boolean>;
+    oauthLogout: (id: string) => Promise<McpOAuthActionResult>;
+    oauthStatus: () => Promise<McpOAuthStatusResult>;
     onChanged: (callback: () => void) => () => void;
   };
   kits: {
-    fetchStore: () => Promise<{ success: boolean; data?: string; error?: string }>;
+    fetchStore: () => Promise<KitStoreResponse>;
     install: (params: {
       kitId: string;
       bundleUrl: string;
@@ -843,7 +862,10 @@ interface IElectronAPI {
     delete: (id: string) => Promise<boolean>;
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
+    expertCatalog: () => Promise<ExpertCatalog>;
     addPreset: (presetId: string) => Promise<Agent>;
+    /** Another window changed agents; reload them. */
+    onChanged?: (callback: () => void) => () => void;
   };
   api: {
     fetch: (options: {
@@ -865,12 +887,8 @@ interface IElectronAPI {
     onStreamError: (requestId: string, callback: (error: string) => void) => () => void;
     onStreamAbort: (requestId: string, callback: () => void) => () => void;
   };
-  getApiConfig: () => Promise<CoworkApiConfig | null>;
-  checkApiConfig: (options?: {
-    probeModel?: boolean;
-  }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
-  saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
-  generateSessionTitle: (userInput: string | null) => Promise<string>;
+  checkApiConfig: () => Promise<{ hasConfig: boolean; error?: string }>;
+  generateSessionTitle: (request: GenerateSessionTitleRequest) => Promise<string | null>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
   dsh: {
     getState: () => Promise<{
@@ -906,6 +924,7 @@ interface IElectronAPI {
         error?: string;
       }>;
       repairGatewayState: () => Promise<OpenClawGatewayRepairResult>;
+      repairLoopbackFirewall: () => Promise<OpenClawLoopbackRepairResult>;
       onProgress: (callback: (status: OpenClawEngineStatus) => void) => () => void;
     };
     sessionPolicy: {
@@ -917,6 +936,13 @@ interface IElectronAPI {
       set: (
         config: OpenClawSessionPolicyConfig,
       ) => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
+    };
+    userConfig: {
+      getStatus: () => Promise<OpenClawUserConfigStatus>;
+      setEnabled: (enabled: boolean) => Promise<OpenClawUserConfigActionResult>;
+      openFile: () => Promise<OpenClawUserConfigActionResult>;
+      revealFile: () => Promise<OpenClawUserConfigActionResult>;
+      apply: () => Promise<OpenClawUserConfigActionResult>;
     };
     session: {
       patch: (options: {
@@ -980,22 +1006,25 @@ interface IElectronAPI {
   };
   cowork: {
     startSession: (options: {
+      analytics?: UsageContext;
       prompt: string;
       cwd?: string;
       systemPrompt?: string;
       title?: string;
       activeSkillIds?: string[];
+      inheritedSkillIds?: string[];
       runtimeSkillIds?: string[];
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       agentId?: string;
       modelOverride?: string;
+      modelPresetId?: ModelPresetId;
       thinkingLevel?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
-      mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+      mediaSelection?: MediaSelection;
       mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => Promise<{
       success: boolean;
@@ -1005,18 +1034,20 @@ interface IElectronAPI {
       engineStatus?: OpenClawEngineStatus;
     }>;
     continueSession: (options: {
+      analytics?: UsageContext;
       sessionId: string;
       prompt: string;
       systemPrompt?: string;
       activeSkillIds?: string[];
+      inheritedSkillIds?: string[];
       runtimeSkillIds?: string[];
       kitIds?: string[];
       kitReferences?: KitReference[];
       resolvedKitCapabilities?: ResolvedKitCapabilities;
-      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
+      selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
-      mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+      mediaSelection?: MediaSelection;
       mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => Promise<{
       success: boolean;
@@ -1048,6 +1079,7 @@ interface IElectronAPI {
       code?: string;
       engineStatus?: OpenClawEngineStatus;
     }>;
+    refreshTurnUsage?: (options: { sessionId: string; messageId: string }) => Promise<CoworkTurnUsage | null>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
@@ -1117,6 +1149,7 @@ interface IElectronAPI {
       total?: number;
       /** Start of the turn the page's first message belongs to (see CoworkSession). */
       leadingTurnStartTimestamp?: number | null;
+      leadingTurnUsage?: CoworkTurnUsageAnchor | null;
       error?: string;
     }>;
     getSessionSearchMessages: (options: {
@@ -1293,6 +1326,9 @@ interface IElectronAPI {
     ) => () => void;
     onStreamGoal?: (
       callback: (data: { sessionId: string; goal: CoworkGoal | null }) => void,
+    ) => () => void;
+    onStreamTurnUsage?: (
+      callback: (data: { sessionId: string; messageId: string; turnUsage: CoworkTurnUsage }) => void,
     ) => () => void;
     onStreamBtwResult?: (
       callback: (data: { sessionId: string; result: CoworkBtwEntry }) => void,
@@ -1587,6 +1623,8 @@ interface IElectronAPI {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>;
   };
   artifact: {
+    imageEditing: import('../../shared/imageEditing/types').ImageEditingBridge;
+    office: OfficeBridges;
     markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;
@@ -1647,6 +1685,11 @@ interface IElectronAPI {
     }>;
     relaunch: () => Promise<void>;
     openSystemNotificationSettings: () => Promise<{ success: boolean; error?: string }>;
+  };
+  /** Files and folders macOS asked LobsterAI to open (Finder "Open With", Dock drops). */
+  openWith: {
+    consumePaths: () => Promise<string[]>;
+    onPathsAvailable: (callback: () => void) => () => void;
   };
   appUpdate: {
     getState: () => Promise<AppUpdateRuntimeState>;
@@ -2020,6 +2063,7 @@ interface IElectronAPI {
       error?: string;
     }>;
   };
+  feedback: FeedbackBridge;
   subscriptionTrial: SubscriptionTrialBridge;
   payment: PaymentBridge;
   activity: {
@@ -2033,6 +2077,12 @@ interface IElectronAPI {
       input: ActivityHostExecuteActionInput,
     ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
+  modelPresets: {
+    available: () => Promise<{ success: boolean; data?: AvailableModelPreset[]; error?: string }>;
+    getPreferences: () => Promise<{ success: boolean; data?: Record<string, ModelPresetPreference>; error?: string }>;
+    setPreference: (agentId: string, presetId: ModelPresetId | null, thinkingLevel?: ModelThinkingLevel) => Promise<{ success: boolean; error?: string }>;
+    selectSession: (sessionId: string, presetId: ModelPresetId, thinkingLevel?: ModelThinkingLevel) => Promise<{ success: boolean; data?: CoworkSession; error?: string }>;
+  };
   auth: {
     cancelLogin: () => Promise<void>;
     setLoginViewBounds: (bounds: AuthLoginViewBounds) => Promise<void>;
@@ -2043,6 +2093,7 @@ interface IElectronAPI {
       purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
     }>;
+    hasCredentials: () => Promise<boolean>;
     getUser: () => Promise<{
       success: boolean;
       status?: AuthSessionStatus;
@@ -2084,6 +2135,12 @@ interface IElectronAPI {
         explicitContextCache?: boolean;
         costMultiplier?: number;
         description?: string;
+        limitedFree?: boolean;
+        limitedFreeActive?: boolean;
+        limitedFreeStartAt?: string | null;
+        limitedFreeEndAt?: string | null;
+        subscriptionPriority?: boolean;
+        busy?: boolean;
         moreModel?: boolean;
         accessible?: boolean;
         restrictionHint?: string;
@@ -2103,6 +2160,7 @@ interface IElectronAPI {
         contextWindow?: number | null;
         costMultiplier?: number;
         moreModel?: boolean;
+        busy?: boolean;
       }>;
       imageModels?: Array<{
         modelId: string;
@@ -2147,6 +2205,8 @@ interface IElectronAPI {
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
   };
   media: {
+    getPreferences: (owner: string) => Promise<MediaPreferenceResult>;
+    setPreference: (owner: string, type: MediaType, preference: MediaPreference) => Promise<MediaPreferenceResult>;
     getModels: (type: 'image' | 'video') => Promise<{ success: boolean; models?: Array<{ modelId: string; displayName: string; provider: string; mediaType: string; generationTimeout: number; pricing: Record<string, unknown> }>; error?: string }>;
     getTaskStatus: (taskId: number, type: 'image' | 'video') => Promise<{ success: boolean; task?: Record<string, unknown>; error?: string }>;
   };
@@ -2664,8 +2724,8 @@ interface WeixinOpenClawConfig {
 }
 
 interface IMSettings {
-  systemPrompt?: string;
-  skillsEnabled: boolean;
+  /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
+  platformAgentBindings?: Record<string, string>;
 }
 
 interface IMGatewayStatus {

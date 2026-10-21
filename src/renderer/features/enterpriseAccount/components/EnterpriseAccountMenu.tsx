@@ -2,6 +2,7 @@ import {
   ArrowRightStartOnRectangleIcon,
   BuildingOffice2Icon,
   ChartBarIcon,
+  ChatBubbleLeftIcon,
   ChevronRightIcon,
 } from '@heroicons/react/24/outline';
 import {
@@ -22,6 +23,7 @@ import type {
   EnterpriseAccountContext,
   EnterpriseAccountIdentity,
 } from '../../../../shared/enterpriseAccount/types';
+import { FeedbackUiEvent } from '../../../../shared/feedback/constants';
 import { getAccountMenuDisplayName } from '../../../components/accountMenuState';
 import { authService } from '../../../services/auth';
 import {
@@ -378,7 +380,7 @@ export const EnterpriseAccountMenu = ({
           </div>
         </div>
 
-        <div className="py-1">
+        <div className="border-b border-border py-1">
           {adminIdentities.length > 0 ? (
             <div
               onMouseEnter={openEnterpriseFlyout}
@@ -423,6 +425,20 @@ export const EnterpriseAccountMenu = ({
               'opening usage overview from enterprise account menu',
             )}
           />
+        </div>
+
+        <div className="border-b border-border py-1">
+          <MenuAction
+            icon={<ChatBubbleLeftIcon className={actionIconClassName} />}
+            label={i18nService.t('feedbackTitle')}
+            onClick={() => {
+              onClose();
+              window.dispatchEvent(new Event(FeedbackUiEvent.OpenSettings));
+            }}
+          />
+        </div>
+
+        <div className="py-1">
           <MenuAction
             icon={<ArrowRightStartOnRectangleIcon className={actionIconClassName} />}
             label={i18nService.t('authLogout')}

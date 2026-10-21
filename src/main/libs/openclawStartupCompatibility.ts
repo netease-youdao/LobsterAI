@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { stripVTControlCharacters } from 'util';
 
+import { OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV } from '../../shared/openclawEngine/constants';
 import { DREAMING_RECOVERY_REPORT_VERSION, OpenClawDreamingRecoveryOutcome, type OpenClawDreamingRecoverySummary } from '../../shared/openclawEngine/dreamingRecovery';
 import {
   OPENCLAW_CLI_ERROR_TYPE,
@@ -93,6 +94,7 @@ export async function runOpenClawStartupCompatibility(params: {
         OPENCLAW_HOME: path.dirname(params.stateDir),
         OPENCLAW_STATE_DIR: params.stateDir,
         OPENCLAW_CONFIG_PATH: params.configPath,
+        [OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV]: params.stateDir,
         OPENCLAW_SERVICE_REPAIR_POLICY: 'external',
         ELECTRON_RUN_AS_NODE: '1',
       },

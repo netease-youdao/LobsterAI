@@ -26,6 +26,7 @@ export type OpenClawSessionReasoningLevel =
 
 export interface OpenClawSessionPatch {
   model?: string | null;
+  contextWindow?: string | null;
   thinkingLevel?: string | null;
   reasoningLevel?: string | null;
   elevatedLevel?: string | null;

@@ -37,8 +37,9 @@ export const DSH_MANAGED_LABEL_PREFIX = 'LobsterAI · ';
 export const DSH_PLAN_ROUTE_ID = 'lobsterai-plan';
 export const DSH_PLAN_ANTHROPIC_ROUTE_ID = 'lobsterai-plan-anthropic';
 
-// The proxy replaces the Authorization header with the real access token, so
-// the credential dsh sends is a placeholder that only has to be non-empty.
+// The proxy replaces the Authorization header with the real access token. dsh
+// must still present the loopback proxy token; the placeholder only covers a
+// proxy started without one.
 const DSH_PLAN_API_KEY_PLACEHOLDER = 'proxy-managed';
 
 const PI_AI_NAMESPACE = 'llm-pi-ai';
@@ -64,6 +65,8 @@ export interface DshProviderRoute {
 export interface DshPlanProviderInput {
   /** Loopback token-proxy origin plus version prefix, e.g. http://127.0.0.1:1234/v1 */
   baseUrl: string;
+  /** Loopback proxy token; passed to dsh through its process env only. */
+  apiKey?: string | null;
   /** Localized product name for the plan (the caller owns i18n). */
   displayName: string;
   models: Array<{
@@ -248,7 +251,7 @@ function renderPlanRoutes(
     const protocolModels = models.filter((model) => wants(model.apiFormat));
     if (protocolModels.length === 0) continue;
     const apiKeyEnv = deriveDshApiKeyEnvRef(routeId);
-    envVars[apiKeyEnv] = DSH_PLAN_API_KEY_PLACEHOLDER;
+    envVars[apiKeyEnv] = plan.apiKey?.trim() || DSH_PLAN_API_KEY_PLACEHOLDER;
     const needsProtocolSuffix = protocolCount > 1 && routeId === DSH_PLAN_ANTHROPIC_ROUTE_ID;
     routes[routeId] = {
       displayName: `${DSH_MANAGED_LABEL_PREFIX}${plan.displayName}${needsProtocolSuffix ? ' (Anthropic)' : ''}`,

@@ -1,5 +1,28 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Config candidate revision cache (upstream backport)
+
+`openclaw-config-candidate-cache-invalidation.patch` backports the production
+changes from [OpenClaw #142169](https://github.com/openclaw/openclaw/pull/142169),
+merged as `37dbd0aac6556ea9a63f045cabec91963d0571b3` on 2026-09-08.
+It invalidates `config.get` at candidate observation for every writer, including
+agent mutations and watched edits, instead of only config RPC persistence.
+Application revisions and committed notifications still advance at acceptance.
+
+The patch adapts context to v2026.8.1, with no new reload policy. The upstream
+test file uses a newer server harness, so its fixture rewrite is not backported.
+Validate the cache/reloader tests and the real Electron/Gateway config lifecycle
+flow described in `specs/bugfixes/openclaw-config-hot-reload-delivery/2026-09-23-config-lifecycle-design.md`.
+Rebuild the Gateway bundle from patched source; changing the source alone does
+not update the bundled runtime.
+
+Removal: upstream v2026.9.5 contains this commit (v2026.8.1 does not). On an
+upgrade that contains equivalent candidate-observation invalidation, remove this
+patch and rerun agent-mutation/watched-edit freshness, genuine stale-CAS rejection,
+and delayed-application checks. Do not remove LobsterAI's application barrier or
+pending recovery: persistence and runtime application remain different states.
+The broader reload changes in #138112 and #154792 are not part of this backport.
+
 ## Device identity conflicts without an import receipt
 
 `openclaw-device-identity-preservation.patch` aligns the identity migration owner
@@ -489,3 +512,325 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Gateway client request traceparent
+
+`openclaw-gateway-client-request-traceparent.patch` lets a Gateway client put an
+optional W3C `traceparent` on a request frame. The frame schema and the
+authenticated request dispatcher already accept it and run the handler in a
+child of that trace; only the client could not send it: `GatewayClient.request`
+rebuilt its options without the field and the pending request writer never put
+it on the frame. The patch forwards the option through both.
+
+LobsterAI creates one trace per Cowork turn and sends it with `chat.send`
+(including plan-mode recovery sends). The command queue restores the request's
+async context for the agent run, and each model call's diagnostic wrapper adds a
+child `traceparent` header, so every model request of the turn reaches the local
+token proxy and lobsterai-server with the turn's trace id. The server stores it
+in the usage ledger, which lets the client show the turn's credits and lets
+support follow one request from client logs to server logs.
+
+Checked on the pinned source with a real Gateway and a mock
+`openai-completions` provider: a `chat.send` carrying
+`00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01` produced a model HTTP
+request with `traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-<new span>-01`,
+while a `chat.send` without it got an unrelated root trace. The Anthropic
+transport merges the same request headers.
+
+Omitting the option keeps the previous frame bytes. Verify with a rebuilt runtime:
+send a turn on a LobsterAI package model and confirm that the main log's
+`[OpenClawTokenProxy] LLM request started trace=...` lines carry the trace id
+logged by `[OpenClawRuntime] chat.send params`. Remove this patch when the pinned
+upstream Gateway client accepts `traceparent` request options.
+
+## Malformed provider tool calls
+
+`openclaw-openai-completions-tool-call-repair.patch` and
+`openclaw-malformed-tool-call-continuation.patch` keep one malformed tool call
+from ending a whole agent turn.
+
+Why: v2026.8.1 parses OpenAI-compatible terminal tool arguments with plain
+`JSON.parse`. When the model writes a complete call whose strings contain a
+raw line break, an invalid escape (`\'`, `\|`), or an unescaped quote, the
+transport rejects the whole assistant message ("Provider returned an incomplete
+or malformed tool call") and drops the call. The runner's own argument-repair
+wrapper never sees it, and every existing retry is off after earlier tools ran,
+so the user got "Agent couldn't generate a response. Note: some tool actions may
+have already been executed". On 2026-09-23 a deepseek-flash run ended this way
+after seven tools; replying "继续" finished the same edit on the next try.
+v2026.6.1 parsed these buffers leniently, so this failure is new with 8.1.
+
+The repair patch backports upstream v2026.9.5 `repairStringLiterals` and applies
+it to OpenAI-compatible completions (upstream only uses it for Anthropic). Only
+raw control characters and invalid escapes inside string values are repaired;
+valid escapes are preserved as written. Truncated, non-object, empty, or unnamed
+calls stay rejected so a cut-off write never runs. A rejection appends a
+`malformed_tool_call_arguments` message diagnostic with shape facts only
+(reason, mapped provider stop reason, argument length and hash, JSON failure
+class and position). The error class keeps these facts off `code`, `cause`, and
+`errorBody`, so Anthropic-lane error projection and failover classification do
+not change.
+
+The continuation patch gives such a turn up to two internal continuations
+(`activateInternalPrompt`, not persisted as a user turn). The rejected call
+never ran and the turn resumes after the committed transcript, so this is the
+one retry that may follow side-effecting tools. It skips aborted, timed-out,
+failed, yielded, client-tool, approval, and already-finalized attempts. A
+settled-tool final-answer pass is not requested for a rejected call; it would
+drop the action the model was taking. After two failures the existing
+incomplete-turn error is shown. Logs record `malformed tool call rejected
+before execution` or `malformed tool call continuations exhausted` with the
+diagnostic summary.
+
+Verify with upstream `transport-stream-shared.test.ts`,
+`openai-completions.legacy-function-call.test.ts`,
+`malformed-tool-call-recovery.test.ts`,
+`terminal-resolution.malformed-tool-call.test.ts`, and the full-entry
+`run.malformed-tool-call-continuation.integration.test.ts`. Then run LobsterAI's
+`malformedToolCallRecovery` test and rebuild the runtime. Remove the repair
+patch when the pinned upstream applies terminal string-literal repair to
+OpenAI-compatible completions. Remove the continuation patch when upstream
+recovers rejected tool calls after side effects.
+
+## Whole-turn replay after a started model call
+
+`openclaw-skip-turn-replay-after-model-call.patch` stops the reply runner from
+replaying a whole turn once that turn has started a model call. This applies to
+both outer replays in `agent-runner-error-handler.ts`: the one-shot transient
+HTTP retry and the overload retry.
+
+Why: v2026.8.1 still has both replays, and it adds keyed user admission to the
+session transcript. A started model call has already committed the turn's
+`<runId>:user` message and, when the call fails, its error reply. The replay
+admits the same keyed user again, behind that reply, and `SessionManager`
+rejects it with "Session transcript keyed user is outside the current turn"
+(or "Transcript idempotency key ... conflicts with the admitted message"). The
+user then sees "LLM request failed." with that internal text 2.5s later,
+instead of the real provider error. The existing replay guard only reacts to
+tool execution and CLI output; the embedded runner never emits
+`assistant_output_started`, so streamed text or reasoning did not stop the
+replay. On 2026-09-24 a Windows user hit this 6 times out of 6. Each case
+followed a mid-stream `net::ERR_SSL_PROTOCOL_ERROR` in the token proxy, which
+OpenClaw reports as `LLM request timed out.` with `terminated`. v2026.6.1 had
+the replay but not the keyed guard, so this failure is new with 8.1.
+
+The patch adds `OverloadRetryState.modelCallStarted`. The embedded runner's
+`model_call_started` phase sets it, and both replay branches require it to be
+false. Failures before any model call (for example an auth-profile cooldown
+classified as overloaded) still replay as before, with the delayed overload
+notice. After a started call, the first failure is surfaced directly with its
+own classification: LobsterAI maps `providerRuntimeFailureKind: timeout` to its
+response-timeout message. CLI backends (`process_spawned`) are unchanged.
+
+Verify with the upstream suites. The new cases in the provider-failures suite
+check that overloaded, HTTP 503 and interrupted-stream failures are not
+replayed after `model_call_started`. The existing pre-call 503 and overload
+retry cases must still pass:
+
+```sh
+node_modules/.bin/vitest run src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
+node_modules/.bin/vitest run --config test/vitest/vitest.e2e.config.ts src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
+```
+
+These files already fail in 16 cases before this patch: failure copy and trace
+segments changed by other LobsterAI patches. The failing set must stay the
+same. Then run LobsterAI's `turnReplayAfterModelCall` test and rebuild the
+runtime. Remove this patch when the pinned upstream contains
+[OpenClaw #134281](https://github.com/openclaw/openclaw/pull/134281) (v2026.9.1
+and later). That change deletes both outer replays and budgets transient
+retries inside the embedded runner, before any visible output.
+
+## Replaced thinking catalog owner (upstream backport)
+
+`openclaw-tolerate-replaced-thinking-catalog-owner.patch` backports the agents
+half of [OpenClaw #127284](https://github.com/openclaw/openclaw/pull/127284),
+merged as `bf599a721784849e350c18ff703c9e75de939e0d` on 2026-09-01. When the
+provider-scoped read-only catalog finds a published owner prepared for another
+config generation, it skips that owner and builds the scoped catalog from the
+turn's own config instead of throwing `PreparedModelCatalogConfigReplacedError`.
+
+Why: before every embedded run, `resolveRunModelHasVision`
+(`agent-runner-run-params.ts`) decides whether the selected model accepts
+images. When the running `openclaw.json` gives that model no `input`, it calls
+`loadProviderScopedThinkingCatalog`, which reaches
+`loadScopedReadOnlyModelCatalog`. In v2026.8.1 a config mismatch there throws.
+The error is not retried and is not a failover reason, and only startup or a
+reload republishes the owner. Every later turn then fails before reply with
+"prepared model catalog owner config was replaced during the read
+(<agentDir>)", `/new` included, until the gateway restarts. On 2026-10-07 a
+Windows QQ user hit this three turns in a row after sending an image. The
+running config carried incomplete plan-model entries (the restart diff changed
+`models`, `agents` and `plugins`), so every turn took this read, and the image
+turn spent almost two minutes loading provider plugins for media understanding.
+The logs do not show which publication replaced the owner; the patch removes
+the failure mode either way.
+
+The upstream wizard half (`setup.finalize`) is omitted because LobsterAI does
+not run onboarding. The read-only owner path in
+`resolvePreparedModelCatalogOwnerSnapshotWithPolicy` keeps its `throw`, as
+upstream does.
+
+Verify with the upstream suite. The new case fails with the user's error
+without the source change:
+
+```sh
+node_modules/.bin/vitest run src/agents/prepared-model-catalog.scoped-thinking.test.ts src/agents/prepared-model-catalog.test.ts
+```
+
+Then run LobsterAI's `replacedThinkingCatalogOwner` test and rebuild the
+runtime. Remove this patch when the pinned upstream reaches v2026.9.1. Later
+releases harden the same reload window: v2026.9.5 (#147001) keeps channel
+replies on the committed publication, and v2026.9.7 (#154462) keeps active
+turns on their admitted generation.
+
+## Unfinished progress-card plans (upstream backport)
+
+`zz-openclaw-plan-completion-check.patch` backports
+[OpenClaw #160297](https://github.com/openclaw/openclaw/pull/160297), merged as
+`3ba0a0b23761ef8209827f7f3dd0f82713c33bbe` on 2026-09-28. It also takes the
+`progress_card` description sentence from
+[#162903](https://github.com/openclaw/openclaw/pull/162903). A run can save an
+unfinished `progress_card` plan and then stop with an ordinary visible reply.
+The embedded runner now sends one hidden `openclaw.plan-completion-check`
+follow-up in the same run. The model then continues feasible work, reconciles
+the plan, or reports the concrete limitation.
+
+Why: on 2026-10-10 users reported the composer card stuck on
+"第 3/10 步 · 本轮已结束" with MiniMax-M3.1-Flash-Preview. The model had written a
+progress report ("评测尚未收尾，我会继续…") without a tool call. v2026.8.1 only
+recovers empty or reasoning-only turns, so the run completed with seven steps
+pending and nothing resumed it. The desktop card showed that label for a
+`completed` session whose card still had unfinished steps; LobsterAI has since
+removed that card, but a run that stops halfway still leaves the work undone.
+
+Scope: the check runs at most once per run and replays no completed tool call.
+It applies only when the run still owes a visible reply and the model stopped
+with `stop`. The following keep their existing behavior:
+
+- old cards;
+- cancellation, timeouts, yields, refusals and length stops;
+- approval prompts, async tasks and accepted child sessions;
+- queued user messages and plugin `finalize` decisions.
+
+The check does not guarantee that the model finishes. A run can still end on
+"本轮已结束" when the model reports a genuine blocker.
+
+Adaptations for v2026.8.1:
+
+- The NO_REPLY clause from [#164896](https://github.com/openclaw/openclaw/pull/164896)
+  is left out. v2026.8.1 builds the final payload from the last assistant message
+  and has no kept-answer delivery, and LobsterAI's silent-final handling deletes
+  the turn's current assistant message. A blocked model restates its limitation
+  instead.
+- `deferTerminalDelivery` is ported. In v2026.8.1 any `onBeforeTerminalDelivery`
+  holds every assistant event until the run ends. With the patch, events are
+  held only when a `before_agent_finalize` hook exists, so LobsterAI keeps live
+  streaming.
+- Any accepted `sessions_spawn` child counts as pending work: v2026.8.1 has no
+  `expectsCompletionMessage` marker.
+- The upstream steering-admission object does not exist here. The check is
+  skipped when the subscription was unsubscribed during the finalize hook or the
+  attempt no longer owns the active run.
+- Refusals are read from the `provider_refusal` diagnostic.
+- LobsterAI addition: when the check continues the run, the runtime emits a
+  `checkpoint` agent event after the finished answer is flushed.
+  `OpenClawRuntimeAdapter` closes that assistant segment on it
+  (`AgentEventStream.Checkpoint`). Without the event, the adapter splits only on
+  a large stream reset, so a short answer followed by text was overwritten, and
+  the final history sync then kept only the last message. Other clients ignore
+  the unknown stream.
+
+Verify with:
+
+```sh
+node_modules/.bin/vitest run src/agents/embedded-agent-runner/run/attempt-plan-completion.test.ts src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts src/agents/tools/progress-card-tool.test.ts src/agents/harness/selection.test.ts
+```
+
+Then run LobsterAI's `planCompletionCheck` test and the adapter test
+"a run checkpoint keeps a finished answer that the same run follows with more
+text", and rebuild the runtime. In the desktop app, a run that saves an
+unfinished plan and stops should continue in the same turn. The hidden check
+must not appear in chat, and assistant text must still stream live. When a short
+answer is followed by more text, both messages must remain after a reload.
+
+Removal: #160297 ships in v2026.9.7, while #162903 and #164896 ship in
+v2026.10.1. Remove this patch when the pinned upstream reaches v2026.10.1. An
+upgrade to v2026.9.7–v2026.9.9 also replaces it, but loses the paused-checklist
+guidance. Blocked runs still restate their limitation until v2026.10.1.
+
+Upstream does not emit the `checkpoint` event, so after the upgrade the
+adapter's checkpoint handling is dormant. Recheck the short-answer case: a model
+can still follow a finished answer with more text. If the overwrite returns,
+carry the event emission as its own small patch.
+
+## Relinked managed workspaces
+
+`openclaw-managed-workspace-alias-follow.patch` lets a LobsterAI-managed
+workspace follow its current target after it is replaced by a link. OpenClaw
+records each configured workspace path and the real directory it resolved to in
+`workspace_path_aliases`. When the path later resolves somewhere else, v2026.8.1
+fails every message with `workspace path alias points to a different current
+target`. Users hit this by linking `workspace-main` to a synced folder (for
+example OneDrive) after the app had already initialized it. A data-migration
+restore does not copy links, so restoring brings back the empty template and the
+user or agent links it again.
+
+LobsterAI sets `LOBSTERAI_MANAGED_WORKSPACE_ROOT` to its OpenClaw state
+directory for the Gateway. For a workspace path strictly below that root that
+still exists, alias rows pointing at an older target are ignored, the current
+target's own records are used, and the next state write repoints the rows with a
+`workspace` warning that names both paths. The previous target's records are not
+moved or deleted: a link usually points at a different workspace, and copying
+its file attestation would make OpenClaw report the new folder as vanished. A
+missing path keeps its stored owner, so vanished-workspace protection still
+applies. Paths outside the root, and runs without the variable, keep upstream's
+fail-closed behavior.
+
+Run the upstream store tests and the end-to-end relink test:
+
+```sh
+node_modules/.bin/vitest run src/agents/workspace-state-store.test.ts src/agents/workspace.managed-relink.test.ts
+```
+
+Then rebuild the runtime. In the desktop app, initialize the main agent, quit,
+replace `openclaw/state/workspace-main` with a link to a folder that already
+holds agent files, and restart. Messages must succeed, `BOOTSTRAP.md` must not be
+created in the linked folder, and the Gateway log must show the alias warning
+once.
+
+Removal: upstream #133198 (v2026.9.4) only improves the error and adds a
+confirmed `openclaw doctor --fix` rebind that moves records. It does not follow
+the new target on its own, so keep an equivalent of this patch after upgrading,
+adapted to the renamed store helpers.
+
+## Managed image attachments during replay
+
+`openclaw-managed-image-replay.patch` excludes managed outgoing image display
+blocks from the assistant's in-memory model replay. These blocks contain an
+`artifact_managed_image_` ID and a local `/api/chat/media/outgoing/` URL, without
+base64 data. Passing them to the image sanitizer creates the misleading
+`[session:history] omitted image payload: missing data or mimeType` text, which
+models can echo in subsequent answers.
+
+The patch retains persisted attachments, user images, tool image results, and
+assistant images that actually contain data. It also removes standalone echoes
+of that exact diagnostic from old assistant replay text while preserving quoted
+and fenced examples. LobsterAI's assistant display and history extraction apply
+the same narrow cleanup to existing local messages; the stored records remain
+available for diagnosis.
+
+This belongs at OpenClaw's replay boundary: LobsterAI's adapter receives output
+after the sanitizer has already supplied the erroneous text to the model, and
+the prompt-building hook does not provide a message replacement result.
+
+Verify in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/embedded-agent-runner/managed-image-replay.test.ts src/agents/embedded-agent-runner/replay-history.test.ts --maxWorkers=2
+```
+
+Then rebuild the runtime and check a conversation containing previously returned
+images. Existing image cards and regular replies must remain visible, without
+the runtime diagnostic appearing as answer text. Remove this patch when
+upstream handles managed display images before sanitizing model replay at all
+relevant boundaries.

@@ -21,9 +21,11 @@ export const CoworkErrorI18nKey = {
   ModelOverloaded: 'coworkErrorModelOverloaded',
   ModelResponseTimeout: 'coworkErrorModelResponseTimeout',
   NetworkError: 'coworkErrorNetworkError',
+  NetworkErrorViaSystemProxy: 'coworkErrorNetworkErrorViaSystemProxy',
   ServerError: 'coworkErrorServerError',
   TranscriptOversized: 'coworkErrorTranscriptOversized',
   GatewayHeapOutOfMemory: 'coworkErrorGatewayHeapOutOfMemory',
+  WorkspaceAliasRepointed: 'coworkErrorWorkspaceAliasRepointed',
 } as const;
 
 const LOBSTERAI_QUOTA_EXHAUSTED_PATTERN =
@@ -34,6 +36,8 @@ const MODEL_CAPACITY_OVERLOAD_PATTERN =
 
 const API_KEY_PATTERN = String.raw`(?:api\s*key|api[_-]?key|apikey)`;
 const UNAVAILABLE_NETWORK_CODE_PATTERN = String.raw`(?:ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]+)`;
+// Chromium network errors from Electron net.fetch, e.g. relayed by the LobsterAI token proxy.
+const CHROMIUM_NET_ERROR_PATTERN = String.raw`net::ERR_[A-Z0-9_]+`;
 
 const ERROR_RULES: Array<[RegExp, string]> = [
   // A persisted local cooldown is not a new provider billing/auth failure.
@@ -67,6 +71,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   // Gateway / connection issues
   [new RegExp(OpenClawTranscriptSafetyErrorCode.ActiveTranscriptOversized, 'i'), CoworkErrorI18nKey.TranscriptOversized],
   [new RegExp(`gatewayFailureKind=${OpenClawGatewayFailureKind.HeapOutOfMemory}|JavaScript heap out of memory`, 'i'), CoworkErrorI18nKey.GatewayHeapOutOfMemory],
+  // OpenClaw refuses a workspace path that now resolves to another folder than recorded.
+  [/workspace path alias(?:es)? (?:points to a different current target|resolve to conflicting state|conflicts with canonical state)/i, CoworkErrorI18nKey.WorkspaceAliasRepointed],
   [/gateway request timeout for sessions\.patch/i, 'coworkGatewaySessionSyncTimeout'],
   [/gateway.*disconnect|client disconnected/i, 'coworkErrorGatewayDisconnected'],
   [/service restart/i, 'coworkErrorServiceRestart'],
@@ -75,8 +81,9 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [/DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i, 'coworkErrorContentFiltered'],
   // Model/provider response timeouts. Must precede generic request/network timeouts.
   [/LLM (?:idle timeout|request timed out)|no response from model|model response (?:timeout|timed out)/i, CoworkErrorI18nKey.ModelResponseTimeout],
-  // Network errors
-  [new RegExp(`${UNAVAILABLE_NETWORK_CODE_PATTERN}|fetch failed|ConnectTimeoutError|network request failed|socket (?:hang up|closed|reset)|connection.*(?:refused|reset|aborted|closed|timeout|timed out)|could not connect|network.*error|request.*timed out`, 'i'), CoworkErrorI18nKey.NetworkError],
+  // Network errors. Must precede server errors: a proxy-relayed connection failure
+  // arrives as HTTP 502 but never reached the server.
+  [new RegExp(`${UNAVAILABLE_NETWORK_CODE_PATTERN}|${CHROMIUM_NET_ERROR_PATTERN}|fetch failed|ConnectTimeoutError|network request failed|socket (?:hang up|closed|reset)|connection.*(?:refused|reset|aborted|closed|timeout|timed out)|could not connect|network.*error|request.*timed out`, 'i'), CoworkErrorI18nKey.NetworkError],
   // Server errors: HTTP 500/502/503
   [/internal.server.error|bad.gateway|service.unavailable|\b50[023]\b/i, CoworkErrorI18nKey.ServerError],
   // Unknown / unclassified errors from upstream (OpenClaw wraps unrecognized errors)

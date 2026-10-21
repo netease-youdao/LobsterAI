@@ -2,12 +2,15 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { ProviderName } from '@shared/providers/constants';
 import type { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
-import type { ModelThinkingConfig } from '@shared/providers/modelThinking';
+import type { ModelThinkingConfig, ModelThinkingLevel } from '@shared/providers/modelThinking';
 
+import type { ModelPresetId } from '../../../shared/modelPresets/constants';
 import { defaultConfig, getProviderDisplayName } from '../../config';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
 
 export interface Model {
+  presetId?: ModelPresetId;
+  presetThinkingLevel?: ModelThinkingLevel;
   id: string;
   name: string;
   provider?: string; // 模型所属的提供商
@@ -28,6 +31,12 @@ export interface Model {
   explicitContextCache?: boolean; // 是否支持服务端显式上下文缓存
   description?: string; // 模型能力简介
   costMultiplier?: number; // 积分消耗倍率 (1.0=标准)
+  limitedFree?: boolean;
+  limitedFreeActive?: boolean;
+  limitedFreeStartAt?: string | null;
+  limitedFreeEndAt?: string | null;
+  subscriptionPriority?: boolean;
+  busy?: boolean;
   moreModel?: boolean; // 是否收起到“更多模型”分组
   accessible?: boolean; // false = 模型可见但用户无权使用（置灰）
   restrictionHint?: string; // 限制提示（如 "订阅套餐/购买加油包可用"）
@@ -59,7 +68,7 @@ export function isSameModelIdentity(
 }
 
 function isModelAccessible(model: Model | undefined): model is Model {
-  return !!model && model.accessible !== false;
+  return !!model && model.accessible !== false && model.busy !== true;
 }
 
 function selectPreferredAccessibleModel(
@@ -70,7 +79,9 @@ function selectPreferredAccessibleModel(
   if (isModelAccessible(matchedModel)) {
     return matchedModel;
   }
-  return allAvailableModels.find(isModelAccessible) ?? matchedModel ?? allAvailableModels[0] ?? currentModel;
+  return allAvailableModels.find(model => isModelAccessible(model))
+    ?? matchedModel
+    ?? allAvailableModels[0] ?? currentModel;
 }
 
 // 从 providers 配置中构建初始可用模型列表
@@ -118,6 +129,7 @@ export function selectAgentSelectedModel(
   agentModelRef: string,
 ): Model {
   const override = modelState.selectedModelByAgent[agentId];
+  if (override?.presetId && isModelAccessible(override)) return override;
   const trimmed = agentModelRef.trim();
   if (trimmed) {
     const resolved = resolveOpenClawModelRef(trimmed, modelState.availableModels);
@@ -130,7 +142,7 @@ export function selectAgentSelectedModel(
   if (isModelAccessible(modelState.defaultSelectedModel)) {
     return modelState.defaultSelectedModel;
   }
-  return modelState.availableModels.find(isModelAccessible) ?? modelState.defaultSelectedModel;
+  return modelState.availableModels.find(model => isModelAccessible(model)) ?? modelState.defaultSelectedModel;
 }
 
 /**
@@ -167,11 +179,11 @@ const modelSlice = createSlice({
   initialState,
   reducers: {
     setSelectedModel: (state, action: PayloadAction<{ agentId: string; model: Model }>) => {
-      if (action.payload.model.accessible === false) return;
+      if (!isModelAccessible(action.payload.model)) return;
       state.selectedModelByAgent[action.payload.agentId] = action.payload.model;
     },
     setDefaultSelectedModel: (state, action: PayloadAction<Model>) => {
-      if (action.payload.accessible === false) return;
+      if (!isModelAccessible(action.payload)) return;
       state.defaultSelectedModel = action.payload;
     },
     clearAgentSelectedModel: (state, action: PayloadAction<string>) => {

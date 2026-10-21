@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { createOpenClawConfigTarget, persistOpenClawConfigTarget } from '../src/main/libs/openclawConfigTarget';
 import {
   OPENCLAW_STARTUP_MIGRATION_ENTRY,
   OPENCLAW_STARTUP_MIGRATION_RESULT_PREFIX,
@@ -176,6 +177,26 @@ describe.skipIf(!runtimeRoot)('bundled OpenClaw auth profile migration', () => {
     expect(JSON.stringify(result.report)).not.toContain(secretValue);
     expect(fs.readFileSync(source.source, 'utf8')).toBe(source.bytes);
     expect(archives(source.source)).toEqual([]);
+  });
+
+  test('passes once the host bootstrap drops the meta stamp of a pre-v2026.8.1 build', async () => {
+    // LobsterAI 2026.9.4 (OpenClaw v2026.6.1) stamped both fields on every config write.
+    const legacy = JSON.parse(configBytes);
+    legacy.meta = { lastTouchedVersion: '2026.6.1', lastTouchedAt: '2026-10-10T08:14:13.654Z' };
+    configBytes = JSON.stringify(legacy, null, 2);
+    fs.writeFileSync(configPath, configBytes);
+
+    const blocked = await migrate();
+    expect(blocked.code).toBe(1);
+    expect(blocked.report.warnings.join('\n')).toContain('cannot repair unrelated config errors at: meta.');
+
+    // Even a host target identical to the old file must not keep the stamp.
+    persistOpenClawConfigTarget(configPath, createOpenClawConfigTarget(configBytes, configBytes));
+    configBytes = fs.readFileSync(configPath, 'utf8');
+    expect(JSON.parse(configBytes).meta).toEqual({ lastTouchedVersion: '2026.6.1' });
+    expect(await migrate()).toMatchObject({ code: 0, report: {
+      status: OpenClawStartupMigrationStatus.Skipped, warnings: [], remainingPaths: [],
+    } });
   });
 
   test('migrates the configured non-main agent credentials and rotation state without running Doctor', async () => {
