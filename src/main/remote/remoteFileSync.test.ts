@@ -147,7 +147,7 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
       db.prepare("UPDATE library_local_artifacts SET updated_at=? WHERE id='local'").run(number);
     });
   };
-  return { store, db, source, cache, calls, bytes, references, uploads, tick, nextRun,
+  return { store, db, source, cache, calls, bytes, references, uploads, tick, nextRun, health: () => sync.health(),
     tickUnacknowledged: async () => { sync.tick(connection()); await sync.settled(); },
     prepareDelivery: () => sync.prepareRun('s', [fs.realpathSync(directory)], () => true),
     switchOwner: () => { actor = { userId: 'B', scopeKey: 'personal' }; },
@@ -311,9 +311,11 @@ describe('remote files policy and immutable snapshots', () => {
     }
     await f.tick();
     expect(fs.readFileSync(retained, 'utf8')).toBe('old retained evidence');
+    expect(f.health().degraded).toBe(false);
     f.store.updateRun('s', 'succeeded'); await f.tick();
     expect(f.bytes.get('asset1')?.toString()).toBe('first');
     expect(fs.existsSync(retained)).toBe(true);
+    await f.tick(); expect(f.health()).toEqual({ degraded: false, pending: 0 });
   });
   it('intersects server types and limits with local deny-by-default rules', () => {
     expect(remoteFileRule(policy, 'report.md', '5242880', true)).toBeNull();
@@ -418,6 +420,9 @@ describe('artifact sync durable boundaries and protocol', () => {
   it('omits code output cards from live library fallback while preserving user-selected code attachments', async () => {
     const f = fixture(false, false, 'make_docx.js');
     await f.tick();
+    f.store.updateRun('s', 'succeeded'); f.store.remove('fileTerminalBoundary:s:run1'); await f.tick();
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final); expect(f.uploads.size).toBe(0);
+    expect(f.health()).toEqual({ degraded: false, pending: 0 });
     f.store.transaction(() => {
       f.db.prepare("INSERT INTO library_local_artifacts VALUES ('document',?,'工作简报.docx','identity',1,'docx',42,'available')")
         .run(path.join(path.dirname(f.source), '工作简报.docx'));
@@ -506,6 +511,25 @@ describe('artifact sync durable boundaries and protocol', () => {
     expect(f.references).toHaveLength(0);
     expect(f.jobs()[0].references.m1.pinned).toBe(false);
     expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final);
+    await f.tick(); expect(f.health()).toEqual({ degraded: false, pending: 0 });
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final);
+  });
+  it('retains the file warning when the same message has a readable old version but its changed source cannot be captured', async () => {
+    const f = fixture(false), now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now); await f.tick();
+    vi.mocked(Date.now).mockReturnValue(now + 2100); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.jobs()[0].queue).toHaveLength(0); expect(f.jobs()[0].dirtyAt).toBeUndefined();
+    const published = structuredClone(f.jobs()[0].references.m1);
+
+    // Replacing the source invalidates its recorded identity; the old remote receipt remains valid only for v1.
+    fs.renameSync(f.source, `${f.source}.old`); fs.writeFileSync(f.source, 'second version');
+    vi.mocked(Date.now).mockReturnValue(now + 2200); f.store.updateRun('s', 'succeeded'); await f.tick();
+    const job = f.jobs()[0];
+    expect(job.reason).toBe(RemoteFileReason.Final); expect(job.dirtyAt).toBe(now + 2200);
+    expect(job.queue).toHaveLength(0); expect(job.references.m1).toEqual(published);
+    expect(f.uploads.size).toBe(1); expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.health()).toEqual({ degraded: true, pending: 0 });
   });
   it('never attributes the next run bytes to an uncaptured older run', async () => {
     const f = fixture(false); await f.tick(); f.store.updateRun('s', 'succeeded');
@@ -573,9 +597,11 @@ describe('artifact sync durable boundaries and protocol', () => {
     const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); let failed = false;
     f.hook(pathname => { if (pathname.endsWith('/complete') && !failed) { failed = true; throw new Error('offline'); } });
     await f.tick(); const request = f.calls.find(item => item.pathname === '/artifacts/remote/versions')!.body;
+    expect(f.health()).toEqual({ degraded: true, pending: 1 });
     f.hook(); f.reconnect(); vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000); await f.tick();
     expect(f.calls.some(item => item.pathname === '/artifact-uploads/asset1/resume')).toBe(true);
     expect(f.uploads.size).toBe(1); expect(f.references[0].requestId).toBe(request.publicationId);
+    await f.tick(); expect(f.health()).toEqual({ degraded: false, pending: 0 });
   });
   it('pins unchanged final content for a new run without allocating another content asset', async () => {
     const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
@@ -655,6 +681,7 @@ describe('artifact sync durable boundaries and protocol', () => {
     expect(f.jobs()).toHaveLength(0); f.store.updateRun('s', 'succeeded'); f.store.remove('fileTerminalBoundary:s:run1');
     f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='created'").run(); await f.tick();
     expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final); expect(f.uploads.size).toBe(0);
+    expect(f.health()).toEqual({ degraded: true, pending: 0 });
   });
   it('captures a late renderer registration only while the same admitted run remains terminal', async () => {
     const f = fixture(); f.db.prepare("DELETE FROM library_artifact_sessions").run(); await f.tick(); f.store.updateRun('s', 'succeeded');

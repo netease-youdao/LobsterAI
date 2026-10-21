@@ -8,7 +8,7 @@ import { type RemoteArtifactManifest, type RemoteFilePolicy, RemoteFileReason, r
 import type { RemoteInputAsset } from '../../shared/remote/input';
 import { sameOwner, stableJson } from './canonical';
 import type { DesktopInputSource } from './desktopInputMetadata';
-import { projectRemoteArtifacts, type RemoteArtifactProjection,remoteArtifactReasons } from './remoteArtifactProjection';
+import { hasRemoteArtifactSyncFailure, projectRemoteArtifacts, type RemoteArtifactProjection,remoteArtifactReasons } from './remoteArtifactProjection';
 import { touchAvailabilityMessage } from './remoteAvailabilitySource';
 import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
@@ -196,7 +196,7 @@ export class RemoteFileSync {
     this.fileHealth = { degraded: false, pending: 0 };
     if (Date.now() - this.cleanupAt > 3_600_000) {
       // Unknown references prohibit garbage collection, not independent publication of verified resources.
-      await this.cleanupSnapshots(connection).catch(error => { this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Cleanup, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); }); this.cleanupAt = Date.now();
+      await this.cleanupSnapshots(connection).catch(error => { telemetry.emit(Telemetry.Stage, { stage: Telemetry.Cleanup, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); }); this.cleanupAt = Date.now();
     }
     if (this.canUploadInput()) await this.inputs(connection);
     if (!this.policy?.features.artifactPublish || !this.current(connection)) return;
@@ -222,7 +222,7 @@ export class RemoteFileSync {
         if (!this.current(connection)) return;
         if (!this.current(connection, job.localSessionId)) continue;
         this.fileHealth.pending = (this.fileHealth.pending || 0) + job.queue.length + (job.rename ? 1 : 0);
-        if (job.reason) this.fileHealth.degraded = true;
+        if (hasRemoteArtifactSyncFailure(job, job.queue.length > 0 || !!job.rename)) this.fileHealth.degraded = true;
         if ((!job.queue.length && !job.rename) || !this.retryAllowed(job)) continue;
         try {
           if (job.rename && job.artifactId) {

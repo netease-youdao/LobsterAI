@@ -1,8 +1,8 @@
 import { isConversationArtifactFileName } from '../../shared/artifactPreview/displayPolicy';
-import type { RemoteArtifactManifest } from '../../shared/remote/files';
+import { type RemoteArtifactManifest, RemoteFileReason, RemoteFileState } from '../../shared/remote/files';
 
 export interface ArtifactProjectionJob {
-  localArtifactId: string; artifactId?: string; name: string; sizeBytes?: string; messageId?: string; reason?: string;
+  localArtifactId: string; artifactId?: string; name: string; sizeBytes?: string; messageId?: string; reason?: string; dirtyAt?: number;
   references: Record<string, { latest: NonNullable<RemoteArtifactManifest['latest']>; pinned: boolean }>;
 }
 /** A null block retains this message's identity so the current library name cannot revive a hidden version. */
@@ -25,4 +25,13 @@ export function projectRemoteArtifacts(jobs: ArtifactProjectionJob[], messageId:
       sizeBytes: reference.latest.sizeBytes, availability: 'ready', artifactVersion: reference.latest.artifactVersion,
       assetId: reference.latest.assetId, assetVersion: reference.latest.assetVersion, referenceMode: reference.pinned ? 'pinned' : 'latest' } }];
   });
+}
+
+/** Keep local capture evidence without treating an available current file as an unfinished upload. */
+export function hasRemoteArtifactSyncFailure(job: ArtifactProjectionJob, pending: boolean): boolean {
+  if (!job.reason) return false;
+  if (pending || !job.messageId) return true;
+  const projection = projectRemoteArtifacts([job], job.messageId)[0];
+  if (projection?.block === null) return false;
+  return job.reason !== RemoteFileReason.Final || job.dirtyAt !== undefined || projection?.block?.availability !== RemoteFileState.Ready;
 }
