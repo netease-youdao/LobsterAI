@@ -42,7 +42,6 @@ import { ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME } from './accountMenuStyles';
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
 import { DailyCheckInAccountMenuEntry } from './DailyCheckInActivity';
 import { getDailyCheckInAuthScopeKey } from './dailyCheckInActivityState';
-import RemoteControlIcon from './icons/RemoteControlIcon';
 import UserAvatarIcon from './icons/UserAvatarIcon';
 import {
   type StartupCreditCampaignEntry,
@@ -281,7 +280,6 @@ const PointsStackIcon: React.FC = () => (
 interface UserMenuProps {
   dailyCheckInSnapshot: DailyCheckInSnapshot | null;
   onClose: () => void;
-  onOpenDeviceManagement?: () => void;
   onOpenFinalReward: (campaignCode: string) => void;
   startupCreditEntry: StartupCreditCampaignEntry;
 }
@@ -289,7 +287,6 @@ interface UserMenuProps {
 const UserMenu: React.FC<UserMenuProps> = ({
   dailyCheckInSnapshot,
   onClose,
-  onOpenDeviceManagement,
   onOpenFinalReward,
   startupCreditEntry,
 }) => {
@@ -639,13 +636,8 @@ const UserMenu: React.FC<UserMenuProps> = ({
         />
       </div>
 
-      {/* Device management, campaigns and invitations */}
+      {/* Campaigns and invitations */}
       <div className="border-b border-border py-1">
-        {onOpenDeviceManagement && <AccountMenuAction
-          icon={<RemoteControlIcon className="h-4 w-4 shrink-0 text-secondary" />}
-          label={i18nService.t('remoteDeviceManagement')}
-          onClick={() => { onClose(); onOpenDeviceManagement(); }}
-        />}
         {campaignActionLabel && (
           <AccountMenuAction
             icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}
@@ -689,7 +681,6 @@ const formatRewardExpiry = (expiresAt: string): string => {
 };
 
 interface LoginButtonProps {
-  onOpenDeviceManagement?: () => void;
   onActivate?: () => void;
   dismissMenu?: boolean;
   contentLeftOffset?: number;
@@ -697,7 +688,6 @@ interface LoginButtonProps {
 }
 
 const LoginButton: React.FC<LoginButtonProps> = ({
-  onOpenDeviceManagement,
   onActivate,
   dismissMenu = false,
   contentLeftOffset = 0,
@@ -947,14 +937,12 @@ const LoginButton: React.FC<LoginButtonProps> = ({
             <EnterpriseAccountMenu
               context={enterpriseAccountContext}
               onClose={() => setShowMenu(false)}
-              onOpenDeviceManagement={onOpenDeviceManagement}
             />
           )
           : (
             <UserMenu
               dailyCheckInSnapshot={menuDailyCheckInSnapshot}
               onClose={() => setShowMenu(false)}
-              onOpenDeviceManagement={onOpenDeviceManagement}
               onOpenFinalReward={setSelectedFinalRewardCode}
               startupCreditEntry={menuStartupCreditEntry}
             />

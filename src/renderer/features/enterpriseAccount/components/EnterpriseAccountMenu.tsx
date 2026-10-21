@@ -23,7 +23,6 @@ import type {
   EnterpriseAccountIdentity,
 } from '../../../../shared/enterpriseAccount/types';
 import { getAccountMenuDisplayName } from '../../../components/accountMenuState';
-import RemoteControlIcon from '../../../components/icons/RemoteControlIcon';
 import { authService } from '../../../services/auth';
 import {
   getEnterpriseMemberProfileUrl,
@@ -38,7 +37,6 @@ import { resolveEnterpriseMenuFlyoutPosition } from '../enterpriseMenuPosition';
 interface EnterpriseAccountMenuProps {
   context: EnterpriseAccountContext;
   onClose: () => void;
-  onOpenDeviceManagement?: () => void;
 }
 
 interface MenuActionProps {
@@ -68,7 +66,6 @@ const formatCredits = (credits: number): string => (
 export const EnterpriseAccountMenu = ({
   context,
   onClose,
-  onOpenDeviceManagement,
 }: EnterpriseAccountMenuProps) => {
   const user = useSelector((state: RootState) => state.auth.user);
   const isSuperAdmin = context.role === EnterpriseMemberRole.SuperAdmin;
@@ -382,11 +379,6 @@ export const EnterpriseAccountMenu = ({
         </div>
 
         <div className="py-1">
-          {onOpenDeviceManagement && <MenuAction
-            icon={<RemoteControlIcon className={actionIconClassName} />}
-            label={i18nService.t('remoteDeviceManagement')}
-            onClick={() => { onClose(); onOpenDeviceManagement(); }}
-          />}
           {adminIdentities.length > 0 ? (
             <div
               onMouseEnter={openEnterpriseFlyout}

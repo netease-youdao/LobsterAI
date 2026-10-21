@@ -198,7 +198,7 @@ export function RemoteControlPopover({ anchorRef, onClose, onLogin, loginAllowed
   };
   const renderSwitch = (setting: Setting, checked: boolean, label: string) => (
     <div className="flex min-h-11 items-center justify-between gap-3 py-2" aria-busy={busy && activeSetting === setting}>
-      <span className="min-w-0 flex-1 text-sm font-medium text-foreground">{t(label)}</span>
+      <span className="min-w-0 flex-1 text-[length:var(--lobster-text-sidebarCompact)] font-normal leading-normal text-foreground">{t(label)}</span>
       {busy && activeSetting === setting && <span role="status" className="text-xs text-secondary">{t('saving')}</span>}
       <SettingsSwitch label={t(label)} checked={checked} disabled={busy || !state || (signInRequired && !checked && !loginAllowed)} onClick={() => toggle(setting)} />
     </div>
@@ -206,31 +206,31 @@ export function RemoteControlPopover({ anchorRef, onClose, onLogin, loginAllowed
 
   const content = <div ref={panelRef} id="remote-control-popover" role="dialog" aria-labelledby={`${id}-title`}
       style={position}
-      className="non-draggable fixed z-[110] w-80 max-w-[calc(100vw-24px)] max-h-[calc(100vh-24px)] overflow-y-auto overscroll-contain rounded-2xl border border-border bg-surface p-5 text-foreground shadow-xl"
+      className="non-draggable fixed z-[110] w-80 max-w-[calc(100vw-24px)] max-h-[calc(100vh-24px)] overflow-y-auto overscroll-contain rounded-2xl border border-border bg-surface p-4 text-foreground shadow-popover"
       onClick={event => event.stopPropagation()}>
-      <div className="flex items-start justify-between gap-2">
-        <h2 id={`${id}-title`} className="min-w-0 text-sm font-semibold leading-5">{t('remoteTitle')}</h2>
+      <div className="flex min-h-6 items-center justify-between gap-3">
+        <h2 id={`${id}-title`} className="min-w-0 text-sm font-medium">{t('remoteTitle')}</h2>
         <button ref={closeButton} type="button" aria-label={t('close')} onClick={onClose}
-          className="-mr-1 -mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-raised">
+          className="-my-0.5 -mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
           <XMarkIcon className="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
       <div className="mt-3 text-center">
         <div className="mx-auto w-fit max-w-full rounded-xl bg-white p-1">
           <MobileEntryQrBoundary fallback={
-            <div className="flex h-[184px] flex-col items-center justify-center gap-2 px-4 text-center text-xs text-gray-600">
+            <div className="flex h-40 w-40 max-w-full flex-col items-center justify-center gap-2 px-4 text-center text-xs text-gray-600">
               <p role="status">{t('remoteQrUnavailable')}</p>
               <a href={entry.url} className={`${ACTION_CLASS} break-all`} aria-label={`${t(isDownload ? 'remoteEntryDownloadLink' : 'remoteEntryLink')}: ${entry.url}`}
                 onClick={event => { event.preventDefault(); void openEntry(); }}>{entry.url}</a>
             </div>
           }>
-            <QRCodeSVG value={entry.url} size={184} marginSize={4} bgColor="#FFFFFF" fgColor="#000000" title={`${t(isDownload ? 'remoteQrAppDownload' : 'remoteQrOfficialSite')}: ${entry.url}`} />
+            <QRCodeSVG value={entry.url} size={160} marginSize={4} bgColor="#FFFFFF" fgColor="#000000" title={`${t(isDownload ? 'remoteQrAppDownload' : 'remoteQrOfficialSite')}: ${entry.url}`} />
           </MobileEntryQrBoundary>
         </div>
-        <p className="mt-2 text-xs font-medium leading-5">{t(isDownload ? 'remoteQrAppDownload' : 'remoteQrOfficialSite')}</p>
-        <p className="text-xs leading-5 text-secondary">{t(isDownload ? 'remoteQrAppDownloadHint' : 'remoteQrDownloadPending')}</p>
+        <p className="mt-2 text-xs font-normal leading-5">{t(isDownload ? 'remoteQrAppDownload' : 'remoteQrOfficialSite')}</p>
+        {isDownload && <p className="text-xs leading-5 text-secondary">{t('remoteQrAppDownloadHint')}</p>}
       </div>
-      <div className="mt-4 border-t border-border pt-2">
+      <div className="mt-3 border-t border-border pt-1">
         {renderSwitch(RemoteSetting.Connection, enabled, 'remoteAllowConnection')}
         {renderSwitch(RemoteSetting.KeepAwake, keepAwake, 'remoteKeepAwake')}
       </div>

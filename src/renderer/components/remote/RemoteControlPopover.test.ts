@@ -57,7 +57,7 @@ describe('mobile connection popover', () => {
     const entry = endpoints.getMobileAppEntry();
     const { html } = render();
     const qr = renderToStaticMarkup(React.createElement(QRCodeSVG, {
-      value: entry.url, size: 184, marginSize: 4, bgColor: '#FFFFFF', fgColor: '#000000',
+      value: entry.url, size: 160, marginSize: 4, bgColor: '#FFFFFF', fgColor: '#000000',
       title: `${i18nService.t('remoteQrOfficialSite')}: ${entry.url}`,
     }));
     expect(html).toContain(qr);
@@ -67,7 +67,7 @@ describe('mobile connection popover', () => {
     expect(html).not.toContain(i18nService.t('remoteHowItWorks'));
     expect(html).not.toContain(i18nService.t('remoteAllowDescription'));
     expect(html).not.toContain(i18nService.t('remoteKeepAwakeDescription'));
-    expect(html).toContain(i18nService.t('remoteQrDownloadPending'));
+    expect(html).not.toContain(i18nService.t('remoteQrDownloadPending'));
     expect(html).not.toContain(i18nService.t('remoteQrAppDownloadHint'));
   });
 

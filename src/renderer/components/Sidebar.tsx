@@ -1007,7 +1007,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                 )}
                 <LoginButton
                   onActivate={closeRemoteControl}
-                  onOpenDeviceManagement={hideDeviceManagement ? undefined : () => { closeRemoteControl(); onShowSettings({ initialTab: 'remoteDevices' }); }}
                   dismissMenu={remoteControlOpen}
                   contentLeftOffset={isCollapsed ? 0 : sidebarWidth}
                   loggedOutVariant="sidebarPromo"
