@@ -96,6 +96,10 @@ export class SqliteStore {
       );
     `);
 
+    // Import the pre-SQLite config before later migrations populate kv with
+    // completion markers; those markers would otherwise make it look migrated.
+    this.migrateFromElectronStore(basePath);
+
     // Create cowork tables
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cowork_sessions (
@@ -797,7 +801,6 @@ export class SqliteStore {
     }
 
     this.migrateLegacyMemoryFileToUserMemories();
-    this.migrateFromElectronStore(basePath);
   }
 
   onDidChange<T = unknown>(

@@ -47,8 +47,8 @@ const pick = (tokens: AuthTokens): AuthTokens => ({
 });
 
 /**
- * Keeps the long-lived refresh token out of plaintext SQLite wherever the OS offers encryption.
- * Tokens written by older versions are read once and re-saved encrypted. Ciphertext that cannot be
+ * Persists tokens only with OS encryption; otherwise they live in memory until the app exits.
+ * Tokens written by older versions are migrated or removed from storage. Ciphertext that cannot be
  * decrypted (for example after restoring a backup on another machine) means the user signs in again.
  */
 export function createAuthTokenStorage(deps: {
@@ -77,20 +77,21 @@ export function createAuthTokenStorage(deps: {
         deps.store.set<EncryptedAuthTokens>(AUTH_TOKENS_STORE_KEY, { v: 2, enc });
         return;
       } catch (error) {
-        console.warn('[AuthTokens] encryption failed; storing tokens without encryption:',
+        console.warn('[AuthTokens] encryption failed; keeping tokens in memory only:',
           error instanceof Error ? error.name : 'unknown');
       }
     } else {
-      console.warn('[AuthTokens] OS encryption is unavailable; storing tokens without encryption');
+      console.warn('[AuthTokens] OS encryption is unavailable; keeping tokens in memory only');
     }
-    deps.store.set<AuthTokens>(AUTH_TOKENS_STORE_KEY, tokens);
+    // Remove both legacy plaintext and stale credentials from a previous account.
+    deps.store.delete(AUTH_TOKENS_STORE_KEY);
   };
 
   const load = (): AuthTokens | null => {
     const stored = deps.store.get<unknown>(AUTH_TOKENS_STORE_KEY);
     if (isAuthTokens(stored)) {
       const tokens = pick(stored);
-      if (canEncrypt()) persist(tokens);
+      persist(tokens);
       return tokens;
     }
     if (!isEncryptedAuthTokens(stored)) return null;

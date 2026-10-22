@@ -14,7 +14,7 @@ import { isExternalLinkAllowed, PortalLoginOrigin } from '../embeddedLogin/login
 
 const API_PATHS = ['/api/plans', '/api/boost-packs', '/api/subscription', '/api/subscription-trial',
   '/api/payment', '/api/purchase-offers', '/api/recharge-campaign', '/api/enterprise/orders'];
-const READ_ONLY_API_PATHS = new Set(['/api/auth/status', '/api/user/profile', '/api/urs/accountinfo',
+const READ_ONLY_API_PATHS = new Set(['/api/auth/status', '/api/user/profile',
   '/api/models/showcase', '/api/models/pricing-catalog', '/api/enterprise/purchase-config',
   '/api/enterprise/purchase-eligibility', '/api/enterprise/context']);
 const PAYMENT_ROUTES = new Set(['/', '/pricing', '/wechat-sign', '/enterprise/purchase', '/enterprise/purchase-success']);
@@ -77,31 +77,42 @@ export function registerEmbeddedPricingIpcHandlers(deps: EmbeddedPricingDeps) {
   let dispose: (() => void) | null = null;
   let updateBounds: ((bounds: AuthLoginViewBounds) => void) | null = null;
   let lastOptions: EmbeddedPricingOptions = {};
+  let currentState: EmbeddedPricingState = EmbeddedPricingState.Closed;
 
   const emit = (state: EmbeddedPricingState): void => {
+    currentState = state;
     const parent = deps.getMainWindow();
     if (parent && !parent.isDestroyed()) parent.webContents.send(EmbeddedPricingIpc.StateChanged, state);
   };
-  const close = (): void => {
+  const disposeView = (): void => {
     generation += 1;
     dispose?.();
     dispose = null;
     updateBounds = null;
+  };
+  const close = (): void => {
+    disposeView();
     emit(EmbeddedPricingState.Closed);
+  };
+  const invalidateAccount = (): void => {
+    // Destroy remote DOM, QR codes and pending work before changing credentials.
+    // Keep an in-progress login's placeholder so its existing completion retries
+    // pricing with a fresh partition bound to the newly authenticated account.
+    disposeView();
+    if (currentState !== EmbeddedPricingState.LoginRequired) emit(EmbeddedPricingState.Closed);
   };
 
   const open = async (input?: unknown): Promise<{ success: boolean; error?: string }> => {
-    generation += 1;
-    dispose?.();
-    dispose = null;
-    updateBounds = null;
+    disposeView();
     if (input !== undefined) lastOptions = normalizeOptions(input);
     const attempt = generation;
+    const accountKey = deps.getAccountKey();
+    const isCurrent = (): boolean => attempt === generation && deps.getAccountKey() === accountKey;
     emit(EmbeddedPricingState.Loading);
     try {
       const entry = new URL(await deps.resolveLoginUrl());
       const parent = deps.getMainWindow();
-      if (attempt !== generation || !parent || parent.isDestroyed()) return { success: false };
+      if (!isCurrent() || !parent || parent.isDestroyed()) return { success: false };
       const route = routeUrl(entry);
       route.pathname = '/pricing';
       route.search = '';
@@ -115,7 +126,6 @@ export function registerEmbeddedPricingIpcHandlers(deps: EmbeddedPricingDeps) {
 
       const portalOrigin = entry.origin;
       const apiBase = new URL(deps.getServerBaseUrl());
-      const accountKey = deps.getAccountKey();
       const partition = session.fromPartition(`lobsterai-pricing-${crypto.randomUUID()}`);
       const abort = new AbortController();
       const parentContents = parent.webContents;
@@ -145,7 +155,7 @@ export function registerEmbeddedPricingIpcHandlers(deps: EmbeddedPricingDeps) {
           'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
         };
         const fail = (status: number) => new Response(null, { status, headers: cors });
-        if (attempt !== generation || deps.getAccountKey() !== accountKey) return fail(401);
+        if (!isCurrent()) return fail(401);
         const origin = request.headers.get('Origin');
         if (origin && origin !== portalOrigin) return fail(403);
         const allowedPath = API_PATHS.some(path => url.pathname === path || url.pathname.startsWith(`${path}/`))
@@ -157,14 +167,18 @@ export function registerEmbeddedPricingIpcHandlers(deps: EmbeddedPricingDeps) {
           const headers = new Headers({ Accept: 'application/json' });
           const contentType = request.headers.get('Content-Type');
           if (contentType) headers.set('Content-Type', contentType);
+          const body = request.method === 'POST' ? await request.arrayBuffer() : undefined;
+          if (!isCurrent()) return fail(401);
           const fetcher = accountKey ? deps.fetchWithAuth : deps.fetchPublic;
           const response = await fetcher(`${apiBase.origin}${url.pathname}${url.search}`, {
             method: request.method, headers, credentials: 'omit', redirect: 'error',
-            body: request.method === 'POST' ? await request.arrayBuffer() : undefined,
+            body,
             signal: AbortSignal.any([abort.signal, request.signal, AbortSignal.timeout(30_000)]),
           });
-          if (attempt !== generation || deps.getAccountKey() !== accountKey) return fail(401);
-          return new Response(response.status === 204 ? null : await response.arrayBuffer(), {
+          if (!isCurrent()) return fail(401);
+          const responseBody = response.status === 204 ? null : await response.arrayBuffer();
+          if (!isCurrent()) return fail(401);
+          return new Response(responseBody, {
             status: response.status,
             headers: { ...cors, 'Content-Type': response.headers.get('Content-Type') ?? 'application/json', 'Cache-Control': 'no-store' },
           });
@@ -188,6 +202,7 @@ export function registerEmbeddedPricingIpcHandlers(deps: EmbeddedPricingDeps) {
       };
       dispose = () => {
         abort.abort();
+        view.setVisible(false);
         parent.removeListener('resize', resize);
         parent.removeListener('closed', close);
         parentContents.removeListener('did-start-navigation', onParentNavigation);
@@ -274,5 +289,5 @@ export function registerEmbeddedPricingIpcHandlers(deps: EmbeddedPricingDeps) {
       updateBounds?.({ x, y, width, height });
     }
   });
-  return { open, close };
+  return { open, close, invalidateAccount };
 }

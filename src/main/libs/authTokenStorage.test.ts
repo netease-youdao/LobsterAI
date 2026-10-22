@@ -54,12 +54,43 @@ describe('createAuthTokenStorage', () => {
     expect(JSON.stringify(store.values.get(AUTH_TOKENS_STORE_KEY))).not.toContain('refresh-1');
   });
 
-  test('keeps the legacy format when the OS offers no real encryption', () => {
+  test.each([
+    ['linux', true, 'basic_text'],
+    ['linux', true, 'unknown'],
+    ['darwin', false, 'keychain'],
+  ] as const)('keeps tokens only in memory without OS encryption: %s %s %s', (platform, available, backend) => {
     const store = memoryStore();
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    createAuthTokenStorage({ store, encryption: encryption(true, 'basic_text'), platform: 'linux' }).save(tokens);
+    const crypto = encryption(available, backend);
+    const storage = createAuthTokenStorage({ store, encryption: crypto, platform });
+    storage.save(tokens);
 
-    expect(store.values.get(AUTH_TOKENS_STORE_KEY)).toEqual(tokens);
+    expect(storage.get()).toEqual(tokens);
+    expect(store.set).not.toHaveBeenCalled();
+    expect(store.values.has(AUTH_TOKENS_STORE_KEY)).toBe(false);
+    expect(createAuthTokenStorage({ store, encryption: crypto, platform }).get()).toBeNull();
+  });
+
+  test('loads legacy plaintext once and removes it when encryption is unavailable', () => {
+    const store = memoryStore(tokens);
+    const storage = createAuthTokenStorage({ store, encryption: encryption(false), platform: 'darwin' });
+
+    expect(storage.get()).toEqual(tokens);
+    expect(store.values.has(AUTH_TOKENS_STORE_KEY)).toBe(false);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  test.each(['legacy', 'encrypted'])('encryption failure removes stale %s credentials but retains the current session', (format) => {
+    const store = memoryStore(format === 'legacy' ? tokens : { v: 2, enc: 'old-ciphertext' });
+    const crypto = encryption();
+    crypto.encryptString = () => { throw new Error('encryption unavailable'); };
+    const storage = createAuthTokenStorage({ store, encryption: crypto, platform: 'win32' });
+    const current = { accessToken: 'new-access', refreshToken: 'new-refresh' };
+    storage.save(current);
+
+    expect(storage.get()).toEqual(current);
+    expect(store.values.has(AUTH_TOKENS_STORE_KEY)).toBe(false);
+    expect(store.set).not.toHaveBeenCalled();
   });
 
   test('treats unreadable ciphertext as signed out without deleting it', () => {

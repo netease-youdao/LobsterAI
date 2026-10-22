@@ -16,6 +16,7 @@ vi.mock('electron', () => ({
 
 import { DB_FILENAME } from './appConstants';
 import { CoworkStore } from './coworkStore';
+import { AUTH_TOKENS_STORE_KEY, createAuthTokenStorage } from './libs/authTokenStorage';
 import { SqliteStore } from './sqliteStore';
 
 let tempDirs: string[] = [];
@@ -32,6 +33,66 @@ const createTempUserDataPath = (): string => {
   tempDirs.push(dir);
   return dir;
 };
+
+test('imports legacy config before migration markers and preserves the account across restarts', async () => {
+  const userDataPath = createTempUserDataPath();
+  const tokens = { accessToken: 'legacy-access', refreshToken: 'legacy-refresh' };
+  const legacyConfig = {
+    [AUTH_TOKENS_STORE_KEY]: tokens,
+    auth_user: { id: 42, nickname: 'Existing user' },
+    app_config: { language: 'en', theme: 'dark', customSetting: { enabled: true } },
+    installation_uuid: 'existing-installation',
+    skills_state: { 'custom-skill': { enabled: false } },
+  };
+  const configPath = path.join(userDataPath, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify(legacyConfig));
+  // Also cover an interrupted first launch that created an empty kv table.
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  legacyDb.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+  legacyDb.close();
+  const encryption = {
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'keychain',
+    encryptString: (value: string) => Buffer.from(`encrypted:${value}`),
+    decryptString: (value: Buffer) => value.toString().slice('encrypted:'.length),
+  };
+  const store = await SqliteStore.create(userDataPath);
+  try {
+    for (const [key, value] of Object.entries(legacyConfig)) {
+      expect(store.get(key)).toEqual(value);
+    }
+    const auth = createAuthTokenStorage({ store, encryption, platform: 'darwin' });
+    expect(auth.get()).toEqual(tokens);
+    expect(store.get(AUTH_TOKENS_STORE_KEY)).toMatchObject({ v: 2 });
+  } finally {
+    store.close();
+  }
+
+  const restarted = await SqliteStore.create(userDataPath);
+  try {
+    const auth = createAuthTokenStorage({ store: restarted, encryption, platform: 'darwin' });
+    expect(auth.get()).toEqual(tokens);
+    for (const [key, value] of Object.entries(legacyConfig)) {
+      if (key !== AUTH_TOKENS_STORE_KEY) expect(restarted.get(key)).toEqual(value);
+    }
+    auth.clear();
+    restarted.delete('auth_user');
+    restarted.set('app_config', { theme: 'light' });
+  } finally {
+    restarted.close();
+  }
+
+  const afterLogout = await SqliteStore.create(userDataPath);
+  try {
+    // The old config file must not resurrect a logged-out account or overwrite new settings.
+    expect(afterLogout.get(AUTH_TOKENS_STORE_KEY)).toBeUndefined();
+    expect(afterLogout.get('auth_user')).toBeUndefined();
+    expect(afterLogout.get('app_config')).toEqual({ theme: 'light' });
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual(legacyConfig);
+  } finally {
+    afterLogout.close();
+  }
+});
 
 const createLegacyDatabase = (userDataPath: string): void => {
   const db = new Database(path.join(userDataPath, DB_FILENAME));

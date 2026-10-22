@@ -5616,6 +5616,7 @@ if (!gotTheLock) {
   // ── Auth IPC handlers ──
 
   let authAccountGeneration = 0;
+  let invalidateEmbeddedPricingAccount: (() => void) | null = null;
   let authExchangeIntentSequence = 0;
   let activeAuthExchangeIntent: AuthExchangeIntentSnapshot | null = null;
 
@@ -5763,6 +5764,7 @@ if (!gotTheLock) {
     authExchangeIntentSequence += 1;
     activeAuthExchangeIntent = null;
     authAccountGeneration += 1;
+    invalidateEmbeddedPricingAccount?.();
     const quotaGateChanged = (
       cachedSubscriptionStatus !== AuthSubscriptionStatus.Free
       || cachedMediaGenerationEntitled
@@ -7899,6 +7901,7 @@ if (!gotTheLock) {
     authExchangeIntentSequence += 1;
     activeAuthExchangeIntent = null;
     authAccountGeneration += 1;
+    invalidateEmbeddedPricingAccount?.();
     mediaSelectionBySession.clear();
     mediaTurnAccountScopeBySession.clear();
     mediaReferencesBySession.clear();
@@ -8075,6 +8078,7 @@ if (!gotTheLock) {
       const previousAccountScope = getCurrentMediaAccountScope();
       activeAuthExchangeIntent = null;
       authAccountGeneration += 1;
+      invalidateEmbeddedPricingAccount?.();
       desktopCompanionManager?.resetLanguageTools();
       const exchangeAccountGeneration = authAccountGeneration;
       clearEnterpriseAccountContext(getStore());
@@ -8141,6 +8145,7 @@ if (!gotTheLock) {
         && authExchangeIntentSequence === exchangeIntent.intentId
       ) {
         authAccountGeneration += 1;
+        invalidateEmbeddedPricingAccount?.();
         if (startingTokens) {
           saveAuthTokens(startingTokens.accessToken, startingTokens.refreshToken);
         } else {
@@ -8210,6 +8215,7 @@ if (!gotTheLock) {
     fetchPublic: (url, options) => net.fetch(url, options),
     openExternal: url => { void shell.openExternal(url); },
   });
+  invalidateEmbeddedPricingAccount = embeddedPricing.invalidateAccount;
 
   const embeddedLoginService = new EmbeddedLoginService({
     onViewChanged: visible => {
@@ -8584,7 +8590,7 @@ if (!gotTheLock) {
   ipcMain.handle(AuthIpcChannel.Logout, async () => {
     const tokens = getAuthTokens();
     const enterpriseHeaders = getEnterpriseAccountHeaders();
-    const logoutBody = JSON.stringify(withKeyfromBody({}));
+    const logoutBody = JSON.stringify(withKeyfromBody({ refreshToken: tokens?.refreshToken }));
     clearLocalAuthSession({
       reason: AuthSessionChangeReason.UserLogout,
       notifyRenderer: true,
@@ -8596,7 +8602,7 @@ if (!gotTheLock) {
         const serverBaseUrl = getServerApiBaseUrl();
         const logoutUrl = `${serverBaseUrl}/api/auth/logout`;
         console.log(`[Auth] requesting logout at ${logoutUrl}`);
-        await net.fetch(logoutUrl, {
+        const response = await net.fetch(logoutUrl, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${tokens.accessToken}`,
@@ -8605,6 +8611,9 @@ if (!gotTheLock) {
           },
           body: logoutBody,
         });
+        if (!response.ok) {
+          console.warn('[Auth] remote logout was rejected after local credentials were cleared:', response.status);
+        }
       } catch (error) {
         console.warn('[Auth] remote logout failed after local credentials were cleared:', error);
       }
