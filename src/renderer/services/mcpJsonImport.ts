@@ -1,3 +1,4 @@
+import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpServerFormData, McpToolFilter, McpTransportType } from '../types/mcp';
 
 /**
@@ -159,6 +160,8 @@ export function parseMcpServersJson(input: string): McpJsonImportResult {
         transportType: resolveRemoteTransport(rawConfig.type ?? rawConfig.transport, url),
         url,
         headers: toStringRecord(rawConfig.headers),
+        // OpenClaw's own `auth: "oauth"` marks a server that signs in with MCP OAuth.
+        ...(rawConfig.auth === McpAuthMode.OAuth ? { auth: McpAuthMode.OAuth } : {}),
         ...toOptionalServerKnobs(rawConfig),
       });
     } else {

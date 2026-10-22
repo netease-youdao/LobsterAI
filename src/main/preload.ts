@@ -82,6 +82,7 @@ import {
   EnterpriseAccountIpcChannel,
   type EnterpriseQuotaRequestType,
 } from '../shared/enterpriseAccount/constants';
+import { type FeedbackInput,FeedbackIpc } from '../shared/feedback/constants';
 import { FOLLOW_UP_SUGGESTION_CHANNEL, type FollowUpSuggestionRequest } from '../shared/followUpSuggestion';
 import {
   type HtmlShareAccessMode,
@@ -91,10 +92,12 @@ import {
   type HtmlShareSourceType,
   type HtmlShareStatus,
 } from '../shared/htmlShare/constants';
-import type {
-  KitReference,
-  KitSkillMetadata,
-  ResolvedKitCapabilities,
+import {
+  KitIpcChannel,
+  type KitReference,
+  type KitSkillMetadata,
+  type KitStoreResponse,
+  type ResolvedKitCapabilities,
 } from '../shared/kit/constants';
 import { LibraryIpc } from '../shared/library/constants';
 import type {
@@ -113,6 +116,7 @@ import {
   type LocalWebService,
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
+import { LogIpc } from '../shared/logExport/constants';
 import { McpIpcChannel } from '../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../shared/mcp/toolDiscovery';
 import type {
@@ -123,6 +127,7 @@ import type {
 } from '../shared/media/defaultPolicy';
 import { type ModelPresetId, ModelPresetIpc } from '../shared/modelPresets/constants';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
+import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
@@ -157,6 +162,7 @@ import type {
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { createLanguageToolsBridge } from './desktopCompanion/languageToolsPreload';
+import { createImageEditingBridge } from './imageEditingPreload';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
@@ -283,6 +289,10 @@ contextBridge.exposeInMainWorld('electron', {
     listTools: (request: McpToolDiscoveryRequest) => ipcRenderer.invoke(McpIpcChannel.ListTools, request),
     fetchMarketplace: () => ipcRenderer.invoke(McpIpcChannel.FetchMarketplace),
     connectQichacha: () => ipcRenderer.invoke(McpIpcChannel.ConnectQichacha),
+    oauthLogin: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthLogin, id),
+    oauthCancel: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthCancel, id),
+    oauthLogout: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthLogout, id),
+    oauthStatus: () => ipcRenderer.invoke(McpIpcChannel.OAuthStatus),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(McpIpcChannel.Changed, handler);
@@ -290,7 +300,7 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
   kits: {
-    fetchStore: () => ipcRenderer.invoke('kits:fetchStore'),
+    fetchStore: (): Promise<KitStoreResponse> => ipcRenderer.invoke(KitIpcChannel.FetchStore),
     install: (params: {
       kitId: string;
       bundleUrl: string;
@@ -419,15 +429,7 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('window:state-changed', handler);
     },
   },
-  getApiConfig: () => ipcRenderer.invoke('get-api-config'),
-  checkApiConfig: (options?: { probeModel?: boolean }) =>
-    ipcRenderer.invoke('check-api-config', options),
-  saveApiConfig: (config: {
-    apiKey: string;
-    baseURL: string;
-    model: string;
-    apiType?: 'anthropic' | 'openai';
-  }) => ipcRenderer.invoke('save-api-config', config),
+  checkApiConfig: () => ipcRenderer.invoke('check-api-config'),
   generateSessionTitle: (request: GenerateSessionTitleRequest) =>
     ipcRenderer.invoke(CoworkIpcChannel.GenerateSessionTitle, request),
   getRecentCwds: (limit?: number) => ipcRenderer.invoke('get-recent-cwds', limit),
@@ -462,6 +464,13 @@ contextBridge.exposeInMainWorld('electron', {
       get: () => ipcRenderer.invoke(OpenClawSessionPolicyIpc.Get),
       set: (config: { keepAlive: '1d' | '7d' | '30d' | '365d' }) =>
         ipcRenderer.invoke(OpenClawSessionPolicyIpc.Set, config),
+    },
+    userConfig: {
+      getStatus: () => ipcRenderer.invoke(OpenClawUserConfigIpc.GetStatus),
+      setEnabled: (enabled: boolean) => ipcRenderer.invoke(OpenClawUserConfigIpc.SetEnabled, enabled),
+      openFile: () => ipcRenderer.invoke(OpenClawUserConfigIpc.OpenFile),
+      revealFile: () => ipcRenderer.invoke(OpenClawUserConfigIpc.RevealFile),
+      apply: () => ipcRenderer.invoke(OpenClawUserConfigIpc.Apply),
     },
     session: {
       patch: (options: {
@@ -1160,6 +1169,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(AsrIpcChannel.CreateRealtimeSession, options),
   },
   artifact: {
+    imageEditing: createImageEditingBridge(ipcRenderer),
     office: createOfficeBridges(ipcRenderer),
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
@@ -1231,6 +1241,9 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(AppIpcChannel.OpenWithPathsAvailable, handler);
     },
   },
+  feedback: {
+    submit: (input: FeedbackInput) => ipcRenderer.invoke(FeedbackIpc.Submit, input),
+  },
   subscriptionTrial: {
     status: () => ipcRenderer.invoke(SubscriptionTrialIpc.Status),
   },
@@ -1288,7 +1301,7 @@ contextBridge.exposeInMainWorld('electron', {
   log: {
     getPath: () => ipcRenderer.invoke('log:getPath'),
     openFolder: () => ipcRenderer.invoke('log:openFolder'),
-    exportZip: () => ipcRenderer.invoke('log:exportZip'),
+    exportZip: () => ipcRenderer.invoke(LogIpc.ExportZip),
     fromRenderer: (level: string, tag: string, message: string) =>
       ipcRenderer.send('log:fromRenderer', level, tag, message),
   },

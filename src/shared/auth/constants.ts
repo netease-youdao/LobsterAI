@@ -73,7 +73,6 @@ export type AuthRefreshFailureKind =
   typeof AuthRefreshFailureKind[keyof typeof AuthRefreshFailureKind];
 
 export const AuthRefreshReason = {
-  CompatProxy: 'compat-proxy',
   Manual: 'manual',
   OpenClawProxy: 'openclaw-proxy',
   Passive: 'passive',

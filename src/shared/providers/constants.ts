@@ -97,6 +97,16 @@ export const ApiFormat = {
 } as const;
 export type ApiFormat = typeof ApiFormat[keyof typeof ApiFormat];
 
+// ─── OpenAI API Mode (endpoint family under ApiFormat.OpenAI) ───────────
+// Kept separate from ApiFormat so older builds that only know
+// 'anthropic' | 'openai' fall back to Chat Completions instead of
+// misreading an unknown format.
+export const OpenAIApiMode = {
+  ChatCompletions: 'chat-completions',
+  Responses: 'responses',
+} as const;
+export type OpenAIApiMode = typeof OpenAIApiMode[keyof typeof OpenAIApiMode];
+
 // ─── Auth Type ──────────────────────────────────────────────────────────
 export const AuthType = {
   ApiKey: 'api-key',
@@ -183,6 +193,20 @@ interface ProviderDefInput {
     readonly maxTokens?: number;
   }[];
   /**
+   * Models that used to be in defaultModels. They are no longer seeded into new
+   * configs, but their capability metadata stays known so saved user configs that
+   * still list them keep resolving the same image/thinking/context values.
+   */
+  readonly legacyModels?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly supportsImage: boolean;
+    readonly supportsVideo?: boolean;
+    readonly supportsThinking?: boolean;
+    readonly contextWindow?: number;
+    readonly maxTokens?: number;
+  }[];
+  /**
    * The OpenClaw gateway provider ID used when building model refs (e.g. "provider/modelId").
    * Most providers share the same value as `id`, but some differ
    * (e.g. zhipu → zai, gemini → google).
@@ -220,6 +244,8 @@ const PROVIDER_DEFINITIONS = [
     defaultModels: [
       { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
+    ],
+    legacyModels: [
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false, supportsThinking: true },
     ],
   },
@@ -248,7 +274,10 @@ const PROVIDER_DEFINITIONS = [
     enPriority: 0,
     defaultModels: [
       { id: 'kimi-k3', name: 'Kimi K3', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 1_048_576 },
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
       { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
+    ],
+    legacyModels: [
       { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
     ],
     codingPlanModels: [{ id: 'kimi-for-coding', name: 'Kimi K2.5', supportsImage: true, supportsThinking: true, contextWindow: 256_000 }],
@@ -274,6 +303,11 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
+      { id: 'qwen3.8-max', name: 'Qwen3.8 Max', supportsImage: true, contextWindow: 1_000_000 },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', supportsImage: true, contextWindow: 1_000_000 },
+      { id: 'qwen3.8-flash', name: 'Qwen3.8 Flash', supportsImage: true, contextWindow: 1_000_000 },
+    ],
+    legacyModels: [
       { id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', supportsImage: true, contextWindow: 1_000_000 },
       { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true, contextWindow: 1_000_000 },
     ],
@@ -299,7 +333,11 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
+      { id: 'glm-5.3', name: 'GLM 5.3', supportsImage: false, supportsThinking: true, contextWindow: 1_048_576 },
+      { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', supportsImage: true, supportsThinking: true, contextWindow: 1_048_576 },
       { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false, supportsThinking: true, contextWindow: 202_800 },
+    ],
+    legacyModels: [
       { id: 'glm-5', name: 'GLM 5', supportsImage: false, supportsThinking: true, contextWindow: 202_800 },
       { id: 'glm-4.7', name: 'GLM 4.7', supportsImage: false, supportsThinking: true, contextWindow: 204_800 },
     ],
@@ -322,6 +360,9 @@ const PROVIDER_DEFINITIONS = [
     defaultModels: [
       { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false, contextWindow: 204_800 },
+      { id: 'MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 Highspeed', supportsImage: false, contextWindow: 204_800 },
+    ],
+    legacyModels: [
       { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false, contextWindow: 204_800 },
     ],
   },
@@ -427,8 +468,11 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+    ],
+    legacyModels: [
+      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
     ],
   },
   {
@@ -633,8 +677,24 @@ export interface ProviderDef {
     readonly contextWindow?: number;
     readonly maxTokens?: number;
   }[];
+  /** Former default models, kept only for capability lookup of saved configs */
+  readonly legacyModels?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly supportsImage: boolean;
+    readonly supportsVideo?: boolean;
+    readonly supportsThinking?: boolean;
+    readonly contextWindow?: number;
+    readonly maxTokens?: number;
+  }[];
   readonly openClawProviderId: OpenClawProviderId;
 }
+
+const getKnownProviderModels = (def: ProviderDef) => [
+  ...def.defaultModels,
+  ...(def.codingPlanModels ?? []),
+  ...(def.legacyModels ?? []),
+];
 
 // ═══════════════════════════════════════════════════════
 // 5. Registry Implementation
@@ -660,7 +720,7 @@ class ProviderRegistryImpl {
     const maxTokensIdx = new Map<string, number>();
     for (const def of definitions) {
       idx.set(def.id, def);
-      for (const model of [...def.defaultModels, ...(def.codingPlanModels ?? [])]) {
+      for (const model of getKnownProviderModels(def)) {
         const existing = modelIdx.get(model.id);
         modelIdx.set(model.id, existing === true || model.supportsImage);
         const existingVideo = modelVideoIdx.get(model.id);
@@ -733,8 +793,7 @@ class ProviderRegistryImpl {
   getProviderModelSupportsImage(providerName: string, modelId: string): boolean | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
-    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
-      .find(candidate => candidate.id === modelId);
+    const model = getKnownProviderModels(def).find(candidate => candidate.id === modelId);
     return model?.supportsImage;
   }
 
@@ -745,8 +804,7 @@ class ProviderRegistryImpl {
   getProviderModelSupportsVideo(providerName: string, modelId: string): boolean | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
-    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
-      .find(candidate => candidate.id === modelId);
+    const model = getKnownProviderModels(def).find(candidate => candidate.id === modelId);
     return model?.supportsVideo;
   }
 
@@ -757,16 +815,14 @@ class ProviderRegistryImpl {
   getProviderModelSupportsThinking(providerName: string, modelId: string): boolean | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
-    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
-      .find(candidate => candidate.id === modelId);
+    const model = getKnownProviderModels(def).find(candidate => candidate.id === modelId);
     return model?.supportsThinking;
   }
 
   getProviderModelContextWindow(providerName: string, modelId: string): number | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
-    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
-      .find(candidate => candidate.id === modelId);
+    const model = getKnownProviderModels(def).find(candidate => candidate.id === modelId);
     return model?.contextWindow;
   }
 
@@ -777,8 +833,7 @@ class ProviderRegistryImpl {
   getProviderModelMaxTokens(providerName: string, modelId: string): number | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
-    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
-      .find(candidate => candidate.id === modelId);
+    const model = getKnownProviderModels(def).find(candidate => candidate.id === modelId);
     return model?.maxTokens;
   }
 

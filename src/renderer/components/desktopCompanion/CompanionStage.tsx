@@ -1,7 +1,8 @@
 import { PaperClipIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 
-import { CompanionAnalyticsAction, CompanionAnalyticsOutcome, CompanionAnalyticsSource, CompanionAnalyticsStage } from '../../../shared/desktopCompanion/analytics';
+import { CompanionAnalyticsAction, CompanionAnalyticsOutcome, CompanionAnalyticsSource, CompanionAnalyticsStage,
+  companionTaskFailure, CompanionTaskFailureStage } from '../../../shared/desktopCompanion/analytics';
 import {
   type DesktopCompanionStage,
   DesktopCompanionStageCommandType,
@@ -130,7 +131,8 @@ function DropZone({ stage }: { stage: DropStage }) {
     reportCompanionAnalytics({ ...analytics, stage: CompanionAnalyticsStage.Submit });
     let outcome: CompanionAnalyticsOutcome = CompanionAnalyticsOutcome.Failed;
     let attachmentCount = 0;
-    let finishTask: ((success: boolean) => void) | undefined;
+    let finishTask: ReturnType<typeof beginCompanionTask> | undefined;
+    let failureStage: CompanionTaskFailureStage = CompanionTaskFailureStage.Prepare;
     // Keep the strip steady while the drop is being resolved, even after mouse-up.
     void api.stageCommand({ type: DesktopCompanionStageCommandType.StageHover, hovering: true });
     try {
@@ -143,14 +145,16 @@ function DropZone({ stage }: { stage: DropStage }) {
         return;
       }
       finishTask = beginCompanionTask(CompanionAnalyticsSource.FileDrop);
-      const result = await startCompanionTask({ prompt: t(companionDropCopyKeys(action).prompt), attachments });
+      const result = await startCompanionTask({ prompt: t(companionDropCopyKeys(action).prompt), attachments }, stage => { failureStage = stage; });
       if ('sessionId' in result) {
         finishTask(true);
         outcome = CompanionAnalyticsOutcome.Success;
         void api.stageCommand({ type: DesktopCompanionStageCommandType.DropStarted, sessionId: result.sessionId });
         return;
       }
+      finishTask(false, result.failure);
     } catch (error) {
+      finishTask?.(false, companionTaskFailure(error, failureStage));
       console.error('[DesktopCompanion] Failed to handle file drop', error);
     } finally {
       finishTask?.(false);

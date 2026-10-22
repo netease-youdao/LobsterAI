@@ -16,6 +16,7 @@ import { BrowserPasskeyUiEvent } from '../shared/browserWebAccess/passkeys';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { DesktopCompanionMainPage } from '../shared/desktopCompanion/constants';
 import { ENABLE_EXPERT_PLAZA_UI } from '../shared/featureFlags';
+import { FeedbackUiEvent } from '../shared/feedback/constants';
 import {
   LibraryNavigationEvent,
   LibrarySourceFilter,
@@ -677,8 +678,7 @@ const App: React.FC = () => {
     const handleOnline = () => {
       console.log('[Renderer] Network online');
       window.electron.networkStatus.send('online');
-      // A startup load that failed while offline has no other retry trigger.
-      void authService.refreshServerModels();
+      void authService.recoverAccount();
     };
 
     const handleOffline = () => {
@@ -715,6 +715,7 @@ const App: React.FC = () => {
 
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {
     setSettingsOptions((current) => ({
+      openFeedback: options?.openFeedback,
       initialTab: options?.initialTab,
       notice: options?.notice,
       noticeI18nKey: options?.noticeI18nKey,
@@ -1833,6 +1834,12 @@ const App: React.FC = () => {
     return () => window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
   }, [handleShowSettings]);
 
+  useEffect(() => {
+    const openFeedback = () => handleShowSettings({ openFeedback: true });
+    window.addEventListener(FeedbackUiEvent.OpenSettings, openFeedback);
+    return () => window.removeEventListener(FeedbackUiEvent.OpenSettings, openFeedback);
+  }, [handleShowSettings]);
+
   // 监听托盘菜单、桌面悬浮球打开设置的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on(AppIpcChannel.OpenSettings, (request?: OpenSettingsRequest) => {
@@ -2131,6 +2138,7 @@ const App: React.FC = () => {
             <SkinProvider>
               <Settings
                 onClose={handleCloseSettings}
+                openFeedback={settingsOptions.openFeedback}
                 initialTab={settingsOptions.initialTab}
                 initialTabRequestId={settingsOptions.requestId}
                 notice={settingsOptions.notice}
@@ -2293,6 +2301,7 @@ const App: React.FC = () => {
         <Settings
           onClose={handleCloseSettings}
           onStartAiSkin={handleStartAiSkinFromSettings}
+          openFeedback={settingsOptions.openFeedback}
           initialTab={settingsOptions.initialTab}
           initialTabRequestId={settingsOptions.requestId}
           notice={settingsOptions.notice}

@@ -15,7 +15,7 @@ import {
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import MediaTaskCard from './MediaTaskCard';
-import type { MediaTaskPresentation } from './mediaTaskPresentation';
+import { isMediaGenerationToolName, type MediaTaskPresentation } from './mediaTaskPresentation';
 import {
   type ConsolidatedItem,
   formatElapsedDuration,
@@ -99,6 +99,7 @@ const ToolCallGroup: React.FC<{
     : null;
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
+  const isMediaTool = isMediaGenerationToolName(rawToolName);
   const toolName = getToolDisplayName(rawToolName);
   const toolInput = toolUse.metadata?.toolInput;
   const isCronTool = isCronToolName(rawToolName);
@@ -189,6 +190,7 @@ const ToolCallGroup: React.FC<{
     <>
       {isMediaGenerateRunning(group) && isSessionStreaming && (() => {
         const streamingInfo = parseMediaStreamingInfo(group);
+        if (!streamingInfo.taskId) return null;
         const pollCount = streamingInfo.pollCount ?? getRetainedMediaPollCount(streamingInfo, retainedMediaPollCounts);
         return (
           <div className={`${containerClass} flex items-center gap-2`}>
@@ -357,7 +359,7 @@ const ToolCallGroup: React.FC<{
     const rowLiveDetail = isRowLive && !isExpanded ? getActivityLiveDetail(stepItem) : null;
     // A file being written already shows its growing +N/-M count; a timer
     // beside it says nothing more. Commands keep theirs.
-    const showRunningElapsed = isRunning && stepKind !== ActivityStepKind.Edit;
+    const showRunningElapsed = isRunning && !isMediaTool && stepKind !== ActivityStepKind.Edit;
     // Terminal output and diffs carry their own frame; anything else gets one
     // so it does not float loose under the step line.
     const hasOwnFrame = isBashTool || isEditWithDiff;
@@ -456,9 +458,9 @@ const ToolCallGroup: React.FC<{
                   {i18nService.t(isGenerating ? 'coworkActivityLiveGenerating' : 'coworkToolRunning')}
                 </span>
               )}
-              <span className="flex-shrink-0 whitespace-pre">
+              {!isMediaTool && <span className="flex-shrink-0 whitespace-pre">
                 <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
-              </span>
+              </span>}
             </div>
           )}
         </div>

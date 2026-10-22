@@ -73,7 +73,7 @@ const RunDeliveryNotice: React.FC<{ run: ScheduledTaskRun; task?: ScheduledTask 
       {canResend && !accepted && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button type="button" disabled={sending} onClick={() => void resend()}
-            className="rounded-md bg-primary px-3 py-1.5 text-xs text-white disabled:opacity-50">
+            className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50">
             {i18nService.t(sending ? 'scheduledTasksWeixinResending' : 'scheduledTasksWeixinResend')}
           </button>
           <span className="text-xs text-secondary">{i18nService.t('scheduledTasksWeixinResendHint')}</span>

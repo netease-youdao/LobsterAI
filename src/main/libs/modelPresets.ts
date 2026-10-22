@@ -29,18 +29,22 @@ export function createModelPresetClient(dependencies: Dependencies) {
       if (!isCurrent()) throw new Error('Account changed while loading model presets');
       return body.data.filter(preset => parseModelPresetId(preset.presetId));
     },
-    resolve(sessionId: string, presetId: ModelPresetId, requiresImage: boolean): Promise<ResolvedPresetModel> {
+    resolve(sessionId: string, presetId: ModelPresetId, requiresImage: boolean, signal?: AbortSignal): Promise<ResolvedPresetModel> {
       const key = `${sessionId}:${presetId}:${requiresImage}`;
-      const existing = pending.get(key);
+      // Independently cancellable calls must not share another caller's transport.
+      const existing = signal ? undefined : pending.get(key);
       if (existing) return existing;
       const isCurrent = dependencies.isAccountCurrent();
       const request = (async () => {
+        signal?.throwIfAborted();
         const response = await dependencies.fetchWithAuth(`${dependencies.serverBaseUrl()}/api/models/${modelPresetModelId(presetId)}/resolve`, {
           method: 'POST',
           headers: { ...dependencies.headers(), 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId, requiresImage }),
+          signal,
         });
         const body = await response.json() as { code: number; data?: ResolvedPresetModel; message?: string };
+        signal?.throwIfAborted();
         if (!isCurrent()) throw new Error('Account changed while resolving model preset');
         if (!response.ok || body.code !== 0 || !body.data?.modelId || body.data.accessible === false
           || !['openai', 'anthropic'].includes(body.data.apiFormat)) {
@@ -48,8 +52,10 @@ export function createModelPresetClient(dependencies: Dependencies) {
         }
         return body.data;
       })();
-      pending.set(key, request);
-      void request.finally(() => { if (pending.get(key) === request) pending.delete(key); }).catch((): void => {});
+      if (!signal) {
+        pending.set(key, request);
+        void request.finally(() => { if (pending.get(key) === request) pending.delete(key); }).catch((): void => {});
+      }
       return request;
     },
   };

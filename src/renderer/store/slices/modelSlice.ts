@@ -109,10 +109,19 @@ function buildInitialModels(): Model[] {
 export let availableModels: Model[] = buildInitialModels();
 const defaultModelProvider = defaultConfig.model.defaultModelProvider;
 
+export const ServerModelLoadStatus = {
+  Idle: 'idle',
+  Loading: 'loading',
+  Ready: 'ready',
+  Error: 'error',
+} as const;
+export type ServerModelLoadStatus = typeof ServerModelLoadStatus[keyof typeof ServerModelLoadStatus];
+
 interface ModelState {
   defaultSelectedModel: Model;
   selectedModelByAgent: Record<string, Model>;
   availableModels: Model[];
+  serverModelLoadStatus: ServerModelLoadStatus;
 }
 
 /**
@@ -172,12 +181,16 @@ const initialState: ModelState = {
   ) || availableModels[0],
   selectedModelByAgent: {},
   availableModels: availableModels,
+  serverModelLoadStatus: ServerModelLoadStatus.Idle,
 };
 
 const modelSlice = createSlice({
   name: 'model',
   initialState,
   reducers: {
+    setServerModelLoadStatus: (state, action: PayloadAction<ServerModelLoadStatus>) => {
+      state.serverModelLoadStatus = action.payload;
+    },
     setSelectedModel: (state, action: PayloadAction<{ agentId: string; model: Model }>) => {
       if (!isModelAccessible(action.payload.model)) return;
       state.selectedModelByAgent[action.payload.agentId] = action.payload.model;
@@ -206,6 +219,7 @@ const modelSlice = createSlice({
       syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
     },
     setServerModels: (state, action: PayloadAction<Model[]>) => {
+      state.serverModelLoadStatus = ServerModelLoadStatus.Ready;
       // 服务端模型放前面，自配模型保留在后面
       const userModels = state.availableModels.filter(m => !m.isServerModel);
       state.availableModels = [...action.payload, ...userModels];
@@ -221,6 +235,7 @@ const modelSlice = createSlice({
       syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
     },
     clearServerModels: (state) => {
+      state.serverModelLoadStatus = ServerModelLoadStatus.Idle;
       state.availableModels = state.availableModels.filter(m => !m.isServerModel);
       availableModels = state.availableModels;
       // 如果 defaultSelectedModel 是服务端模型，切换到第一个可用模型
@@ -235,6 +250,7 @@ const modelSlice = createSlice({
 });
 
 export const {
+  setServerModelLoadStatus,
   setSelectedModel,
   setDefaultSelectedModel,
   clearAgentSelectedModel,

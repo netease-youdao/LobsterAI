@@ -10,6 +10,11 @@ export const LLM_TRACEPARENT_HEADER = 'traceparent';
 export const LOBSTER_SERVER_TRACE_ID_HEADER = 'x-lobster-trace-id';
 /** lobsterai-server endpoint that summarizes one turn's usage by trace id. */
 export const LLM_TRACE_USAGE_API_PATH = '/api/usage/llm-traces';
+/**
+ * Local token proxy route where the model-routing plugin reports the trace of
+ * each run OpenClaw starts itself (IM, cron). Mirrored in that plugin.
+ */
+export const NATIVE_RUN_LLM_TRACE_PROXY_PATH = '/lobsterai/native-run-llm-traces';
 
 export const CoworkTurnUsageStatus = {
   /** The turn finished and its summary is being fetched. */
@@ -30,11 +35,19 @@ export const CoworkTurnUsageBillingScope = {
 export type CoworkTurnUsageBillingScope =
   typeof CoworkTurnUsageBillingScope[keyof typeof CoworkTurnUsageBillingScope];
 
-/** Stored on the turn's user message when the client starts the turn. */
+/**
+ * Stored on the turn's user message: by the client when it starts the turn,
+ * or when an IM/cron run that OpenClaw started finishes.
+ */
 export interface CoworkLlmTrace {
   traceId: string;
   /** Turn start (epoch ms); bounds the server ledger lookup window. */
   startedAt: number;
+  /**
+   * More traces of the same turn. OpenClaw gives each attempt of a cron run
+   * its own trace, so a retried run spans several.
+   */
+  relatedTraceIds?: string[];
 }
 
 export const TurnUsageModelType = {
@@ -140,12 +153,24 @@ export const getCoworkLlmTrace = (metadata: unknown): CoworkLlmTrace | null => {
   if (!metadata || typeof metadata !== 'object') return null;
   const trace = (metadata as { llmTrace?: unknown }).llmTrace;
   if (!trace || typeof trace !== 'object') return null;
-  const { traceId, startedAt } = trace as { traceId?: unknown; startedAt?: unknown };
+  const { traceId, startedAt, relatedTraceIds } = trace as {
+    traceId?: unknown;
+    startedAt?: unknown;
+    relatedTraceIds?: unknown;
+  };
   if (!isValidLlmTraceId(traceId) || typeof startedAt !== 'number' || !Number.isFinite(startedAt)) {
     return null;
   }
-  return { traceId, startedAt };
+  const related = Array.isArray(relatedTraceIds)
+    ? [...new Set(relatedTraceIds.filter(isValidLlmTraceId))].filter(id => id !== traceId)
+    : [];
+  return { traceId, startedAt, ...(related.length > 0 ? { relatedTraceIds: related } : {}) };
 };
+
+/** Every trace of a turn, the primary one first. */
+export const getCoworkLlmTraceIds = (trace: CoworkLlmTrace): string[] => (
+  [trace.traceId, ...(trace.relatedTraceIds ?? [])]
+);
 
 const toCount = (value: unknown): number => (
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
@@ -193,6 +218,95 @@ const parseModelUsage = (value: unknown): TurnModelUsage[] | undefined => {
       } } : {}),
     }];
   });
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  !!value && typeof value === 'object' && !Array.isArray(value)
+);
+
+const SUMMARY_COUNT_FIELDS = [
+  'requestCount', 'failedRequestCount', 'uncachedInputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens',
+] as const;
+const MODEL_USAGE_COUNT_FIELDS = [
+  'count', 'uncachedInputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens',
+] as const;
+const TOKEN_ESTIMATE_CREDIT_FIELDS = ['uncachedInput', 'cacheRead', 'cacheWrite', 'output'] as const;
+
+const sumField = (
+  rows: Record<string, unknown>[],
+  field: string,
+  read: (value: unknown) => number,
+): number => rows.reduce((total, row) => total + read(row[field]), 0);
+
+const sumFields = (
+  rows: Record<string, unknown>[],
+  fields: readonly string[],
+  read: (value: unknown) => number,
+): Record<string, number> => Object.fromEntries(fields.map(field => [field, sumField(rows, field, read)]));
+
+/** Rows without a display total contribute their actual credits. */
+const mergeDisplayCredits = (rows: Record<string, unknown>[]): { displayCreditsUsed?: number } => (
+  rows.some(row => toOptionalCredits(row.displayCreditsUsed) !== undefined)
+    ? {
+      displayCreditsUsed: rows.reduce(
+        (total, row) => total + (toOptionalCredits(row.displayCreditsUsed) ?? toCredits(row.creditsUsed)),
+        0,
+      ),
+    }
+    : {}
+);
+
+const mergeModelUsageRows = (rows: Record<string, unknown>[]): Record<string, unknown>[] => {
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    const key = `${String(row.type)}\x1f${String(row.model)}`;
+    const group = groups.get(key);
+    if (group) group.push(row);
+    else groups.set(key, [row]);
+  }
+  return [...groups.values()].map((group) => {
+    const estimates = group.map(row => row.tokenCreditEstimate).filter(isRecord);
+    const periods = new Set(estimates.map(estimate => estimate.pricingPeriod));
+    return {
+      type: group[0].type,
+      model: group[0].model,
+      ...sumFields(group, MODEL_USAGE_COUNT_FIELDS, toCount),
+      creditsUsed: sumField(group, 'creditsUsed', toCredits),
+      ...mergeDisplayCredits(group),
+      // A partial estimate would not add up to the row's credits.
+      ...(estimates.length === group.length ? {
+        tokenCreditEstimate: {
+          ...sumFields(estimates, TOKEN_ESTIMATE_CREDIT_FIELDS, toCredits),
+          cacheSavings: sumField(estimates, 'cacheSavings', toSignedCredits),
+          pricingPeriod: periods.size === 1 ? estimates[0].pricingPeriod : TurnUsagePricingPeriod.Mixed,
+        },
+      } : {}),
+    };
+  });
+};
+
+/**
+ * Combines the server summaries of a turn that spans several traces into one
+ * summary of the primary trace. A single summary is returned unchanged.
+ */
+export const mergeLlmTraceUsageSummaries = (traceId: string, summaries: unknown[]): unknown => {
+  if (summaries.length === 1) return summaries[0];
+  const rows = summaries.filter(isRecord);
+  if (rows.length === 0) return null;
+  return {
+    traceId,
+    billingScope: rows[0].billingScope,
+    ...sumFields(rows, SUMMARY_COUNT_FIELDS, toCount),
+    models: [...new Set(rows.flatMap(row => (Array.isArray(row.models) ? row.models : [])))],
+    creditsUsed: sumField(rows, 'creditsUsed', toCredits),
+    ...mergeDisplayCredits(rows),
+    ...(rows.some(row => Array.isArray(row.modelUsage)) ? {
+      modelUsage: mergeModelUsageRows(
+        rows.flatMap(row => (Array.isArray(row.modelUsage) ? row.modelUsage.filter(isRecord) : [])),
+      ),
+    } : {}),
+    ...(rows.some(row => row.mediaPending === true) ? { mediaPending: true } : {}),
+  };
 };
 
 /**

@@ -15,6 +15,11 @@ const menuItems = [
 ] as const;
 const MENU_EDGE_GAP = 8;
 const HOVER_CLOSE_DELAY = 180;
+// Keep in sync with the exit animation of `.sidebar-capabilities-menu` in index.css.
+const MENU_EXIT_DURATION = 120;
+const menuItemClassName =
+  'flex h-8 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] text-foreground transition-colors duration-150 hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 dark:hover:bg-white/[0.06]';
+const selectedMenuItemClassName = `${menuItemClassName} bg-black/[0.04] dark:bg-white/[0.06]`;
 
 type CapabilityView = typeof menuItems[number]['view'];
 
@@ -36,6 +41,8 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
   iconClassName,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  // Stays true briefly after closing so the menu can play its exit animation.
+  const [isMenuMounted, setIsMenuMounted] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -49,18 +56,33 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
     if (!isActive || isCollapsed) setIsOpen(false);
   }, [isActive, isCollapsed]);
 
+  useEffect(() => {
+    if (isOpen) {
+      setIsMenuMounted(true);
+      return;
+    }
+    const timer = setTimeout(() => setIsMenuMounted(false), MENU_EXIT_DURATION);
+    return () => clearTimeout(timer);
+  }, [isOpen]);
+
   useLayoutEffect(() => {
     if (!isOpen || !triggerRef.current || !menuRef.current) return;
     const trigger = triggerRef.current.getBoundingClientRect();
-    const menu = menuRef.current.getBoundingClientRect();
+    // Layout sizes ignore the entry animation's transform.
+    const menu = menuRef.current;
+    const firstItem = itemRefs.current[0];
+    // Line the first item up with the trigger so the menu reads as its continuation.
+    const firstItemCenter = firstItem
+      ? menu.clientTop + firstItem.offsetTop + firstItem.offsetHeight / 2
+      : 0;
     setPosition({
       top: Math.max(MENU_EDGE_GAP, Math.min(
-        trigger.top - MENU_EDGE_GAP,
-        window.innerHeight - menu.height - MENU_EDGE_GAP,
+        trigger.top + trigger.height / 2 - firstItemCenter,
+        window.innerHeight - menu.offsetHeight - MENU_EDGE_GAP,
       )),
       left: Math.max(MENU_EDGE_GAP, Math.min(
         trigger.right + MENU_EDGE_GAP,
-        window.innerWidth - menu.width - MENU_EDGE_GAP,
+        window.innerWidth - menu.offsetWidth - MENU_EDGE_GAP,
       )),
     });
     itemRefs.current[Math.max(0, selectedIndex)]?.focus();
@@ -144,13 +166,15 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
         <SidebarKitsIcon className={iconClassName} />
         <span className="min-w-0 flex-1 truncate">{i18nService.t('skillsAndConnectors')}</span>
       </button>
-      {isOpen && !isCollapsed && createPortal(
+      {(isOpen || isMenuMounted) && !isCollapsed && createPortal(
         <div
           ref={menuRef}
           id={menuId}
           role="menu"
           aria-label={i18nService.t('skillsAndConnectors')}
-          className="non-draggable fixed z-[9999] w-48 max-w-[calc(100vw-16px)] rounded-2xl border border-border bg-surface p-2 text-foreground shadow-popover"
+          aria-hidden={!isOpen}
+          data-state={isOpen ? 'open' : 'closed'}
+          className="sidebar-capabilities-menu non-draggable fixed z-[9999] w-44 max-w-[calc(100vw-16px)] space-y-0.5 rounded-2xl border border-border bg-surface p-1.5 text-foreground shadow-[0_12px_32px_-12px_rgba(0,0,0,0.16),0_4px_12px_-4px_rgba(0,0,0,0.06)]"
           style={position}
           onKeyDown={(event) => {
             const index = itemRefs.current.findIndex(item => item === document.activeElement);
@@ -187,13 +211,14 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
                   closeAndFocusTrigger();
                   onSelect(view);
                 }}
-                className={`flex h-10 w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-colors hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 dark:hover:bg-white/[0.06] ${
-                  isSelected ? 'bg-black/[0.04] font-medium dark:bg-white/[0.06]' : ''
-                }`}
+                className={isSelected ? selectedMenuItemClassName : menuItemClassName}
               >
-                <Icon className="h-5 w-5 shrink-0 text-foreground/80" />
+                <Icon className={iconClassName} />
                 <span className="min-w-0 flex-1 truncate">{i18nService.t(label)}</span>
-                {isSelected && <CheckIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-primary" />}
+                <CheckIcon
+                  aria-hidden="true"
+                  className={`h-4 w-4 shrink-0 text-primary ${isSelected ? '' : 'invisible'}`}
+                />
               </button>
             );
           })}

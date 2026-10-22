@@ -26,6 +26,7 @@ import {
   AgentBrowserZoom,
   BrowserDisplayMode,
   type BrowserWebAccessConfig,
+  buildBrowserSearchUrl,
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
@@ -90,6 +91,10 @@ const SCREENSHOT_CAPTURE_TIMEOUT_MS = 10_000;
 const MAX_OPERATION_TIMEOUT_MS = 60_000;
 const MAX_SNAPSHOT_NODES = 2_000;
 const SNAPSHOT_REF_PREFIX = 'ax-';
+// Pages created while the panel is hidden (IM, scheduled tasks, another
+// session) still need a viewport: a zero-size view lays out at zero width and
+// never produces a frame, so screenshots hang.
+const DETACHED_PAGE_SIZE = { width: 1280, height: 800 } as const;
 
 type BrowserEvaluationResult = {
   result?: { value?: unknown; description?: string };
@@ -140,6 +145,7 @@ type AgentBrowserHostDeps = {
   credentialService: BrowserCredentialService;
   credentialApprovalService: BrowserCredentialApprovalService;
   resolveSessionKey: (sessionId?: string) => string | undefined;
+  getLanguage: () => string;
   manualCredentialPreloadPath?: string;
 };
 
@@ -177,7 +183,7 @@ const resolveManualCredentialPreloadPath = (): string => {
   return candidates.find(candidate => fs.existsSync(candidate)) ?? candidates[1];
 };
 
-const normalizeAddress = (rawValue: string): string => {
+const normalizeAddress = (rawValue: string, language: string): string => {
   const value = rawValue.trim();
   if (!value) return DEFAULT_PAGE_URL;
   if (/^(?:https?:\/\/|about:blank$)/i.test(value)) return value;
@@ -187,8 +193,17 @@ const normalizeAddress = (rawValue: string): string => {
   ) {
     return `https://${value}`;
   }
-  return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  return buildBrowserSearchUrl(value, language);
 };
+
+/**
+ * Electron adds the app and Electron tokens to Chrome's user agent. Sites such
+ * as Google sign-in reject embedded browsers by those tokens, so present the
+ * plain Chrome user agent instead.
+ */
+export const toChromeUserAgent = (userAgent: string): string => userAgent
+  .replace(/(\(KHTML, like Gecko\))\s+.*?\s*(Chrome\/)/, '$1 $2')
+  .replace(/\s+Electron\/\S+/, '');
 
 const isBlockedHostname = (url: string, config: BrowserWebAccessConfig): boolean => {
   if (url === DEFAULT_PAGE_URL) return false;
@@ -290,6 +305,7 @@ export class AgentBrowserHost {
   constructor(private readonly deps: AgentBrowserHostDeps) {
     this.windowVisible = Boolean(this.deps.getMainWindow()?.isVisible());
     this.browserSession = session.fromPartition(AgentBrowserPartition.Default, { cache: true });
+    this.browserSession.setUserAgent(toChromeUserAgent(this.browserSession.getUserAgent()));
     this.browserSession.setPermissionCheckHandler(() => false);
     this.browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
       callback(false);
@@ -414,7 +430,7 @@ export class AgentBrowserHost {
     if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
     const page = this.getSelectedPage() ?? await this.createPage(DEFAULT_PAGE_URL);
     this.markBrowserToolBootstrapPageUsed(page.pageId);
-    await this.navigatePage(page, normalizeAddress(url), DEFAULT_OPERATION_TIMEOUT_MS);
+    await this.navigatePage(page, this.normalizeAddress(url), DEFAULT_OPERATION_TIMEOUT_MS);
     return this.getState();
   }
 
@@ -463,25 +479,12 @@ export class AgentBrowserHost {
     if (sessionId?.trim()) this.activeSessionId = sessionId.trim();
     const page = this.requireSelectedPage();
     await this.ensureDebugger(page);
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const result = await Promise.race([
-      page.view.webContents.debugger.sendCommand('Page.captureScreenshot', {
-        format: 'png',
-        fromSurface: true,
-        captureBeyondViewport: false,
-      }) as Promise<{ data?: string }>,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`In-app browser screenshot timed out after ${SCREENSHOT_CAPTURE_TIMEOUT_MS}ms.`));
-        }, SCREENSHOT_CAPTURE_TIMEOUT_MS);
-      }),
-    ]).finally(() => {
-      if (timeout) clearTimeout(timeout);
+    const data = await this.capturePageScreenshot(page, {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: false,
     });
-    if (!result.data) {
-      throw new Error('The in-app browser screenshot did not contain image data.');
-    }
-    const image = nativeImage.createFromBuffer(Buffer.from(result.data, 'base64'));
+    const image = nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
     if (image.isEmpty()) {
       throw new Error('The in-app browser screenshot is empty.');
     }
@@ -627,7 +630,7 @@ export class AgentBrowserHost {
         if (this.browserToolBootstrapPagePromise) {
           await this.browserToolBootstrapPagePromise;
         }
-        const url = normalizeAddress(readString(args.url) || DEFAULT_PAGE_URL);
+        const url = this.normalizeAddress(readString(args.url) || DEFAULT_PAGE_URL);
         const timeoutMs = readTimeout(args.timeout);
         const bootstrapPage = this.takeReusableBrowserToolBootstrapPage();
         if (bootstrapPage) {
@@ -651,7 +654,7 @@ export class AgentBrowserHost {
       case BrowserMcpTool.NavigatePage: {
         const page = this.requirePage(this.requirePageId(args.pageId));
         this.markBrowserToolBootstrapPageUsed(page.pageId);
-        await this.navigatePage(page, normalizeAddress(readString(args.url)), readTimeout(args.timeout));
+        await this.navigatePage(page, this.normalizeAddress(readString(args.url)), readTimeout(args.timeout));
         return textResult('Page navigated.', { message: 'Page navigated.' });
       }
       case BrowserMcpTool.TakeSnapshot:
@@ -761,6 +764,7 @@ export class AgentBrowserHost {
     const pageId = this.nextPageId++;
     const view = new WebContentsView(options);
     view.setBackgroundColor('#ffffff');
+    view.setBounds(this.getDetachedViewBounds());
     const page: BrowserPage = {
       pageId,
       openerPageId,
@@ -905,20 +909,35 @@ export class AgentBrowserHost {
     this.lastError = undefined;
     await this.proxyReady;
     await this.passkeys.ready;
-    const loadPromise = loadOptions
-      ? page.view.webContents.loadURL(url, loadOptions)
-      : page.view.webContents.loadURL(url);
+    const webContents = page.view.webContents;
+    let documentCommitted = false;
+    const onCommit = () => { documentCommitted = true; };
+    let onDocumentReady = () => {};
+    const documentReady = new Promise<void>(resolve => {
+      onDocumentReady = () => { if (documentCommitted) resolve(); };
+    });
+    webContents.on('did-navigate', onCommit);
+    webContents.on('dom-ready', onDocumentReady);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        loadPromise,
+        loadOptions ? webContents.loadURL(url, loadOptions) : webContents.loadURL(url),
+        // A top-level document can be used while images keep loading. Ignore
+        // readiness from the previous document; loadURL still owns load errors.
+        documentReady,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(new Error(`Browser navigation timed out after ${timeoutMs}ms.`)), timeoutMs);
         }),
       ]);
     } finally {
       if (timer) clearTimeout(timer);
+      webContents.removeListener('did-navigate', onCommit);
+      webContents.removeListener('dom-ready', onDocumentReady);
     }
+  }
+
+  private normalizeAddress(rawValue: string): string {
+    return normalizeAddress(rawValue, this.deps.getLanguage());
   }
 
   private isAllowedUrl(url: string): boolean {
@@ -1053,16 +1072,38 @@ export class AgentBrowserHost {
     const format = readString(args.format).toLowerCase() === 'jpeg' ? 'jpeg' : 'png';
     const uid = readString(args.uid);
     const clip = uid ? await this.getElementClip(page, uid) : undefined;
-    const result = await page.view.webContents.debugger.sendCommand('Page.captureScreenshot', {
+    const imageBase64 = await this.capturePageScreenshot(page, {
       format,
       fromSurface: true,
       captureBeyondViewport: args.fullPage === true,
       ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
-    }) as { data: string };
+    });
     return textResult('Screenshot captured.', {
-      imageBase64: result.data,
+      imageBase64,
       format,
     });
+  }
+
+  /** Chromium never answers a capture for a view without a frame; do not hang the tool call. */
+  private async capturePageScreenshot(
+    page: BrowserPage,
+    params: Record<string, unknown>,
+  ): Promise<string> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      page.view.webContents.debugger.sendCommand('Page.captureScreenshot', params) as Promise<{ data?: string }>,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`In-app browser screenshot timed out after ${SCREENSHOT_CAPTURE_TIMEOUT_MS}ms.`));
+        }, SCREENSHOT_CAPTURE_TIMEOUT_MS);
+      }),
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
+    if (!result.data) {
+      throw new Error('The in-app browser screenshot did not contain image data.');
+    }
+    return result.data;
   }
 
   private async click(page: BrowserPage, uid: string, doubleClick: boolean): Promise<void> {
@@ -1372,6 +1413,14 @@ export class AgentBrowserHost {
     return { x, y, width, height };
   }
 
+  /** Size for a view that is not shown: the last panel size, or a desktop viewport. */
+  private getDetachedViewBounds(): { x: number; y: number; width: number; height: number } {
+    const { x, y, width, height } = this.bounds;
+    return width > 1 && height > 1
+      ? { x, y, width, height }
+      : { x: 0, y: 0, ...DETACHED_PAGE_SIZE };
+  }
+
   private syncAttachment(): void {
     const mainWindow = this.deps.getMainWindow();
     const shouldAttach = this.desiredVisible
@@ -1430,7 +1479,10 @@ export class AgentBrowserHost {
   }
 
   private setCredentialLoginView(view: WebContentsView | null): void {
-    if (this.credentialLoginView !== view) this.detachCredentialLoginView();
+    if (this.credentialLoginView !== view) {
+      this.detachCredentialLoginView();
+      view?.setBounds(this.getDetachedViewBounds());
+    }
     this.credentialLoginView = view;
     if (view && this.selectedPageId) this.passkeys.watch(view.webContents, this.selectedPageId);
     this.syncAttachment();

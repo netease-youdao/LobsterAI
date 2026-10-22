@@ -14,6 +14,7 @@ import {
   isValidLlmTraceId,
   LLM_TRACEPARENT_HEADER,
   LOBSTER_SERVER_TRACE_ID_HEADER,
+  NATIVE_RUN_LLM_TRACE_PROXY_PATH,
   parseLlmTraceparent,
 } from '../../shared/cowork/llmTurnUsage';
 import { EnterpriseApiErrorCode } from '../../shared/enterpriseAccount/constants';
@@ -26,6 +27,11 @@ import type { EnterpriseAuthSessionSnapshot } from '../enterpriseAccount/members
 import { createLlmSpanId, createLlmTraceId } from './llmTrace';
 import { clearLlmUsageContexts, getLlmUsageHeaders } from './llmUsageContext';
 import { listenOnLoopback } from './loopbackListen';
+import {
+  clearNativeRunTurnUsage,
+  type NativeRunLlmTraceReport,
+  recordNativeRunLlmTrace,
+} from './nativeRunTurnUsage';
 
 const PROXY_BIND_HOST = '127.0.0.1';
 // Header names OpenAI-, Anthropic- and Google-style clients use for the provider key.
@@ -176,6 +182,7 @@ export function stopOpenClawTokenProxy(): void {
   recentQuotaError = null;
   traceStatsById.clear();
   clearLlmUsageContexts();
+  clearNativeRunTurnUsage();
   tokenGetter = null;
   tokenRefresher = null;
   serverBaseUrlGetter = null;
@@ -292,6 +299,30 @@ function collectRequestBody(req: http.IncomingMessage): Promise<Buffer> {
   });
 }
 
+/** Records an IM/cron run's trace; it is answered locally and never forwarded. */
+async function handleNativeRunLlmTraceReport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  let report: NativeRunLlmTraceReport | null = null;
+  try {
+    const parsed: unknown = JSON.parse((await collectRequestBody(req)).toString('utf8'));
+    report = parsed && typeof parsed === 'object' ? parsed as NativeRunLlmTraceReport : null;
+  } catch {
+    report = null;
+  }
+  if (!report) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Invalid native run trace report' }));
+    return;
+  }
+  if (recordNativeRunLlmTrace(report, Date.now(), sessionKeyGetter?.() ?? undefined)) {
+    console.debug(
+      `[OpenClawTokenProxy] native run ${String(report.runId)} uses trace=${String(report.traceId)}`
+      + ` model=${String(report.model ?? 'unknown')} virtualModel=${String(report.virtualModelId ?? 'none')}`,
+    );
+  }
+  res.writeHead(204);
+  res.end();
+}
+
 function shouldRefreshLobsterAIToken(status: number): boolean {
   return status === 401;
 }
@@ -390,6 +421,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   }
   if (!isInboundRequestAuthorized(req.headers, inboundAuthTokenGetter?.() ?? null)) {
     rejectInboundRequest(req, res, 401, 'invalid_proxy_token');
+    return;
+  }
+  if (req.method === 'POST' && (req.url ?? '').split('?')[0] === NATIVE_RUN_LLM_TRACE_PROXY_PATH) {
+    await handleNativeRunLlmTraceReport(req, res);
     return;
   }
   let requestTrace: ProxyRequestTrace | undefined;
@@ -1119,7 +1154,7 @@ function buildUpstreamRequestHeaders(
     [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
     [LOBSTERAI_CLIENT_VERSION_HEADER]: clientVersion,
     ...(traceparent ? { [LLM_TRACEPARENT_HEADER]: traceparent } : {}),
-    ...getLlmUsageHeaders(traceparent, requestModel),
+    ...getLlmUsageHeaders(traceparent, requestModel, sessionKeyGetter?.()),
   };
 
   // Forward accept header for SSE streaming

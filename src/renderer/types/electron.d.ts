@@ -91,6 +91,7 @@ import type {
   EnterpriseAccountIdentitiesResult,
   EnterpriseQuotaRequestResult,
 } from '../../shared/enterpriseAccount/types';
+import type { FeedbackBridge } from '../../shared/feedback/constants';
 import type { FollowUpSuggestionRequest } from '../../shared/followUpSuggestion';
 import type {
   HtmlShareAccessMode,
@@ -108,6 +109,7 @@ import type {
   InstalledKitRecord,
   KitReference,
   KitSkillMetadata,
+  KitStoreResponse,
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
 import type {
@@ -135,6 +137,7 @@ import type {
   ListLocalWebServicesOptions,
   LocalWebService,
 } from '../../shared/localWebServices/constants';
+import type { McpAuthMode, McpOAuthActionResult, McpOAuthStatusResult } from '../../shared/mcp/auth';
 import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
 import type {
   MediaPreference,
@@ -151,6 +154,10 @@ import type {
   OpenClawLoopbackRepairOutcome,
 } from '../../shared/openclawEngine/constants';
 import type { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
+import type {
+  OpenClawUserConfigActionResult,
+  OpenClawUserConfigStatus,
+} from '../../shared/openclawUserConfig/constants';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -388,13 +395,6 @@ interface CoworkPermissionRequest {
   toolUseId?: string | null;
 }
 
-interface CoworkApiConfig {
-  apiKey: string;
-  baseURL: string;
-  model: string;
-  apiType?: 'anthropic' | 'openai';
-}
-
 type OpenClawEnginePhase = SharedOpenClawEnginePhase;
 
 interface OpenClawEngineStatus {
@@ -518,6 +518,7 @@ interface McpServerConfigIPC {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
   isBuiltIn: boolean;
   githubUrl?: string;
   registryId?: string;
@@ -544,19 +545,6 @@ interface McpServerConfigIPC {
   updatedAt: number;
 }
 
-interface McpMarketplaceServer {
-  id: string;
-  name: string;
-  description_zh: string;
-  description_en: string;
-  category: string;
-  transportType: 'stdio' | 'sse' | 'http';
-  command: string;
-  defaultArgs: string[];
-  requiredEnvKeys?: string[];
-  optionalEnvKeys?: string[];
-}
-
 interface McpMarketplaceCategory {
   id: string;
   name_zh: string;
@@ -572,6 +560,7 @@ import type { AgentLegacyIdentityCleanupResult } from '@shared/agent';
 import type { Platform } from '@shared/platform';
 
 import type { Agent, PresetAgent } from './agent';
+import type { McpMarketplaceServer } from './mcp';
 
 interface CreditItem {
   type: 'subscription' | 'boost' | 'free' | 'bonus' | 'invitation' | 'campaign';
@@ -798,10 +787,14 @@ interface IElectronAPI {
       servers?: McpServerConfigIPC[];
       error?: string;
     }>;
+    oauthLogin: (id: string) => Promise<McpOAuthActionResult>;
+    oauthCancel: (id: string) => Promise<boolean>;
+    oauthLogout: (id: string) => Promise<McpOAuthActionResult>;
+    oauthStatus: () => Promise<McpOAuthStatusResult>;
     onChanged: (callback: () => void) => () => void;
   };
   kits: {
-    fetchStore: () => Promise<{ success: boolean; data?: string; error?: string }>;
+    fetchStore: () => Promise<KitStoreResponse>;
     install: (params: {
       kitId: string;
       bundleUrl: string;
@@ -893,11 +886,7 @@ interface IElectronAPI {
     onStreamError: (requestId: string, callback: (error: string) => void) => () => void;
     onStreamAbort: (requestId: string, callback: () => void) => () => void;
   };
-  getApiConfig: () => Promise<CoworkApiConfig | null>;
-  checkApiConfig: (options?: {
-    probeModel?: boolean;
-  }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
-  saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
+  checkApiConfig: () => Promise<{ hasConfig: boolean; error?: string }>;
   generateSessionTitle: (request: GenerateSessionTitleRequest) => Promise<string | null>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
   dsh: {
@@ -946,6 +935,13 @@ interface IElectronAPI {
       set: (
         config: OpenClawSessionPolicyConfig,
       ) => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
+    };
+    userConfig: {
+      getStatus: () => Promise<OpenClawUserConfigStatus>;
+      setEnabled: (enabled: boolean) => Promise<OpenClawUserConfigActionResult>;
+      openFile: () => Promise<OpenClawUserConfigActionResult>;
+      revealFile: () => Promise<OpenClawUserConfigActionResult>;
+      apply: () => Promise<OpenClawUserConfigActionResult>;
     };
     session: {
       patch: (options: {
@@ -1628,6 +1624,7 @@ interface IElectronAPI {
     createRealtimeSession: (options: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>;
   };
   artifact: {
+    imageEditing: import('../../shared/imageEditing/types').ImageEditingBridge;
     office: OfficeBridges;
     markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
@@ -2067,6 +2064,7 @@ interface IElectronAPI {
       error?: string;
     }>;
   };
+  feedback: FeedbackBridge;
   subscriptionTrial: SubscriptionTrialBridge;
   activity: {
     getSlot: (
@@ -2731,8 +2729,8 @@ interface WeixinOpenClawConfig {
 }
 
 interface IMSettings {
-  systemPrompt?: string;
-  skillsEnabled: boolean;
+  /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
+  platformAgentBindings?: Record<string, string>;
 }
 
 interface IMGatewayStatus {

@@ -147,4 +147,28 @@ describe('local extension sync into the dev runtime', () => {
     expect(fs.readFileSync(path.join(runtime, 'third-party-extensions', 'ask-user-question', 'src', 'index.ts'), 'utf8'))
       .toBe('export const changed = true;');
   });
+
+  test('drops a precompiled bundle once its TypeScript source changes', () => {
+    const source = path.join(root, 'openclaw-extensions', 'ask-user-question');
+    const target = path.join(runtime, 'third-party-extensions', 'ask-user-question');
+    fs.writeFileSync(path.join(source, 'package.json'), '{"openclaw":{"extensions":["./src/index.ts"]}}');
+    fs.writeFileSync(path.join(source, 'src', 'shipped.ts'), 'export {};');
+    fs.writeFileSync(path.join(source, 'src', 'shipped.js'), 'export {};');
+    syncLocalOpenClawExtensionsIntoRuntime(runtime);
+    // State after `openclaw:precompile`: a bundle and a package.json pointing at it.
+    fs.writeFileSync(path.join(target, 'src', 'index.js'), 'stale bundle');
+    fs.writeFileSync(path.join(target, 'package.json'), '{"openclaw":{"extensions":["./src/index.js"]}}');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // Restoring package.json alone keeps the still-current bundle.
+    expect(syncLocalOpenClawExtensionsIntoRuntime(runtime).copied).toEqual(['ask-user-question']);
+    expect(fs.existsSync(path.join(target, 'src', 'index.js'))).toBe(true);
+
+    fs.writeFileSync(path.join(source, 'src', 'index.ts'), 'export const changed = true;');
+    expect(syncLocalOpenClawExtensionsIntoRuntime(runtime).copied).toEqual(['ask-user-question']);
+    expect(fs.existsSync(path.join(target, 'src', 'index.js'))).toBe(false);
+    expect(fs.existsSync(path.join(target, 'src', 'shipped.js'))).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('ask-user-question'));
+    log.mockRestore();
+  });
 });

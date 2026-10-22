@@ -1,7 +1,7 @@
 {
   "id": "lobster-model-routing",
   "name": "LobsterModelRouting",
-  "description": "Resolve virtual models using persistent server session bindings.",
+  "description": "Resolve virtual models using persistent server session bindings and report the package-model traces of IM/cron runs.",
   "activation": {
     "onCapabilities": ["hook"]
   },

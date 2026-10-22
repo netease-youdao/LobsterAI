@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV } from '../../shared/openclawEngine/constants';
 import {
   OPENCLAW_STARTUP_COMPATIBILITY_ENTRY,
   OPENCLAW_STARTUP_COMPATIBILITY_RESULT_PREFIX,
@@ -72,7 +73,7 @@ describe('on-demand helper', () => {
     return {
       stateDir: path.join(tempDir, 'state'), configPath: path.join(tempDir, 'state', 'openclaw.json'),
       runtimeRoot: tempDir, electronNodeRuntimePath: process.execPath,
-      env: { OPENCLAW_STATE_DIR: 'wrong', OPENCLAW_HOME: 'wrong', EXISTING: 'kept' },
+      env: { OPENCLAW_STATE_DIR: 'wrong', OPENCLAW_HOME: 'wrong', [OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV]: 'wrong', EXISTING: 'kept' },
       mode: OpenClawStartupCompatibilityMode.RepairBindings,
     };
   }
@@ -86,7 +87,8 @@ describe('on-demand helper', () => {
         cwd: tempDir, timeoutMs: 180_000,
         env: {
           EXISTING: 'kept', OPENCLAW_HOME: tempDir, OPENCLAW_STATE_DIR: params.stateDir,
-          OPENCLAW_CONFIG_PATH: params.configPath, OPENCLAW_SERVICE_REPAIR_POLICY: 'external', ELECTRON_RUN_AS_NODE: '1',
+          OPENCLAW_CONFIG_PATH: params.configPath, [OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV]: params.stateDir,
+          OPENCLAW_SERVICE_REPAIR_POLICY: 'external', ELECTRON_RUN_AS_NODE: '1',
         },
       });
   });

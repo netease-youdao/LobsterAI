@@ -178,10 +178,10 @@ const DateInput: React.FC<DateInputProps> = ({ value, onChange, min, max, placeh
         onClick={() => setOpen(o => !o)}
         className={`flex items-center gap-1.5 text-xs rounded-md border border-border-subtle px-2 py-1 transition-colors ${
           open
-            ? 'border-primary bg-surface text-foreground'
+            ? 'border-secondary/40 bg-surface text-foreground'
             : value
-              ? 'bg-surface text-foreground hover:border-primary/50'
-              : 'bg-surface text-secondary hover:border-primary/50'
+              ? 'bg-surface text-foreground hover:border-secondary/40'
+              : 'bg-surface text-secondary hover:border-secondary/40'
         }`}
       >
         <CalendarIcon className="h-3 w-3 shrink-0 opacity-60" />

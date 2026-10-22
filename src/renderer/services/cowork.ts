@@ -5,6 +5,7 @@ import {
   CoworkSystemMessageKind,
 } from '../../common/coworkSystemMessages';
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
+import { UsageFailureCode } from '../../shared/analytics/usage';
 import {
   type CoworkBtwAbortRequest,
   CoworkBtwStatus,
@@ -76,7 +77,6 @@ import {
 } from '../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type {
-  CoworkApiConfig,
   CoworkConfigUpdate,
   CoworkContextUsage,
   CoworkContinueOptions,
@@ -1080,11 +1080,11 @@ class CoworkService {
     return this.openClawStatus;
   }
 
-  async startSession(options: CoworkStartOptions): Promise<{ session: CoworkSession | null; error?: string }> {
+  async startSession(options: CoworkStartOptions): Promise<{ session: CoworkSession | null; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }> {
     const cowork = window.electron?.cowork;
     if (!cowork) {
       console.error('Cowork API not available');
-      return { session: null, error: 'Cowork API not available' };
+      return { session: null, error: 'Cowork API not available', code: UsageFailureCode.ApiUnavailable };
     }
 
     store.dispatch(setStreaming(true));
@@ -1121,7 +1121,7 @@ class CoworkService {
 
     store.dispatch(setStreaming(false));
     console.error('Failed to start session:', result.error);
-    return { session: null, error: result.error };
+    return { session: null, error: result.error, code: result.code, engineStatus: result.engineStatus };
   }
 
   async continueSession(options: CoworkContinueOptions): Promise<boolean> {
@@ -2300,25 +2300,11 @@ class CoworkService {
     return false;
   }
 
-  async getApiConfig(): Promise<CoworkApiConfig | null> {
-    if (!window.electron?.getApiConfig) {
-      return null;
-    }
-    return window.electron.getApiConfig();
-  }
-
-  async checkApiConfig(options?: { probeModel?: boolean }): Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string } | null> {
+  async checkApiConfig(): Promise<{ hasConfig: boolean; error?: string } | null> {
     if (!window.electron?.checkApiConfig) {
       return null;
     }
-    return window.electron.checkApiConfig(options);
-  }
-
-  async saveApiConfig(config: CoworkApiConfig): Promise<{ success: boolean; error?: string } | null> {
-    if (!window.electron?.saveApiConfig) {
-      return null;
-    }
-    return window.electron.saveApiConfig(config);
+    return window.electron.checkApiConfig();
   }
 
   async listMemoryEntries(input: {

@@ -33,7 +33,7 @@ test('keeps secrets and ports across launches of the same app version', () => {
   expect(second.mcpBridgeSecret).toBe(first.mcpBridgeSecret);
   expect(second.getPreferredPort(OpenClawLoopbackService.TokenProxy)).toBe(54061);
   expect(second.getPreferredPort(OpenClawLoopbackService.McpBridge)).toBe(54071);
-  expect(second.getPreferredPort(OpenClawLoopbackService.CompatProxy)).toBeUndefined();
+  expect(second.getPreferredPort(OpenClawLoopbackService.CopilotProxy)).toBeUndefined();
   if (process.platform !== 'win32') {
     expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
   }
@@ -41,12 +41,12 @@ test('keeps secrets and ports across launches of the same app version', () => {
 
 test('rotates secrets but keeps ports when the app version changes', () => {
   const first = new OpenClawLoopbackState(filePath, '2026.9.24', secrets);
-  first.rememberPort(OpenClawLoopbackService.CompatProxy, 61000);
+  first.rememberPort(OpenClawLoopbackService.CopilotProxy, 61000);
 
   const upgraded = new OpenClawLoopbackState(filePath, '2026.10.1', secrets);
   expect(upgraded.proxyToken).not.toBe(first.proxyToken);
   expect(upgraded.mcpBridgeSecret).not.toBe(first.mcpBridgeSecret);
-  expect(upgraded.getPreferredPort(OpenClawLoopbackService.CompatProxy)).toBe(61000);
+  expect(upgraded.getPreferredPort(OpenClawLoopbackService.CopilotProxy)).toBe(61000);
 
   const reloaded = new OpenClawLoopbackState(filePath, '2026.10.1', secrets);
   expect(reloaded.proxyToken).toBe(upgraded.proxyToken);
@@ -68,7 +68,7 @@ test('regenerates state from a corrupt or weak file and drops unusable ports', (
   }));
   const fromWeak = new OpenClawLoopbackState(filePath, '2026.9.24', secrets);
   expect(fromWeak.proxyToken).not.toBe('short');
-  expect(fromWeak.getPreferredPort(OpenClawLoopbackService.CompatProxy)).toBeUndefined();
+  expect(fromWeak.getPreferredPort(OpenClawLoopbackService.CopilotProxy)).toBeUndefined();
 
   const token = 't'.repeat(48);
   fs.writeFileSync(filePath, JSON.stringify({
@@ -81,7 +81,7 @@ test('regenerates state from a corrupt or weak file and drops unusable ports', (
   const sanitized = new OpenClawLoopbackState(filePath, '2026.9.24', secrets);
   expect(sanitized.proxyToken).toBe(token);
   expect(sanitized.getPreferredPort(OpenClawLoopbackService.TokenProxy)).toBeUndefined();
-  expect(sanitized.getPreferredPort(OpenClawLoopbackService.CompatProxy)).toBe(61000);
+  expect(sanitized.getPreferredPort(OpenClawLoopbackService.CopilotProxy)).toBe(61000);
   expect(sanitized.getPreferredPort(OpenClawLoopbackService.McpBridge)).toBeUndefined();
 });
 

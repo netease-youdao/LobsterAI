@@ -126,6 +126,21 @@ describe('parseMcpServersJson', () => {
     expect(result.ok && result.servers[0].url).toBe('https://example.com/mcp');
   });
 
+  test('keeps auth: "oauth" on remote servers and ignores other values', () => {
+    const result = parseMcpServersJson(JSON.stringify({
+      mcpServers: {
+        notion: { type: 'http', url: 'https://mcp.notion.com/mcp', auth: 'oauth' },
+        keyed: { url: 'https://example.com/mcp', auth: 'bearer' },
+        local: { command: 'npx', auth: 'oauth' },
+      },
+    }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.servers[0].auth).toBe('oauth');
+    expect(result.servers[1]).not.toHaveProperty('auth');
+    expect(result.servers[2]).not.toHaveProperty('auth');
+  });
+
   test('rejects invalid JSON', () => {
     const result = parseMcpServersJson('{ not json');
     expect(result).toEqual({ ok: false, code: McpJsonImportErrorCode.InvalidJson });

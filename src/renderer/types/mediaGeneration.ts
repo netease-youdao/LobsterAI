@@ -42,6 +42,7 @@ export interface MediaTaskStatus {
 }
 
 export interface MediaAttachmentRef {
+  imageEdit?: import('../../shared/imageEditing/types').ImageEditRequest;
   token: string;
   mediaType: 'image' | 'video' | 'audio';
   index: number;

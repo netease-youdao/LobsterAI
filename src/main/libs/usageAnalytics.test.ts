@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import { LogReporterAction } from '../../shared/analytics/constants';
-import { UsageEntry, UsageOutcome, UsageStage } from '../../shared/analytics/usage';
+import { UsageEntry, UsageFailureCode, UsageOutcome, UsageStage } from '../../shared/analytics/usage';
 import type { CoworkMessage } from '../coworkStore';
 import { TaskUsageAnalytics } from './usageAnalytics';
 
@@ -53,6 +53,24 @@ function setup() {
 }
 
 describe('TaskUsageAnalytics', () => {
+  test('reports the HTTP status without classifying or uploading the external error body', () => {
+    const s = setup();
+    s.tracker.begin('local-session', { analytics: context }, false);
+    s.send('user', 'user');
+    s.send('use', 'tool_use', { toolName: 'web_fetch', toolUseId: 'fetch-call' });
+    s.send('result', 'tool_result', {
+      toolUseId: 'fetch-call',
+      isError: true,
+      toolResult: JSON.stringify({
+        status: 'error',
+        tool: 'web_fetch',
+        error: 'Web fetch failed (404): 登录 quota subscription /private/path',
+      }),
+    });
+    expect(s.events().at(-1)).toMatchObject({ failureCode: UsageFailureCode.Http, httpStatus: 404 });
+    expect(JSON.stringify(s.events())).not.toMatch(/登录|quota|subscription|private\/path/);
+  });
+
   test('joins runtime outcomes to submission and counts a streamed tool result once', () => {
     const s = setup();
     expect(s.tracker.begin('local-session', { analytics: context }, false)).toBe(true);

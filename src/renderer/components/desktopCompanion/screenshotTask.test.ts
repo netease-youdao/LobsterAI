@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { CompanionTaskFailureCode, CompanionTaskFailureStage } from '../../../shared/desktopCompanion/analytics';
 import { CompanionScreenshotAction } from '../../../shared/desktopCompanion/screenshot';
 import { startCompanionTask } from './companionTasks';
 import { createScreenshotTaskRunner, runScreenshotTask } from './screenshotTask';
@@ -30,14 +31,16 @@ describe('screenshot task routing', () => {
     expect(notify).toHaveBeenLastCalledWith('capture', 'new-session');
   });
   test('repeated clicks while starting a task are ignored; a failed start remains retryable', async () => {
-    let resolve!: (value: { error: string }) => void;
+    let resolve!: (value: Awaited<ReturnType<typeof startCompanionTask>>) => void;
     vi.mocked(startCompanionTask).mockReturnValueOnce(new Promise(done => { resolve = done; }));
     const notify = vi.fn().mockResolvedValue(true);
     const failed = vi.fn();
     const run = createScreenshotTaskRunner(request, notify, failed);
     const pending = run(); await run();
     expect(startCompanionTask).toHaveBeenCalledOnce();
-    resolve({ error: 'Model unavailable' }); await pending;
+    resolve({ error: 'Model unavailable', failure: {
+      failureCode: CompanionTaskFailureCode.NoModel, failureStage: CompanionTaskFailureStage.SessionStart,
+    } }); await pending;
     expect(notify).not.toHaveBeenCalled();
     vi.mocked(startCompanionTask).mockResolvedValue({ sessionId: 'retry-session' });
     await failed.mock.calls[0][1]();

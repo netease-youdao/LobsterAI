@@ -43,6 +43,7 @@ import type { MediaGenerationSelection, MediaModel } from '../../types/mediaGene
 import { removeSessionFromState, removeSessionsFromState } from './coworkDeleteState';
 
 export interface DraftAttachment {
+  imageEdit?: import('../../../shared/imageEditing/types').ImageEditRequest;
   path: string;
   name: string;
   isImage?: boolean;

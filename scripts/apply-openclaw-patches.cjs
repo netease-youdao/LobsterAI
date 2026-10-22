@@ -1297,6 +1297,23 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-managed-workspace-alias-follow.patch': [
+    {
+      file: 'src/agents/workspace-state-store.ts',
+      snippets: [
+        'const MANAGED_WORKSPACE_ROOT_ENV = "LOBSTERAI_MANAGED_WORKSPACE_ROOT"',
+        'function followsCurrentWorkspaceTarget(workspaceDir: string): boolean',
+        'followCurrentTarget: followExistingTarget',
+        '.updateTable("workspace_path_aliases")',
+      ],
+    },
+    {
+      file: 'src/agents/workspace.managed-relink.test.ts',
+      snippets: [
+        'serves the synced workspace without reseeding bootstrap',
+      ],
+    },
+  ],
 };
 
 v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [

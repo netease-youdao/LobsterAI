@@ -3,6 +3,7 @@ import {
   ArrowDownTrayIcon,
   CheckIcon,
   ExclamationTriangleIcon,
+  PlusIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -16,16 +17,16 @@ import { compareVersions,resolveLocalizedText, skillService } from '../../servic
 import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
 import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
-import { CARD_ACTION_PILL_CLASS, DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
+import { DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
 import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
 import CardToggle from '../common/CardToggle';
+import ManagementSearchHeader from '../common/ManagementSearchHeader';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
 import FolderOpenIcon from '../icons/FolderOpenIcon';
 import LinkIcon from '../icons/LinkIcon';
-import PlusCircleIcon from '../icons/PlusCircleIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
 import UploadIcon from '../icons/UploadIcon';
@@ -67,9 +68,20 @@ const importTabConfig: Record<ImportSourceType, {
   },
 };
 
-/** Hover/focus-revealed card actions, matching the MCP card treatment. */
+/** Match Expert Plaza's hover/focus reveal and neutral primary action. */
 const CARD_ACTION_REVEAL_CLASS =
-  'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100';
+  'invisible group-hover:visible group-focus-within:visible';
+const SKILL_CARD_ACTION_CLASS =
+  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-neutral-900 px-3 '
+  + `${MANAGEMENT_META_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
+  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
+  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 '
+  + 'focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
+const SKILL_DETAIL_USE_CLASS =
+  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-neutral-900 px-5 '
+  + `${MANAGEMENT_BODY_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
+  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
+  + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 interface SkillsManagerProps {
   readOnly?: boolean;
@@ -1022,7 +1034,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         <button
           type="button"
           onClick={() => { setSelectedMarketplaceSkill(null); handleUseSkill(installedSkill); }}
-          className={DETAIL_ACTION_PILL_CLASS}
+          className={SKILL_DETAIL_USE_CLASS}
         >
           {i18nService.t('skillUse')}
         </button>
@@ -1072,7 +1084,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         key={skill.id}
         role="button"
         tabIndex={0}
-        className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-4 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-within:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-4 transition-colors hover:bg-surface-raised/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         onClick={openInstalledDetail}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
@@ -1089,22 +1101,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           <div className={`min-w-0 flex-1 truncate ${MANAGEMENT_TITLE_TEXT} font-semibold leading-snug text-foreground`}>
             {displayName}
           </div>
-          {/* This is a management surface — the everyday "use a skill" path is
-              the picker in the composer. So use/menu surface on hover or
-              keyboard focus, while the enable switch stays on the resting card
-              (same layout as an MCP card): state is readable at a glance and
-              toggling is one click. */}
+          {/* Reveal the management menu on hover or keyboard focus;
+              keep the enable switch visible at rest. */}
           <div className="flex flex-shrink-0 items-center gap-1">
             <div className={`flex items-center gap-1 ${CARD_ACTION_REVEAL_CLASS}`}>
-              {onUseSkill && skill.enabled && (
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); handleUseSkill(skill); }}
-                  className={CARD_ACTION_PILL_CLASS}
-                >
-                  {i18nService.t('skillUse')}
-                </button>
-              )}
               <CardOverflowMenu items={buildInstalledSkillMenuItems(skill)} />
             </div>
             <CardToggle
@@ -1131,7 +1131,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 {i18nService.t(skill.isBuiltIn ? 'skillOriginBuiltIn' : 'skillOriginMine')}
               </span>
             ) : skill.isOfficial && (
-              <span className="rounded bg-primary-muted px-1.5 py-0.5 font-medium text-primary">
+              <span className="rounded bg-surface-raised px-1.5 py-0.5 font-medium">
                 {i18nService.t('official')}
               </span>
             )}
@@ -1165,12 +1165,6 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
 
   return (
     <div className="space-y-4">
-      <div className="pb-2">
-        <p className={`${MANAGEMENT_BODY_TEXT} text-secondary`}>
-          {i18nService.t('skillsDescription')}
-        </p>
-      </div>
-
       {skillActionError && !isRemoteImportOpen && (
         <ErrorMessage
           message={skillActionError}
@@ -1181,22 +1175,24 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
       {/* Sticky toolbar: Description + Search + Tabs + Tag pills */}
       <div
         data-skin-management-toolbar="true"
-        className="sticky top-0 z-10 space-y-4 bg-background pb-2"
+        className="sticky top-0 z-10 space-y-3 bg-background pb-2"
       >
         {/* Search + Add button */}
-        <div className="flex items-center gap-3">
-        <div className="relative flex-1">
+        <ManagementSearchHeader description={i18nService.t('skillsDescription')}>
+        <div className="management-search-header__search relative min-w-0">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
           <input
             type="text"
             placeholder={i18nService.t('searchSkills')}
+            aria-label={i18nService.t('searchSkills')}
             value={skillSearchQuery}
             onChange={(e) => setSkillSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-8 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+            className="h-9 w-full pl-9 pr-8 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
           />
           {skillSearchQuery && (
             <button
               type="button"
+              aria-label={i18nService.t('clearSearch')}
               onClick={() => {
                 reportSkillAction('clear_search', {
                   source: 'skills_manager',
@@ -1215,7 +1211,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             </button>
           )}
         </div>
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
             ref={addSkillButtonRef}
             type="button"
@@ -1231,16 +1227,16 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 return next;
               });
             }}
-            className="px-3 py-2 text-sm rounded-xl border transition-colors bg-surface border-border text-foreground hover:bg-surface-raised flex items-center gap-2"
+            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <PlusCircleIcon className="h-4 w-4" />
+            <PlusIcon className="h-5 w-5" aria-hidden="true" />
             <span>{i18nService.t('addSkill')}</span>
           </button>
 
           {isAddSkillMenuOpen && (
             <div
               ref={addSkillMenuRef}
-              className="absolute right-0 mt-2 w-72 rounded-xl border border-border bg-surface shadow-lg z-50 overflow-hidden"
+              className="absolute right-0 mt-2 w-72 max-w-[100cqw] rounded-xl border border-border bg-surface shadow-lg z-50 overflow-hidden"
             >
               <p className={`px-3 py-2 ${MANAGEMENT_META_TEXT} text-orange-600 dark:text-orange-400 border-b border-border`}>
                 {i18nService.t('addSkillSecurityTip')}
@@ -1292,7 +1288,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
             </div>
           )}
         </div>
-        </div>
+        </ManagementSearchHeader>
 
         {/* Tabs */}
         <div className="flex items-center border-b border-border">
@@ -1323,7 +1319,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   </span>
                 )}
                 <div className={`absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
-                  activeTab === tab ? 'bg-primary' : 'bg-transparent'
+                  activeTab === tab ? 'bg-foreground' : 'bg-transparent'
                 }`} />
               </button>
             );
@@ -1343,11 +1339,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           )}
         </div>
 
-        {/* Tag filter pills (Marketplace only) */}
+        {/* Category filters, matching Expert Plaza (Marketplace only). */}
         {activeTab === SkillTab.Marketplace && !isLoadingMarketplace && marketTags.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
+          <div className="flex flex-wrap items-center gap-2 py-1">
             <button
               type="button"
+              aria-pressed={activeMarketTag === 'all'}
               onClick={() => {
                 reportSkillAction('market_tag_change', {
                   source: 'skills_manager',
@@ -1358,10 +1355,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 });
                 setActiveMarketTag('all');
               }}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+              className={`h-9 shrink-0 whitespace-nowrap rounded-lg px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 ${
                 activeMarketTag === 'all'
-                  ? 'bg-primary text-white'
-                  : 'bg-surface-raised text-secondary hover:text-foreground'
+                  ? 'bg-surface-raised font-semibold text-foreground'
+                  : 'text-secondary hover:bg-surface-raised hover:text-foreground'
               }`}
             >
               {i18nService.t('skillCategoryAll')}
@@ -1370,6 +1367,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               <button
                 key={tag.id}
                 type="button"
+                aria-pressed={activeMarketTag === tag.id}
                 onClick={() => {
                   reportSkillAction('market_tag_change', {
                     source: 'skills_manager',
@@ -1380,10 +1378,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   });
                   setActiveMarketTag(tag.id);
                 }}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                className={`h-9 shrink-0 whitespace-nowrap rounded-lg px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 ${
                   activeMarketTag === tag.id
-                    ? 'bg-primary text-white'
-                    : 'bg-surface-raised text-secondary hover:text-foreground'
+                    ? 'bg-surface-raised font-semibold text-foreground'
+                    : 'text-secondary hover:bg-surface-raised hover:text-foreground'
                 }`}
               >
                 {resolveLocalizedText(tag)}
@@ -1525,7 +1523,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 key={skill.id}
                 role="button"
                 tabIndex={0}
-                className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-4 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="group flex flex-col cursor-pointer rounded-2xl border border-border bg-surface p-4 transition-colors hover:bg-surface-raised/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 onClick={openMarketplaceDetail}
                 onKeyDown={(e) => {
                   if (e.target !== e.currentTarget) return;
@@ -1540,9 +1538,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   <div className={`min-w-0 flex-1 truncate ${MANAGEMENT_TITLE_TEXT} font-semibold leading-snug text-foreground`}>
                     {skillService.getLocalizedSkillName(skill.id, skill.name)}
                   </div>
-                  {/* App Store rules: one capsule, label carries the state.
-                      Uninstall is not a browsing action — it lives in detail. */}
-                  <div className="flex flex-shrink-0 items-center">
+                  {/* Reveal actions on hover/focus; keep installation progress visible. */}
+                  <div className={`flex flex-shrink-0 items-center ${installingSkillId === skill.id ? '' : CARD_ACTION_REVEAL_CLASS}`}>
                     {(() => {
                       const status = getSkillInstallStatus(skill);
                       const installedSkill = skills.find(item => item.id === skill.id);
@@ -1552,7 +1549,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleUpgradeSkill(skill); }}
                             disabled={upgradeState?.isActive === true}
-                            className={CARD_ACTION_PILL_CLASS}
+                            className={SKILL_CARD_ACTION_CLASS}
                           >
                             {i18nService.t('skillUpgrade')}
                           </button>
@@ -1571,7 +1568,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleUseSkill(installedSkill); }}
-                            className={CARD_ACTION_PILL_CLASS}
+                            className={SKILL_CARD_ACTION_CLASS}
                           >
                             {i18nService.t('skillUse')}
                           </button>
@@ -1582,7 +1579,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                           type="button"
                           onClick={(e) => { e.stopPropagation(); handleInstallMarketplaceSkill(skill); }}
                           disabled={installingSkillId !== null}
-                          className={CARD_ACTION_PILL_CLASS}
+                          className={SKILL_CARD_ACTION_CLASS}
                         >
                           {installingSkillId === skill.id && (
                             <ArrowPathIcon className="h-3 w-3 animate-spin" />
@@ -1822,7 +1819,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                   <button
                     type="button"
                     onClick={() => handleUseSkill(selectedSkill)}
-                    className={DETAIL_ACTION_PILL_CLASS}
+                    className={SKILL_DETAIL_USE_CLASS}
                   >
                     {i18nService.t('skillUse')}
                   </button>

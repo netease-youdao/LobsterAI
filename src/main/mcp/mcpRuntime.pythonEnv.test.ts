@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { McpNodeEnv } from '../../shared/mcp/constants';
 import { PythonEncodingEnv } from '../libs/pythonEncodingEnv';
 import { McpLaunchResolutionStatus, McpLaunchResolverKind } from './mcpLaunchResolution';
 import { McpRuntime } from './mcpRuntime';
@@ -121,6 +122,21 @@ describe.each([false, true])('MCP Python env (managed launch: %s)', managed => {
       expect(env).toHaveProperty('pythonutf8', '0');
       expect(env).not.toHaveProperty(PythonEncodingEnv.Utf8);
       expect(env).not.toHaveProperty(PythonEncodingEnv.IoEncoding);
+    }
+  });
+});
+
+describe.each([false, true])('MCP Node system CA env (managed launch: %s)', managed => {
+  test('native config and discovery trust the system certificate store by default', async () => {
+    for (const env of await getLaunchEnvironments(makeRuntime(managed))) {
+      expect(env).toHaveProperty(McpNodeEnv.UseSystemCa, '1');
+    }
+  });
+
+  test('a server value opts out on both launch paths', async () => {
+    const harness = makeRuntime(managed, { [McpNodeEnv.UseSystemCa]: '0' });
+    for (const env of await getLaunchEnvironments(harness)) {
+      expect(env).toHaveProperty(McpNodeEnv.UseSystemCa, '0');
     }
   });
 });

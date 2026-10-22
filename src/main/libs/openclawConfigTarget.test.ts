@@ -169,3 +169,27 @@ test('backup rotation keeps OpenClaw\'s five-slot ring', () => {
     .toEqual(['slot-0', 'slot-1', 'slot-2', 'slot-3']);
   expect(fs.existsSync(`${file}.bak.5`)).toBe(false);
 });
+
+test('merges unowned sections from a reverted base while rebasing against the file as read', () => {
+  const fileRaw = JSON.stringify({
+    models: { providers: {} },
+    hooks: { internal: { enabled: true } },
+    custom: { keep: true },
+  });
+  const revertedRaw = JSON.stringify({ models: { providers: {} }, custom: { keep: true } });
+  const target = createOpenClawConfigTarget(fileRaw, JSON.stringify({
+    models: { providers: {} },
+    tools: { profile: 'full' },
+  }), undefined, { mergeBaseRaw: revertedRaw, extraOwnedSections: ['tools', 'gateway'] });
+
+  expect(target.baseRaw).toBe(fileRaw);
+  expect(target.ownedSections).toContain('tools');
+  expect(target.ownedSections).not.toContain('gateway');
+  const concurrent = JSON.stringify({ ...JSON.parse(fileRaw), tools: { profile: 'minimal' }, extra: 1 });
+  expect(JSON.parse(rebaseOpenClawConfigTarget(target, concurrent))).toEqual({
+    models: { providers: {} },
+    custom: { keep: true },
+    tools: { profile: 'full' },
+    extra: 1,
+  });
+});

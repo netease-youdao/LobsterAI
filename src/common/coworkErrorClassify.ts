@@ -25,6 +25,7 @@ export const CoworkErrorI18nKey = {
   ServerError: 'coworkErrorServerError',
   TranscriptOversized: 'coworkErrorTranscriptOversized',
   GatewayHeapOutOfMemory: 'coworkErrorGatewayHeapOutOfMemory',
+  WorkspaceAliasRepointed: 'coworkErrorWorkspaceAliasRepointed',
 } as const;
 
 const LOBSTERAI_QUOTA_EXHAUSTED_PATTERN =
@@ -70,6 +71,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   // Gateway / connection issues
   [new RegExp(OpenClawTranscriptSafetyErrorCode.ActiveTranscriptOversized, 'i'), CoworkErrorI18nKey.TranscriptOversized],
   [new RegExp(`gatewayFailureKind=${OpenClawGatewayFailureKind.HeapOutOfMemory}|JavaScript heap out of memory`, 'i'), CoworkErrorI18nKey.GatewayHeapOutOfMemory],
+  // OpenClaw refuses a workspace path that now resolves to another folder than recorded.
+  [/workspace path alias(?:es)? (?:points to a different current target|resolve to conflicting state|conflicts with canonical state)/i, CoworkErrorI18nKey.WorkspaceAliasRepointed],
   [/gateway request timeout for sessions\.patch/i, 'coworkGatewaySessionSyncTimeout'],
   [/gateway.*disconnect|client disconnected/i, 'coworkErrorGatewayDisconnected'],
   [/service restart/i, 'coworkErrorServiceRestart'],

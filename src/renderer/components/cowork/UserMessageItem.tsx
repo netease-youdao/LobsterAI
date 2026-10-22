@@ -11,6 +11,7 @@ import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedT
 import type { KitReference } from '../../../shared/kit/constants';
 import { copyTextToClipboard } from '../../services/clipboard';
 import { i18nService } from '../../services/i18n';
+import { useImageEditSnapshots } from '../../services/imageEditSnapshots';
 import { buildKitReferences } from '../../services/kitCapability';
 import type { CoworkImageAttachment, CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import type { MarketplaceKit } from '../../types/kit';
@@ -18,6 +19,7 @@ import type { Skill } from '../../types/skill';
 import { formatMessageDateTime } from '../../utils/tokenFormat';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
 import { extractUserMessageFileAttachments } from '../../utils/userMessageFileAttachments';
+import { ImageEditMessageCard } from '../artifacts/imageEditor/ImageEditMessageCard';
 import EditIcon from '../icons/EditIcon';
 import GoalIcon from '../icons/GoalIcon';
 import MessageCopyIcon from '../icons/MessageCopyIcon';
@@ -32,7 +34,6 @@ import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal'
 import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
-  getMessageModelLabel,
   messageMetaClassName,
 } from './messageDisplayUtils';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
@@ -198,7 +199,6 @@ const UserMessageItem: React.FC<{
 }> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, onLocateSelectedText, onOpenAnnotation }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
-  const modelLabel = getMessageModelLabel(message.metadata);
   const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
@@ -212,6 +212,7 @@ const UserMessageItem: React.FC<{
   }, []);
 
   const metadata = message.metadata as CoworkMessageMetadata | undefined;
+  const imageEdits = useImageEditSnapshots(message, sessionId);
   const isGoalSettingMessage = hasGoalSettingMessageMetadata(metadata);
   const { text: displayContent, attachments: fileAttachments } = useMemo(
     () => extractUserMessageFileAttachments(parseUserMessageForDisplay(message.content || '', {
@@ -247,9 +248,10 @@ const UserMessageItem: React.FC<{
     : legacyImageAttachments;
   // Annotation transport screenshots already render as numbered annotation
   // cards; keep them out of the regular attachment row.
-  const displayImageAttachments = browserAnnotationCount > 0
-    ? allImageAttachments.filter(image => !isBrowserAnnotationTransportImage(image))
-    : allImageAttachments;
+  const displayImageAttachments = allImageAttachments.filter(image =>
+    !(browserAnnotationCount > 0 && isBrowserAnnotationTransportImage(image))
+    && !imageEdits.some(snapshot => snapshot.source.filePath === image.localPath)
+  );
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
   const handleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
     reportConversationMessageAction({
@@ -343,6 +345,11 @@ const UserMessageItem: React.FC<{
                     />
                   </div>
                 )}
+                {imageEdits.map(snapshot => {
+                  const preview = imageAttachmentPreviews.find(image => image.localPath === snapshot.source.filePath);
+                  return <ImageEditMessageCard key={snapshot.requestId} snapshot={snapshot}
+                    fallback={preview ? `data:${preview.mimeType};base64,${preview.base64Data}` : undefined} />;
+                })}
                 {displayImageAttachments.length > 0 && (
                   <div className={`flex flex-wrap gap-2 ${displayContent?.trim() ? 'mt-2' : ''}`}>
                     {displayImageAttachments.map((img, idx) => (
@@ -377,7 +384,6 @@ const UserMessageItem: React.FC<{
               <div className="flex w-full items-center justify-end gap-2">
                 <div className={messageMetaClassName(isHovered, 'right')} aria-hidden={!isHovered}>
                   <span>{formatMessageDateTime(message.timestamp)}</span>
-                  {modelLabel && <span>{modelLabel}</span>}
                   <CopyButton
                     content={message.content}
                     onCopy={(result) => reportConversationMessageAction({

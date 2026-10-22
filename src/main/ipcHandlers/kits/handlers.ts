@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, net } from 'electron';
 import extractZip from 'extract-zip';
 import fs from 'fs';
 import http from 'http';
@@ -13,9 +13,10 @@ import type {
   InstalledKitRecord,
   KitSkillMetadata,
   KitStoreKey,
+  KitStoreResponse,
   LocalizedText,
 } from '../../../shared/kit/constants';
-import { KitStoreKey as KitStoreKeyValue } from '../../../shared/kit/constants';
+import { KitIpcChannel, KitStoreKey as KitStoreKeyValue } from '../../../shared/kit/constants';
 import {
   buildComputerUseMarketplaceKit,
   buildInstalledComputerUseKitRecord,
@@ -41,6 +42,7 @@ import type { SqliteStore } from '../../sqliteStore';
 const KITS_INSTALLED_KEY: KitStoreKey = KitStoreKeyValue.Installed;
 const SKILLS_DIR_NAME = 'SKILLs';
 const SKILL_FILE_NAME = 'SKILL.md';
+const KIT_STORE_REQUEST_TIMEOUT_MS = 10_000;
 
 function downloadBuffer(url: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -231,27 +233,17 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
   );
 
   // Fetch kit store catalog from overmind
-  ipcMain.handle('kits:fetchStore', async () => {
+  ipcMain.handle(KitIpcChannel.FetchStore, async (): Promise<KitStoreResponse> => {
     const url = getKitStoreUrl();
     console.log(`[KitStore] fetching from: ${url}`);
     try {
-      const https = await import('https');
-      const data = await new Promise<string>((resolve, reject) => {
-        const req = https.get(url, { timeout: 10000 }, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            res.resume();
-            return;
-          }
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk: string) => { body += chunk; });
-          res.on('end', () => resolve(body));
-          res.on('error', reject);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+      const response = await net.fetch(url, {
+        signal: AbortSignal.timeout(KIT_STORE_REQUEST_TIMEOUT_MS),
       });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.text();
       return {
         success: true,
         data: skinPackKitLifecycle.appendToStoreResponse(data, getAdditionalBuiltInKits()),
@@ -259,9 +251,9 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
     } catch (error) {
       console.error('[KitStore] fetch failed:', error);
       return {
-        success: true,
+        success: false,
         data: skinPackKitLifecycle.buildOfflineStoreResponse(getAdditionalBuiltInKits()),
-        warning: error instanceof Error ? error.message : 'Failed to fetch kit store',
+        error: error instanceof Error ? error.message : 'Failed to fetch kit store',
       };
     }
   });

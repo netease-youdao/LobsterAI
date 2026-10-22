@@ -142,7 +142,7 @@ export const hasLegacyPluginInstallConfig = (raw: string): boolean => (
   inspectLegacyPluginInstallConfig(raw).hasLegacyInstalls
 );
 
-const resolveOpenClawCliPath = (runtimeRoot: string): string | null => {
+export const resolveOpenClawCliPath = (runtimeRoot: string): string | null => {
   const candidates = [
     path.join(runtimeRoot, 'openclaw.mjs'),
     path.join(runtimeRoot, 'gateway.asar', 'openclaw.mjs'),

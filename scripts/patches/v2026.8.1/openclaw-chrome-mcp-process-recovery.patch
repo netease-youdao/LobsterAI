@@ -1,0 +1,306 @@
+diff --git a/extensions/browser/src/browser/chrome-mcp-connect.ts b/extensions/browser/src/browser/chrome-mcp-connect.ts
+index 806bff64a4e..085842d8282 100644
+--- a/extensions/browser/src/browser/chrome-mcp-connect.ts
++++ b/extensions/browser/src/browser/chrome-mcp-connect.ts
+@@ -7,6 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
+ import { redactCdpUrl } from "./cdp.helpers.js";
+ import {
+   CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
++  ChromeMcpProcessSnapshotError,
+   type ChromeMcpSession,
+   type NormalizedChromeMcpProfileOptions,
+ } from "./chrome-mcp-contracts.js";
+@@ -98,6 +99,13 @@ async function createRealSession(
+       const detail = redactChromeMcpDiagnosticTextWithLocalPaths(
+         err instanceof Error ? err.message : String(err),
+       );
++      if (err instanceof ChromeMcpProcessSnapshotError) {
++        throw new BrowserProfileUnavailableError(
++          `Chrome MCP process inspection failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". ` +
++            "Retry the browser command to finish subprocess cleanup and reconnect. " +
++            `Details: ${detail}`,
++        );
++      }
+       throw new BrowserProfileUnavailableError(
+         `Chrome MCP existing-session attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". ` +
+           `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
+diff --git a/extensions/browser/src/browser/chrome-mcp-process.ts b/extensions/browser/src/browser/chrome-mcp-process.ts
+index 73682f04841..6c7d9b1fd76 100644
+--- a/extensions/browser/src/browser/chrome-mcp-process.ts
++++ b/extensions/browser/src/browser/chrome-mcp-process.ts
+@@ -183,6 +183,12 @@ export async function refreshChromeMcpCleanupProcess(session: ChromeMcpSession):
+       return;
+     }
+     const snapshots = await listChromeMcpPlatformProcesses(getChromeMcpProcessCleanupDeps());
++    if (!existing && readChromeMcpTransportPid(session.transport) !== rootPid) {
++      session.processCleanup = { status: "uncertain" };
++      throw new ChromeMcpProcessSnapshotError(
++        "Chrome MCP subprocess identity became unavailable during inspection.",
++      );
++    }
+     const currentRoot = snapshots.find((snapshot) => snapshot.pid === rootPid);
+     if (existing && currentRoot?.identity !== existing.root.identity) {
+       if (state.status === "uncertain") {
+@@ -327,11 +333,16 @@ async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<v
+   const target = session.processCleanup ? cleanupTarget(session.processCleanup) : undefined;
+   const terminateFirst =
+     Boolean(target) && (getChromeMcpProcessCleanupDeps()?.platform ?? process.platform) === "win32";
+-  if (terminateFirst) {
++  if (terminateFirst && !firstError) {
+     await attempt(async () => await terminateChromeMcpProcessTree(target));
+   }
+-  // MCP SDK owns the exact spawned ChildProcess; always close it even when
+-  // descendant discovery or platform tree cleanup fails.
++  if (firstError && cleanupUncertain) {
++    // SDK close discards its ChildProcess/PID before shutdown. Keep that live
++    // ownership handle so retained cleanup can retry discovery before replacing it.
++    session.processCleanup = { status: "uncertain", ...(target ? { target } : {}) };
++    throw firstError;
++  }
++  // Once ownership is known, close the SDK handle even if tree termination fails.
+   await attempt(async () => await session.client.close());
+   if (!terminateFirst) {
+     await attempt(async () => await terminateChromeMcpProcessTree(target));
+diff --git a/extensions/browser/src/browser/chrome-mcp.test.ts b/extensions/browser/src/browser/chrome-mcp.test.ts
+index 5f03f4c2c54..bd928e546ba 100644
+--- a/extensions/browser/src/browser/chrome-mcp.test.ts
++++ b/extensions/browser/src/browser/chrome-mcp.test.ts
+@@ -1378,6 +1378,149 @@ describe("chrome MCP page parsing", () => {
+     expect(killProcess).not.toHaveBeenCalledWith(125, expect.anything());
+   });
+ 
++  it.each([
++    { platform: "linux", snapshotsBeforeFailure: 0, shared: false },
++    { platform: "darwin", snapshotsBeforeFailure: 0, shared: false },
++    { platform: "win32", snapshotsBeforeFailure: 0, shared: false },
++    { platform: "win32", snapshotsBeforeFailure: 1, shared: false },
++    { platform: "win32", snapshotsBeforeFailure: 0, shared: true },
++  ] as const)(
++    "retains the live $platform transport after $snapshotsBeforeFailure snapshots (shared: $shared)",
++    async ({ platform, snapshotsBeforeFailure, shared }) => {
++      const session = createFakeSession();
++      Object.assign(session, { processCleanup: { status: "open" } });
++      if (shared) {
++        session.ready = Promise.reject(new Error("initial attach failed"));
++        void session.ready.catch(() => {});
++      }
++      const alive = new Set([123, 124, 126]);
++      let discoveryFails = true;
++      let snapshots = 0;
++      const closeMock = vi.fn(async () => {
++        (session.transport as { pid: number | null }).pid = null;
++      });
++      session.client.close = closeMock as typeof session.client.close;
++      setChromeMcpProcessCleanupDepsForTest({
++        platform,
++        listProcesses: async () => {
++          if (discoveryFails && snapshots++ >= snapshotsBeforeFailure) {
++            throw new Error("process enumeration failed");
++          }
++          return [
++            processSnapshot(123, 1),
++            processSnapshot(124, 123),
++            processSnapshot(126, 1),
++          ].filter(({ pid }) => alive.has(pid));
++        },
++        killProcess: (pid) => {
++          alive.delete(pid);
++        },
++        taskkillProcessTree: async (pid) => {
++          alive.delete(pid);
++          if (pid === 123) {
++            alive.delete(124);
++          }
++        },
++        sleep: vi.fn().mockResolvedValue(undefined),
++      });
++      const factory = vi
++        .fn()
++        .mockResolvedValueOnce(session)
++        .mockResolvedValueOnce(createFakeSession());
++      setChromeMcpSessionFactoryForTest(factory);
++
++      try {
++        await expect(
++          shared
++            ? listChromeMcpTabs("chrome-live")
++            : ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true }),
++        ).rejects.toThrow("process enumeration failed");
++        expect(closeMock).not.toHaveBeenCalled();
++        await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
++          "process enumeration failed",
++        );
++        expect(factory).toHaveBeenCalledOnce();
++
++        discoveryFails = false;
++        await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
++        expect(closeMock).toHaveBeenCalledOnce();
++        expect(factory).toHaveBeenCalledTimes(2);
++        expect(alive).toEqual(new Set([126]));
++      } finally {
++        discoveryFails = false;
++        // Also drain the retained fixture when verifying this regression pre-fix.
++        if (session.processCleanup?.status !== "closed") {
++          (session.transport as { pid: number | null }).pid = 123;
++        }
++      }
++    },
++  );
++
++  it.each(["open", "uncertain"] as const)(
++    "does not adopt a recycled root when the %s transport closes during its first snapshot",
++    async (status) => {
++      const session = createFakeSession();
++      Object.assign(session, { processCleanup: { status } });
++      let releaseSnapshot!: () => void;
++      const snapshotGate = new Promise<void>((resolve) => {
++        releaseSnapshot = resolve;
++      });
++      let alive = true;
++      const listProcesses = vi.fn(async () => {
++        await snapshotGate;
++        return alive ? [processSnapshot(123, 1, "start-reused")] : [];
++      });
++      const killProcess = vi.fn(() => {
++        alive = false;
++      });
++      const taskkillProcessTree = vi.fn(async () => {
++        alive = false;
++      });
++      const closeMock = vi.fn(async () => {
++        (session.transport as { pid: number | null }).pid = null;
++      });
++      session.client.close = closeMock as typeof session.client.close;
++      setChromeMcpProcessCleanupDepsForTest({
++        platform: "win32",
++        listProcesses,
++        killProcess,
++        taskkillProcessTree,
++        sleep: vi.fn().mockResolvedValue(undefined),
++      });
++      const factory = vi
++        .fn()
++        .mockResolvedValueOnce(session)
++        .mockResolvedValueOnce(createFakeSession());
++      setChromeMcpSessionFactoryForTest(factory);
++      const closing = ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
++      void closing.catch(() => {});
++
++      try {
++        await waitForChromeMcpState(() => expect(listProcesses).toHaveBeenCalledOnce());
++        (session.transport as { pid: number | null }).pid = null;
++        releaseSnapshot();
++        await expect(closing).rejects.toThrow("identity became unavailable during inspection");
++        expect(session.processCleanup).toEqual({ status: "uncertain" });
++        await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
++          "subprocess tree cleanup could not be verified",
++        );
++        expect(session.processCleanup).toEqual({ status: "uncertain" });
++        expect(factory).toHaveBeenCalledOnce();
++        expect(closeMock).not.toHaveBeenCalled();
++        expect(killProcess).not.toHaveBeenCalled();
++        expect(taskkillProcessTree).not.toHaveBeenCalled();
++      } finally {
++        releaseSnapshot();
++        await closing.catch(() => {});
++        // Restore only the fake fixture after asserting the unknown PID was never killed.
++        if (session.processCleanup?.status !== "closed") {
++          (session.transport as { pid: number | null }).pid = 123;
++        }
++        await closeChromeMcpSession("chrome-live");
++      }
++    },
++  );
++
+   it("keeps snapshot uncertainty closed after the root disappears", async () => {
+     const session = createFakeSession();
+     Object.assign(session, { processCleanup: { status: "open" } });
+@@ -1397,7 +1540,8 @@ describe("chrome MCP page parsing", () => {
+     await expect(
+       ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true }),
+     ).rejects.toThrow("process enumeration failed");
+-    expect(closeMock).toHaveBeenCalledOnce();
++    // Losing the root outside cleanup still cannot authorize replacement.
++    (session.transport as { pid: number | null }).pid = null;
+     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
+       "subprocess tree cleanup could not be verified",
+     );
+@@ -1615,6 +1759,69 @@ describe("chrome MCP page parsing", () => {
+     expect(closeMock).toHaveBeenCalledTimes(3);
+   });
+ 
++  it("reports process inspection failures without Chrome setup advice", async () => {
++    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-inspection-"));
++    const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
++    const pidPath = path.join(tempDir, "pid");
++    await fs.writeFile(
++      fakeMcpCommand,
++      `#!/usr/bin/env node
++       import fs from "node:fs";
++       import readline from "node:readline";
++       fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
++       readline.createInterface({ input: process.stdin }).on("line", (line) => {
++         const request = JSON.parse(line);
++         if (request.id === undefined) return;
++         const result = request.method === "initialize"
++           ? { protocolVersion: "2024-11-05", capabilities: { tools: {} },
++               serverInfo: { name: "inspection-fixture", version: "1.0.0" } }
++           : { tools: [{ name: "list_pages", inputSchema: { type: "object" } }] };
++         process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
++       });`,
++    );
++    await fs.chmod(fakeMcpCommand, 0o755);
++    const privatePath = path.join(os.homedir(), "private-browser-profile");
++    let failDiscovery = true;
++    let alive = true;
++    setChromeMcpProcessCleanupDepsForTest({
++      platform: "win32",
++      listProcesses: async () => {
++        if (failDiscovery) {
++          failDiscovery = false;
++          throw new Error(`process enumeration failed for ${privatePath}`);
++        }
++        const pid = Number(await fs.readFile(pidPath, "utf8"));
++        return alive ? [processSnapshot(pid, process.pid)] : [];
++      },
++      taskkillProcessTree: async (pid) => {
++        process.kill(pid);
++        alive = false;
++      },
++      sleep: vi.fn().mockResolvedValue(undefined),
++    });
++
++    let message = "";
++    try {
++      await ensureChromeMcpAvailable(
++        "inspection-profile",
++        { mcpCommand: fakeMcpCommand },
++        { ephemeral: true },
++      );
++    } catch (err) {
++      message = err instanceof Error ? err.message : String(err);
++    } finally {
++      await closeChromeMcpSession("inspection-profile");
++      await fs.rm(tempDir, { recursive: true, force: true });
++    }
++
++    expect(message).toContain("Chrome MCP process inspection failed");
++    expect(message).toContain("Retry the browser command");
++    expect(message).toMatch(/~[\\/]private-browser-profile/);
++    expect(message).not.toContain("remote debugging enabled");
++    expect(message).not.toContain(os.homedir());
++    expect(alive).toBe(false);
++  });
++
+   it("redacts remote CDP URL secrets from attach failures", async () => {
+     const secretToken = "browserless-secret-token-1234567890"; // pragma: allowlist secret
+     const user = "browser-user";
+@@ -1723,7 +1930,7 @@ describe("chrome MCP page parsing", () => {
+     expect(message).toContain("Chrome MCP existing-session attach failed");
+     expect(message).toContain("~/Library/Application Support/Google/Chrome/Profile 1");
+     expect(message).toContain(
+-      "attach failed for ~/Library/Application Support/Google/Chrome/Profile 1",
++      `attach failed for ${path.join("~", "Library", "Application Support", "Google", "Chrome", "Profile 1")}`,
+     );
+     expect(message).not.toContain(homeDir);
+     expect(message).not.toContain(userDataDir);

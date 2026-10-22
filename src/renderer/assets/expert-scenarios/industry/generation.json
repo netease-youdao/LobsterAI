@@ -1,0 +1,57 @@
+{
+  "tool": "built-in image_gen",
+  "created": "2026-10-21",
+  "promptTemplate": "Use case: stylized-concept. Asset type: original decorative industry illustration for the upper-right corner of a desktop app category card. Create ONE isolated sculptural still-life illustration of: {scene}. Palette: {palette}. Style: sophisticated tactile paper-clay hybrid, softly bevelled geometric forms, matte surfaces, a few translucent accents, soft studio shading, restrained modern editorial illustration. Design a fresh original object arrangement. Composition: a compact diagonal grouping centered in the square frame, comfortably contained within the central 78%, clear recognizable silhouette at 96px, very few objects, lots of transparent breathing room around the grouping. True transparent background with clean alpha, soft self-shadows only, no floor, no colored backdrop, no rectangular or circular backing. No people, faces, mascots, text, letters, numbers, brand marks, logos, watermark, trophy, flame, sprout, medal or ranking badge. This is a decorative image asset, not a UI screenshot. Use a square canvas.",
+  "assets": [
+    {
+      "key": "documents",
+      "scene": "A folded ivory document sheet with subtle embossed abstract lines, a small mint spreadsheet tile and a blue binder clip",
+      "palette": "soft cornflower blue, ivory and mint"
+    },
+    {
+      "key": "media",
+      "scene": "A compact sculptural camera with a circular lens, a small blank film frame and a tiny coral editing tile",
+      "palette": "dusty coral, apricot and lilac"
+    },
+    {
+      "key": "efficiency",
+      "scene": "An open teal file folder holding two ivory cards, one small checkmark token and a subtle curved connector",
+      "palette": "sage, turquoise and ivory"
+    },
+    {
+      "key": "development",
+      "scene": "A small open laptop with blank dark lavender screen, two floating abstract modular blocks and a mint connector piece",
+      "palette": "lavender, dusty indigo and mint"
+    },
+    {
+      "key": "analytics",
+      "scene": "Three elegant translucent ascending chart bars with a soft curved line and a small floating data tile",
+      "palette": "teal, pale cyan and periwinkle"
+    },
+    {
+      "key": "education",
+      "scene": "Two small stacked books, one open book with blank pages and a simple blue bookmark",
+      "palette": "apricot, ivory and sky blue"
+    },
+    {
+      "key": "commerce",
+      "scene": "A small paper shopping bag, a neat parcel box and a blank hang tag, composed as one tiny sculptural still life",
+      "palette": "muted terracotta, blush and butter yellow"
+    },
+    {
+      "key": "legal",
+      "scene": "A refined small balanced set of scales beside one folded ivory agreement sheet",
+      "palette": "dusty navy, warm ivory and muted brass"
+    },
+    {
+      "key": "career",
+      "scene": "A simple modern briefcase, a small compass dial without markings, and one ivory portfolio card",
+      "palette": "dusty periwinkle, warm ivory and muted sage"
+    },
+    {
+      "key": "games",
+      "scene": "A small original game controller with simple round buttons, one translucent modular cube and a tiny curved game path",
+      "palette": "lilac, mint and soft coral"
+    }
+  ]
+}

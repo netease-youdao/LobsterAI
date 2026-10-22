@@ -8,7 +8,14 @@ interface ThemedSelectProps {
   options: { value: string; label: string }[];
   className?: string;
   label?: string;
+  /** 'sm' matches the compact text-xs inputs used in dense forms. */
+  size?: 'md' | 'sm';
 }
+
+const SIZE_CLASSES = {
+  md: { button: 'rounded-lg px-4 py-2.5 text-sm', list: 'text-sm' },
+  sm: { button: 'rounded-xl px-3 py-2 text-xs', list: 'text-xs' },
+} as const;
 
 const ThemedSelect: React.FC<ThemedSelectProps> = ({
   id,
@@ -17,7 +24,9 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
   options,
   className = '',
   label,
+  size = 'md',
 }) => {
+  const sizeClasses = SIZE_CLASSES[size];
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +66,7 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
             id={id}
             type="button"
             onClick={() => setIsOpen(!isOpen)}
-            className={`flex items-center justify-between w-full rounded-lg bg-surface border-border border focus:border-primary focus:ring-1 focus:ring-primary/40 text-foreground px-4 py-2.5 text-sm ${className}`}
+            className={`flex items-center justify-between w-full ${sizeClasses.button} bg-surface border-border border focus:border-primary focus:ring-1 focus:ring-primary/40 text-foreground ${className}`}
             aria-haspopup="listbox"
             aria-expanded={isOpen}
           >
@@ -68,7 +77,7 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
           {isOpen && (
             <div className="absolute z-10 w-full mt-1 overflow-auto rounded-md popover-enter shadow-popover max-h-60 focus:outline-none">
               <ul
-                className="py-1 overflow-auto text-sm bg-surface border border-border rounded-lg"
+                className={`py-1 overflow-auto ${sizeClasses.list} bg-surface border border-border rounded-lg`}
                 role="listbox"
                 aria-labelledby={id}
               >

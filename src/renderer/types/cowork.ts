@@ -87,6 +87,7 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  imageEdits?: import('../../shared/imageEditing/types').ImageEditMessageSnapshot[];
   modelChange?: CoworkModelChange;
   modelPresetId?: ModelPresetId;
   resolvedModelId?: string;
@@ -282,13 +283,6 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'dreamingModel'
   | 'dreamingTimezone'
 >>;
-
-export interface CoworkApiConfig {
-  apiKey: string;
-  baseURL: string;
-  model: string;
-  apiType?: 'anthropic' | 'openai';
-}
 
 export type OpenClawEnginePhase = SharedOpenClawEnginePhase;
 

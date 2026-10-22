@@ -12,6 +12,8 @@ export type MediaTaskPresentation = {
 export type MediaTaskPresentations = ReadonlyMap<string, MediaTaskPresentation>;
 
 const MEDIA_TOOL_NAMES = new Set(['lobsteraiimagegenerate', 'lobsteraivideogenerate']);
+export const isMediaGenerationToolName = (name: string): boolean =>
+  MEDIA_TOOL_NAMES.has(name.replace(/[^a-z0-9]/gi, '').toLowerCase());
 
 const taskIdOf = (value: unknown): string | undefined => {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
@@ -32,6 +34,11 @@ const taskCreatedAt = (details: MediaDetails): number | undefined => {
 
 const resultReceivedAt = (group: ToolGroupItem): number | undefined => {
   const timestamp = group.toolResult?.timestamp;
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
+};
+
+const clientStartedAt = (details: MediaDetails): number | undefined => {
+  const timestamp = details.clientStartedAt;
   return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
 };
 
@@ -67,11 +74,11 @@ export const buildMediaTaskPresentations = (turns: readonly ConversationTurn[]):
       const task = tasks.get(taskId);
       if (task) {
         task.details = mergeDetails(task.details, details);
-        task.startedAt = createdAt ?? task.startedAt ?? resultReceivedAt(item.group);
+        task.startedAt = clientStartedAt(task.details) ?? createdAt ?? task.startedAt ?? resultReceivedAt(item.group);
       } else {
         tasks.set(taskId, {
           ownerId: item.group.toolUse.id,
-          startedAt: createdAt ?? resultReceivedAt(item.group),
+          startedAt: clientStartedAt(details) ?? createdAt ?? resultReceivedAt(item.group),
           details,
         });
       }

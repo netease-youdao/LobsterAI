@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 
+import { stripAssistantImageDiagnostic } from '../../../shared/cowork/assistantImageDiagnostic';
 import {
   type CoworkGoal,
   formatCoworkGoalCompletionDuration,
@@ -79,7 +80,7 @@ const AssistantMessageItem: React.FC<{
 }) => {
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
   const rawContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
-  const proposedPlan = parseProposedPlanBlock(rawContent);
+  const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(rawContent));
   const displayContent = proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd();
   const copyContent = [
     displayContent,

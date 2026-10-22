@@ -1,0 +1,178 @@
+Keep managed outgoing image descriptors out of model replay.
+
+Base: OpenClaw v2026.8.1 (ea806575e6450e4d1efdfc72c19f04be982a1b9b).
+The display-only URL/artifact blocks intentionally have no base64 data.
+Treating them as model images creates a session:history diagnostic which models
+can copy into user-facing answers. Drop only recognized assistant descriptors
+from the in-memory replay copy; preserve stored attachments and actual inputs.
+Also remove old standalone echoes, preserving quotes and fenced code examples.
+Remove when upstream normalizes managed assistant image descriptors before
+sanitizeSessionMessagesImages at all model replay boundaries.
+
+diff --git a/src/agents/embedded-agent-runner/replay-history.ts b/src/agents/embedded-agent-runner/replay-history.ts
+--- a/src/agents/embedded-agent-runner/replay-history.ts
++++ b/src/agents/embedded-agent-runner/replay-history.ts
+@@ -65,6 +65,7 @@
+   type AssistantUsageSnapshot,
+   type UsageLike,
+ } from "../usage.js";
++import { isManagedAssistantImageBlock, stripAssistantImageDiagnostic } from "./managed-image-replay.js";
+ import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
+ import {
+   dropReasoningFromHistory,
+@@ -229,7 +230,7 @@
+   message: AssistantReplayMessage,
+   replayContent: string,
+ ): AssistantReplayMessage | null {
+-  const strippedText = stripInternalMetadataForDisplay(replayContent);
++  const strippedText = stripAssistantImageDiagnostic(stripInternalMetadataForDisplay(replayContent));
+   const trimmed = strippedText.trim();
+   if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+     return null;
+@@ -249,12 +250,18 @@
+       sanitizedContent.push(block);
+       continue;
+     }
++    // Managed outgoing images describe UI attachments, not provider image inputs.
++    // Omit only from the replay copy; retain the persisted attachment and real image data.
++    if (isManagedAssistantImageBlock(block)) {
++      touched = true;
++      continue;
++    }
+     const text = (block as { text?: unknown }).text;
+     if (typeof text !== "string") {
+       sanitizedContent.push(block);
+       continue;
+     }
+-    const strippedText = stripInternalMetadataForDisplay(text);
++    const strippedText = stripAssistantImageDiagnostic(stripInternalMetadataForDisplay(text));
+     if (strippedText === text) {
+       if (!isSilentReplyPayloadText(text.trim(), SILENT_REPLY_TOKEN)) {
+         sanitizedContent.push(block);
+diff --git a/src/agents/embedded-agent-runner/managed-image-replay.ts b/src/agents/embedded-agent-runner/managed-image-replay.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/managed-image-replay.ts
+@@ -0,0 +1,43 @@
++const IMAGE_HISTORY_DIAGNOSTIC =
++  "[session:history] omitted image payload: missing data or mimeType";
++const MANAGED_IMAGE_ARTIFACT_PREFIX = "artifact_managed_image_";
++const MANAGED_IMAGE_URL_PREFIX = "/api/chat/media/outgoing/";
++
++export function isManagedAssistantImageBlock(value: unknown): boolean {
++  if (!value || typeof value !== "object") return false;
++  const block = value as Record<string, unknown>;
++  return block.type === "image"
++    && block.data === undefined
++    && typeof block.artifactId === "string"
++    && block.artifactId.startsWith(MANAGED_IMAGE_ARTIFACT_PREFIX)
++    && typeof block.url === "string"
++    && block.url.startsWith(MANAGED_IMAGE_URL_PREFIX);
++}
++
++/** Old model replies can echo a sentinel generated from these display-only blocks. */
++export function stripAssistantImageDiagnostic(text: string): string {
++  if (!text.includes(IMAGE_HISTORY_DIAGNOSTIC)) return text;
++  let fence: { marker: string; length: number } | undefined;
++  let changed = false;
++  const lines = text.split("\n").filter((line) => {
++    const boundary = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
++    if (boundary) {
++      if (!fence) {
++        fence = { marker: boundary[1][0], length: boundary[1].length };
++      } else if (
++        boundary[1][0] === fence.marker
++        && boundary[1].length >= fence.length
++        && !boundary[2].trim()
++      ) {
++        fence = undefined;
++      }
++      return true;
++    }
++    if (!fence && line.replace(/\r$/, "") === IMAGE_HISTORY_DIAGNOSTIC) {
++      changed = true;
++      return false;
++    }
++    return true;
++  });
++  return changed ? lines.join("\n").trimEnd() : text;
++}
+diff --git a/src/agents/embedded-agent-runner/managed-image-replay.test.ts b/src/agents/embedded-agent-runner/managed-image-replay.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/managed-image-replay.test.ts
+@@ -0,0 +1,74 @@
++import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
++import { describe, expect, it } from "vitest";
++import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.js";
++import { normalizeAssistantReplayContent } from "./replay-history.js";
++
++const diagnostic = "[session:history] omitted image payload: missing data or mimeType";
++const image = {
++  type: "image",
++  artifactId: "artifact_managed_image_test",
++  url: "/api/chat/media/outgoing/session/test/full",
++  mimeType: "image/png",
++  width: 2048,
++  height: 2048,
++};
++const assistant = (content: unknown): AgentMessage => ({
++  role: "assistant", content, stopReason: "stop",
++  api: "openai-completions", provider: "test", model: "test",
++  usage: { input: 1, output: 1, totalTokens: 2 }, timestamp: 1,
++}) as unknown as AgentMessage;
++
++describe("managed outgoing images in assistant replay", () => {
++  it("avoids image omission diagnostics without changing the persisted image attachment", async () => {
++    const messages = [assistant([{ type: "text", text: "Image ready." }, image])];
++    const saved = structuredClone(messages);
++    const replay = normalizeAssistantReplayContent(messages);
++    expect(replay[0].content).toEqual([{ type: "text", text: "Image ready." }]);
++    expect(await sanitizeSessionMessagesImages(replay, "session:history")).toEqual(replay);
++    expect(messages).toEqual(saved);
++    expect(normalizeAssistantReplayContent(replay)).toBe(replay);
++  });
++
++  it("omits display-only turns but retains tool calls in mixed turns", () => {
++    expect(normalizeAssistantReplayContent([assistant([image])])).toEqual([]);
++    const call = { type: "toolCall", id: "call1", name: "read", arguments: {} };
++    expect(normalizeAssistantReplayContent([assistant([image, call])])[0].content).toEqual([call]);
++  });
++
++  it("keeps actual image inputs and malformed non-managed blocks for normal validation", () => {
++    const content = [
++      { ...image, data: "actual-base64" },
++      { type: "image", mimeType: "image/png" },
++      { ...image, artifactId: "unrecognized" },
++      { ...image, url: "https://example.test/image.png" },
++    ];
++    const messages = [assistant(content)];
++    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
++  });
++
++  it("does not remove user attachments or tool results", () => {
++    const messages = [
++      { role: "user", content: [image], timestamp: 1 },
++      { role: "toolResult", toolCallId: "call1", toolName: "read", content: [image], timestamp: 2 },
++    ] as unknown as AgentMessage[];
++    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
++  });
++
++  it("removes an old echoed sentinel without losing the final answer", () => {
++    for (const content of ["Done.\n" + diagnostic, [{ type: "text", text: "Done.\n" + diagnostic }]]) {
++      expect(normalizeAssistantReplayContent([assistant(content)])[0].content)
++        .toEqual([{ type: "text", text: "Done." }]);
++    }
++  });
++
++  it.each([
++    "Explain " + diagnostic,
++    "> " + diagnostic,
++    "```text\n" + diagnostic + "\n```",
++    "~~~text\n" + diagnostic + "\n~~~",
++    "```svg\n<svg><text>hello</text></svg>\n```",
++  ])("preserves quoted diagnostics and SVG examples", (text) => {
++    const messages = [assistant([{ type: "text", text }])];
++    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
++  });
++});

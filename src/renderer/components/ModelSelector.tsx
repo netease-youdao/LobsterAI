@@ -31,7 +31,9 @@ import {
 } from '../services/modelThinkingLevelMemory';
 import { RootState } from '../store';
 import type { Model } from '../store/slices/modelSlice';
-import { getModelIdentityKey, isSameModelIdentity, setSelectedModel } from '../store/slices/modelSlice';
+import { getModelIdentityKey, isSameModelIdentity, ServerModelLoadStatus, setSelectedModel } from '../store/slices/modelSlice';
+import { AccountConnectionNotice } from './AccountConnectionNotice';
+import { getAccountConnectionState, getModelConnectionState } from './accountConnectionState';
 import Modal from './common/Modal';
 import { resolvePopoverPlacement } from './cowork/popoverPlacement';
 import BalancedModelIcon from './icons/BalancedModelIcon';
@@ -534,8 +536,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const thinkingSelectionEnabled = controlled && thinkingLevel !== undefined;
   const globalSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
-  const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+  const auth = useSelector((state: RootState) => state.auth);
+  const { isLoggedIn } = auth;
+  const accountConnectionState = getAccountConnectionState(auth);
+  const serverModelLoadStatus = useSelector((state: RootState) => state.model.serverModelLoadStatus);
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const connectionState = getModelConnectionState(
+    auth,
+    serverModelLoadStatus,
+    availableModels.some(model => model.isServerModel),
+  );
   const selectedValue = controlled ? value ?? null : globalSelectedModel;
   const currentModelMetadata = selectedValue
     ? availableModels.find(model => isSameModelIdentity(model, selectedValue)) : undefined;
@@ -586,11 +596,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const stableListMinHeight = shouldShowGroupTabs
     ? Math.min(largestGroupRowCount * MODEL_ITEM_HEIGHT + LIST_VERTICAL_PADDING, LIST_MAX_HEIGHT)
     : undefined;
-  const showSelectedModelUnavailableFallback = shouldRenderSelectedModelUnavailableFallback(
-    availableModels.length,
-    selectedModel,
-    isLoggedIn,
-  );
+  const showSelectedModelUnavailableFallback = serverModelLoadStatus !== ServerModelLoadStatus.Ready
+    && shouldRenderSelectedModelUnavailableFallback(
+      availableModels.length,
+      selectedModel,
+      isLoggedIn,
+    );
   const selectedModelUnavailableFallbackLogKey = showSelectedModelUnavailableFallback
     ? `${selectedModel.providerKey ?? ''}:${selectedModel.id}`
     : '';
@@ -869,6 +880,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const handleModelSelect = (model: Model | null) => {
     if (disabled) return;
+    // Cached plan entries cannot determine login or purchase requirements while
+    // the account is being verified. The notice above the list offers recovery.
+    if (model?.isServerModel && accountConnectionState) return;
     if (model?.busy) {
       setRestrictedPrompt(ModelAccessPromptKind.Busy);
       setHoveredModel(null);
@@ -1013,6 +1027,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   // 如果没有可用模型，显示提示
   if (availableModels.length === 0) {
+    if (connectionState) {
+      return (
+        <AccountConnectionNotice
+          state={connectionState}
+          className={`${triggerClassName} ${triggerTextClassName}`}
+          iconOnly={iconOnly}
+          disabled={disabled}
+        />
+      );
+    }
     if (showSelectedModelUnavailableFallback) {
       return (
         <div ref={containerRef} className="relative cursor-wait">
@@ -1179,7 +1203,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const agenticBlocked = isModelAgenticBlocked(model);
     const restricted = model.accessible === false;
     const busy = model.busy === true;
-    const blocked = restricted || agenticBlocked || busy;
+    const accountUnavailable = model.isServerModel === true && accountConnectionState !== null;
+    const blocked = restricted || agenticBlocked || busy || accountUnavailable;
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(model);
 
     const showCostMultiplier = model.costMultiplier != null && (model.costMultiplier > 0 || !!model.presetId || model.limitedFreeActive === true);
@@ -1194,6 +1219,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         ref={selected ? selectedItemRef : undefined}
         type="button"
         key={getModelIdentityKey(model)}
+        disabled={accountUnavailable}
         onClick={() => handleModelSelect(model)}
         onMouseEnter={(event) => handleModelHover(model, event.currentTarget)}
         onMouseLeave={handleModelHoverEnd}
@@ -1202,7 +1228,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         aria-disabled={blocked}
         aria-haspopup={thinkingSelectionEnabled && hasThinkingProtocol ? 'menu' : undefined}
         className={`grid w-full grid-cols-[20px_minmax(0,1fr)_72px_40px_16px] items-center gap-x-1 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
-          busy
+          accountUnavailable
+            ? 'cursor-not-allowed opacity-60'
+            : busy
             ? 'cursor-not-allowed'
             : blocked
               ? 'cursor-pointer opacity-60 hover:bg-surface-raised'
@@ -1486,6 +1514,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       className={`${portal ? '' : `absolute ${dropdownPositionClass} ${dropdownAlignmentClass}`} bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}
     >
       {shouldShowGroupTabs && renderGroupTabs()}
+      {connectionState && (
+        <AccountConnectionNotice state={connectionState} className="w-full px-3 py-2 text-xs" disabled={disabled} />
+      )}
       <div
         ref={scrollContainerRef}
         style={{

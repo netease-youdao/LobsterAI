@@ -13,6 +13,7 @@
  */
 
 import { desktopCompanionTranslations } from '../shared/desktopCompanion/copy';
+import { imageEditingTranslations } from '../shared/imageEditing/copy';
 import { mediaTranslations } from '../shared/media/copy';
 
 export type LanguageType = 'zh' | 'en';
@@ -30,6 +31,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
+    ...imageEditingTranslations.zh,
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
     browserPasskeyUnnamedAccount: '已保存的账号',
@@ -112,13 +114,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     channelPrefixWeixin: '微信',
     channelPrefixNeteaseBee: '小蜜蜂',
     channelPrefixEmail: '邮件',
-    // NIM chat type labels
-    nimQChat: '圈组',
-    nimGroup: '群聊',
 
     // Timeout hint
     taskTimedOut: '[任务超时] 任务因超过最大允许时长而被自动停止。你可以继续对话以从中断处继续。',
-    imSessionStoppedReply: '任务已被手动停止。你可以继续发送消息开始新的对话。',
 
     // Thinking-only hint
     taskThinkingOnly:
@@ -154,6 +152,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkGatewaySessionSyncTimeout: 'OpenClaw 引擎响应缓慢，消息尚未发送。请等待 1~2 分钟后重新发送；若频繁出现，请检查系统内存与磁盘占用，并将 LobsterAI 加入杀毒软件白名单。',
     coworkErrorTranscriptOversized: '该任务的历史记录过大。为保护 AI 引擎，本次消息未发送；请新建任务继续，原任务记录仍会保留。',
     coworkErrorGatewayHeapOutOfMemory: '本地 AI 引擎内存不足并已自动重启。当前任务可能过大，请等待恢复后在新任务中继续。',
+    coworkErrorWorkspaceAliasRepointed: 'AI 引擎无法确认工作区目录：它被移动过，或被替换成了指向其他位置的链接，本次消息未发送。请恢复原来的目录或链接后重试；如果问题持续，请联系客服并附上日志。',
     coworkErrorGatewayDisconnected: 'AI 引擎连接中断，请重试。',
     coworkErrorServiceRestart: 'AI 引擎正在重启，请稍后重试。',
     coworkErrorGatewayDraining: 'AI 引擎正在重启中，请稍等片刻后重试。',
@@ -443,6 +442,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
+    ...imageEditingTranslations.en,
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
     openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
     browserPasskeyChooseAccountTitle: 'Use a passkey',
@@ -525,15 +525,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     channelPrefixWeixin: 'WeChat',
     channelPrefixNeteaseBee: 'Xiaomifeng',
     channelPrefixEmail: 'Email',
-    // NIM chat type labels
-    nimQChat: 'QChat',
-    nimGroup: 'Group',
 
     // Timeout hint
     taskTimedOut:
       '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
-    imSessionStoppedReply:
-      'The task was manually stopped. You can send a new message to start a fresh conversation.',
 
     // OAuth flow messages
     qwenOAuthRequestingDeviceCode: 'Requesting device authorization code...',
@@ -578,6 +573,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkGatewaySessionSyncTimeout: 'The OpenClaw engine is responding slowly and your message has not been sent. Please wait a minute or two and resend. If this happens frequently, check system memory and disk usage, and add LobsterAI to your antivirus allowlist.',
     coworkErrorTranscriptOversized: 'This task history is too large. The message was not sent to protect the AI engine. Continue in a new task; the original task will be preserved.',
     coworkErrorGatewayHeapOutOfMemory: 'The local AI engine ran out of memory and is restarting automatically. This task may be too large; wait for recovery and continue in a new task.',
+    coworkErrorWorkspaceAliasRepointed: 'The AI engine could not verify the workspace folder because it was moved or replaced with a link to another location. The message was not sent. Restore the original folder or link and retry; if the problem continues, contact support with your logs.',
     coworkErrorGatewayDisconnected: 'AI engine connection lost. Please retry.',
     coworkErrorServiceRestart: 'AI engine is restarting. Please try again later.',
     coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',

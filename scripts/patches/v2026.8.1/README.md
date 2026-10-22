@@ -762,3 +762,116 @@ Upstream does not emit the `checkpoint` event, so after the upgrade the
 adapter's checkpoint handling is dormant. Recheck the short-answer case: a model
 can still follow a finished answer with more text. If the overwrite returns,
 carry the event emission as its own small patch.
+
+## Relinked managed workspaces
+
+`openclaw-managed-workspace-alias-follow.patch` lets a LobsterAI-managed
+workspace follow its current target after it is replaced by a link. OpenClaw
+records each configured workspace path and the real directory it resolved to in
+`workspace_path_aliases`. When the path later resolves somewhere else, v2026.8.1
+fails every message with `workspace path alias points to a different current
+target`. Users hit this by linking `workspace-main` to a synced folder (for
+example OneDrive) after the app had already initialized it. A data-migration
+restore does not copy links, so restoring brings back the empty template and the
+user or agent links it again.
+
+LobsterAI sets `LOBSTERAI_MANAGED_WORKSPACE_ROOT` to its OpenClaw state
+directory for the Gateway. For a workspace path strictly below that root that
+still exists, alias rows pointing at an older target are ignored, the current
+target's own records are used, and the next state write repoints the rows with a
+`workspace` warning that names both paths. The previous target's records are not
+moved or deleted: a link usually points at a different workspace, and copying
+its file attestation would make OpenClaw report the new folder as vanished. A
+missing path keeps its stored owner, so vanished-workspace protection still
+applies. Paths outside the root, and runs without the variable, keep upstream's
+fail-closed behavior.
+
+Run the upstream store tests and the end-to-end relink test:
+
+```sh
+node_modules/.bin/vitest run src/agents/workspace-state-store.test.ts src/agents/workspace.managed-relink.test.ts
+```
+
+Then rebuild the runtime. In the desktop app, initialize the main agent, quit,
+replace `openclaw/state/workspace-main` with a link to a folder that already
+holds agent files, and restart. Messages must succeed, `BOOTSTRAP.md` must not be
+created in the linked folder, and the Gateway log must show the alias warning
+once.
+
+Removal: upstream #133198 (v2026.9.4) only improves the error and adds a
+confirmed `openclaw doctor --fix` rebind that moves records. It does not follow
+the new target on its own, so keep an equivalent of this patch after upgrading,
+adapted to the renamed store helpers.
+
+## Managed image attachments during replay
+
+`openclaw-managed-image-replay.patch` excludes managed outgoing image display
+blocks from the assistant's in-memory model replay. These blocks contain an
+`artifact_managed_image_` ID and a local `/api/chat/media/outgoing/` URL, without
+base64 data. Passing them to the image sanitizer creates the misleading
+`[session:history] omitted image payload: missing data or mimeType` text, which
+models can echo in subsequent answers.
+
+The patch retains persisted attachments, user images, tool image results, and
+assistant images that actually contain data. It also removes standalone echoes
+of that exact diagnostic from old assistant replay text while preserving quoted
+and fenced examples. LobsterAI's assistant display and history extraction apply
+the same narrow cleanup to existing local messages; the stored records remain
+available for diagnosis.
+
+This belongs at OpenClaw's replay boundary: LobsterAI's adapter receives output
+after the sanitizer has already supplied the erroneous text to the model, and
+the prompt-building hook does not provide a message replacement result.
+
+Verify in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/embedded-agent-runner/managed-image-replay.test.ts src/agents/embedded-agent-runner/replay-history.test.ts --maxWorkers=2
+```
+
+Then rebuild the runtime and check a conversation containing previously returned
+images. Existing image cards and regular replies must remain visible, without
+the runtime diagnostic appearing as answer text. Remove this patch when
+upstream handles managed display images before sanitizing model replay at all
+relevant boundaries.
+
+## Browser process cleanup recovery
+
+`openclaw-chrome-mcp-process-recovery.patch` retains a live Chrome MCP transport
+when OS process enumeration or identity revalidation fails. Closing the SDK
+client at that point discards its PID, leaving cleanup permanently uncertain
+even after Windows process enumeration recovers. A later browser command now
+retries verified cleanup before creating a replacement connection. PID identity,
+unrelated-process protection, and the existing enumeration timeout stay intact.
+First-time identity capture also rejects a snapshot if the transport has closed
+while enumeration was pending, retaining uncertainty instead of adopting a reused PID.
+The diagnostic identifies process inspection instead of recommending unrelated
+Chrome remote-debugging setup.
+
+Verify `extensions/browser/src/browser/chrome-mcp.test.ts`,
+`server-context.tab-ownership.test.ts`, and `server-context.list-profiles.test.ts` in the
+OpenClaw checkout, then rebuild the runtime. Desktop acceptance should inject
+latency into two real process-enumeration commands, restore normal timing, and
+confirm recovery on the next browser command without restarting the gateway.
+Remove when upstream preserves a verifiable cleanup handle across discovery
+failures and provides equivalent recovery coverage.
+
+## Web fetch follows the desktop proxy preference
+
+`openclaw-web-fetch-proxy.patch` lets LobsterAI enable the existing
+`tools.web.fetch.useTrustedEnvProxy` setting while retaining web_fetch's local
+DNS checks and binding proxy CONNECT targets to the validated addresses.
+LobsterAI emits this setting only when both the global proxy switch and the
+web_fetch follow-proxy switch are enabled. Host headers and TLS SNI retain the
+original hostname; NO_PROXY and the SSRF policy are checked on every redirect.
+Global proxy use grants no new access to private addresses. Local DNS must still
+resolve the destination. Provider-specific trusted-proxy behavior is unchanged.
+
+This requires a runtime patch because the original web_fetch option delegates
+DNS resolution to the proxy and bypasses local address validation. The desktop
+configuration boundary alone cannot preserve that validation.
+
+Verify `src/agents/tools/web-fetch.proxy.integration.test.ts`, the neighboring
+web-fetch tests, and `src/infra/net/fetch-guard.test.ts`; then rebuild and test a
+real HTTPS tunnel with the generated desktop config. Remove when upstream
+supports an equivalent proxy transport with validated, pinned destination IPs.

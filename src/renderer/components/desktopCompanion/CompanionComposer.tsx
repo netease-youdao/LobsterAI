@@ -5,7 +5,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { buildSessionTitleFromInput } from '../../../common/sessionTitle';
 import { PromptAnalyticsSurface } from '../../../shared/analytics/constants';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
-import { CompanionAnalyticsSource } from '../../../shared/desktopCompanion/analytics';
+import { CompanionAnalyticsSource, CompanionTaskBlockedReason, companionTaskFailure, CompanionTaskFailureCode, CompanionTaskFailureStage } from '../../../shared/desktopCompanion/analytics';
 import {
   DesktopCompanionMainPage,
   DesktopCompanionPanelPlacement,
@@ -27,7 +27,7 @@ import CoworkPromptInput, { type CoworkPromptInputRef } from '../cowork/CoworkPr
 import { buildCoworkStartPlan, COWORK_START_BLOCK_MESSAGE_KEYS, resolveCoworkStartBlock } from '../cowork/coworkStartRequest';
 import { useHomeStartContext } from '../cowork/useHomeStartContext';
 import Toast, { type ToastEventDetail } from '../Toast';
-import { beginCompanionTask } from './analytics';
+import { beginCompanionTask, companionPreflightFailure } from './analytics';
 import { bootstrapCompanionComposer, refreshCompanionComposer } from './companionComposerBootstrap';
 import { createScreenshotTaskRunner } from './screenshotTask';
 import SelectionTaskContextCard from './SelectionTaskContextCard';
@@ -223,6 +223,7 @@ export default function CompanionComposer() {
     if (submittingRef.current) return false;
     submittingRef.current = true;
     const finish = beginCompanionTask(CompanionAnalyticsSource.Panel);
+    let failureStage: CompanionTaskFailureStage = CompanionTaskFailureStage.Preflight;
     try {
       const engineStatus = await coworkService.loadOpenClawEngineStatus().catch(() => null);
       const block = resolveCoworkStartBlock({
@@ -231,16 +232,19 @@ export default function CompanionComposer() {
         crossesBillingSide: start.startModel.crossesBillingSide,
       });
       if (block) {
+        finish(false, companionPreflightFailure(block, engineStatus?.phase));
         showToast(t(COWORK_START_BLOCK_MESSAGE_KEYS[block]));
         return false;
       }
       const apiConfig = await coworkService.checkApiConfig().catch(() => null);
       if (apiConfig && !apiConfig.hasConfig) {
+        finish(false, { failureCode: CompanionTaskFailureCode.NoModel, failureStage, blockedReason: CompanionTaskBlockedReason.NoModel });
         // Signing in or adding a model happens in the main window.
         showToast({ message: t('desktopCompanionNeedsModel'), actionLabel: t('desktopCompanionOpenApp'), onAction: () => { void api.openMain(null); } });
         return false;
       }
       const kitIds = [...activeKitIds];
+      failureStage = CompanionTaskFailureStage.Prepare;
       const plan = buildCoworkStartPlan({
         prompt: buildSelectionTaskPrompt(prompt, selectionContext, t),
         title: buildSessionTitleFromInput(prompt, t('coworkDefaultSessionTitle')),
@@ -260,8 +264,10 @@ export default function CompanionComposer() {
         selectedTextSnippets,
         browserAnnotations,
       });
-      const { session, error } = await coworkService.startSession(plan.options);
+      failureStage = CompanionTaskFailureStage.SessionStart;
+      const { session, error, code, engineStatus: rejectedStatus } = await coworkService.startSession(plan.options);
       if (!session) {
+        finish(false, companionTaskFailure({ error, code, engineStatus: rejectedStatus }, failureStage));
         showToast(error ? t('coworkErrorSessionStartFailed').replace('{error}', error) : t('desktopCompanionRequestFailed'));
         return false;
       }
@@ -277,6 +283,7 @@ export default function CompanionComposer() {
       await api.taskStarted(session.id);
       return true;
     } catch (error) {
+      finish(false, companionTaskFailure(error, failureStage));
       console.error('[CompanionComposer] failed to start a task', error);
       showToast(t('desktopCompanionRequestFailed'));
       return false;

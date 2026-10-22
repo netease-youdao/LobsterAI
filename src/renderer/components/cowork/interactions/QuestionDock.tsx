@@ -273,7 +273,7 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
           title={t('coworkQuestionDockExpand')}
           onClick={expand}
         >
-          <strong>{question.title}</strong>
+          <strong>{question.heading ?? question.title}</strong>
           {request.questions.length > 1 && <span>{index + 1} / {request.questions.length}</span>}
           <ChevronUpIcon aria-hidden="true" />
         </button>
@@ -330,7 +330,7 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
       }}
     >
       <header>
-        <h2>{question.title}</h2>
+        <h2>{question.heading ?? question.title}</h2>
         <nav aria-label={t('coworkQuestionDockNavigation')}>
           <button
             type="button"
@@ -362,8 +362,9 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
           </button>
         </nav>
       </header>
+      {question.subtitle && <p className="cowork-question-hint cowork-question-subtitle">{question.subtitle}</p>}
       <div className="cowork-question-page" key={question.id}>
-        {question.subtitle && <p className="cowork-question-hint">{question.subtitle}</p>}
+        {question.heading && <p className="cowork-question-description">{question.title}</p>}
         {question.multiSelect && <p className="cowork-question-hint">{t('coworkQuestionWizardMultiSelectHint')}</p>}
         <div role="group" aria-label={question.title}>
           {question.options.map((option, optionIndex) => {

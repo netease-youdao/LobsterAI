@@ -28,6 +28,7 @@ import {
   ProviderRegistry,
   resolveCodingPlanBaseUrl,
   resolveModelRuntimeProfile,
+  supportsGeminiApiFormatSelection,
 } from '../../shared/providers';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { OPEN_SOURCE_ENTERPRISE_UI_KEY } from '../constants/openSource';
@@ -71,6 +72,7 @@ import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
 import { useDesktopCompanionState } from './desktopCompanion/useDesktopCompanionState';
 import DshExperimentalSettings from './DshExperimentalSettings';
 import ErrorMessage from './ErrorMessage';
+import FeedbackDialog from './feedback/FeedbackDialog';
 import BrainIcon from './icons/BrainIcon';
 import EditIcon from './icons/EditIcon';
 import MessageCopyIcon from './icons/MessageCopyIcon';
@@ -81,6 +83,7 @@ import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle 
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import {
+  buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
   buildOpenAIConnectionTestRequestBody,
   buildOpenAIResponsesUrl,
@@ -107,6 +110,7 @@ import {
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
+import OpenClawUserConfigRow from './settings/OpenClawUserConfigRow';
 import ProviderTransferDialog from './settings/ProviderTransferDialog';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
 import { useProviderTransfer } from './settings/useProviderTransfer';
@@ -941,6 +945,7 @@ const FloatingOrbTabIcon: React.FC<{ className?: string }> = ({ className }) => 
 );
 
 export type SettingsOpenOptions = {
+  openFeedback?: boolean;
   initialTab?: TabType;
   notice?: string;
   noticeI18nKey?: string;
@@ -1387,6 +1392,7 @@ const Settings: React.FC<SettingsProps> = ({
   onStartAiSkin,
   initialTab,
   initialTabRequestId,
+  openFeedback,
   notice,
   noticeI18nKey,
   noticeExtra,
@@ -1402,6 +1408,7 @@ const Settings: React.FC<SettingsProps> = ({
   } = useSkin();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
+  const [feedbackOpen, setFeedbackOpen] = useState(Boolean(openFeedback));
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [themeId, setThemeId] = useState<string>(themeService.getDefaultThemeId());
   const [uiFontSize, setUiFontSize] = useState<number>(FontPreferences.UiFontSizeDefault);
@@ -2322,6 +2329,10 @@ const Settings: React.FC<SettingsProps> = ({
       setActiveTab(initialTab);
     }
   }, [initialTab, initialTabRequestId]);
+
+  useEffect(() => {
+    if (openFeedback) setFeedbackOpen(true);
+  }, [openFeedback, initialTabRequestId]);
 
   // Subscribe to language changes
   useEffect(() => {
@@ -4254,8 +4265,21 @@ const Settings: React.FC<SettingsProps> = ({
       // - openai provider: /v1/responses
       // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = effectiveApiFormat === 'anthropic';
+      const useCustomGeminiFormat = effectiveApiFormat === 'gemini'
+        && supportsGeminiApiFormatSelection(testingProvider);
 
-      if (useAnthropicFormat) {
+      if (useCustomGeminiFormat) {
+        const geminiRequest = buildGeminiConnectionTestRequest(normalizedBaseUrl, firstModel.id);
+        response = await window.electron.api.fetch({
+          url: geminiRequest.url,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': effectiveApiKey,
+          },
+          body: JSON.stringify(geminiRequest.body),
+        });
+      } else if (useAnthropicFormat) {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
           ? `${normalizedBaseUrl}/messages`
           : `${normalizedBaseUrl}/v1/messages`;
@@ -4274,7 +4298,10 @@ const Settings: React.FC<SettingsProps> = ({
           }),
         });
       } else {
-        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider);
+        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider, {
+          ...providerConfig,
+          apiFormat: effectiveApiFormat,
+        });
         const openaiUrl = useResponsesApi
           ? buildOpenAIResponsesUrl(normalizedBaseUrl)
           : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, testingProvider);
@@ -5113,6 +5140,8 @@ const Settings: React.FC<SettingsProps> = ({
                       </button>
                     </div>
 
+                    <OpenClawUserConfigRow />
+
                     {openClawDataBackupResult && (
                       <div className="flex flex-col gap-3 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-1">
@@ -5853,19 +5882,27 @@ const Settings: React.FC<SettingsProps> = ({
             <h2 className="text-lg font-semibold text-foreground">{i18nService.t('settings')}</h2>
           </div>
           <nav className="flex flex-col gap-0.5 px-3 pb-4">
-            {sidebarTabs.map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => handleTabChange(tab.key)}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
-                  activeTab === tab.key
-                    ? 'bg-primary-muted text-primary'
-                    : 'text-secondary hover:text-foreground hover:bg-surface-raised'
-                }`}
-              >
-                <span className="shrink-0">{tab.icon}</span>
-                <span className="min-w-0 truncate">{tab.label}</span>
-              </button>
+            {sidebarTabs.map((tab, index) => (
+              <React.Fragment key={tab.key}>
+                {(tab.key === 'about' || (index === sidebarTabs.length - 1 && !sidebarTabs.some(item => item.key === 'about'))) && (
+                  <button type="button" onClick={() => setFeedbackOpen(true)} className="flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground">
+                    <ChatBubbleLeftIcon className="h-5 w-5 shrink-0" />
+                    {i18nService.t('feedbackTitle')}
+                  </button>
+                )}
+                <button
+                  key={tab.key}
+                  onClick={() => handleTabChange(tab.key)}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
+                    activeTab === tab.key
+                      ? 'bg-primary-muted text-primary'
+                      : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                  }`}
+                >
+                  <span className="shrink-0">{tab.icon}</span>
+                  <span className="min-w-0 truncate">{tab.label}</span>
+                </button>
+              </React.Fragment>
             ))}
           </nav>
         </div>
@@ -6281,6 +6318,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
+          {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} />}
       </SkinPresentationScope>
     </Modal>
   );

@@ -32,6 +32,7 @@ import { CompanionScreenshotAction as ScreenshotAction } from '../../shared/desk
 import { ScreenshotTaskIpc } from '../../shared/desktopCompanion/screenshotTask';
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
 import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../shared/desktopCompanion/selectionToolbar';
+import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController } from './companionSelection';
 import { deleteCustomCompanionSkin, loadCustomCompanionSkin, saveCustomCompanionSkin } from './customSkinStore';
@@ -134,7 +135,7 @@ let fileDrag: FakeMonitor;
 let getTaskInfo: ReturnType<typeof vi.fn<(id: string) => CompanionTaskInfo | null>>;
 let reportAnalytics: ReturnType<typeof vi.fn>;
 
-function create(languageClient?: CompanionLanguageClient) {
+function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running) {
   reportAnalytics = vi.fn();
   main = new BrowserWindow();
   openMain = vi.fn();
@@ -143,6 +144,7 @@ function create(languageClient?: CompanionLanguageClient) {
   fileDrag = new FakeMonitor();
   getTaskInfo = vi.fn(id => ({ id, title: `Task ${id}`, status: 'completed', updatedAt: 1000 }));
   manager = new DesktopCompanionManager({
+    enginePhase,
     reportAnalytics,
     store: {
       get: <T>(key: string) => values.get(key) as T | undefined,
@@ -202,6 +204,79 @@ afterEach(() => {
   vi.restoreAllMocks();
   ipcMain.removeAllListeners();
   vi.useRealTimers();
+});
+
+describe('gateway readiness', () => {
+  test.each(Object.values(OpenClawEnginePhase).filter(phase => phase !== OpenClawEnginePhase.Running))(
+    'keeps the enabled companion hidden during %s until the gateway runs', phase => {
+      values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+      create(undefined, phase);
+      expect(mocks.windows).toHaveLength(1);
+      expect(foreground.start).not.toHaveBeenCalled();
+      expect(fileDrag.start).not.toHaveBeenCalled();
+      manager.setPreferences({ enabled: true });
+      manager.wake();
+      expect(mocks.windows).toHaveLength(1);
+      manager.setEnginePhase(OpenClawEnginePhase.Running);
+      orb().emit('ready-to-show');
+      expect(orb().isVisible()).toBe(true);
+      expect(foreground.start).toHaveBeenCalledTimes(1);
+      manager.setEnginePhase(OpenClawEnginePhase.Running);
+      expect(mocks.windows).toHaveLength(2);
+    },
+  );
+
+  test('defers a shortcut opening until ready, including when the orb is disabled', () => {
+    create(undefined, OpenClawEnginePhase.Starting);
+    manager.togglePanel(AnalyticsSource.Shortcut);
+    expect(manager.getState().panelVisible).toBe(false);
+    expect(mocks.windows).toHaveLength(1);
+    manager.setEnginePhase(OpenClawEnginePhase.Running);
+    expect(manager.getState().panelVisible).toBe(true);
+    expect(readyPanel()).toBe(true);
+    expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({ source: AnalyticsSource.Shortcut, surface: DesktopCompanionSurface.Panel }));
+  });
+
+  test('a second shortcut cancels a deferred opening', () => {
+    create(undefined, OpenClawEnginePhase.Starting);
+    manager.togglePanel(AnalyticsSource.Shortcut);
+    manager.togglePanel(AnalyticsSource.Shortcut);
+    manager.setEnginePhase(OpenClawEnginePhase.Running);
+    expect(manager.getState().panelVisible).toBe(false);
+    expect(mocks.windows).toHaveLength(1);
+  });
+
+  test('a restart hides the orb and panel, rejects late show events and retains the draft', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create();
+    const originalOrb = orb();
+    manager.togglePanel();
+    const panel = mocks.windows.at(-1);
+    readyPanel(panel);
+    invoke(DesktopCompanionIpc.SetDraft, { prompt: 'Keep this draft', attachments: [] });
+    manager.setEnginePhase(OpenClawEnginePhase.Starting);
+    expect(originalOrb.isDestroyed()).toBe(true);
+    expect(panel.isVisible()).toBe(false);
+    originalOrb.emit('ready-to-show');
+    expect(readyPanel(panel)).toBe(false);
+    expect(manager.getState().draft.prompt).toBe('Keep this draft');
+    manager.setEnginePhase(OpenClawEnginePhase.Running);
+    expect(mocks.windows.at(-1)).not.toBe(originalOrb);
+    manager.togglePanel();
+    expect(readyPanel(panel)).toBe(true);
+    expect(manager.getState().draft.prompt).toBe('Keep this draft');
+  });
+
+  test('readiness does not override disabled or snoozed preferences', () => {
+    create(undefined, OpenClawEnginePhase.Starting);
+    manager.setEnginePhase(OpenClawEnginePhase.Running);
+    expect(mocks.windows).toHaveLength(1);
+    manager.setEnginePhase(OpenClawEnginePhase.Starting);
+    manager.setPreferences({ enabled: true });
+    manager.snoozeFor(DesktopCompanionSnoozeMode.Hidden);
+    manager.setEnginePhase(OpenClawEnginePhase.Running);
+    expect(mocks.windows).toHaveLength(1);
+  });
 });
 
 describe('orb edge snapping', () => {

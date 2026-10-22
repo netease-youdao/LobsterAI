@@ -3,6 +3,7 @@ import {
   parseScheduledReminderPrompt,
   parseSimpleScheduledReminderText,
 } from '../../scheduledTask/reminderText';
+import { stripAssistantImageDiagnostic } from '../../shared/cowork/assistantImageDiagnostic';
 
 type GatewayHistoryRole = 'user' | 'assistant' | 'system';
 
@@ -148,25 +149,26 @@ export const extractGatewayMessageText = (message: unknown): string => {
   if (!isRecord(message)) {
     return '';
   }
+  const visibleText = (text: string) => message.role === 'assistant' ? stripAssistantImageDiagnostic(text) : text;
 
   const content = message.content;
   if (typeof content === 'string') {
-    return content;
+    return visibleText(content);
   }
   if (Array.isArray(content)) {
     const chunks = collectTextChunks(content);
     if (chunks.length > 0) {
-      return chunks.join('\n');
+      return visibleText(chunks.join('\n'));
     }
   }
   if (isRecord(content)) {
     const chunks = collectTextChunks(content);
     if (chunks.length > 0) {
-      return chunks.join('\n');
+      return visibleText(chunks.join('\n'));
     }
   }
   if (typeof message.text === 'string') {
-    return message.text;
+    return visibleText(message.text);
   }
   return '';
 };

@@ -12,6 +12,5 @@ export const ENABLE_OPENCLAW_SKILL_SYNC = false;
 
 /**
  * Whether to show Expert Plaza entry points in the renderer.
- * Keep catalog, installation and existing Agent behavior available for relaunch.
  */
-export const ENABLE_EXPERT_PLAZA_UI = false;
+export const ENABLE_EXPERT_PLAZA_UI = true;

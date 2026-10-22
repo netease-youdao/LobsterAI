@@ -6,10 +6,13 @@ import {
   CoworkTurnUsageStatus,
   formatLlmTraceparent,
   getCoworkLlmTrace,
+  getCoworkLlmTraceIds,
   getCoworkTurnUsage,
   isValidLlmTraceId,
+  mergeLlmTraceUsageSummaries,
   parseLlmTraceparent,
   TurnUsageModelType,
+  TurnUsagePricingPeriod,
 } from './llmTurnUsage';
 
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
@@ -58,6 +61,18 @@ describe('message metadata accessors', () => {
     expect(getCoworkLlmTrace({ llmTrace: { traceId: 'bad', startedAt: 1_000 } })).toBeNull();
     expect(getCoworkLlmTrace({ llmTrace: { traceId: TRACE_ID } })).toBeNull();
     expect(getCoworkLlmTrace(undefined)).toBeNull();
+  });
+
+  test('reads related traces of a multi-attempt run without duplicates or invalid ids', () => {
+    const related = '11112222333344445555666677778888';
+    const trace = getCoworkLlmTrace({
+      llmTrace: { traceId: TRACE_ID, startedAt: 1_000, relatedTraceIds: [related, TRACE_ID, 'bad', related] },
+    });
+
+    expect(trace).toEqual({ traceId: TRACE_ID, startedAt: 1_000, relatedTraceIds: [related] });
+    expect(getCoworkLlmTraceIds(trace!)).toEqual([TRACE_ID, related]);
+    expect(getCoworkLlmTrace({ llmTrace: { traceId: TRACE_ID, startedAt: 1_000, relatedTraceIds: 'x' } }))
+      .toEqual({ traceId: TRACE_ID, startedAt: 1_000 });
   });
 
   test('reads a stored turn usage only with a known status', () => {
@@ -171,5 +186,114 @@ describe('buildCoworkTurnUsage', () => {
     });
     expect(result?.displayCreditsUsed).toBe(0);
     expect(result?.creditsUsed).toBe(0.004);
+  });
+});
+
+describe('mergeLlmTraceUsageSummaries', () => {
+  const RELATED_TRACE_ID = '11112222333344445555666677778888';
+
+  test('returns a single summary unchanged', () => {
+    const summary = { traceId: TRACE_ID, creditsUsed: 1 };
+    expect(mergeLlmTraceUsageSummaries(TRACE_ID, [summary])).toBe(summary);
+  });
+
+  test('sums the attempts of a run into one summary of the primary trace', () => {
+    const merged = mergeLlmTraceUsageSummaries(TRACE_ID, [{
+      traceId: TRACE_ID,
+      billingScope: 'enterprise',
+      requestCount: 2,
+      failedRequestCount: 1,
+      models: ['deepseek-flash'],
+      creditsUsed: '1.5',
+      displayCreditsUsed: '1.6',
+      uncachedInputTokens: 10,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 0,
+      outputTokens: 5,
+      modelUsage: [{
+        type: TurnUsageModelType.Text, model: 'deepseek-flash', count: 2, creditsUsed: 1.5, displayCreditsUsed: 1.6,
+        uncachedInputTokens: 10, cacheReadTokens: 100, cacheWriteTokens: 0, outputTokens: 5,
+        tokenCreditEstimate: {
+          uncachedInput: 0.5, cacheRead: 0.5, cacheWrite: 0, output: 0.5, cacheSavings: 1,
+          pricingPeriod: TurnUsagePricingPeriod.Peak,
+        },
+      }],
+    }, {
+      traceId: RELATED_TRACE_ID,
+      billingScope: 'enterprise',
+      requestCount: 1,
+      failedRequestCount: 0,
+      models: ['deepseek-flash', 'glm-5'],
+      creditsUsed: 2,
+      uncachedInputTokens: 20,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 4,
+      outputTokens: 6,
+      mediaPending: true,
+      modelUsage: [{
+        type: TurnUsageModelType.Text, model: 'deepseek-flash', count: 1, creditsUsed: 2,
+        uncachedInputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 4, outputTokens: 6,
+        tokenCreditEstimate: {
+          uncachedInput: 1, cacheRead: 0, cacheWrite: 0.5, output: 0.5, cacheSavings: -0.25,
+          pricingPeriod: TurnUsagePricingPeriod.OffPeak,
+        },
+      }, {
+        type: TurnUsageModelType.Image, model: 'seedream', count: 1, creditsUsed: 0,
+      }],
+    }]);
+
+    const usage = buildCoworkTurnUsage(merged, { traceId: TRACE_ID, observedCompletedRequests: 3, now: 1 });
+
+    expect(usage).toMatchObject({
+      traceId: TRACE_ID,
+      status: CoworkTurnUsageStatus.Partial,
+      billingScope: CoworkTurnUsageBillingScope.Enterprise,
+      requestCount: 3,
+      failedRequestCount: 1,
+      models: ['deepseek-flash', 'glm-5'],
+      creditsUsed: 3.5,
+      displayCreditsUsed: 3.6,
+      uncachedInputTokens: 30,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 4,
+      inputTokens: 134,
+      outputTokens: 11,
+      mediaPending: true,
+    });
+    expect(usage?.modelUsage).toEqual([{
+      type: TurnUsageModelType.Text,
+      model: 'deepseek-flash',
+      count: 3,
+      creditsUsed: 3.5,
+      displayCreditsUsed: 3.6,
+      uncachedInputTokens: 30,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 4,
+      outputTokens: 11,
+      tokenCreditEstimate: {
+        uncachedInput: 1.5, cacheRead: 0.5, cacheWrite: 0.5, output: 1, cacheSavings: 0.75,
+        pricingPeriod: TurnUsagePricingPeriod.Mixed,
+      },
+    }, {
+      type: TurnUsageModelType.Image,
+      model: 'seedream',
+      count: 1,
+      creditsUsed: 0,
+      uncachedInputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 0,
+    }]);
+  });
+
+  test('omits a model estimate that only some attempts provided', () => {
+    const row = { type: TurnUsageModelType.Text, model: 'm', count: 1, creditsUsed: 1 };
+    const merged = mergeLlmTraceUsageSummaries(TRACE_ID, [
+      { modelUsage: [{ ...row, tokenCreditEstimate: { uncachedInput: 1 } }] },
+      { modelUsage: [row] },
+    ]);
+
+    expect(buildCoworkTurnUsage(merged, { traceId: TRACE_ID, now: 1 })?.modelUsage?.[0].tokenCreditEstimate)
+      .toBeUndefined();
   });
 });

@@ -3,6 +3,7 @@ import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
 import { ASK_USER_QUESTION_TOOL_NAME, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
+import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpIpcChannel } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
 import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
@@ -20,6 +21,7 @@ import {
   type MediaGenerationRequest,
   type MediaGenerationResponse,
 } from '../libs/mcpBridgeServer';
+import { applyNodeSystemCaDefault } from '../libs/nodeSystemCaEnv';
 import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey } from '../libs/openclawLocalSessionResolver';
@@ -51,6 +53,7 @@ function buildMcpShimEnv(...overrides: (Record<string, string> | undefined)[]): 
     shimEnv = { ...shimEnv, ...override };
   }
   applyPythonEncodingDefaults(shimEnv, { sources: [process.env, ...overrides] });
+  applyNodeSystemCaDefault(shimEnv);
   return shimEnv;
 }
 
@@ -375,12 +378,14 @@ export class McpRuntime {
     let builtInCount = 0;
 
     const electronPath = getElectronNodeRuntimePath();
-    // toolFilter / supportsParallelToolCalls ride along to openclaw.json regardless of transport.
+    // toolFilter / supportsParallelToolCalls / timeouts ride along to openclaw.json regardless of transport.
     const passthroughFields = (server: typeof enabledServers[number]) => ({
       ...(server.toolFilter ? { toolFilter: server.toolFilter } : {}),
       ...(typeof server.supportsParallelToolCalls === 'boolean'
         ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
         : {}),
+      ...(server.requestTimeoutMs ? { requestTimeoutMs: server.requestTimeoutMs } : {}),
+      ...(server.connectionTimeoutMs ? { connectionTimeoutMs: server.connectionTimeoutMs } : {}),
     });
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
       const r = await resolveStdioCommand(server);
@@ -459,6 +464,7 @@ export class McpRuntime {
           transportType: server.transportType,
           url: server.url,
           headers: server.headers,
+          ...(server.auth === McpAuthMode.OAuth ? { auth: McpAuthMode.OAuth } : {}),
           ...passthroughFields(server),
         });
       }

@@ -213,6 +213,17 @@ test('gateway: heap OOM is not classified as a generic disconnect', () => {
   )).toBe('coworkErrorGatewayHeapOutOfMemory');
 });
 
+test('gateway: a repointed workspace folder has a dedicated recovery message', () => {
+  for (const error of [
+    'Error: Error: workspace path alias points to a different current target',
+    'workspace path aliases resolve to conflicting state',
+    'workspace path alias conflicts with canonical state',
+  ]) {
+    expect(classifyError(error)).toBe(CoworkErrorI18nKey.WorkspaceAliasRepointed);
+  }
+  expect(classifyError('workspace path alias key collision')).toBe('workspace path alias key collision');
+});
+
 test('gateway: session patch timeout before send', () => {
   expect(classifyError('gateway request timeout for sessions.patch')).toBe('coworkGatewaySessionSyncTimeout');
 });

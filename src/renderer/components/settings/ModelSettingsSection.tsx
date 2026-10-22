@@ -7,6 +7,7 @@ import {
   ProviderAuthType,
   ProviderName,
   ProviderRegistry,
+  supportsOpenAIApiModeSelection,
 } from '../../../shared/providers';
 import { defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, isCustomProvider } from '../../config';
 import { getProviderIcon } from '../../providers/uiRegistry';
@@ -15,8 +16,12 @@ import EditIcon from '../icons/EditIcon';
 import PlusCircleIcon from '../icons/PlusCircleIcon';
 import { GitHubCopilotIcon } from '../icons/providers';
 import TrashIcon from '../icons/TrashIcon';
+import ThemedSelect from '../ui/ThemedSelect';
 import {
+  ApiFormatOption,
   CUSTOM_PROVIDER_KEYS,
+  getApiFormatOption,
+  getApiFormatOptions,
   getEffectiveApiFormat,
   getProviderDefaultBaseUrl,
   hasProviderAuthConfigured,
@@ -24,8 +29,23 @@ import {
   providerRequiresApiKey,
   type ProvidersConfig,
   type ProviderType,
+  resolveApiFormatOption,
   shouldShowApiFormatSelector,
 } from './modelProviderUtils';
+
+const API_FORMAT_OPTION_LABEL_KEYS: Record<ApiFormatOption, string> = {
+  [ApiFormatOption.Anthropic]: 'apiFormatAnthropicMessages',
+  [ApiFormatOption.OpenAIChatCompletions]: 'apiFormatOpenAIChatCompletions',
+  [ApiFormatOption.OpenAIResponses]: 'apiFormatOpenAIResponses',
+  [ApiFormatOption.Gemini]: 'apiFormatGemini',
+};
+
+const API_FORMAT_OPTION_HINT_KEYS: Record<ApiFormatOption, string> = {
+  [ApiFormatOption.Anthropic]: 'apiFormatHint',
+  [ApiFormatOption.OpenAIChatCompletions]: 'apiFormatHint',
+  [ApiFormatOption.OpenAIResponses]: 'apiFormatResponsesHint',
+  [ApiFormatOption.Gemini]: 'apiFormatGeminiHint',
+};
 
 // Context Window slider constants & helpers
 const CW_MIN = 32000;
@@ -657,6 +677,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
     || copilotAuthStatus === 'polling';
   const copilotSignedIn = copilotAuthStatus === 'authenticated'
     || copilotProvider?.authType === ProviderAuthType.OAuth;
+
+  const applyApiFormatOption = (provider: ProviderType, option: ApiFormatOption) => {
+    const { apiFormat, openaiApiMode } = resolveApiFormatOption(option);
+    handleProviderConfigChange(provider, 'apiFormat', apiFormat);
+    if (supportsOpenAIApiModeSelection(provider)) {
+      handleProviderConfigChange(provider, 'openaiApiMode', openaiApiMode);
+    }
+  };
 
   // Guides users who click a toggle that cannot be enabled yet: highlights the
   // missing auth requirement (API key input / login) instead of ignoring the click.
@@ -1786,14 +1814,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 <div className="mt-1.5 space-y-1">
                   <p className="text-[10px] text-muted">{i18nService.t('baseUrlExamplesTitle')}</p>
                   {([
-                    { format: 'anthropic', label: i18nService.t('apiFormatNative'), url: i18nService.t('baseUrlHintExample1') },
-                    { format: 'openai', label: i18nService.t('apiFormatOpenAI'), url: i18nService.t('baseUrlHintExample2') },
+                    { format: ApiFormatOption.OpenAIChatCompletions, label: i18nService.t('apiFormatOpenAI'), url: i18nService.t('baseUrlHintExample2') },
+                    { format: ApiFormatOption.Anthropic, label: i18nService.t('apiFormatNative'), url: i18nService.t('baseUrlHintExample1') },
                   ] as const).map(example => (
                     <button
                       key={example.format}
                       type="button"
                       onClick={() => {
-                        handleProviderConfigChange(activeProvider, 'apiFormat', example.format);
+                        applyApiFormatOption(activeProvider, example.format);
                         handleProviderConfigChange(activeProvider, 'baseUrl', example.url);
                       }}
                       title={i18nService.t('clickToFillBaseUrl')}
@@ -1865,36 +1893,18 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                   <label htmlFor={`${activeProvider}-apiFormat`} className="block text-xs font-medium text-foreground mb-1">
                     {i18nService.t('apiFormat')}
                   </label>
-                  <div className="flex items-center space-x-4">
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name={`${activeProvider}-apiFormat`}
-                        value="anthropic"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) !== 'openai'}
-                        onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'anthropic')}
-                        className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface disabled:opacity-50"
-                      />
-                      <span className="ml-2 text-xs text-foreground">
-                        {i18nService.t('apiFormatNative')}
-                      </span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name={`${activeProvider}-apiFormat`}
-                        value="openai"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) === 'openai'}
-                        onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'openai')}
-                        className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface disabled:opacity-50"
-                      />
-                      <span className="ml-2 text-xs text-foreground">
-                        {i18nService.t('apiFormatOpenAI')}
-                      </span>
-                    </label>
-                  </div>
+                  <ThemedSelect
+                    id={`${activeProvider}-apiFormat`}
+                    size="sm"
+                    value={getApiFormatOption(activeProvider, providers[activeProvider])}
+                    onChange={(value) => applyApiFormatOption(activeProvider, value as ApiFormatOption)}
+                    options={getApiFormatOptions(activeProvider, providers[activeProvider]).map(option => ({
+                      value: option,
+                      label: i18nService.t(API_FORMAT_OPTION_LABEL_KEYS[option]),
+                    }))}
+                  />
                   <p className="mt-1 text-xs text-secondary">
-                    {i18nService.t('apiFormatHint')}
+                    {i18nService.t(API_FORMAT_OPTION_HINT_KEYS[getApiFormatOption(activeProvider, providers[activeProvider])])}
                   </p>
                 </div>
               )}

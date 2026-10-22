@@ -8,6 +8,7 @@ import {
   BrowserDisplayMode,
   BrowserNetworkMode,
   BrowserProfileMode,
+  buildBrowserSearchUrl,
   normalizeBrowserCdpUrl,
   normalizeBrowserHostnameList,
   normalizeBrowserHostnamePolicyList,
@@ -70,7 +71,7 @@ describe('browser web access constants', () => {
 
     expect(config.browserEnabled).toBe(false);
     expect(config.profileMode).toBe(BrowserProfileMode.User);
-    expect(config.displayMode).toBe(BrowserDisplayMode.External);
+    expect(config.displayMode).toBe(BrowserDisplayMode.InApp);
     expect(config.networkMode).toBe(BrowserNetworkMode.Strict);
     expect(config.allowedHostnames).toEqual(['https://localhost:8443']);
     expect(config.blockedHostnames).toEqual(['https://tracking.example']);
@@ -84,15 +85,15 @@ describe('browser web access constants', () => {
     });
   });
 
-  test('defaults to external display while preserving explicit display choices', () => {
+  test('defaults to the in-app browser while preserving explicit display choices', () => {
     expect(normalizeBrowserWebAccessConfig(undefined).displayMode).toBe(
-      BrowserDisplayMode.External,
+      BrowserDisplayMode.InApp,
     );
     expect(normalizeBrowserWebAccessConfig({ headless: false }).displayMode).toBe(
       BrowserDisplayMode.External,
     );
     expect(normalizeBrowserWebAccessConfig({ headless: true }).displayMode).toBe(
-      BrowserDisplayMode.External,
+      BrowserDisplayMode.InApp,
     );
     expect(normalizeBrowserWebAccessConfig({
       displayMode: BrowserDisplayMode.External,
@@ -101,6 +102,14 @@ describe('browser web access constants', () => {
     expect(normalizeBrowserWebAccessConfig({
       displayMode: BrowserDisplayMode.InApp,
     }).displayMode).toBe(BrowserDisplayMode.InApp);
+  });
+
+  test('searches address text with an engine reachable without a proxy', () => {
+    expect(buildBrowserSearchUrl('龙虾 AI', 'zh')).toBe(
+      'https://www.baidu.com/s?wd=%E9%BE%99%E8%99%BE%20AI',
+    );
+    expect(buildBrowserSearchUrl('a&b', 'en')).toBe('https://www.bing.com/search?q=a%26b');
+    expect(buildBrowserSearchUrl('lobster')).toBe('https://www.bing.com/search?q=lobster');
   });
 
   test('defaults saved login use to per-use approval and preserves an explicit policy', () => {

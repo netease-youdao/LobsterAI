@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'node:
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { ApiFormat, ProviderAuthType, ProviderName } from '../../shared/providers';
+import { ApiFormat, OpenAIApiMode, ProviderAuthType, ProviderName } from '../../shared/providers';
 import { getDefaultProviders, type ProvidersConfig } from '../components/settings/modelProviderUtils';
 import { EXPORT_FORMAT_TYPE } from '../constants/app';
 import { buildProvidersExport, importProviders, parseProvidersImport } from './providerTransfer';
@@ -136,6 +136,39 @@ describe('provider export v3', () => {
     expect(() => validateExportPassword(PASSWORD)).not.toThrow();
     expect(() => validateExportPassword('这是用于模型配置备份的安全长口令')).not.toThrow();
     expect(() => validateExportPassword('        short       ')).toThrow();
+  });
+});
+
+describe('custom provider OpenAI API mode', () => {
+  const withResponses = (): ProvidersConfig => ({
+    ...providers(),
+    custom_0: { ...providers().custom_0, openaiApiMode: OpenAIApiMode.Responses },
+  });
+
+  test('exports Responses mode and restores it on import', async () => {
+    const json = await buildProvidersExport(withResponses());
+    expect(JSON.parse(json).providers.custom_0.openaiApiMode).toBe(OpenAIApiMode.Responses);
+    const restored = await importProviders(parseProvidersImport(json), {});
+    expect(restored.custom_0.openaiApiMode).toBe(OpenAIApiMode.Responses);
+  });
+
+  test('omits the default mode so older strict importers still accept the file', async () => {
+    const source = providers();
+    source.custom_0 = { ...source.custom_0, openaiApiMode: OpenAIApiMode.ChatCompletions };
+    const json = await buildProvidersExport(source);
+    expect(JSON.parse(json).providers.custom_0).not.toHaveProperty('openaiApiMode');
+  });
+
+  test('importing a Chat Completions export clears an existing Responses mode', async () => {
+    const json = await buildProvidersExport(providers());
+    const restored = await importProviders(parseProvidersImport(json), withResponses());
+    expect(restored.custom_0.openaiApiMode).toBeUndefined();
+  });
+
+  test('rejects unknown mode values', async () => {
+    const file = JSON.parse(await buildProvidersExport(withResponses()));
+    file.providers.custom_0.openaiApiMode = 'websocket';
+    expect(() => parseProvidersImport(JSON.stringify(file))).toThrow();
   });
 });
 

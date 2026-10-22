@@ -633,6 +633,49 @@ select::-ms-expand {
   animation: fade-in-down 0.2s ease-out;
 }
 
+/* Sidebar capabilities menu: grows out of its trigger, fades back on close.
+   The close duration is mirrored by MENU_EXIT_DURATION in SidebarCapabilitiesMenu. */
+.sidebar-capabilities-menu {
+  transform-origin: left top;
+  animation: sidebar-capabilities-menu-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sidebar-capabilities-menu[data-state='closed'] {
+  pointer-events: none;
+  animation: sidebar-capabilities-menu-out 120ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes sidebar-capabilities-menu-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.97);
+  }
+}
+
+@keyframes sidebar-capabilities-menu-out {
+  to {
+    opacity: 0;
+    transform: translateX(-2px) scale(0.98);
+  }
+}
+
+@keyframes sidebar-capabilities-menu-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-capabilities-menu {
+    animation-name: sidebar-capabilities-menu-fade;
+  }
+
+  .sidebar-capabilities-menu[data-state='closed'] {
+    animation-name: sidebar-capabilities-menu-fade;
+    animation-direction: reverse;
+  }
+}
+
 /* Skeleton loading */
 .skeleton {
   background-color: var(--lobster-surface-raised);

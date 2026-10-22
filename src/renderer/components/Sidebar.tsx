@@ -16,6 +16,7 @@ import {
 import type { CoworkSessionSummary } from '../types/cowork';
 import { MainView } from '../types/navigation';
 import { getAgentDisplayNameById } from '../utils/agentDisplay';
+import { getAccountConnectionState } from './accountConnectionState';
 import {
   type AgentSidebarBatchItem,
   AgentSidebarBatchItemKind,
@@ -33,8 +34,8 @@ import {
 import CoworkSearchModal from './cowork/CoworkSearchModal';
 import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
-import ExpertIcon from './icons/ExpertIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
+import SidebarExpertIcon from './icons/SidebarExpertIcon';
 import SidebarLibraryIcon from './icons/SidebarLibraryIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import TrashIcon from './icons/TrashIcon';
@@ -156,7 +157,7 @@ const SidebarNewFeatureBadge = {
 const sidebarNavItemClassName =
   'w-full inline-flex h-9 items-center gap-2.5 rounded-full px-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 const activeSidebarNavItemClassName =
-  `${sidebarNavItemClassName} bg-black/[0.05] hover:bg-black/[0.05] dark:bg-white/[0.07] dark:hover:bg-white/[0.07]`;
+  `${sidebarNavItemClassName} bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] dark:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)] dark:hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)]`;
 const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/75';
 const sidebarBottomIconButtonClassName =
   'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
@@ -271,6 +272,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const agents = useSelector((state: RootState) => state.agent.agents);
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
   const isAuthLoading = useSelector((state: RootState) => state.auth.isLoading);
+  const accountConnectionState = useSelector((state: RootState) => getAccountConnectionState(state.auth));
   const sessions = useSelector(selectCoworkSessions);
   const currentSessionId = useSelector(selectCurrentSessionId);
   // The home page is the "new task" view, so its nav item reads as selected there.
@@ -299,7 +301,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const paymentGuideOwnsSlot = canShowPurchaseGuide && (paymentGuideVisible || purchaseGuide.loading);
   const isWindows = window.electron.platform === 'win32';
   const showHeaderRow = !isWindows;
-  const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn;
+  const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn && !accountConnectionState;
   const shouldShowLoginPromoTip = showLoginPromo && showLoginPromoTip;
   const shouldReserveLoginPromoTipSpace = shouldShowLoginPromoTip;
   const batchSelectableKeySet = useMemo(
@@ -785,7 +787,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               className={activeView === MainView.Experts ? activeSidebarNavItemClassName : sidebarNavItemClassName}
               aria-current={activeView === MainView.Experts ? 'page' : undefined}
             >
-              <ExpertIcon className={sidebarNavIconClassName} />
+              <SidebarExpertIcon className={sidebarNavIconClassName} />
               <span className="min-w-0 truncate">{i18nService.t('expertPlaza')}</span>
               {showExpertsNewBadge && (
                 <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-[#ff4f6d] px-1.5 text-[10px] font-semibold leading-none text-white">

@@ -62,10 +62,10 @@ const ScheduledTaskTemplatePickerModal: React.FC<ScheduledTaskTemplatePickerModa
                   key={template.id}
                   type="button"
                   onClick={() => onSelect(template)}
-                  className="group flex min-h-[156px] flex-col items-start rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
+                  className="group flex min-h-[156px] flex-col items-start rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:border-secondary/40 hover:bg-surface-raised"
                 >
                   <div className="flex w-full items-start gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-secondary">
                       <Icon className="h-5 w-5" />
                     </div>
                     <div className="min-w-0 flex-1">

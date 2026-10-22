@@ -16,89 +16,24 @@ import {
   CompanionSelectionAction,
   isCompanionSelectionAction,
 } from '../../shared/desktopCompanion/selectionActions';
-import { ApiFormat, ProviderName } from '../../shared/providers/constants';
 import { getLanguage, t } from '../i18n';
-import { resolveCurrentApiConfig, resolveRawApiConfig } from '../libs/claudeSettings';
+import { extractApiErrorSnippet } from '../libs/coworkModelApi';
 import {
-  buildAnthropicMessagesUrl,
-  CoworkModelProtocol,
-  extractApiErrorSnippet,
-  normalizeGeminiBaseUrl,
-} from '../libs/coworkModelApi';
-import { getCoworkOpenAICompatProxyToken } from '../libs/coworkOpenAICompatProxy';
+  buildOneShotHttpRequest,
+  type OneShotPresetResolver,
+  type OneShotTarget,
+  OneShotTargetError,
+  type OneShotTargetResolution,
+  readOneShotStreamEvent,
+  resolveOneShotPreset,
+  resolveOneShotTarget,
+} from '../libs/oneShotModelClient';
+import { splitSseEvents, type StreamChunk } from '../libs/sse';
 import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companionAnalytics';
-import { readAnthropicStreamEvent, readGeminiStreamEvent, splitSseEvents, type StreamChunk } from './sse';
 
 const MAX_OUTPUT_TOKENS = 2_048;
 const REQUEST_TIMEOUT_MS = 90_000;
 const MAX_HISTORY_TURNS = 12;
-
-export interface QuickAnswerModelConfig {
-  protocol: CoworkModelProtocol;
-  apiKey: string;
-  baseURL: string;
-  model: string;
-  proxyToken?: string;
-}
-
-/** Same model the session title generator uses: the user's current default model. */
-export function resolveQuickAnswerModel(): QuickAnswerModelConfig | null {
-  const raw = resolveRawApiConfig();
-  if (raw.config && raw.providerMetadata?.providerName === ProviderName.Gemini) {
-    return { protocol: CoworkModelProtocol.GeminiNative, apiKey: raw.config.apiKey, baseURL: raw.config.baseURL, model: raw.config.model };
-  }
-  const resolved = resolveCurrentApiConfig();
-  if (!resolved.config) return null;
-  return {
-    protocol: CoworkModelProtocol.Anthropic,
-    apiKey: resolved.config.apiKey,
-    baseURL: resolved.config.baseURL,
-    model: resolved.config.model,
-    // resolveCurrentApiConfig routes OpenAI providers through our local proxy.
-    // Its Bearer token is separate from the upstream provider's API key.
-    ...(resolved.config.apiType === ApiFormat.OpenAI ? { proxyToken: getCoworkOpenAICompatProxyToken() ?? undefined } : {}),
-  };
-}
-
-export function buildQuickAnswerHttpRequest(config: QuickAnswerModelConfig, prompt: CompanionQuickAnswerPrompt): {
-  url: string;
-  init: RequestInit;
-} {
-  if (config.protocol === CoworkModelProtocol.GeminiNative) {
-    return {
-      url: `${normalizeGeminiBaseUrl(config.baseURL)}/models/${encodeURIComponent(config.model.trim())}:streamGenerateContent?alt=sse`,
-      init: {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: prompt.system }] },
-          contents: prompt.messages.map(message => ({
-            role: message.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: message.content }],
-          })),
-          generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
-        }),
-      },
-    };
-  }
-  return {
-    url: buildAnthropicMessagesUrl(config.baseURL),
-    init: {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json', 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01',
-        ...(config.proxyToken ? { Authorization: `Bearer ${config.proxyToken}` } : {}),
-      },
-      body: JSON.stringify({
-        model: config.model,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system: prompt.system,
-        messages: prompt.messages,
-        stream: true,
-      }),
-    },
-  };
-}
 
 interface Running {
   controller: AbortController;
@@ -109,7 +44,10 @@ interface Running {
 interface QuickAnswerDeps {
   reportAnalytics?: CompanionAnalyticsReporter;
   getSessionKey(): string | null;
-  resolveModel?(): QuickAnswerModelConfig | null;
+  /** Loopback token for providers OpenClaw reaches through a local proxy. */
+  getProxyToken?(): string | null;
+  resolveModel?(): OneShotTargetResolution;
+  resolvePreset?: OneShotPresetResolver;
   fetch?: typeof fetch;
 }
 
@@ -131,7 +69,8 @@ export class CompanionQuickAnswerService {
       source, tool: request.action, isFollowUp: (typeof request.question === 'string' && !!request.question.trim())
         || (Array.isArray(request.history) && request.history.length > 0),
     }) : undefined;
-    if (!this.deps.getSessionKey()) {
+    const sessionKey = this.deps.getSessionKey();
+    if (!sessionKey) {
       finish?.(Outcome.Blocked, Reason.LoginRequired);
       return { success: false, code: CompanionQuickAnswerErrorCode.LoginRequired, error: t('desktopToolsLoginRequired') };
     }
@@ -141,10 +80,17 @@ export class CompanionQuickAnswerService {
       finish?.(Outcome.Blocked, Reason.InvalidInput);
       return { success: false, error: t('desktopCompanionRequestFailed') };
     }
-    const model = (this.deps.resolveModel ?? resolveQuickAnswerModel)();
-    if (!model) {
+    const resolution = this.deps.resolveModel
+      ? this.deps.resolveModel()
+      : resolveOneShotTarget({ getProxyToken: () => this.deps.getProxyToken?.() ?? null });
+    if ('error' in resolution) {
       finish?.(Outcome.Blocked, Reason.NoModel);
-      return { success: false, error: t('desktopCompanionAnswerNoModel') };
+      return {
+        success: false,
+        error: t(resolution.error === OneShotTargetError.UnsupportedModel
+          ? 'desktopCompanionAnswerUnsupportedModel'
+          : 'desktopCompanionAnswerNoModel'),
+      };
     }
     const history = Array.isArray(request.history)
       ? request.history.filter(turn => turn && typeof turn.content === 'string').slice(-MAX_HISTORY_TURNS)
@@ -159,7 +105,7 @@ export class CompanionQuickAnswerService {
     this.abort(requestId);
     const controller = new AbortController();
     this.running.set(requestId, { controller, ownerId: sender.id, finish: finish! });
-    void this.stream(sender, requestId, model, prompt, controller);
+    void this.stream(sender, requestId, resolution.target, prompt, controller, sessionKey);
     return { success: true };
   }
 
@@ -182,21 +128,33 @@ export class CompanionQuickAnswerService {
   private async stream(
     sender: WebContents,
     requestId: string,
-    model: QuickAnswerModelConfig,
+    target: OneShotTarget,
     prompt: CompanionQuickAnswerPrompt,
     controller: AbortController,
+    sessionKey: string,
   ): Promise<void> {
     const finish = this.running.get(requestId)!.finish;
+    const isCurrent = () => this.running.get(requestId)?.controller === controller
+      && this.deps.getSessionKey() === sessionKey && !sender.isDestroyed();
     const send = (event: CompanionQuickAnswerEvent) => {
+      if (!isCurrent()) { finish(Outcome.Cancelled); return; }
       if (event.type === CompanionQuickAnswerEventType.Done) finish(Outcome.Success);
       if (event.type === CompanionQuickAnswerEventType.Error) finish(Outcome.Failed, Reason.Upstream);
       if (!sender.isDestroyed()) sender.send(DesktopCompanionIpc.QuickAnswerEvent, event);
     };
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    const read = model.protocol === CoworkModelProtocol.GeminiNative ? readGeminiStreamEvent : readAnthropicStreamEvent;
     try {
-      const { url, init } = buildQuickAnswerHttpRequest(model, prompt);
+      target = await resolveOneShotPreset(target, this.deps.resolvePreset, controller.signal);
+      if (!isCurrent()) { finish(Outcome.Cancelled); return; }
+      controller.signal.throwIfAborted();
+      const { url, init } = buildOneShotHttpRequest(target, {
+        system: prompt.system,
+        messages: prompt.messages,
+        maxTokens: MAX_OUTPUT_TOKENS,
+      });
       const response = await (this.deps.fetch ?? fetch)(url, { ...init, signal: controller.signal });
+      if (!isCurrent()) { finish(Outcome.Cancelled); await response.body?.cancel(); return; }
+      controller.signal.throwIfAborted();
       if (!response.ok || !response.body) {
         const detail = extractApiErrorSnippet(await response.text().catch(() => '')) || `HTTP ${response.status}`;
         send({ requestId, type: CompanionQuickAnswerEventType.Error, message: t('desktopCompanionAnswerFailed', { error: detail }) });
@@ -207,12 +165,14 @@ export class CompanionQuickAnswerService {
       let buffer = '';
       for (;;) {
         const { value, done } = await reader.read();
+        if (!isCurrent()) { finish(Outcome.Cancelled); await reader.cancel(); return; }
+        controller.signal.throwIfAborted();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const { events, rest } = splitSseEvents(buffer);
         buffer = rest;
         for (const event of events) {
-          const chunk: StreamChunk = read(event);
+          const chunk: StreamChunk = readOneShotStreamEvent(target.api, event);
           if (chunk.error) {
             send({ requestId, type: CompanionQuickAnswerEventType.Error, message: t('desktopCompanionAnswerFailed', { error: chunk.error }) });
             return;
@@ -222,10 +182,11 @@ export class CompanionQuickAnswerService {
       }
       send({ requestId, type: CompanionQuickAnswerEventType.Done });
     } catch (error) {
-      if (controller.signal.aborted && this.running.get(requestId)?.controller !== controller) return;
+      if (!isCurrent()) { finish(Outcome.Cancelled); return; }
       const message = controller.signal.aborted ? 'timeout' : error instanceof Error ? error.message : String(error);
       console.warn('[DesktopCompanion] Quick answer failed:', message);
-      send({ requestId, type: CompanionQuickAnswerEventType.Error, message: t('desktopCompanionAnswerFailed', { error: message }) });
+      send({ requestId, type: CompanionQuickAnswerEventType.Error, message: message === OneShotTargetError.UnsupportedModel
+        ? t('desktopCompanionAnswerUnsupportedModel') : t('desktopCompanionAnswerFailed', { error: message }) });
     } finally {
       clearTimeout(timeout);
       if (this.running.get(requestId)?.controller === controller) this.running.delete(requestId);

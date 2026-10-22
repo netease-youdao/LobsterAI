@@ -26,6 +26,15 @@ const renderCard = (permission: CoworkPermissionRequest, props: Record<string, u
   renderToStaticMarkup(createElement(QuestionDockCard, { request: permissionDockRequest(permission)!, ...props }));
 
 describe('QuestionDockCard', () => {
+  test('keeps a short heading and puts the full request in the scrollable body', () => {
+    const html = renderCard({ ...plugin, toolInput: { questions: [{
+      title: 'Generate?', question: 'Full scene description', subtitle: '200 credits', options,
+    }] } });
+    expect(html).toContain('<h2>Generate?</h2>');
+    expect(html).toContain('<p class="cowork-question-description">Full scene description</p>');
+    expect(html.indexOf('200 credits')).toBeLessThan(html.indexOf('class="cowork-question-page"'));
+  });
+
   test('shows the pricing subtitle in a video confirmation', () => {
     const html = renderCard({ ...plugin, toolInput: { questions: [{
       question: 'Confirm video generation?', subtitle: 'Video price depends on model, duration and resolution.', options,

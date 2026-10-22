@@ -3,6 +3,13 @@ import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
+import {
+  createModalEscapeLayerId,
+  isDismissEscapeEvent,
+  isTopModalEscapeLayer,
+  registerModalEscapeLayer,
+  unregisterModalEscapeLayer,
+} from '../common/modalEscape';
 
 export interface ImagePreviewSource {
   src: string;
@@ -23,15 +30,39 @@ function getImageLabel(image: ImagePreviewSource): string {
 
 const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({ image, onClose }) => {
   const mouseDownOnBackdropRef = useRef(false);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const layerIdRef = useRef<number | null>(null);
+  const isOpen = image !== null;
+  if (isOpen && layerIdRef.current === null) {
+    layerIdRef.current = createModalEscapeLayerId();
+  } else if (!isOpen) {
+    layerIdRef.current = null;
+  }
+  const layerId = layerIdRef.current;
 
   useEffect(() => {
-    if (!image) return;
+    if (layerId === null) return;
+    registerModalEscapeLayer(layerId);
     const handler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (!isDismissEscapeEvent(event) || !isTopModalEscapeLayer(layerId)) return;
+      event.preventDefault();
+      onClose();
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [image, onClose]);
+    document.addEventListener('keydown', handler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      unregisterModalEscapeLayer(layerId);
+    };
+  }, [layerId, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const previous = document.activeElement;
+    closeButtonRef.current?.focus();
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [isOpen]);
 
   if (!image) return null;
 
@@ -56,11 +87,18 @@ const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({ image, onClose })
       aria-modal="true"
       aria-label={label}
       className="fixed inset-0 z-[10000] flex flex-col bg-neutral-950/70 backdrop-blur-sm"
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeButtonRef.current?.focus();
+      }}
       onMouseDown={handleBackdropMouseDown}
       onClick={handleBackdropClick}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end p-4">
         <button
+          ref={closeButtonRef}
           type="button"
           onClick={(event) => {
             event.stopPropagation();

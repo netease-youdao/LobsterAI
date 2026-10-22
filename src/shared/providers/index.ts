@@ -3,12 +3,19 @@ export type { ProviderDef } from './constants';
 export {
   ApiFormat,
   AuthType,
+  OpenAIApiMode,
   OpenClawApi,
   OpenClawProviderId,
   ProviderAuthType,
   ProviderName,
   ProviderRegistry,
 } from './constants';
+export {
+  isCustomProviderKey,
+  normalizeGeminiApiBaseUrl,
+  supportsGeminiApiFormatSelection,
+  usesCustomGeminiApiFormat,
+} from './customProviders';
 export {
   LOBSTERAI_REQUEST_OPTIONS_FIELD,
   LOBSTERAI_REQUEST_OPTIONS_VERSION,
@@ -53,4 +60,10 @@ export {
   resolveOpenClawThinkingLevel,
   resolveProductThinkingLevel,
 } from './modelThinking';
+export {
+  isOpenAIApiModeAvailable,
+  normalizeOpenAIApiMode,
+  resolveProviderOpenAIApiMode,
+  supportsOpenAIApiModeSelection,
+} from './openaiApiMode';
 export type { ProviderConfig } from './types';

@@ -16,6 +16,8 @@ vi.mock('electron', () => ({
 
 import { net } from 'electron';
 
+import { NATIVE_RUN_LLM_TRACE_PROXY_PATH } from '../../shared/cowork/llmTurnUsage';
+import { claimNativeRunTurnUsage } from './nativeRunTurnUsage';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
@@ -974,6 +976,41 @@ test('the running proxy rejects foreign hosts and missing tokens before touching
     // Authorized requests reach the account layer (no signed-in account here).
     expect(await send({ authorization: `Bearer ${token}` })).toBe(503);
     expect(getAuthTokens).toHaveBeenCalledOnce();
+  } finally {
+    stopOpenClawTokenProxy();
+  }
+});
+
+test('the running proxy records native run traces locally without a signed-in account', async () => {
+  const token = 'd'.repeat(48);
+  const getAuthTokens = vi.fn(() => null);
+  const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens,
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => token,
+  });
+  const send = (headers: http.OutgoingHttpHeaders, body: string) => new Promise<number>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: NATIVE_RUN_LLM_TRACE_PROXY_PATH, headers }, res => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+  try {
+    const report = JSON.stringify({ runId: 'im-run-1', traceId, model: 'deepseek-flash-YoudaoInner', virtualModelId: 'yd-fast' });
+    expect(await send({ authorization: 'Bearer wrong' }, report)).toBe(401);
+    expect(await send({ authorization: `Bearer ${token}` }, 'not json')).toBe(400);
+    expect(await send({ authorization: `Bearer ${token}` }, report)).toBe(204);
+    expect(getAuthTokens).not.toHaveBeenCalled();
+    expect(vi.mocked(net.fetch)).not.toHaveBeenCalledWith(expect.stringContaining('native-run'), expect.anything());
+    expect(claimNativeRunTurnUsage(['im-run-1'])).toMatchObject({
+      trace: { traceId },
+      modelPreset: { modelPresetId: 'balanced', resolvedModelId: 'deepseek-flash-YoudaoInner' },
+    });
   } finally {
     stopOpenClawTokenProxy();
   }
