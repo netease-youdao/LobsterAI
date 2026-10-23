@@ -110,6 +110,7 @@ const IDLE_POLL_MS = 60000;
 const COMMAND_IDLE_POLL_MS = 30000;
 const ACTIVE_POLL_MS = 5000;
 const CATALOG_RECHECK_MS = 300000;
+const InputResultConflict = { Model: 47042, State: 47043 } as const;
 export class RemoteBridge {
   private readonly availability: RemoteAvailabilityPublisher;
   private readonly deletions: RemoteSessionDeletionClient | null;
@@ -2312,7 +2313,30 @@ export class RemoteBridge {
         if (readySent) {
           remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: claim.preparationId, stage: readyStage, result: 'failed',
             reason: readyStage === 'server_ready' ? 'REQUEST_FAILED' : 'STORAGE_UNAVAILABLE', elapsedMs: Date.now() - readyStartedAt, error }, 'warn');
-          throw error;
+          if (readyStage !== 'server_ready' || !(error instanceof RemoteApiError) || error.httpStatus !== 409) throw error;
+          if (!current()) return false;
+          let rejection: unknown = error;
+          if (error.code === InputResultConflict.Model
+            && [RemoteInputReason.ModelChanged, RemoteInputReason.ModelUnavailable].includes(error.data?.reason)) {
+            if (!permitted()) return false;
+            try {
+              // A definitive refusal cannot have accepted ready. Older servers need an explicit failure report.
+              await this.api(`/input-preparations/${claim.preparationId}/result`, 'POST', {
+                ...proof(), status: RemoteInputStatus.Failed, reason: error.data.reason,
+              });
+              if (!current()) return false;
+              continue;
+            } catch (failure) { rejection = failure; }
+          }
+          if (rejection instanceof RemoteApiError && rejection.httpStatus === 409 && rejection.code === InputResultConflict.State) {
+            if (!current()) return false;
+            // Newer servers can commit failed while rejecting ready; never infer that state from a conflict alone.
+            const receipt = await this.api(`/input-preparations/${claim.preparationId}`);
+            if (!current()) return false;
+            if (receipt.preparationId === claim.preparationId && receipt.targetSummary?.deviceId === deviceId
+              && receipt.status === RemoteInputStatus.Failed) continue;
+          }
+          throw rejection;
         }
         if (!permitted()) return false;
         const allowed = new Set<string>([RemoteInputReason.ModelUnavailable, RemoteInputReason.ModelChanged, RemoteInputReason.AgentUnavailable, RemoteInputReason.Workspace, RemoteInputReason.Version]);

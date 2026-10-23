@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteRunStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
-import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery } from '../../shared/remote/input';
+import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery, RemoteInputStatus } from '../../shared/remote/input';
 import { RemoteAttachmentError } from './inputPreparationService';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteInputError } from './remoteModelCatalog';
@@ -465,6 +465,100 @@ describe('input preparation failure boundaries', () => {
     await expect(bridge.prepareInputs()).resolves.toBe(false);
     expect(cancel).toHaveBeenCalledOnce();
     expect(request.mock.calls.some(([, path]) => path.endsWith('/input-preparations/prep/result'))).toBe(false);
+  });
+  it.each([RemoteInputReason.ModelChanged, RemoteInputReason.ModelUnavailable])('reports a definitive ready rejection as failed: %s', async reason => {
+    const { bridge, request } = await fixture();
+    bridge.deps.input.preparations.prepare.mockResolvedValue({ preparationId: 'prep', resolvedInput: {}, inputDigest: 'digest' });
+    const original = request.getMockImplementation()!;
+    let pending = true;
+    const submitted: any[] = [];
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: pending ? [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] : [] });
+      if (path.endsWith('/input-preparations/prep/result')) {
+        const body = JSON.parse(String(init!.body)); submitted.push(body);
+        if (body.status === RemoteInputStatus.Ready) return new Response(JSON.stringify({ code: 47042, data: { reason } }), { status: 409 });
+        pending = false; return response({ status: RemoteInputStatus.Failed });
+      }
+      return original(owner, path, init);
+    });
+    await expect(bridge.prepareInputs()).resolves.toBe(true);
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1]).toEqual({ status: RemoteInputStatus.Failed, reason, claimId: 'claim', claimToken: 'token', connectionGeneration: '1', expectedStatusVersion: '1' });
+    await expect(bridge.prepareInputs()).resolves.toBe(false);
+    expect(bridge.deps.input.preparations.prepare).toHaveBeenCalledOnce();
+  });
+  it.each([false, true])('reads an authoritative failed receipt after a state conflict (during failure report: %s)', async reportingFailure => {
+    const { bridge, request } = await fixture();
+    bridge.deps.input.preparations.prepare.mockResolvedValue({ preparationId: 'prep', resolvedInput: {}, inputDigest: 'digest' });
+    const original = request.getMockImplementation()!;
+    const submitted: any[] = [];
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+      if (path.endsWith('/input-preparations/prep/result')) {
+        const body = JSON.parse(String(init!.body)); submitted.push(body);
+        return body.status === RemoteInputStatus.Ready && reportingFailure
+          ? new Response(JSON.stringify({ code: 47042, data: { reason: RemoteInputReason.ModelChanged } }), { status: 409 })
+          : new Response(JSON.stringify({ code: 47043, data: { status: RemoteInputStatus.Failed } }), { status: 409 });
+      }
+      if (path.endsWith('/input-preparations/prep')) return response({ preparationId: 'prep', targetSummary: { deviceId: 'pc' }, status: RemoteInputStatus.Failed });
+      return original(owner, path, init);
+    });
+    await expect(bridge.prepareInputs()).resolves.toBe(true);
+    expect(submitted.map(body => body.status)).toEqual(reportingFailure ? [RemoteInputStatus.Ready, RemoteInputStatus.Failed] : [RemoteInputStatus.Ready]);
+    expect(request.mock.calls.filter(([, path]) => path.endsWith('/input-preparations/prep'))).toHaveLength(1);
+  });
+  it.each(['preparation', 'device', 'status'])('does not accept a mismatched %s in a failure receipt', async mismatch => {
+    const { bridge, request } = await fixture();
+    bridge.deps.input.preparations.prepare.mockResolvedValue({ preparationId: 'prep', resolvedInput: {}, inputDigest: 'digest' });
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+      if (path.endsWith('/input-preparations/prep/result')) return new Response(JSON.stringify({ code: 47043, data: { status: RemoteInputStatus.Failed } }), { status: 409 });
+      if (path.endsWith('/input-preparations/prep')) return response({ preparationId: mismatch === 'preparation' ? 'other' : 'prep',
+        targetSummary: { deviceId: mismatch === 'device' ? 'other' : 'pc' }, status: mismatch === 'status' ? 'preparing' : RemoteInputStatus.Failed });
+      return original(owner, path, init);
+    });
+    await expect(bridge.prepareInputs()).rejects.toMatchObject({ code: 47043 });
+  });
+  it.each(['connection', 'account', 'lease'])('does not report failed after ready rejection when the %s is no longer valid', async invalid => {
+    const { bridge, request } = await fixture();
+    bridge.deps.input.preparations.prepare.mockResolvedValue({ preparationId: 'prep', resolvedInput: {}, inputDigest: 'digest' });
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+      if (path.endsWith('/input-preparations/prep/result')) {
+        if (invalid === 'connection') bridge.generation = '2';
+        else if (invalid === 'account') bridge.owner = { ...initialOwner, userId: 'other' };
+        else vi.setSystemTime(new Date(Date.now() + 60001));
+        return new Response(JSON.stringify({ code: 47042, data: { reason: RemoteInputReason.ModelChanged } }), { status: 409 });
+      }
+      return original(owner, path, init);
+    });
+    if (invalid === 'account') await expect(bridge.prepareInputs()).rejects.toThrow('Account changed during remote request');
+    else await expect(bridge.prepareInputs()).resolves.toBe(false);
+    expect(request.mock.calls.filter(([, path]) => path.endsWith('/input-preparations/prep/result'))).toHaveLength(1);
+  });
+  it.each([
+    [409, 47042, undefined],
+    [409, 47042, RemoteInputReason.Account],
+    [500, 47042, RemoteInputReason.ModelChanged],
+    [409, 47033, RemoteInputReason.ModelChanged],
+  ])('retains uncertain or unrelated ready errors (%s, %s, %s)', async (status, code, reason) => {
+    const { bridge, request } = await fixture();
+    bridge.deps.input.preparations.prepare.mockResolvedValue({ preparationId: 'prep', resolvedInput: {}, inputDigest: 'digest' });
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (owner, path, init) => {
+      if (path.endsWith('/input-preparations/claim')) return response({ items: [{ preparationId: 'prep', claimId: 'claim',
+        claimToken: 'token', statusVersion: '1', claimUntil: new Date(Date.now() + 60000).toISOString() }] });
+      if (path.endsWith('/input-preparations/prep/result')) return new Response(JSON.stringify({ code, data: { reason } }), { status });
+      return original(owner, path, init);
+    });
+    await expect(bridge.prepareInputs()).rejects.toMatchObject({ code });
+    expect(request.mock.calls.filter(([, path]) => path.endsWith('/input-preparations/prep/result'))).toHaveLength(1);
   });
   it('retains a local failure checkpoint when server ready reporting fails', async () => {
     const { bridge, request } = await fixture();
