@@ -223,6 +223,7 @@ fi
 # Verify a critical transitive dependency before deciding whether to reinstall.
 # Some historical installs had partial node_modules trees (missing iconv-lite encodings).
 ICONV_SENTINEL="node_modules/iconv-lite/encodings/index.js"
+MCP_SENTINEL="node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.js"
 
 if [ "$FORCE_REPAIR" = "1" ]; then
   if ! ensure_npm_available; then
@@ -234,7 +235,7 @@ if [ "$FORCE_REPAIR" = "1" ]; then
 fi
 
 # Ensure dependencies are installed
-if [ ! -d "node_modules" ] || [ ! -f "$ICONV_SENTINEL" ]; then
+if [ ! -d "node_modules" ] || [ ! -f "$ICONV_SENTINEL" ] || [ ! -f "$MCP_SENTINEL" ]; then
   if ! ensure_npm_available; then
     exit 1
   fi

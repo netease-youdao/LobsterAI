@@ -1,6 +1,6 @@
 # Web Search Skill
 
-Real-time web search capability for LobsterAI using Playwright-controlled browser automation.
+Real-time web search for LobsterAI using browser automation or optional anonymous Parallel Search MCP.
 
 ## Overview
 
@@ -28,7 +28,7 @@ Claude → Bash Tool → CLI Scripts → Bridge Server (localhost:8923) → Play
 1. **Bridge Server** - Express HTTP API for browser control
 2. **Playwright Manager** - Connection and session management
 3. **Browser Launcher** - Chrome lifecycle management
-4. **Search Engines** - Google primary and Bing fallback
+4. **Search Engines** - Google primary and Bing fallback; explicit Parallel via Search MCP
 5. **CLI Scripts** - Simplified command-line interface
 6. **Electron Integration** - Automatic service management
 
@@ -101,6 +101,39 @@ curl -X POST http://127.0.0.1:8923/api/search \
   -H "Content-Type: application/json" \
   -d '{"connectionId": "...", "query": "...", "maxResults": 5}'
 ```
+
+### Optional Parallel Search
+
+Select Parallel explicitly through the same CLI:
+
+```bash
+WEB_SEARCH_ENGINE=parallel bash scripts/search.sh "TypeScript release notes" 5
+```
+
+No Parallel account, API key, Chrome installation, browser connection, or browser
+cookies are needed. The local bridge uses the maintained MCP SDK to discover
+and call `web_search` at `https://search.parallel.ai/mcp`. It sends the query as
+both `objective` and a single `search_queries` entry to Parallel for third-party
+processing. Optional conversation/model metadata is omitted because this CLI
+does not expose that context. Free anonymous access is rate limited; there is
+no unlimited allowance or SLA. See [public setup guidance](https://docs.parallel.ai/integrations/mcp/search-mcp),
+[Customer Terms](https://parallel.ai/customer-terms), and [Privacy Policy](https://parallel.ai/privacy-policy).
+
+`WEB_SEARCH_ENGINE` accepts `auto` (default), `google`, `bing`, or `parallel`.
+Auto continues to try Google then Bing and makes no Parallel requests. Explicit
+Parallel failures are reported with no provider fallback or automatic retry.
+Result count is limited locally, not sent as an unsupported MCP argument.
+Parallel accepts non-empty queries up to 200 characters and result counts from
+1 to 50. Searches have a maximum 30-second deadline, each MCP response is capped
+at 1 MiB before buffering, and returned evidence is limited to 25,000 characters
+with bounded titles/excerpts and a visible truncation warning. Source URLs are
+preserved. This provider supports search only; page/content operations still
+use the existing browser path.
+
+The outbound project-wide `User-Agent` is `LobsterAI-WebSearch/<skill version>`
+(currently `LobsterAI-WebSearch/1.0.3`) so Parallel can measure aggregate project
+usage. It contains no user or installation identifier. The service may process
+other request metadata under its policies.
 
 ## Configuration
 
@@ -192,7 +225,8 @@ SKILLs/web-search/
 │   └── search/
 │       ├── types.ts             # Type definitions
 │       ├── google.ts            # Google search engine
-│       └── bing.ts              # Bing fallback engine
+│       ├── bing.ts              # Bing fallback engine
+│       └── parallel.ts          # Optional anonymous Search MCP engine
 ├── scripts/                     # CLI tools
 │   ├── start-server.sh          # Start Bridge Server
 │   ├── stop-server.sh           # Stop Bridge Server
@@ -273,7 +307,7 @@ bash scripts/start-server.sh
 - **Localhost only** - Server binds to 127.0.0.1
 - **No external access** - Not exposed to network
 - **Isolated profile** - Separate Chrome user-data-dir
-- **Visible operations** - All actions shown in browser window
+- **Visible operations** - Google/Bing actions shown in browser window; Parallel uses no browser cookies
 - **No credentials** - No sensitive operations performed
 
 ## Performance
@@ -286,13 +320,14 @@ bash scripts/start-server.sh
 
 ## Requirements
 
-- Node.js 18+
-- Google Chrome or Chromium
+- Node.js 18+ for Google/Bing; Node.js 20.3+ for Parallel (LobsterAI bundles its runtime)
+- Google Chrome or Chromium for Google/Bing (not needed for Parallel)
 - macOS, Windows, or Linux
 - Internet connection for searches
 
 ## Dependencies
 
+- `@modelcontextprotocol/sdk` - Maintained MCP client for optional Parallel search
 - `express` - HTTP server
 - `playwright-core` - Browser automation
 - `uuid` - Connection ID generation
