@@ -248,7 +248,7 @@
     "@univerjs/drawing-ui": "1.0.2",
     "@univerjs/engine-formula": "1.0.2",
     "@univerjs/engine-render": "1.0.2",
-    "@univerjs/find-replace": "1.0.2",
+    "@univerjs/find-replace": "1.0.3",
     "@univerjs/rpc": "1.0.2",
     "@univerjs/sheets": "1.0.2",
     "@univerjs/sheets-conditional-formatting": "1.0.2",
