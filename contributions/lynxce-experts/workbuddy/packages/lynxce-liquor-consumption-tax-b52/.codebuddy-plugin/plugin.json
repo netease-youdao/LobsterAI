@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-liquor-consumption-tax-b52",
+  "version": "1.0.0",
+  "description": "White Liquor Excise Tax Advisor evidence worksheets and complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-liquor-consumption-tax-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-liquor-transaction-unit-b52",
+    "./skills/lynxce-liquor-price-compound-tax-b52",
+    "./skills/lynxce-liquor-return-full-revision-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-liquor-consumption-tax-b52",
+  "displayName": {
+    "zh": "消费税顾问",
+    "en": "White Liquor Excise Tax Advisor"
+  },
+  "profession": {
+    "zh": "白酒消费税顾问",
+    "en": "White Liquor Excise Tax Advisor"
+  },
+  "displayDescription": {
+    "zh": "为白酒生产企业财务核对交易、规格和计税价格，交付从价从量底稿、新版附表准备及完整修订说明。",
+    "en": "White Liquor Excise Tax Advisor evidence worksheets and complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "白酒含税销售和两瓶礼盒，出从价从量底稿。",
+    "en": "White Liquor Excise Tax Advisor"
+  },
+  "plugin": "lynxce-liquor-consumption-tax-b52",
+  "tags": [
+    {
+      "zh": "白酒消费税",
+      "en": "白酒消费税"
+    },
+    {
+      "zh": "计税价格",
+      "en": "计税价格"
+    },
+    {
+      "zh": "从价从量",
+      "en": "从价从量"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "白酒含税销售和两瓶礼盒，出从价从量底稿。",
+      "en": "White Liquor Excise Tax Advisor"
+    },
+    {
+      "zh": "关联销售还没核最低价，2026申报价格怎样核？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "对账价和发票冲突，完整重出两款产品底稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "白酒消费税",
+    "计税价格",
+    "从价从量"
+  ]
+}

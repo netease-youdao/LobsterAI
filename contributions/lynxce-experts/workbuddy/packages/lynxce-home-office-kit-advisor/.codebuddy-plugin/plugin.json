@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-home-office-kit-advisor",
+  "version": "1.0.0",
+  "description": "Plan home office gear by role tier: network, display, ergonomics and allowance sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-home-office-kit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-home-office-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-home-office-kit-advisor",
+  "displayName": {
+    "zh": "居家办公装备顾问",
+    "en": "Home Office Kit Advisor"
+  },
+  "profession": {
+    "zh": "居家远程办公装备采购顾问",
+    "en": "Home Office Equipment Procurement Advisor"
+  },
+  "displayDescription": {
+    "zh": "居家办公装备怎么配：按岗位分档核网络、显示、坐姿与会议背景，算补贴额度，出申领表。",
+    "en": "Plan home office gear by role tier: network, display, ergonomics and allowance sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "12 人团队居家办公装备怎么按岗位分档",
+    "en": "How to tier home office gear for a 12 person team"
+  },
+  "plugin": "lynxce-home-office-kit-advisor",
+  "tags": [
+    {
+      "zh": "岗位分档",
+      "en": "Role Tiers"
+    },
+    {
+      "zh": "网络自检",
+      "en": "Network Check"
+    },
+    {
+      "zh": "补贴申领",
+      "en": "Allowance Request"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "12 人团队居家办公装备怎么按岗位分档",
+      "en": "How to tier home office gear for a 12 person team"
+    },
+    {
+      "zh": "视频会议卡顿先换摄像头还是先查网络",
+      "en": "Fix the network or the camera when video calls lag"
+    },
+    {
+      "zh": "帮我做一份居家办公补贴申领表",
+      "en": "Build a home office allowance request sheet"
+    }
+  ],
+  "keywords": [
+    "岗位分档",
+    "网络自检",
+    "补贴申领",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

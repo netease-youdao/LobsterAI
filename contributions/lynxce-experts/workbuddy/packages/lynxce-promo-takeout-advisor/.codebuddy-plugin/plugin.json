@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-takeout-advisor",
+  "version": "1.0.2",
+  "description": "Use sale takeout and local coupons well: red packets, group-buy vouchers, coupon packs, thresholds and validity.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-takeout-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-takeout"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-takeout-advisor",
+  "displayName": {
+    "zh": "大促外卖与本地生活券顾问",
+    "en": "Promo Takeout and Local Life Coupon Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促外卖与本地生活券顾问",
+    "en": "Promo Takeout and Local Life Coupon Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促外卖红包和到店券怎么用：外卖红包、团购券、券包与膨胀红包的门槛、叠加与有效期逐项核对。",
+    "en": "Use sale takeout and local coupons well: red packets, group-buy vouchers, coupon packs, thresholds and validity."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这张外卖券包值不值得买",
+    "en": "Is this takeout coupon pack worth buying"
+  },
+  "plugin": "lynxce-promo-takeout-advisor",
+  "tags": [
+    {
+      "zh": "外卖红包",
+      "en": "Takeout Red Packets"
+    },
+    {
+      "zh": "团购券",
+      "en": "Group-buy Vouchers"
+    },
+    {
+      "zh": "券包回本",
+      "en": "Coupon Pack Payback"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这张外卖券包值不值得买",
+      "en": "Is this takeout coupon pack worth buying"
+    },
+    {
+      "zh": "膨胀红包门槛变高了还要不要用",
+      "en": "Should I use a boosted red packet with a higher threshold"
+    },
+    {
+      "zh": "到店团购券买之前要看什么",
+      "en": "What to check before buying a group-buy voucher"
+    }
+  ],
+  "keywords": [
+    "外卖红包",
+    "团购券",
+    "券包回本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-coupon-wallet-advisor",
+  "version": "1.0.1",
+  "description": "Organize coupons: sort by threshold, expiry and category, mutual exclusion, use-before-expiry plan, no cart padding.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-coupon-wallet-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-coupon-wallet"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-coupon-wallet-advisor",
+  "displayName": {
+    "zh": "优惠券包整理顾问",
+    "en": "Coupon Wallet Organizer Advisor"
+  },
+  "profession": {
+    "zh": "11.11 优惠券包整理顾问",
+    "en": "11.11 Coupon Wallet Organizer Advisor"
+  },
+  "displayDescription": {
+    "zh": "领到的券怎么用：按门槛有效期品类整理、平台券店铺券互斥关系、过期前使用计划、不为用券凑单。",
+    "en": "Organize coupons: sort by threshold, expiry and category, mutual exclusion, use-before-expiry plan, no cart padding."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我领了一堆券该先用哪张",
+    "en": "Which of my coupons should I use first"
+  },
+  "plugin": "lynxce-coupon-wallet-advisor",
+  "tags": [
+    {
+      "zh": "券包排序",
+      "en": "Coupon Sorting"
+    },
+    {
+      "zh": "互斥核对",
+      "en": "Stacking Check"
+    },
+    {
+      "zh": "过期计划",
+      "en": "Expiry Plan"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我领了一堆券该先用哪张",
+      "en": "Which of my coupons should I use first"
+    },
+    {
+      "zh": "平台券和店铺券能不能一起用",
+      "en": "Can platform and store coupons be used together"
+    },
+    {
+      "zh": "为了用这张券要不要凑单",
+      "en": "Should I pad my cart just to use this coupon"
+    }
+  ],
+  "keywords": [
+    "券包排序",
+    "互斥核对",
+    "过期计划",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-technology-contract-registration-b49",
+  "version": "1.0.0",
+  "description": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-technology-contract-registration-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tech-contract-facts",
+    "./skills/lynxce-tech-contract-amount",
+    "./skills/lynxce-tech-contract-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-technology-contract-registration-b49",
+  "displayName": {
+    "zh": "登记顾问",
+    "en": "Technology Contract Filing Advisor"
+  },
+  "profession": {
+    "zh": "技术合同登记顾问",
+    "en": "Technology Contract Filing Advisor"
+  },
+  "displayDescription": {
+    "zh": "为技术交易企业整理合同载明事实、成交额与技术部分，核对登记材料和变更来源，形成准备说明及补正稿。",
+    "en": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请按已有合同事实整理技术合同登记说明，不做法律审阅。",
+    "en": "Technology Contract Filing Advisor"
+  },
+  "plugin": "lynxce-technology-contract-registration-b49",
+  "tags": [
+    {
+      "zh": "技术合同登记",
+      "en": "技术合同登记"
+    },
+    {
+      "zh": "技术交易额",
+      "en": "技术交易额"
+    },
+    {
+      "zh": "登记材料",
+      "en": "登记材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请按已有合同事实整理技术合同登记说明，不做法律审阅。",
+      "en": "Technology Contract Filing Advisor"
+    },
+    {
+      "zh": "总价120万含技术和独立代购，核对候选技术额与预收款。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "金额附件两版冲突，保留未变事实重出全稿V2。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "技术合同登记",
+    "技术交易额",
+    "登记材料"
+  ]
+}

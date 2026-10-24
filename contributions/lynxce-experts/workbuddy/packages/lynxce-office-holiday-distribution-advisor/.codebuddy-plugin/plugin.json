@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-holiday-distribution-advisor",
+  "version": "1.0.0",
+  "description": "Reconcile recipients, purchase packs, delegated receipts, shipments and stock differences.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-holiday-distribution-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-holiday-distribution"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-holiday-distribution-advisor",
+  "displayName": {
+    "zh": "节日物资分发核算助理",
+    "en": "Holiday Supply Distribution Assistant"
+  },
+  "profession": {
+    "zh": "节日慰问物资批次分发核算助理",
+    "en": "Holiday Gift Batch and Distribution Assistant"
+  },
+  "displayDescription": {
+    "zh": "员工节日慰问物资怎么发：核对资格名单与库存，按包装算采购量，记录代领邮寄，交付签收表与差异台账。",
+    "en": "Reconcile recipients, purchase packs, delegated receipts, shipments and stock differences."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "80人慰问物资按整箱要买多少",
+    "en": "Calculate gift packs for 80 recipients"
+  },
+  "plugin": "lynxce-office-holiday-distribution-advisor",
+  "tags": [
+    {
+      "zh": "批次测算",
+      "en": "Batch Calculation"
+    },
+    {
+      "zh": "整箱采购",
+      "en": "Pack Purchase"
+    },
+    {
+      "zh": "签收对账",
+      "en": "Receipt Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "80人慰问物资按整箱要买多少",
+      "en": "Calculate gift packs for 80 recipients"
+    },
+    {
+      "zh": "代领和邮寄怎样避免重复发放",
+      "en": "Reconcile delegated collection and shipping"
+    },
+    {
+      "zh": "做一份物资批次分发与库存核算表",
+      "en": "Make a gift batch and stock reconciliation sheet"
+    }
+  ],
+  "keywords": [
+    "批次测算",
+    "整箱采购",
+    "签收对账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

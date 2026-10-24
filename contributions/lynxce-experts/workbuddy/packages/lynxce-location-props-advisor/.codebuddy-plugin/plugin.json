@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-location-props-advisor",
+  "version": "1.0.2",
+  "description": "Turn shot lists and crew needs into location scorecards, permission checks, power load sums, props lists and shoot-day run sheets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-location-props-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-location-props"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-location-props-advisor",
+  "displayName": {
+    "zh": "拍摄勘景道具顾问",
+    "en": "Location and Props Advisor"
+  },
+  "profession": {
+    "zh": "拍摄场地勘景与道具准备顾问｜灵策智算",
+    "en": "Location Scouting and Props Preparation Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据镜头清单与人员设备倒推场地需求，给出勘景评分对比和许可确认项，附用电核算、道具清单与当天流程表。",
+    "en": "Turn shot lists and crew needs into location scorecards, permission checks, power load sums, props lists and shoot-day run sheets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据镜头清单生成勘景评分表道具清单和当天流程",
+    "en": "Build a scouting scorecard props list and run sheet from my shot list"
+  },
+  "plugin": "lynxce-location-props-advisor",
+  "tags": [
+    {
+      "zh": "场地勘景",
+      "en": "Location Scouting"
+    },
+    {
+      "zh": "道具清单",
+      "en": "Props List"
+    },
+    {
+      "zh": "拍摄流程",
+      "en": "Run Sheet"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据镜头清单生成勘景评分表道具清单和当天流程",
+      "en": "Build a scouting scorecard props list and run sheet from my shot list"
+    },
+    {
+      "zh": "帮我检查这份拍摄流程表的时间和用电有没有问题",
+      "en": "Check this shoot-day schedule for timing and power problems"
+    },
+    {
+      "zh": "只有拍摄主题和日期先给一版勘景要点和道具框架",
+      "en": "With only a theme and date draft scouting points and a props outline"
+    }
+  ],
+  "keywords": [
+    "场地勘景",
+    "道具清单",
+    "拍摄流程",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

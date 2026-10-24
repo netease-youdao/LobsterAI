@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-live-room-setup-advisor",
+  "version": "1.0.1",
+  "description": "Turn room size, budget and stream type into a set plan, light chart, depth and camera check, phased gear list and preflight.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-live-room-setup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-live-room-setup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-live-room-setup-advisor",
+  "displayName": {
+    "zh": "直播间布景灯光顾问",
+    "en": "Live Room Setup Advisor"
+  },
+  "profession": {
+    "zh": "直播间布景与灯光搭建顾问｜灵策智算",
+    "en": "Live Room Set Design and Lighting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据房间尺寸预算与直播类型出布景方案，交付灯位表、纵深机位核算、分阶段采购清单和开播自检表。",
+    "en": "Turn room size, budget and stream type into a set plan, light chart, depth and camera check, phased gear list and preflight."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据房间尺寸和预算生成直播间灯位表与分阶段采购清单",
+    "en": "Build a light chart and phased gear list from room size and budget"
+  },
+  "plugin": "lynxce-live-room-setup-advisor",
+  "tags": [
+    {
+      "zh": "灯位表",
+      "en": "Lighting Chart"
+    },
+    {
+      "zh": "机位纵深",
+      "en": "Camera Depth"
+    },
+    {
+      "zh": "开播自检",
+      "en": "Preflight Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据房间尺寸和预算生成直播间灯位表与分阶段采购清单",
+      "en": "Build a light chart and phased gear list from room size and budget"
+    },
+    {
+      "zh": "复核我现有的直播灯位和机位设置哪里会出问题",
+      "en": "Review my current live room light and camera setup for problems"
+    },
+    {
+      "zh": "只知道画面发黄发暗先给一版最小排查与补光方案",
+      "en": "Give a minimal fix list when the stream only looks yellow and dark"
+    }
+  ],
+  "keywords": [
+    "灯位表",
+    "机位纵深",
+    "开播自检",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-babyfeed-advisor",
+  "version": "1.0.4",
+  "description": "Stage by stage: a minimum gear list, materials and cleaning routines.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-babyfeed-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-babyfeed-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-babyfeed-advisor",
+  "displayName": {
+    "zh": "婴幼儿喂养器具选购顾问",
+    "en": "Baby Feeding Equipment Advisor"
+  },
+  "profession": {
+    "zh": "婴幼儿喂养器具选购顾问",
+    "en": "Baby Feeding Equipment Advisor"
+  },
+  "displayDescription": {
+    "zh": "喂养器具按阶段买：每个阶段最小清单列什么、材质怎么看、清洗消毒按什么节奏安排才省事。",
+    "en": "Stage by stage: a minimum gear list, materials and cleaning routines."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新生儿阶段要准备什么",
+    "en": "What do I need for a newborn"
+  },
+  "plugin": "lynxce-babyfeed-advisor",
+  "tags": [
+    {
+      "zh": "喂养器具",
+      "en": "Feeding Gear"
+    },
+    {
+      "zh": "分阶段买",
+      "en": "By Stage"
+    },
+    {
+      "zh": "清洗消毒",
+      "en": "Sterilising"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新生儿阶段要准备什么",
+      "en": "What do I need for a newborn"
+    },
+    {
+      "zh": "辅食期器具怎么选",
+      "en": "Which gear do I need for solids"
+    },
+    {
+      "zh": "奶瓶多久换一次",
+      "en": "How often should I replace bottles"
+    }
+  ],
+  "keywords": [
+    "喂养器具",
+    "分阶段买",
+    "清洗消毒",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

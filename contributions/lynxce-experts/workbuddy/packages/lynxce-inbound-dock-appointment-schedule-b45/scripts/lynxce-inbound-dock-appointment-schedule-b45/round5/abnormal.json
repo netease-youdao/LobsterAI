@@ -1,0 +1,70 @@
+{
+  "date": null,
+  "sharedCrew": false,
+  "actualArrivalStatus": null,
+  "shipments": [
+    {
+      "id": "A",
+      "arrival": "09:00",
+      "durationMinutes": 40,
+      "deadline": "10:00",
+      "allowedDocks": [
+        "甲"
+      ]
+    },
+    {
+      "id": "C",
+      "arrival": "09:10",
+      "durationMinutes": 30,
+      "deadline": "11:00",
+      "allowedDocks": [
+        "甲"
+      ]
+    },
+    {
+      "id": "B",
+      "arrival": "09:15",
+      "durationMinutes": 30,
+      "deadline": "10:30",
+      "allowedDocks": [
+        "乙"
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "label": "正常09点开放",
+      "source": "本轮假设输入；关闭时刻待补",
+      "docks": {
+        "甲": {
+          "open": "09:00",
+          "close": null,
+          "blockedIntervals": null
+        },
+        "乙": {
+          "open": "09:00",
+          "close": null,
+          "blockedIntervals": null
+        }
+      },
+      "existingReservations": null
+    },
+    {
+      "label": "值班信息10点开放；保留原截止",
+      "source": "本轮冲突值，不指定生效版本",
+      "docks": {
+        "甲": {
+          "open": "10:00",
+          "close": null,
+          "blockedIntervals": null
+        },
+        "乙": {
+          "open": "09:00",
+          "close": null,
+          "blockedIntervals": null
+        }
+      },
+      "existingReservations": null
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-circulation-fan-advisor",
+  "version": "1.0.1",
+  "description": "Pick air circulators and fans: airflow and throw, DC or AC motor, power cost, noise, cleaning.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-circulation-fan-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-circulation-fan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-circulation-fan-advisor",
+  "displayName": {
+    "zh": "循环扇与电风扇选购顾问",
+    "en": "Air Circulator and Electric Fan Advisor"
+  },
+  "profession": {
+    "zh": "11.11 循环扇与电风扇选购顾问",
+    "en": "11.11 Air Circulator and Electric Fan Advisor"
+  },
+  "displayDescription": {
+    "zh": "循环扇电风扇怎么挑：按房间面积看风量风距、比直流无刷与交流电费、核噪音分贝、看收纳清洗。",
+    "en": "Pick air circulators and fans: airflow and throw, DC or AC motor, power cost, noise, cleaning."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "18 平方米卧室循环扇要多大风量",
+    "en": "What airflow suits an 18 square meter bedroom"
+  },
+  "plugin": "lynxce-circulation-fan-advisor",
+  "tags": [
+    {
+      "zh": "风量风距",
+      "en": "Airflow and Throw"
+    },
+    {
+      "zh": "直流电费",
+      "en": "DC Motor Cost"
+    },
+    {
+      "zh": "噪音清洗",
+      "en": "Noise and Cleaning"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "18 平方米卧室循环扇要多大风量",
+      "en": "What airflow suits an 18 square meter bedroom"
+    },
+    {
+      "zh": "直流无刷风扇一年能省多少电费",
+      "en": "How much a DC brushless fan saves per year"
+    },
+    {
+      "zh": "睡觉用风扇噪音多少分贝算安静",
+      "en": "What noise level counts as quiet for sleeping"
+    }
+  ],
+  "keywords": [
+    "风量风距",
+    "直流电费",
+    "噪音清洗",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

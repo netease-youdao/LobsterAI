@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-fan-dm-advisor",
+  "version": "1.0.1",
+  "description": "Classify past DMs by intent, measure first-response time, draft manual reply templates, lead handoff logs and weekly reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fan-dm-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fan-dm"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fan-dm-advisor",
+  "displayName": {
+    "zh": "私信线索承接顾问",
+    "en": "Fan DM Advisor"
+  },
+  "profession": {
+    "zh": "粉丝私信回复与线索承接顾问｜灵策智算",
+    "en": "Fan Message Reply and Lead Intake Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据历史私信与值守安排做意图分类和首响核算，提供人工回复模板、线索交接表与周复盘，不收集敏感信息。",
+    "en": "Classify past DMs by intent, measure first-response time, draft manual reply templates, lead handoff logs and weekly reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据这周的私信记录做意图分类和回复模板",
+    "en": "Classify this week's DMs and draft reply templates"
+  },
+  "plugin": "lynxce-fan-dm-advisor",
+  "tags": [
+    {
+      "zh": "意图分类",
+      "en": "Intent Triage"
+    },
+    {
+      "zh": "首响时效",
+      "en": "Response Time"
+    },
+    {
+      "zh": "线索交接",
+      "en": "Lead Handoff"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这周的私信记录做意图分类和回复模板",
+      "en": "Classify this week's DMs and draft reply templates"
+    },
+    {
+      "zh": "复核我的私信回复模板有没有承诺和多余追问",
+      "en": "Review my DM replies for promises and excess questions"
+    },
+    {
+      "zh": "只有几条私信截图先给我分类和回复草稿",
+      "en": "Draft triage and replies from a few DM screenshots"
+    }
+  ],
+  "keywords": [
+    "意图分类",
+    "首响时效",
+    "线索交接",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

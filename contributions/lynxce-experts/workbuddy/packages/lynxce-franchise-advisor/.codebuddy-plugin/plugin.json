@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-franchise-advisor",
+  "version": "1.0.1",
+  "description": "Turn store data and recruitment plans into unit economics ranges, franchisee scoring, HQ support lists and opening timelines.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-franchise-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-franchise-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-franchise-advisor",
+  "displayName": {
+    "zh": "加盟招商顾问",
+    "en": "Franchise Advisor"
+  },
+  "profession": {
+    "zh": "加盟招商与门店拓展顾问",
+    "en": "Franchise Recruitment and Store Expansion Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据门店经营数据与招商计划，整理单店模型区间测算、加盟商筛选评分、总部支持清单和开业倒排时间表。",
+    "en": "Turn store data and recruitment plans into unit economics ranges, franchisee scoring, HQ support lists and opening timelines."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "根据直营店数据生成单店模型区间与招商手册目录",
+    "en": "Build unit economics ranges and a franchise kit outline from store data"
+  },
+  "plugin": "lynxce-franchise-advisor",
+  "tags": [
+    {
+      "zh": "单店模型",
+      "en": "Unit Economics"
+    },
+    {
+      "zh": "加盟筛选",
+      "en": "Franchisee Screening"
+    },
+    {
+      "zh": "开业排期",
+      "en": "Opening Timeline"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据直营店数据生成单店模型区间与招商手册目录",
+      "en": "Build unit economics ranges and a franchise kit outline from store data"
+    },
+    {
+      "zh": "复核我现有的招商材料有没有收益承诺和漏项",
+      "en": "Review my franchise materials for return promises and missing items"
+    },
+    {
+      "zh": "只有一家店的粗略数据时先给测算口径与待补项",
+      "en": "With rough data from one store, give the model structure and gaps"
+    }
+  ],
+  "keywords": [
+    "单店模型",
+    "加盟筛选",
+    "开业排期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

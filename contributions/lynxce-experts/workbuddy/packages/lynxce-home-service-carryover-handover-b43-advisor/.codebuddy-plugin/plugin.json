@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-home-service-carryover-handover-b43-advisor",
+  "version": "1.0.0",
+  "description": "Reconcile housekeeping visit carryover handover from supplied records and produce reviewable text tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-home-service-carryover-handover-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-home-service-carryover-handover-b43",
+    "./skills/lynxce-home-service-carryover-handover-b43-int-items",
+    "./skills/lynxce-home-service-carryover-handover-b43-int-carryover"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-home-service-carryover-handover-b43-advisor",
+  "displayName": {
+    "zh": "家政跨次服务交接顾问",
+    "en": "Housekeeping Visit Carryover Handover Advisor"
+  },
+  "profession": {
+    "zh": "家政跨次服务交接顾问",
+    "en": "Housekeeping Visit Carryover Handover Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向家庭服务委托人，依据上次记录、遗留事项与本次授权范围整理交接，提供物品核对及后续复查表。",
+    "en": "Reconcile housekeeping visit carryover handover from supplied records and produce reviewable text tables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据现有记录生成首份家政跨次服务交接表",
+    "en": "Build the first review table from supplied records"
+  },
+  "plugin": "lynxce-home-service-carryover-handover-b43-advisor",
+  "tags": [
+    {
+      "zh": "家庭服务委托人",
+      "en": "Target Role"
+    },
+    {
+      "zh": "家政跨次服务交接",
+      "en": "Task Review"
+    },
+    {
+      "zh": "证据复核表",
+      "en": "Evidence Review Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据现有记录生成首份家政跨次服务交接表",
+      "en": "Build the first review table from supplied records"
+    },
+    {
+      "zh": "资料冲突或条件缺失时怎样保留待核项",
+      "en": "Handle conflicting records and missing conditions"
+    },
+    {
+      "zh": "根据后续反馈更新版本并复核影响范围",
+      "en": "Revise the table and check the affected scope"
+    }
+  ],
+  "keywords": [
+    "家庭服务委托人",
+    "家政跨次服务交接",
+    "证据复核表"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-water-dispenser-advisor",
+  "version": "1.0.1",
+  "description": "Pick water dispensers: bottled, pipeline or countertop type, heating power cost, yearly filter cost, safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-water-dispenser-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-water-dispenser"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-water-dispenser-advisor",
+  "displayName": {
+    "zh": "饮水机与即热净饮机选购核算顾问",
+    "en": "Water Dispenser and Purifier Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 饮水机与即热净饮机选购核算顾问",
+    "en": "11.11 Water Dispenser and Purifier Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "饮水机净饮机怎么挑：分桶装管线台式、算即热保温耗电、核滤芯年成本、看水质报告与安全。",
+    "en": "Pick water dispensers: bottled, pipeline or countertop type, heating power cost, yearly filter cost, safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "台式净饮机滤芯一年要花多少钱",
+    "en": "How much do countertop purifier filters cost per year"
+  },
+  "plugin": "lynxce-water-dispenser-advisor",
+  "tags": [
+    {
+      "zh": "桶装管线台式",
+      "en": "Bottled or Pipeline"
+    },
+    {
+      "zh": "滤芯成本",
+      "en": "Filter Cost"
+    },
+    {
+      "zh": "保温电费",
+      "en": "Standby Power Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "台式净饮机滤芯一年要花多少钱",
+      "en": "How much do countertop purifier filters cost per year"
+    },
+    {
+      "zh": "即热和热罐保温哪个更费电",
+      "en": "Which uses more power, instant heat or a hot tank"
+    },
+    {
+      "zh": "家里喝自来水该买哪种饮水机",
+      "en": "Which dispenser suits a home drinking tap water"
+    }
+  ],
+  "keywords": [
+    "桶装管线台式",
+    "滤芯成本",
+    "保温电费",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

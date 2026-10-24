@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-growth-advisor",
+  "version": "1.0.1",
+  "description": "Evidence-based document preparation with transparent calculations and review checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-growth-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-growth-advisor-evidence",
+    "./skills/lynxce-growth-advisor-method",
+    "./skills/lynxce-growth-advisor-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-growth-advisor",
+  "displayName": {
+    "zh": "用户增长顾问",
+    "en": "Growth Advisor"
+  },
+  "profession": {
+    "zh": "用户增长与留存运营顾问",
+    "en": "User Growth & Retention Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户事件定义和分群报表核对激活留存指标，拆分口径冲突并设计待验证方案，交付增长复算记录",
+    "en": "Organize user-provided evidence, check calculations and conflicts, and deliver reviewable records and templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "新增没问题但留存很差,怎么查",
+    "en": "Acquisition is fine but retention is poor — how do I diagnose"
+  },
+  "plugin": "lynxce-growth-advisor",
+  "tags": [
+    {
+      "zh": "漏斗诊断",
+      "en": "Funnel"
+    },
+    {
+      "zh": "留存提升",
+      "en": "Retention"
+    },
+    {
+      "zh": "增长动作",
+      "en": "Growth Plays"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新增没问题但留存很差,怎么查",
+      "en": "Acquisition is fine but retention is poor — how do I diagnose"
+    },
+    {
+      "zh": "帮我设计一个激活环节的改进方案",
+      "en": "Design an improvement for the activation step"
+    },
+    {
+      "zh": "沉默用户召回怎么做才不打扰",
+      "en": "How do I win back dormant users without spamming"
+    }
+  ],
+  "keywords": [
+    "漏斗诊断",
+    "留存提升",
+    "增长动作",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

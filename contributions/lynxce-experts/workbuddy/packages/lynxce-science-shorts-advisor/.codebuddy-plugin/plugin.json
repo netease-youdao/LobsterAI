@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-science-shorts-advisor",
+  "version": "1.0.1",
+  "description": "Turn real audience questions and supplied sources into conclusion-first explainer scripts, graded fact checks and correction logs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-science-shorts-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-science-shorts"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-science-shorts-advisor",
+  "displayName": {
+    "zh": "科普短视频策划顾问",
+    "en": "Explainer Video Advisor"
+  },
+  "profession": {
+    "zh": "知识科普短视频策划顾问｜灵策智算",
+    "en": "Science and Explainer Short Video Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据观众真实疑问与资料生成结论先行的科普脚本，附来源分级事实核查表和发布更正记录，让内容准确又好懂。",
+    "en": "Turn real audience questions and supplied sources into conclusion-first explainer scripts, graded fact checks and correction logs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据这些观众提问和资料生成七十秒科普脚本与核查表",
+    "en": "Build a 70-second explainer script and fact-check table from these questions and sources"
+  },
+  "plugin": "lynxce-science-shorts-advisor",
+  "tags": [
+    {
+      "zh": "知识科普",
+      "en": "Explainers"
+    },
+    {
+      "zh": "事实核查",
+      "en": "Fact Check"
+    },
+    {
+      "zh": "脚本结构",
+      "en": "Script Structure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这些观众提问和资料生成七十秒科普脚本与核查表",
+      "en": "Build a 70-second explainer script and fact-check table from these questions and sources"
+    },
+    {
+      "zh": "复核我写好的科普脚本有没有事实和来源问题",
+      "en": "Review my explainer script for factual and sourcing issues"
+    },
+    {
+      "zh": "只有一个选题没有资料先给我最小可用的脚本框架",
+      "en": "Only a topic and no sources so give me a minimal script frame"
+    }
+  ],
+  "keywords": [
+    "知识科普",
+    "事实核查",
+    "脚本结构",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

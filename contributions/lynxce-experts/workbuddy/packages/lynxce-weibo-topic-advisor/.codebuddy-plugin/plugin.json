@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-weibo-topic-advisor",
+  "version": "1.0.1",
+  "description": "Turn account status and exported stats into topic plans, weekly post rhythm, event rules, moderator shifts and monthly reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-weibo-topic-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-weibo-topics"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-weibo-topic-advisor",
+  "displayName": {
+    "zh": "微博超话运营顾问",
+    "en": "Weibo Topics Advisor"
+  },
+  "profession": {
+    "zh": "微博话题与超话运营顾问｜灵策智算",
+    "en": "Weibo Hashtag and Super Topic Operations Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据账号现状与后台导出数据规划话题和超话，交付周内容节奏、活动规则、管理排班与同口径月度复盘表。",
+    "en": "Turn account status and exported stats into topic plans, weekly post rhythm, event rules, moderator shifts and monthly reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的账号情况和人手生成下周超话内容节奏与活动规则",
+    "en": "Plan next week of super topic posts and event rules from my account and staffing"
+  },
+  "plugin": "lynxce-weibo-topic-advisor",
+  "tags": [
+    {
+      "zh": "超话运营",
+      "en": "Super Topics"
+    },
+    {
+      "zh": "周内容节奏",
+      "en": "Weekly Rhythm"
+    },
+    {
+      "zh": "月度复盘",
+      "en": "Monthly Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的账号情况和人手生成下周超话内容节奏与活动规则",
+      "en": "Plan next week of super topic posts and event rules from my account and staffing"
+    },
+    {
+      "zh": "复核我们上月的超话复盘数据和管理规则是否有问题",
+      "en": "Review last month super topic stats and moderation rules"
+    },
+    {
+      "zh": "没有后台数据先给一版最小话题规划和置顶规则",
+      "en": "Give a minimal topic plan and pinned rules without exported stats"
+    }
+  ],
+  "keywords": [
+    "超话运营",
+    "周内容节奏",
+    "月度复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

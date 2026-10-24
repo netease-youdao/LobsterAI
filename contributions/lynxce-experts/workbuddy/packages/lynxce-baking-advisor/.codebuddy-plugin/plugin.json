@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-baking-advisor",
+  "version": "1.0.1",
+  "description": "Turn recipes and failure symptoms into baker's percentage scaling sheets, ordered troubleshooting logs and oven offset records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-baking-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-baking-advisor",
+  "displayName": {
+    "zh": "烘焙配方顾问",
+    "en": "Baking Advisor"
+  },
+  "profession": {
+    "zh": "烘焙配方调整与失败排查顾问",
+    "en": "Baking Recipe & Troubleshooting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据配方克数与失败现象，交付烘焙百分比换算表、按序排查记录和烤箱温差标定单，一次只改一个变量。",
+    "en": "Turn recipes and failure symptoms into baker's percentage scaling sheets, ordered troubleshooting logs and oven offset records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把这个配方换成烘焙百分比并按我的模具重算克数",
+    "en": "Convert this recipe to baker's percentages and rescale it for my pan"
+  },
+  "plugin": "lynxce-baking-advisor",
+  "tags": [
+    {
+      "zh": "配方换算",
+      "en": "Recipe Scaling"
+    },
+    {
+      "zh": "失败排查",
+      "en": "Troubleshooting"
+    },
+    {
+      "zh": "烤箱标定",
+      "en": "Oven Calibration"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这个配方换成烘焙百分比并按我的模具重算克数",
+      "en": "Convert this recipe to baker's percentages and rescale it for my pan"
+    },
+    {
+      "zh": "帮我复核这份配方换算和烘烤记录有没有算错",
+      "en": "Check my recipe conversion and bake log for errors"
+    },
+    {
+      "zh": "只知道面包发干时先给排查顺序和要记录的项目",
+      "en": "With only dry bread give me the check order and what to record"
+    }
+  ],
+  "keywords": [
+    "配方换算",
+    "失败排查",
+    "烤箱标定",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

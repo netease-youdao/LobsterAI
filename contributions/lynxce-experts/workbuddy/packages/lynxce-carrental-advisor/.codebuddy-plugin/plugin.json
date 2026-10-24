@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-carrental-advisor",
+  "version": "1.0.4",
+  "description": "Look past the day rate: deposits, insurance terms, inspection and ride comparisons.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-carrental-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-carrental-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-carrental-advisor",
+  "displayName": {
+    "zh": "租车与网约出行成本核算顾问",
+    "en": "Car Rental and Ride Cost Advisor"
+  },
+  "profession": {
+    "zh": "租车与网约出行成本核算顾问",
+    "en": "Car Rental and Ride Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "租车别只看日租价：总成本怎么列、保险条款怎么读、取还车怎么验、押金纠纷怎么避开。",
+    "en": "Look past the day rate: deposits, insurance terms, inspection and ride comparisons."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这趟租车还是打车划算",
+    "en": "Rent or ride-hail for this trip"
+  },
+  "plugin": "lynxce-carrental-advisor",
+  "tags": [
+    {
+      "zh": "租车比价",
+      "en": "Car Rental"
+    },
+    {
+      "zh": "保险条款",
+      "en": "Insurance"
+    },
+    {
+      "zh": "取还验车",
+      "en": "Inspection"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这趟租车还是打车划算",
+      "en": "Rent or ride-hail for this trip"
+    },
+    {
+      "zh": "保险该买哪一档",
+      "en": "Which insurance tier should I take"
+    },
+    {
+      "zh": "取车要检查什么",
+      "en": "What should I check at pickup"
+    }
+  ],
+  "keywords": [
+    "租车比价",
+    "保险条款",
+    "取还验车",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

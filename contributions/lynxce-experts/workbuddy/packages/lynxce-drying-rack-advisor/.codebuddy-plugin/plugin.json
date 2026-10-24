@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-drying-rack-advisor",
+  "version": "1.0.1",
+  "description": "Pick electric drying racks: load and rod length, heated drying power cost, installation check by official installers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-drying-rack-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-drying-rack"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-drying-rack-advisor",
+  "displayName": {
+    "zh": "电动晾衣架功能与安装核算顾问",
+    "en": "Electric Drying Rack Function and Install Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电动晾衣架功能与安装核算顾问",
+    "en": "11.11 Electric Drying Rack Function and Install Advisor"
+  },
+  "displayDescription": {
+    "zh": "电动晾衣架怎么挑：看承重与杆长、算烘干风干的电费、核安装条件并由官方安装、比价格。",
+    "en": "Pick electric drying racks: load and rod length, heated drying power cost, installation check by official installers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "多花 500 元买带烘干的晾衣架值不值",
+    "en": "Is paying 500 more for heated drying worth it"
+  },
+  "plugin": "lynxce-drying-rack-advisor",
+  "tags": [
+    {
+      "zh": "承重杆长",
+      "en": "Load and Rod Length"
+    },
+    {
+      "zh": "烘干电费",
+      "en": "Drying Power Cost"
+    },
+    {
+      "zh": "安装条件",
+      "en": "Install Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "多花 500 元买带烘干的晾衣架值不值",
+      "en": "Is paying 500 more for heated drying worth it"
+    },
+    {
+      "zh": "我家阳台 2 米宽该选多长的杆",
+      "en": "What rod length suits my 2 meter balcony"
+    },
+    {
+      "zh": "石膏板吊顶能装电动晾衣架吗",
+      "en": "Can an electric drying rack be installed on a plasterboard ceiling"
+    }
+  ],
+  "keywords": [
+    "承重杆长",
+    "烘干电费",
+    "安装条件",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

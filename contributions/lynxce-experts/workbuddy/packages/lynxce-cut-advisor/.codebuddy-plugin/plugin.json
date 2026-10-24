@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-cut-advisor",
+  "version": "1.0.1",
+  "description": "Edit faster: media management, templates, subtitles and export presets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cut-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-jianying-workflow"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cut-advisor",
+  "displayName": {
+    "zh": "短视频批量剪辑与素材管理顾问",
+    "en": "Batch Video Editing Advisor"
+  },
+  "profession": {
+    "zh": "短视频批量剪辑与素材管理顾问",
+    "en": "Batch Video Editing Advisor"
+  },
+  "displayDescription": {
+    "zh": "剪辑太慢怎么提速：素材怎么归档、模板怎么复用、字幕怎么做得快、导出参数怎么定好。",
+    "en": "Edit faster: media management, templates, subtitles and export presets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "剪一条要几个小时怎么提速",
+    "en": "Editing takes hours, how do I speed up"
+  },
+  "plugin": "lynxce-cut-advisor",
+  "tags": [
+    {
+      "zh": "剪辑提效",
+      "en": "Editing Speed"
+    },
+    {
+      "zh": "素材管理",
+      "en": "Media Library"
+    },
+    {
+      "zh": "模板复用",
+      "en": "Templates"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "剪一条要几个小时怎么提速",
+      "en": "Editing takes hours, how do I speed up"
+    },
+    {
+      "zh": "素材怎么归档才好找",
+      "en": "How should I organise my footage"
+    },
+    {
+      "zh": "导出参数怎么设置",
+      "en": "Which export settings should I use"
+    }
+  ],
+  "keywords": [
+    "剪辑提效",
+    "素材管理",
+    "模板复用",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

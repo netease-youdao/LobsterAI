@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-prepaid-advisor",
+  "version": "1.0.4",
+  "description": "Break-even before prepaying: per-use cost, contract terms to check and risk control.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-prepaid-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-prepaid-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-prepaid-advisor",
+  "displayName": {
+    "zh": "预付卡与会员权益核算顾问",
+    "en": "Prepaid and Membership Advisor"
+  },
+  "profession": {
+    "zh": "预付卡与会员权益核算顾问",
+    "en": "Prepaid and Membership Advisor"
+  },
+  "displayDescription": {
+    "zh": "办卡前先算回本次数：单次成本怎么折算、哪些条款必须问清、预付跑路风险怎么降下来。",
+    "en": "Break-even before prepaying: per-use cost, contract terms to check and risk control."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这张卡到底划不划算",
+    "en": "Is this prepaid card actually worth it"
+  },
+  "plugin": "lynxce-prepaid-advisor",
+  "tags": [
+    {
+      "zh": "预付卡",
+      "en": "Prepaid"
+    },
+    {
+      "zh": "回本测算",
+      "en": "Break-even"
+    },
+    {
+      "zh": "条款风险",
+      "en": "Terms"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这张卡到底划不划算",
+      "en": "Is this prepaid card actually worth it"
+    },
+    {
+      "zh": "办卡前要问清哪些条款",
+      "en": "Which terms should I confirm first"
+    },
+    {
+      "zh": "帮我清理一下在订会员",
+      "en": "Help me audit my active memberships"
+    }
+  ],
+  "keywords": [
+    "预付卡",
+    "回本测算",
+    "条款风险",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

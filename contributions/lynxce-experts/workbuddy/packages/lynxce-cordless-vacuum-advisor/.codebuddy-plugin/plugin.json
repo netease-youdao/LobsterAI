@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-cordless-vacuum-advisor",
+  "version": "1.0.1",
+  "description": "Pick cordless vacuums: AW vs Pa suction, runtime by mode, battery and filter cost, attachments.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cordless-vacuum-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cordless-vacuum"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cordless-vacuum-advisor",
+  "displayName": {
+    "zh": "无线手持吸尘器选购顾问",
+    "en": "Cordless Handheld Vacuum Advisor"
+  },
+  "profession": {
+    "zh": "11.11 无线手持吸尘器选购顾问",
+    "en": "11.11 Cordless Handheld Vacuum Advisor"
+  },
+  "displayDescription": {
+    "zh": "无线吸尘器怎么挑：分清吸力 AW 与 Pa 口径、按档位核续航、算电池与滤网耗材、按需取舍配件。",
+    "en": "Pick cordless vacuums: AW vs Pa suction, runtime by mode, battery and filter cost, attachments."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "吸尘器 AW 和 Pa 能直接比吗",
+    "en": "Can AW and Pa suction ratings be compared directly"
+  },
+  "plugin": "lynxce-cordless-vacuum-advisor",
+  "tags": [
+    {
+      "zh": "吸力口径",
+      "en": "Suction Units"
+    },
+    {
+      "zh": "续航电池",
+      "en": "Runtime and Battery"
+    },
+    {
+      "zh": "三年耗材",
+      "en": "Three-year Upkeep"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "吸尘器 AW 和 Pa 能直接比吗",
+      "en": "Can AW and Pa suction ratings be compared directly"
+    },
+    {
+      "zh": "无线吸尘器续航多少分钟够用",
+      "en": "How much runtime a cordless vacuum really needs"
+    },
+    {
+      "zh": "养猫选吸尘器要看哪些配件",
+      "en": "Which attachments matter for a home with cats"
+    }
+  ],
+  "keywords": [
+    "吸力口径",
+    "续航电池",
+    "三年耗材",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

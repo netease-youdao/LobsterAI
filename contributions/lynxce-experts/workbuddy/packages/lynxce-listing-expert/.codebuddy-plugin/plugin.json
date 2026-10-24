@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-listing-expert",
+  "version": "1.0.1",
+  "description": "Rewrite Amazon titles, bullets and backend terms from specs and keyword lists, with length, byte, localization and claim checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-listing-expert.md"
+  ],
+  "skills": [
+    "./skills/lynxce-amazon-listing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-listing-expert",
+  "displayName": {
+    "zh": "亚马逊Listing优化顾问",
+    "en": "Listing Optimizer"
+  },
+  "profession": {
+    "zh": "亚马逊listing与本地化顾问",
+    "en": "Amazon Listing & Localization Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据产品参数与关键词表重写英文标题五点和后台搜索词，核对字符字节与本地化表达，并列出宣称待证项。",
+    "en": "Rewrite Amazon titles, bullets and backend terms from specs and keyword lists, with length, byte, localization and claim checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "根据产品参数和关键词表重写英文标题和五点描述",
+    "en": "Rewrite the English title and bullets from specs and keywords"
+  },
+  "plugin": "lynxce-listing-expert",
+  "tags": [
+    {
+      "zh": "标题五点",
+      "en": "Title and Bullets"
+    },
+    {
+      "zh": "后台词字节",
+      "en": "Search Term Bytes"
+    },
+    {
+      "zh": "本地化核对",
+      "en": "Localization Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据产品参数和关键词表重写英文标题和五点描述",
+      "en": "Rewrite the English title and bullets from specs and keywords"
+    },
+    {
+      "zh": "复核这条Listing的字符字节和宣称证据",
+      "en": "Review this listing for length bytes and claim evidence"
+    },
+    {
+      "zh": "只有中文卖点时先给英文初稿和待补清单",
+      "en": "With only Chinese selling points draft English and a missing list"
+    }
+  ],
+  "keywords": [
+    "标题五点",
+    "后台词字节",
+    "本地化核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

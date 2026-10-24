@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-honey-advisor",
+  "version": "1.0.0",
+  "description": "Pick honey: name and ingredient check, standard, moisture grade, crystallisation, price per 100g.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-honey-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-honey"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-honey-advisor",
+  "displayName": {
+    "zh": "蜂蜜选购顾问",
+    "en": "Honey Selection Advisor"
+  },
+  "profession": {
+    "zh": "11.11 蜂蜜选购与标签核对顾问",
+    "en": "11.11 Honey Selection and Label Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "蜂蜜怎么挑：看产品名称与配料表辨真蜂蜜、核执行标准与生产许可、懂蜜种与结晶、按百克价比较。",
+    "en": "Pick honey: name and ingredient check, standard, moisture grade, crystallisation, price per 100g."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "怎么看蜂蜜是不是调制蜂蜜",
+    "en": "How to tell honey from a blended honey product"
+  },
+  "plugin": "lynxce-honey-advisor",
+  "tags": [
+    {
+      "zh": "配料表核对",
+      "en": "Ingredient Check"
+    },
+    {
+      "zh": "蜜种结晶",
+      "en": "Variety and Crystals"
+    },
+    {
+      "zh": "百克价",
+      "en": "Price per 100g"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "怎么看蜂蜜是不是调制蜂蜜",
+      "en": "How to tell honey from a blended honey product"
+    },
+    {
+      "zh": "蜂蜜结晶了还能吃吗",
+      "en": "Is crystallised honey still fine to eat"
+    },
+    {
+      "zh": "大罐和小瓶蜂蜜怎么比价",
+      "en": "How to compare big jars and small bottles of honey"
+    }
+  ],
+  "keywords": [
+    "配料表核对",
+    "蜜种结晶",
+    "百克价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

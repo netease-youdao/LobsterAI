@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-cit-annual-reconcile-advisor",
+  "version": "1.0.0",
+  "description": "CIT annual prep: revenue and cost checks, deduction limits, small low profit test, adjustments.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cit-annual-reconcile-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cit-annual-reconcile"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cit-annual-reconcile-advisor",
+  "displayName": {
+    "zh": "企业所得税汇算助理",
+    "en": "Corporate Income Tax Reconciliation Assistant"
+  },
+  "profession": {
+    "zh": "企业所得税年度汇算清缴准备助理",
+    "en": "Corporate Income Tax Annual Reconciliation Prep Assistant"
+  },
+  "displayDescription": {
+    "zh": "小微企业所得税汇算前准备：核对收入成本、算招待费广告费福利费限额、判断小型微利，产出调整表。",
+    "en": "CIT annual prep: revenue and cost checks, deduction limits, small low profit test, adjustments."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我算一下业务招待费和广告费要调增多少",
+    "en": "Compute the entertainment and advertising adjustments"
+  },
+  "plugin": "lynxce-cit-annual-reconcile-advisor",
+  "tags": [
+    {
+      "zh": "纳税调整",
+      "en": "Tax Adjustments"
+    },
+    {
+      "zh": "小型微利判断",
+      "en": "Small Profit Test"
+    },
+    {
+      "zh": "亏损弥补",
+      "en": "Loss Carryforward"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我算一下业务招待费和广告费要调增多少",
+      "en": "Compute the entertainment and advertising adjustments"
+    },
+    {
+      "zh": "我们公司能不能享受小型微利企业优惠",
+      "en": "Does our company qualify as a small low profit enterprise"
+    },
+    {
+      "zh": "列一份企业所得税汇算清缴要准备的资料",
+      "en": "List the documents needed for the annual CIT filing"
+    }
+  ],
+  "keywords": [
+    "纳税调整",
+    "小型微利判断",
+    "亏损弥补",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-training-kit-advisor",
+  "version": "1.0.0",
+  "description": "Training kits: quantities, print cost comparison, per person cost and a sign off sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-training-kit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-training-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-training-kit-advisor",
+  "displayName": {
+    "zh": "培训资料包助理",
+    "en": "Training Kit Assistant"
+  },
+  "profession": {
+    "zh": "培训学员资料包采购助理",
+    "en": "Training Participant Kit Purchase Assistant"
+  },
+  "displayDescription": {
+    "zh": "培训学员包怎么备：按报名人数加讲师与余量备货、比较内印外印打印成本，产出资料包清单与发放签收表。",
+    "en": "Training kits: quantities, print cost comparison, per person cost and a sign off sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "46 人培训资料包备多少份",
+    "en": "How many kits for a 46 person training"
+  },
+  "plugin": "lynxce-training-kit-advisor",
+  "tags": [
+    {
+      "zh": "备量测算",
+      "en": "Quantity Planning"
+    },
+    {
+      "zh": "打印比价",
+      "en": "Print Cost Compare"
+    },
+    {
+      "zh": "发放签收",
+      "en": "Kit Sign Off"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "46 人培训资料包备多少份",
+      "en": "How many kits for a 46 person training"
+    },
+    {
+      "zh": "120 页讲义内印还是外印划算",
+      "en": "Print 120 page handouts in house or outsource"
+    },
+    {
+      "zh": "帮我做学员资料包发放签收表",
+      "en": "Make a participant kit sign off sheet"
+    }
+  ],
+  "keywords": [
+    "备量测算",
+    "打印比价",
+    "发放签收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

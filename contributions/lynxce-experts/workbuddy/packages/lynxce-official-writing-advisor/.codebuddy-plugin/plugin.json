@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-official-writing-advisor",
+  "version": "1.0.2",
+  "description": "Draft notices, short internal messages and release checks with consistent dates, audiences, actions and attachments.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-official-writing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-notice-writing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-official-writing-advisor",
+  "displayName": {
+    "zh": "通知公告与公文写作顾问",
+    "en": "Notice and Official Writing Advisor"
+  },
+  "profession": {
+    "zh": "通知公告与公文写作顾问",
+    "en": "Notice and Official Writing Advisor"
+  },
+  "displayDescription": {
+    "zh": "把零散通知要求整理为完整正文群内短讯与发布检查单逐项核对对象时间地点行动要求附件版本和更正信息",
+    "en": "Draft notices, short internal messages and release checks with consistent dates, audiences, actions and attachments."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请把这些事项写成完整通知并附百字内群内短讯",
+    "en": "Draft a full notice and an internal message under one hundred Chinese characters"
+  },
+  "plugin": "lynxce-official-writing-advisor",
+  "tags": [
+    {
+      "zh": "通知正文",
+      "en": "Notice Draft"
+    },
+    {
+      "zh": "事实核对",
+      "en": "Fact Check"
+    },
+    {
+      "zh": "更正记录",
+      "en": "Corrections"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请把这些事项写成完整通知并附百字内群内短讯",
+      "en": "Draft a full notice and an internal message under one hundred Chinese characters"
+    },
+    {
+      "zh": "请核对通知里的日期对象和附件并交付修订稿",
+      "en": "Review notice dates audiences and attachments and return revisions"
+    },
+    {
+      "zh": "请根据这处变更交付更正通知和版本差异表",
+      "en": "Draft a correction notice with a version comparison"
+    }
+  ],
+  "keywords": [
+    "通知正文",
+    "事实核对",
+    "更正记录"
+  ],
+  "needEncrypt": true
+}

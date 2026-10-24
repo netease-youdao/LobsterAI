@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-digital-piano-advisor",
+  "version": "1.0.0",
+  "description": "Pick beginner keyboards: key count, velocity, hammer action, polyphony, pedals and total cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-digital-piano-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-digital-piano"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-digital-piano-advisor",
+  "displayName": {
+    "zh": "电子琴电钢琴选购顾问",
+    "en": "Keyboard and Digital Piano Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电子琴与电钢琴入门选购顾问",
+    "en": "11.11 Keyboard and Digital Piano Starter Advisor"
+  },
+  "displayDescription": {
+    "zh": "电子琴电钢琴怎么挑：按目标定键数、核力度感应与重锤手感、看复音踏板、算琴架琴凳总价。",
+    "en": "Pick beginner keyboards: key count, velocity, hammer action, polyphony, pedals and total cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "孩子要考级买 61 键电子琴够吗",
+    "en": "Is a 61 key keyboard enough for piano exams"
+  },
+  "plugin": "lynxce-digital-piano-advisor",
+  "tags": [
+    {
+      "zh": "键数选择",
+      "en": "Key Count"
+    },
+    {
+      "zh": "重锤手感",
+      "en": "Hammer Action"
+    },
+    {
+      "zh": "配件总价",
+      "en": "Accessory Total"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "孩子要考级买 61 键电子琴够吗",
+      "en": "Is a 61 key keyboard enough for piano exams"
+    },
+    {
+      "zh": "半配重和重锤键盘差别大吗",
+      "en": "How different are semi weighted and hammer keys"
+    },
+    {
+      "zh": "电钢琴加琴架琴凳一共要花多少",
+      "en": "Total cost of a digital piano with stand and bench"
+    }
+  ],
+  "keywords": [
+    "键数选择",
+    "重锤手感",
+    "配件总价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

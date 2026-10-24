@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-retail-presale-fact-clarification-b43-advisor",
+  "version": "1.0.1",
+  "description": "Help business staff review supplied records and produce retail presale fact clarification tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-retail-presale-fact-clarification-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-retail-presale-fact-clarification-b43",
+    "./skills/lynxce-retail-presale-fact-clarification-b43-int-ask-order",
+    "./skills/lynxce-retail-presale-fact-clarification-b43-int-reply-proof"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-retail-presale-fact-clarification-b43-advisor",
+  "displayName": {
+    "zh": "电商售前澄清专家",
+    "en": "Retail Presale Fact Clarification Advisor"
+  },
+  "profession": {
+    "zh": "电商售前澄清专家：售前对话中的使用条件与规格事实",
+    "en": "Retail Presale Fact Clarification Advisor"
+  },
+  "displayDescription": {
+    "zh": "贴入售前对话与商品规格，拆出客户硬条件和缺失事实，生成优先提问清单及每句都有依据的客服回复。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把这段售前对话整理成客户硬条件、已知规格和待核问题",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-retail-presale-fact-clarification-b43-advisor",
+  "tags": [
+    {
+      "zh": "电商零售",
+      "en": "Retail and Food Service"
+    },
+    {
+      "zh": "电商售前需求事实表",
+      "en": "Evidence Workflow"
+    },
+    {
+      "zh": "事实表格成果",
+      "en": "Reviewable Tables"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这段售前对话整理成客户硬条件、已知规格和待核问题",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "帮我改写售前回复，每句保留规格出处，不承诺未证实的兼容性",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "资料不全时先给可回答部分，再列最影响判断的三个问题",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "电商零售",
+    "电商售前需求事实表",
+    "事实表格成果"
+  ],
+  "needEncrypt": true
+}

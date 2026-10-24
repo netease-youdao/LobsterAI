@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-audio-capture-advisor",
+  "version": "1.0.1",
+  "description": "Plan mic choice, placement and levels per scene, diagnose noise types, and give a repair order with loudness math.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-audio-capture-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-audio-capture"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-audio-capture-advisor",
+  "displayName": {
+    "zh": "收音降噪顾问",
+    "en": "Audio Capture Advisor"
+  },
+  "profession": {
+    "zh": "短视频收音与降噪处理顾问｜灵策智算",
+    "en": "Video Audio Capture and Noise Repair Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据拍摄场景与试录情况给出选麦摆位和电平设置，诊断噪声类型，提供后期修音顺序、参数起点与响度核算。",
+    "en": "Plan mic choice, placement and levels per scene, diagnose noise types, and give a repair order with loudness math."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的拍摄场景给出选麦摆位和录前检查单",
+    "en": "Plan mic placement and a pre-recording checklist for my scene"
+  },
+  "plugin": "lynxce-audio-capture-advisor",
+  "tags": [
+    {
+      "zh": "收音摆位",
+      "en": "Mic Placement"
+    },
+    {
+      "zh": "噪声诊断",
+      "en": "Noise Diagnosis"
+    },
+    {
+      "zh": "响度核算",
+      "en": "Loudness Math"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的拍摄场景给出选麦摆位和录前检查单",
+      "en": "Plan mic placement and a pre-recording checklist for my scene"
+    },
+    {
+      "zh": "复核我的后期修音顺序和响度参数",
+      "en": "Review my audio repair order and loudness settings"
+    },
+    {
+      "zh": "只知道声音里有嗡嗡声先给我排查步骤",
+      "en": "Give me first troubleshooting steps for a hum"
+    }
+  ],
+  "keywords": [
+    "收音摆位",
+    "噪声诊断",
+    "响度核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

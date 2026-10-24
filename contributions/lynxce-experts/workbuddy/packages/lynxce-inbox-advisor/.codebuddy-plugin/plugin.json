@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-inbox-advisor",
+  "version": "1.0.2",
+  "description": "Turn inbox backlog and weekly meetings into triage rules, reply templates, a time-blocked week plan and follow-up dates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-inbox-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-inbox-zero"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-inbox-advisor",
+  "displayName": {
+    "zh": "邮件日程管理顾问",
+    "en": "Email and Calendar Management Advisor"
+  },
+  "profession": {
+    "zh": "邮件与日程管理顾问",
+    "en": "Email Triage and Calendar Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据收件箱现状与本周会议清单整理分流规则和回信模板，排出时间块周计划，附会议负荷与跟进日期核算。",
+    "en": "Turn inbox backlog and weekly meetings into triage rules, reply templates, a time-blocked week plan and follow-up dates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我的收件箱情况和本周会议生成分流规则与周计划",
+    "en": "Build triage rules and a week plan from my inbox and meetings"
+  },
+  "plugin": "lynxce-inbox-advisor",
+  "tags": [
+    {
+      "zh": "收件箱分流",
+      "en": "Inbox Triage"
+    },
+    {
+      "zh": "回信模板",
+      "en": "Reply Templates"
+    },
+    {
+      "zh": "周日程规划",
+      "en": "Week Planning"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的收件箱情况和本周会议生成分流规则与周计划",
+      "en": "Build triage rules and a week plan from my inbox and meetings"
+    },
+    {
+      "zh": "帮我复核这封邮件和这周日程哪里不清楚或排太满",
+      "en": "Review this email draft and week schedule for gaps and overload"
+    },
+    {
+      "zh": "只知道每天邮件量和固定会议先给一版处理时段",
+      "en": "With only daily volume and fixed meetings draft processing slots first"
+    }
+  ],
+  "keywords": [
+    "收件箱分流",
+    "回信模板",
+    "周日程规划",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

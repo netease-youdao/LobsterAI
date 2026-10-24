@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-business-annual-disclosure-b50",
+  "version": "1.0.0",
+  "description": "Prepare traceable enterprise reporting materials, reconcile source records and produce complete correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-business-annual-disclosure-b50.md"
+  ],
+  "skills": [
+    "./skills/lynxce-business-annual-disclosure-b50-1",
+    "./skills/lynxce-business-annual-disclosure-b50-2",
+    "./skills/lynxce-business-annual-disclosure-b50-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-business-annual-disclosure-b50",
+  "displayName": {
+    "zh": "年报顾问",
+    "en": "Business Annual Disclosure Advisor"
+  },
+  "profession": {
+    "zh": "工商年报顾问",
+    "en": "Business Annual Disclosure Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业年报经办人串联股东出资、财务与社保资料，核对年度字段和公示选择，交付年报底稿与更正说明。",
+    "en": "Prepare traceable enterprise reporting materials, reconcile source records and produce complete correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把我的股东和财社资料整理成年报准备底稿。",
+    "en": "Business Annual Disclosure Advisor"
+  },
+  "plugin": "lynxce-business-annual-disclosure-b50",
+  "tags": [
+    {
+      "zh": "工商年报",
+      "en": "工商年报"
+    },
+    {
+      "zh": "股东出资",
+      "en": "股东出资"
+    },
+    {
+      "zh": "公示核对",
+      "en": "公示核对"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把我的股东和财社资料整理成年报准备底稿。",
+      "en": "Business Annual Disclosure Advisor"
+    },
+    {
+      "zh": "核对认缴实缴日期与年报公示选择的缺口。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "股东实缴两版不同，请完整重出差异更正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "工商年报",
+    "股东出资",
+    "公示核对"
+  ]
+}

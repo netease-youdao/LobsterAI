@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-footage-archive-advisor",
+  "version": "1.0.1",
+  "description": "Plan footage archives with directory mappings, media manifests, storage budgets and restore checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-footage-archive-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-footage-archive"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-footage-archive-advisor",
+  "displayName": {
+    "zh": "素材归档管理顾问",
+    "en": "Footage Archive Advisor"
+  },
+  "profession": {
+    "zh": "剪辑素材归档与工程文件管理顾问｜灵策智算",
+    "en": "Footage Archiving and Project File Advisor"
+  },
+  "displayDescription": {
+    "zh": "把零散剪辑资料整理成可追溯归档方案，交付目录映射、素材台账、容量预算与恢复核对表，保留原始文件线索",
+    "en": "Plan footage archives with directory mappings, media manifests, storage budgets and restore checklists."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据现有素材清单做目录映射与归档台账，保留原路径",
+    "en": "Create an archive manifest and directory map preserving original paths"
+  },
+  "plugin": "lynxce-footage-archive-advisor",
+  "tags": [
+    {
+      "zh": "素材台账",
+      "en": "Media manifest"
+    },
+    {
+      "zh": "工程依赖",
+      "en": "Project dependencies"
+    },
+    {
+      "zh": "恢复核对",
+      "en": "Restore review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据现有素材清单做目录映射与归档台账，保留原路径",
+      "en": "Create an archive manifest and directory map preserving original paths"
+    },
+    {
+      "zh": "按我的素材量和副本策略计算容量预算与缺口",
+      "en": "Calculate storage capacity and gaps for my footage and copy strategy"
+    },
+    {
+      "zh": "把工程丢失素材的问题整理成依赖核对表与人工恢复步骤",
+      "en": "Create a dependency checklist and manual relink plan for missing media"
+    }
+  ],
+  "keywords": [
+    "素材台账",
+    "工程依赖",
+    "恢复核对"
+  ],
+  "needEncrypt": true
+}

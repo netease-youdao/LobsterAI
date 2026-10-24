@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-export-qc-advisor",
+  "version": "1.0.1",
+  "description": "Build an export spec and QC register from supplied media details, with fix notes and verification evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-export-qc-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-export-qc"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-export-qc-advisor",
+  "displayName": {
+    "zh": "成片质检顾问",
+    "en": "Final Cut QC Advisor"
+  },
+  "profession": {
+    "zh": "成片质检与导出参数顾问｜灵策智算",
+    "en": "Final Cut Quality Check and Export Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "依据成片资料建立导出规格与质检记录，定位字幕画面声音问题，交付修改单和复查清单，逐项标明验证证据",
+    "en": "Build an export spec and QC register from supplied media details, with fix notes and verification evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的成片资料生成字幕、画面、声音质检表",
+    "en": "Create a subtitle, picture and sound QC sheet from my supplied details"
+  },
+  "plugin": "lynxce-export-qc-advisor",
+  "tags": [
+    {
+      "zh": "规格核对",
+      "en": "Spec checks"
+    },
+    {
+      "zh": "缺陷登记",
+      "en": "Defect register"
+    },
+    {
+      "zh": "复查证据",
+      "en": "Review evidence"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的成片资料生成字幕、画面、声音质检表",
+      "en": "Create a subtitle, picture and sound QC sheet from my supplied details"
+    },
+    {
+      "zh": "把目标上传要求与文件参数整理成差异表和导出草案",
+      "en": "Compare upload requirements and file metadata in an export draft"
+    },
+    {
+      "zh": "把这些时间码问题生成修改单和复查记录",
+      "en": "Turn timecoded defects into fix notes and a recheck register"
+    }
+  ],
+  "keywords": [
+    "规格核对",
+    "缺陷登记",
+    "复查证据"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-moto-advisor",
+  "version": "1.0.3",
+  "description": "Licence and plates first: picking a model, gear priorities and real yearly cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-moto-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-moto-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-moto-advisor",
+  "displayName": {
+    "zh": "摩托车选购与骑行装备顾问",
+    "en": "Motorcycle and Riding Gear Advisor"
+  },
+  "profession": {
+    "zh": "摩托车选购与骑行装备顾问",
+    "en": "Motorcycle and Riding Gear Advisor"
+  },
+  "displayDescription": {
+    "zh": "买摩托先看驾照与上牌：车型按什么选、护具怎么配、二手车怎么验、一年养车要花多少钱。",
+    "en": "Licence and plates first: picking a model, gear priorities and real yearly cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新手第一台摩托怎么选",
+    "en": "How do I pick my first motorcycle"
+  },
+  "plugin": "lynxce-moto-advisor",
+  "tags": [
+    {
+      "zh": "摩托选购",
+      "en": "Motorcycle"
+    },
+    {
+      "zh": "骑行护具",
+      "en": "Riding Gear"
+    },
+    {
+      "zh": "持有成本",
+      "en": "Running Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新手第一台摩托怎么选",
+      "en": "How do I pick my first motorcycle"
+    },
+    {
+      "zh": "护具要配哪些才够",
+      "en": "Which protective gear do I actually need"
+    },
+    {
+      "zh": "帮我算一年养车花多少",
+      "en": "Estimate my yearly ownership cost"
+    }
+  ],
+  "keywords": [
+    "摩托选购",
+    "骑行护具",
+    "持有成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

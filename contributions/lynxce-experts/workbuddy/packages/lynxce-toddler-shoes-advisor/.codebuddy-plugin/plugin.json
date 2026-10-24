@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-toddler-shoes-advisor",
+  "version": "1.0.1",
+  "description": "Pick kids shoes: foot length plus allowance, sole flexibility, size-change cycle, stock, exchange rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-toddler-shoes-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-toddler-shoes"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-toddler-shoes-advisor",
+  "displayName": {
+    "zh": "学步鞋与童鞋选购与尺码核对顾问",
+    "en": "Toddler and Kids Shoe Size Check Advisor"
+  },
+  "profession": {
+    "zh": "11.11 学步鞋与童鞋选购与尺码核对顾问",
+    "en": "11.11 Toddler and Kids Shoe Size Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "童鞋怎么挑：量脚长加放量定尺码、核鞋底软硬与弯折、按换码周期定囤货、看退换尺码规则。",
+    "en": "Pick kids shoes: foot length plus allowance, sole flexibility, size-change cycle, stock, exchange rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "孩子脚长 12.5 厘米该买几码学步鞋",
+    "en": "What toddler shoe size for a 12.5 centimeter foot"
+  },
+  "plugin": "lynxce-toddler-shoes-advisor",
+  "tags": [
+    {
+      "zh": "脚长加放",
+      "en": "Foot Length Allowance"
+    },
+    {
+      "zh": "鞋底弯折",
+      "en": "Sole Flexibility"
+    },
+    {
+      "zh": "换码囤货",
+      "en": "Size-up Stocking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "孩子脚长 12.5 厘米该买几码学步鞋",
+      "en": "What toddler shoe size for a 12.5 centimeter foot"
+    },
+    {
+      "zh": "大促童鞋要不要多囤几双",
+      "en": "Should we stock several pairs of kids shoes on sale"
+    },
+    {
+      "zh": "学步鞋鞋底怎么判断软硬合适",
+      "en": "How to judge if a toddler shoe sole is flexible enough"
+    }
+  ],
+  "keywords": [
+    "脚长加放",
+    "鞋底弯折",
+    "换码囤货",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

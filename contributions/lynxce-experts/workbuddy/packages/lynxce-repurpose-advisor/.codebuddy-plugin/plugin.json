@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-repurpose-advisor",
+  "version": "1.0.1",
+  "description": "Repurpose content across platforms: formats, re-edits and publishing order.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-repurpose-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-repurpose-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-repurpose-advisor",
+  "displayName": {
+    "zh": "多平台分发与二次剪辑顾问",
+    "en": "Multi-platform Repurposing Advisor"
+  },
+  "profession": {
+    "zh": "多平台分发与二次剪辑顾问",
+    "en": "Multi-platform Repurposing Advisor"
+  },
+  "displayDescription": {
+    "zh": "一条内容怎么多平台复用：横竖版怎么改、文案怎么适配、发布顺序与排期要怎么安排开。",
+    "en": "Repurpose content across platforms: formats, re-edits and publishing order."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "一条视频怎么多平台发",
+    "en": "How do I post one video across platforms"
+  },
+  "plugin": "lynxce-repurpose-advisor",
+  "tags": [
+    {
+      "zh": "一稿多投",
+      "en": "Repurposing"
+    },
+    {
+      "zh": "二次剪辑",
+      "en": "Re-editing"
+    },
+    {
+      "zh": "分发排期",
+      "en": "Scheduling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一条视频怎么多平台发",
+      "en": "How do I post one video across platforms"
+    },
+    {
+      "zh": "横版怎么改成竖版",
+      "en": "How do I adapt landscape video to vertical"
+    },
+    {
+      "zh": "帮我排一版分发日历",
+      "en": "Help me build a publishing calendar"
+    }
+  ],
+  "keywords": [
+    "一稿多投",
+    "二次剪辑",
+    "分发排期",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

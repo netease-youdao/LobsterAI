@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-software-upgrade-advisor",
+  "version": "1.0.2",
+  "description": "Turn version, terminal and key-file lists into compatibility tests, batch gates, rollback plans and upgrade notices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-software-upgrade-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-software-upgrade"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-software-upgrade-advisor",
+  "displayName": {
+    "zh": "办公软件升级顾问",
+    "en": "Software Upgrade Advisor"
+  },
+  "profession": {
+    "zh": "办公软件版本升级与兼容性顾问｜灵策智算",
+    "en": "Office Software Upgrade and Compatibility Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据软件版本、终端和关键文件清单，交付兼容性测试矩阵、分批放行标准、回滚预案与两次升级通知稿。",
+    "en": "Turn version, terminal and key-file lists into compatibility tests, batch gates, rollback plans and upgrade notices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据终端和关键文件清单生成兼容测试与分批升级计划",
+    "en": "Build compatibility tests and a batch plan from my terminal and file lists"
+  },
+  "plugin": "lynxce-software-upgrade-advisor",
+  "tags": [
+    {
+      "zh": "兼容性测试",
+      "en": "Compatibility Tests"
+    },
+    {
+      "zh": "分批放行",
+      "en": "Batch Gates"
+    },
+    {
+      "zh": "回滚预案",
+      "en": "Rollback Plan"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据终端和关键文件清单生成兼容测试与分批升级计划",
+      "en": "Build compatibility tests and a batch plan from my terminal and file lists"
+    },
+    {
+      "zh": "复核我写好的升级方案并指出放行标准和回滚漏洞",
+      "en": "Review my upgrade plan for gaps in batch gates and rollback"
+    },
+    {
+      "zh": "只知道软件名和人数时先给最小可用升级计划",
+      "en": "Give a minimal upgrade plan from only the software name and headcount"
+    }
+  ],
+  "keywords": [
+    "兼容性测试",
+    "分批放行",
+    "回滚预案",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

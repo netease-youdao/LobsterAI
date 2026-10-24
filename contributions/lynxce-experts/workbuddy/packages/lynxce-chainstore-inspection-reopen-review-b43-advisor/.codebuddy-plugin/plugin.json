@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-chainstore-inspection-reopen-review-b43-advisor",
+  "version": "1.0.0",
+  "description": "Help business staff review supplied records and produce store inspection reopened action review tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-chainstore-inspection-reopen-review-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-chainstore-inspection-reopen-review-b43",
+    "./skills/lynxce-chainstore-inspection-reopen-review-b43-int-return-cause",
+    "./skills/lynxce-chainstore-inspection-reopen-review-b43-int-proof-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-chainstore-inspection-reopen-review-b43-advisor",
+  "displayName": {
+    "zh": "门店整改复检专家",
+    "en": "Store Inspection Reopened Action Review Advisor"
+  },
+  "profession": {
+    "zh": "门店整改复检专家：首轮整改被退回后的二次整改与复检",
+    "en": "Store Inspection Reopened Action Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户提供的门店巡检退回整改复检表相关业务资料，整理事实、异常与待补证据，交付可复核文本表格成果。",
+    "en": "Help business staff review supplied records and produce store inspection reopened action review tables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "首次使用：请按我的资料生成门店巡检退回整改复检表",
+    "en": "Create the first review table from my records"
+  },
+  "plugin": "lynxce-chainstore-inspection-reopen-review-b43-advisor",
+  "tags": [
+    {
+      "zh": "连锁餐饮与零售",
+      "en": "Retail and Food Service"
+    },
+    {
+      "zh": "门店巡检退回整改复检表",
+      "en": "Evidence Workflow"
+    },
+    {
+      "zh": "事实表格成果",
+      "en": "Reviewable Tables"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "首次使用：请按我的资料生成门店巡检退回整改复检表",
+      "en": "Create the first review table from my records"
+    },
+    {
+      "zh": "异常处理：这些记录互相矛盾，先核实哪些字段",
+      "en": "Resolve conflicting records before revising results"
+    },
+    {
+      "zh": "进阶任务：追加新证据并对照前版复核成果",
+      "en": "Compare revisions after adding new evidence"
+    }
+  ],
+  "keywords": [
+    "连锁餐饮与零售",
+    "门店巡检退回整改复检表",
+    "事实表格成果"
+  ]
+}

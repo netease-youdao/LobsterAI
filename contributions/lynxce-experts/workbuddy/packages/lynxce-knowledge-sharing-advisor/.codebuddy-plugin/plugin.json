@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-knowledge-sharing-advisor",
+  "version": "1.0.1",
+  "description": "Plan internal talks and book clubs with topic screening, back-scheduled prep, session timing, write-ups and quarterly review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-knowledge-sharing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-knowledge-sharing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-knowledge-sharing-advisor",
+  "displayName": {
+    "zh": "内部分享会组织顾问",
+    "en": "Knowledge Sharing Advisor"
+  },
+  "profession": {
+    "zh": "内部分享会与读书会组织顾问｜灵策智算",
+    "en": "Internal Talks and Book Club Organizer"
+  },
+  "displayDescription": {
+    "zh": "根据团队目的与可讲人员排出季度分享计划，提供选题筛选、会前倒推、读书会控时和会后知识沉淀模板。",
+    "en": "Plan internal talks and book clubs with topic screening, back-scheduled prep, session timing, write-ups and quarterly review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我们团队的情况排出一个季度的分享会计划",
+    "en": "Plan a quarter of internal talks for my team"
+  },
+  "plugin": "lynxce-knowledge-sharing-advisor",
+  "tags": [
+    {
+      "zh": "内部分享",
+      "en": "Internal Talks"
+    },
+    {
+      "zh": "读书会",
+      "en": "Book Club"
+    },
+    {
+      "zh": "知识沉淀",
+      "en": "Knowledge Base"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们团队的情况排出一个季度的分享会计划",
+      "en": "Plan a quarter of internal talks for my team"
+    },
+    {
+      "zh": "复核我现有的排期表和会后记录还缺什么",
+      "en": "Review my current schedule and session records for gaps"
+    },
+    {
+      "zh": "只知道想办读书会时先给流程和控时方案",
+      "en": "Draft a book club flow and timing plan from minimal info"
+    }
+  ],
+  "keywords": [
+    "内部分享",
+    "读书会",
+    "知识沉淀",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

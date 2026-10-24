@@ -1,0 +1,103 @@
+{
+  "groups": [
+    {
+      "id": "G1",
+      "operator": "甲（假设）",
+      "gauge": "Q1（假设）",
+      "method": "方法V1（假设）",
+      "condition": "同条件假设",
+      "conditionsComparable": true,
+      "readings": [
+        {
+          "partId": "P1",
+          "trialId": "1",
+          "value": "10.00",
+          "unit": "mm",
+          "source": "假设原始测量记录P1-1"
+        },
+        {
+          "partId": "P1",
+          "trialId": "2",
+          "value": "10.01",
+          "unit": "mm",
+          "source": "假设原始测量记录P1-2"
+        },
+        {
+          "partId": "P1",
+          "trialId": "3",
+          "value": "10.00",
+          "unit": "mm",
+          "source": "假设原始测量记录P1-3"
+        },
+        {
+          "partId": "P2",
+          "trialId": "1",
+          "value": "10.20",
+          "unit": "mm",
+          "source": "假设原始测量记录P2-1"
+        },
+        {
+          "partId": "P2",
+          "trialId": "2",
+          "value": "10.22",
+          "unit": "mm",
+          "source": "假设原始测量记录P2-2"
+        },
+        {
+          "partId": "P2",
+          "trialId": "3",
+          "value": "10.21",
+          "unit": "mm",
+          "source": "假设原始测量记录P2-3"
+        },
+        {
+          "partId": "P3",
+          "trialId": "1",
+          "value": "9.90",
+          "unit": "mm",
+          "source": "假设原始测量记录P3-1"
+        },
+        {
+          "partId": "P3",
+          "trialId": "2",
+          "value": "9.91",
+          "unit": "mm",
+          "source": "假设原始测量记录P3-2"
+        },
+        {
+          "partId": "P3",
+          "trialId": "3",
+          "value": "9.90",
+          "unit": "mm",
+          "source": "假设原始测量记录P3-3"
+        }
+      ]
+    }
+  ],
+  "tolerance": {
+    "width": "0.10",
+    "unit": "mm",
+    "source": "仅尺度比较的假设公差"
+  },
+  "references": [],
+  "corrections": [],
+  "objectContext": {
+    "objectType": {
+      "value": "轴类零件",
+      "sourceKind": "original",
+      "quote": "【假设试跑输入】假设同人同量具同条件，单位毫米，三样件各3次：P1 10.00/10.01/10.00，P2 10.20/10.22/10.21，P3 9.90/9.91/9.90；仅用于尺度比较的公差宽0.10毫米。"
+    },
+    "scenario": {
+      "value": "某机加工车间",
+      "sourceKind": "original",
+      "quote": "【假设试跑输入】假设同人同量具同条件，单位毫米，三样件各3次：P1 10.00/10.01/10.00，P2 10.20/10.22/10.21，P3 9.90/9.91/9.90；仅用于尺度比较的公差宽0.10毫米。"
+    },
+    "measurementPosition": {
+      "value": "外径",
+      "sourceKind": "original",
+      "quote": "【假设试跑输入】假设同人同量具同条件，单位毫米，三样件各3次：P1 10.00/10.01/10.00，P2 10.20/10.22/10.21，P3 9.90/9.91/9.90；仅用于尺度比较的公差宽0.10毫米。"
+    }
+  },
+  "scope": "某机加工车间轴类零件外径，均为本轮原文给定",
+  "sourceText": "某机加工车间轴类零件外径，伪造原文"
+}

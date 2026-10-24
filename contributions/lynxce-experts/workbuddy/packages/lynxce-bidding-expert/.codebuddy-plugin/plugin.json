@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bidding-expert",
+  "version": "1.0.3",
+  "description": "Offline, user-material-based workflow assistance with traceable drafts and explicit review decisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bidding-expert.md"
+  ],
+  "skills": [
+    "./skills/bidding-proposal",
+    "./skills/bidding-evidence-draft",
+    "./skills/bidding-delivery-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bidding-expert",
+  "displayName": {
+    "zh": "招投标专家",
+    "en": "Bidding Expert"
+  },
+  "profession": {
+    "zh": "招投标合规与标书编制专家",
+    "en": "Tender Compliance & Bid Writing Specialist"
+  },
+  "displayDescription": {
+    "zh": "上传招标要求与企业材料，逐条生成响应偏离表、缺件清单和可编辑标书章节，交付前复核报价与附件。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "11-SecurityCompliance",
+  "defaultInitPrompt": {
+    "zh": "我有招标文件和企业材料，请先交一版响应矩阵、缺件清单和标书目录",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-bidding-expert",
+  "tags": [
+    {
+      "zh": "招投标",
+      "en": "Tendering"
+    },
+    {
+      "zh": "标书编制",
+      "en": "Bid Writing"
+    },
+    {
+      "zh": "废标自检",
+      "en": "Rejection Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我有招标文件和企业材料，请先交一版响应矩阵、缺件清单和标书目录",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "这是已有标书，请逐条检查要求遗漏、报价勾稽及附件引用，按影响排序",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "收到补遗后哪些内容要重写？请给受影响条款、改稿和复核清单",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "招投标",
+    "标书编制",
+    "废标自检",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

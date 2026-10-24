@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-crosspost-advisor",
+  "version": "1.0.1",
+  "description": "Turn official account articles and Channels videos into a repurposing table, entry-point rules, a monthly calendar and a two-way review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-crosspost-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-article-video-link"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-crosspost-advisor",
+  "displayName": {
+    "zh": "公众号视频号联动顾问",
+    "en": "Article and Channels Advisor"
+  },
+  "profession": {
+    "zh": "公众号与视频号联动运营顾问｜灵策智算",
+    "en": "Official Account and Channels Cross-posting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据两个账号的定位与内容生成一稿两用改编表和月度联动排期，提供入口位置规则与互相带量复盘，按月调整。",
+    "en": "Turn official account articles and Channels videos into a repurposing table, entry-point rules, a monthly calendar and a two-way review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据两个号近三个月内容生成下月联动排期和改编表",
+    "en": "Build next month's cross-post calendar and repurposing table from recent content"
+  },
+  "plugin": "lynxce-crosspost-advisor",
+  "tags": [
+    {
+      "zh": "公众号",
+      "en": "Official Account"
+    },
+    {
+      "zh": "视频号",
+      "en": "Channels"
+    },
+    {
+      "zh": "联动排期",
+      "en": "Cross-post Calendar"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据两个号近三个月内容生成下月联动排期和改编表",
+      "en": "Build next month's cross-post calendar and repurposing table from recent content"
+    },
+    {
+      "zh": "复核我们已排好的联动日历和入口位置",
+      "en": "Review our cross-post calendar and entry-point placement"
+    },
+    {
+      "zh": "只有文章列表没有视频数据先给我最小联动方案",
+      "en": "Only an article list and no video data so give me a minimal cross-post plan"
+    }
+  ],
+  "keywords": [
+    "公众号",
+    "视频号",
+    "联动排期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

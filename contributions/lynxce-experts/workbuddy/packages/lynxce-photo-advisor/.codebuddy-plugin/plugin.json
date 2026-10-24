@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-photo-advisor",
+  "version": "1.0.1",
+  "description": "Evidence-based document preparation with transparent calculations and review checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-photo-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-photo-advisor-evidence",
+    "./skills/lynxce-photo-advisor-method",
+    "./skills/lynxce-photo-advisor-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-photo-advisor",
+  "displayName": {
+    "zh": "摄影布光顾问",
+    "en": "Photography Advisor"
+  },
+  "profession": {
+    "zh": "摄影布光与拍摄执行顾问",
+    "en": "Photography Lighting & Production Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户脚本与场地资料整理分镜、机位布光记录和拍摄排程，核对时长器材与授权，交付可复核清单",
+    "en": "Organize user-provided evidence, check calculations and conflicts, and deliver reviewable records and templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "拍一条产品短片,帮我列分镜表",
+    "en": "Draft a shot list for a short product film"
+  },
+  "plugin": "lynxce-photo-advisor",
+  "tags": [
+    {
+      "zh": "分镜表",
+      "en": "Shot List"
+    },
+    {
+      "zh": "布光方案",
+      "en": "Lighting"
+    },
+    {
+      "zh": "器材清单",
+      "en": "Gear List"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "拍一条产品短片,帮我列分镜表",
+      "en": "Draft a shot list for a short product film"
+    },
+    {
+      "zh": "室内窗光和灯光打架怎么处理",
+      "en": "Window light clashes with my lamps — what do I do"
+    },
+    {
+      "zh": "预算有限,器材怎么取舍",
+      "en": "Limited budget — how should I prioritise gear"
+    }
+  ],
+  "keywords": [
+    "分镜表",
+    "布光方案",
+    "器材清单",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

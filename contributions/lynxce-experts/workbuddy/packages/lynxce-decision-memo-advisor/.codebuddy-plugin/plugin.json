@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-decision-memo-advisor",
+  "version": "1.0.2",
+  "description": "Compare options with hard constraints, evidence-based scores, sensitivity checks and a one-page decision memo.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-decision-memo-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-decision-memo"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-decision-memo-advisor",
+  "displayName": {
+    "zh": "决策备忘与方案对比顾问",
+    "en": "Decision Memo and Options Advisor"
+  },
+  "profession": {
+    "zh": "决策备忘与方案对比顾问",
+    "en": "Decision Memo and Options Advisor"
+  },
+  "displayDescription": {
+    "zh": "把备选方案整理为硬约束筛选、证据评分与权重敏感性对照，交付一页决策备忘、风险退路和待确认清单。",
+    "en": "Compare options with hard constraints, evidence-based scores, sensitivity checks and a one-page decision memo."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "按预算和期限筛选方案，制作带依据的加权对比表",
+    "en": "Screen options by budget and deadline and build an evidence scorecard."
+  },
+  "plugin": "lynxce-decision-memo-advisor",
+  "tags": [
+    {
+      "zh": "方案对比",
+      "en": "Option Comparison"
+    },
+    {
+      "zh": "敏感性检查",
+      "en": "Sensitivity Check"
+    },
+    {
+      "zh": "决策备忘",
+      "en": "Decision Memo"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按预算和期限筛选方案，制作带依据的加权对比表",
+      "en": "Screen options by budget and deadline and build an evidence scorecard."
+    },
+    {
+      "zh": "改变成本与效果权重，检查推荐是否稳定并写敏感性说明",
+      "en": "Check recommendation stability under alternative weights."
+    },
+    {
+      "zh": "把这些方案整理成一页决策备忘与失败回退方案",
+      "en": "Draft a one-page decision memo with risks and fallback options."
+    }
+  ],
+  "keywords": [
+    "方案对比",
+    "敏感性检查",
+    "决策备忘"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bigsale-advisor",
+  "version": "1.0.3",
+  "description": "Lock the list before the sale: pre-sale rules, coupon stacking order, bundling efficiency and price protection.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bigsale-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bigsale-playbook"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bigsale-advisor",
+  "displayName": {
+    "zh": "大促采购节奏与凑单核算顾问",
+    "en": "Shopping Festival Planning Advisor"
+  },
+  "profession": {
+    "zh": "大促采购节奏与凑单核算顾问",
+    "en": "Shopping Festival Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促前把要买的写死：预售与尾款规则、优惠叠加顺序、凑单效率核算与价保规则怎么用起来。",
+    "en": "Lock the list before the sale: pre-sale rules, coupon stacking order, bundling efficiency and price protection."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我把大促清单排个优先级",
+    "en": "Prioritize my shopping festival list"
+  },
+  "plugin": "lynxce-bigsale-advisor",
+  "tags": [
+    {
+      "zh": "大促攻略",
+      "en": "Sale Season"
+    },
+    {
+      "zh": "优惠叠加",
+      "en": "Stacking"
+    },
+    {
+      "zh": "凑单核算",
+      "en": "Bundling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把大促清单排个优先级",
+      "en": "Prioritize my shopping festival list"
+    },
+    {
+      "zh": "这个优惠能不能叠加",
+      "en": "Can these discounts be stacked"
+    },
+    {
+      "zh": "为了满减多买划算吗",
+      "en": "Is buying more to hit the threshold worth it"
+    }
+  ],
+  "keywords": [
+    "大促攻略",
+    "优惠叠加",
+    "凑单核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

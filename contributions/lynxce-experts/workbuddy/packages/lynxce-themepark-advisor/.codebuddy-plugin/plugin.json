@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-themepark-advisor",
+  "version": "1.0.4",
+  "description": "Plan a park day: ticket types, a smart route, packing and budget control.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-themepark-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-themepark-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-themepark-advisor",
+  "displayName": {
+    "zh": "亲子出游与乐园门票顾问",
+    "en": "Family Trip and Park Ticket Advisor"
+  },
+  "profession": {
+    "zh": "亲子出游与乐园门票顾问",
+    "en": "Family Trip and Park Ticket Advisor"
+  },
+  "displayDescription": {
+    "zh": "带娃逛乐园怎么安排：票型怎么折算、动线怎么排队更少、要带什么东西、全天预算怎么控住。",
+    "en": "Plan a park day: ticket types, a smart route, packing and budget control."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个乐园什么时候去最划算",
+    "en": "When is the best time to visit"
+  },
+  "plugin": "lynxce-themepark-advisor",
+  "tags": [
+    {
+      "zh": "亲子出游",
+      "en": "Family Trip"
+    },
+    {
+      "zh": "票型比较",
+      "en": "Tickets"
+    },
+    {
+      "zh": "动线安排",
+      "en": "Route"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个乐园什么时候去最划算",
+      "en": "When is the best time to visit"
+    },
+    {
+      "zh": "一天怎么安排不排队太久",
+      "en": "How do I plan a day with less queuing"
+    },
+    {
+      "zh": "带娃去一趟要花多少",
+      "en": "What will this family trip cost"
+    }
+  ],
+  "keywords": [
+    "亲子出游",
+    "票型比较",
+    "动线安排",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

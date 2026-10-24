@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-pantry-quota-advisor",
+  "version": "1.0.0",
+  "description": "Calculate pantry quotas, visitor demand, pack orders and stock variances.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-pantry-quota-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-pantry-quota"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-pantry-quota-advisor",
+  "displayName": {
+    "zh": "茶水接待耗材核算师",
+    "en": "Pantry Reception Supply Calculator"
+  },
+  "profession": {
+    "zh": "办公室茶水接待耗材配额核算师",
+    "en": "Office Pantry Reception Quota Calculator"
+  },
+  "displayDescription": {
+    "zh": "按员工与访客人数核算茶水耗材配额，区分接待领用与日常消耗，扣除可用库存，输出补货和差异台账。",
+    "en": "Calculate pantry quotas, visitor demand, pack orders and stock variances."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按员工人日与访客人次算茶包采购盒数",
+    "en": "Calculate tea boxes from staff days and visitor counts"
+  },
+  "plugin": "lynxce-office-pantry-quota-advisor",
+  "tags": [
+    {
+      "zh": "人次配额",
+      "en": "Per Visit Quotas"
+    },
+    {
+      "zh": "整包补货",
+      "en": "Pack Replenishment"
+    },
+    {
+      "zh": "领用差异",
+      "en": "Usage Variances"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按员工人日与访客人次算茶包采购盒数",
+      "en": "Calculate tea boxes from staff days and visitor counts"
+    },
+    {
+      "zh": "前台领出但没用完的耗材怎么核差异",
+      "en": "Reconcile reception supplies issued but not consumed"
+    },
+    {
+      "zh": "输出接待配额补货表并核对包装结余",
+      "en": "Build a quota order sheet and check pack leftovers"
+    }
+  ],
+  "keywords": [
+    "人次配额",
+    "整包补货",
+    "领用差异",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

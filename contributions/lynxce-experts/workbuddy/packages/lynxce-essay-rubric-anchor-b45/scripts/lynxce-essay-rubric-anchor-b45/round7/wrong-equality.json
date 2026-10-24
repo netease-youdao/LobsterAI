@@ -1,0 +1,19 @@
+{
+  "calculations": [
+    {
+      "id": "阈内",
+      "operation": "percent",
+      "values": [
+        2,
+        3
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "calculationId": "阈内",
+      "value": "66.67%",
+      "relation": "="
+    }
+  ]
+}

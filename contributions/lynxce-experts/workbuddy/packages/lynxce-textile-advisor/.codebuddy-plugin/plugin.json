@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-textile-advisor",
+  "version": "1.0.3",
+  "description": "Measure first for home textiles: bedding specs, material differences, care costs and delivery checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-textile-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-home-textile"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-textile-advisor",
+  "displayName": {
+    "zh": "家纺床品选购与尺寸核对顾问",
+    "en": "Home Textile Selection Advisor"
+  },
+  "profession": {
+    "zh": "家纺床品选购与尺寸核对顾问",
+    "en": "Home Textile Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "家纺先量尺寸：四件套与被芯规格、材质区别在哪、洗护成本与收货验收具体要看哪几项。",
+    "en": "Measure first for home textiles: bedding specs, material differences, care costs and delivery checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "四件套该买什么尺寸",
+    "en": "What bedding size should I buy"
+  },
+  "plugin": "lynxce-textile-advisor",
+  "tags": [
+    {
+      "zh": "家纺选购",
+      "en": "Home Textile"
+    },
+    {
+      "zh": "尺寸核对",
+      "en": "Sizing"
+    },
+    {
+      "zh": "洗护成本",
+      "en": "Care"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "四件套该买什么尺寸",
+      "en": "What bedding size should I buy"
+    },
+    {
+      "zh": "纯棉和天丝怎么选",
+      "en": "Cotton or lyocell — how do I choose"
+    },
+    {
+      "zh": "帮我比一下这两套的价格",
+      "en": "Compare the prices of these two sets"
+    }
+  ],
+  "keywords": [
+    "家纺选购",
+    "尺寸核对",
+    "洗护成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

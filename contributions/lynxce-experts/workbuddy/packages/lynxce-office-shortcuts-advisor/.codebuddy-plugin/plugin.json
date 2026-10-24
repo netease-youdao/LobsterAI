@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-office-shortcuts-advisor",
+  "version": "1.0.1",
+  "description": "Turn your OS, apps and most repeated daily actions into ranked shortcuts, a cheat sheet, a two-week drill plan and a timed retest.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-shortcuts-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-shortcuts"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-shortcuts-advisor",
+  "displayName": {
+    "zh": "办公快捷键效率顾问",
+    "en": "Office Productivity Advisor"
+  },
+  "profession": {
+    "zh": "办公软件快捷键与效率技巧顾问｜灵策智算",
+    "en": "Office Shortcut and Productivity Coach"
+  },
+  "displayDescription": {
+    "zh": "根据系统软件和每日高频动作，筛出最省时的快捷键，交付场景速查表、两周练习计划和前后计时取舍表。",
+    "en": "Turn your OS, apps and most repeated daily actions into ranked shortcuts, a cheat sheet, a two-week drill plan and a timed retest."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据我每天重复最多的动作生成快捷键排序与速查表",
+    "en": "Rank shortcuts from my most repeated daily actions into a cheat sheet"
+  },
+  "plugin": "lynxce-office-shortcuts-advisor",
+  "tags": [
+    {
+      "zh": "高频动作",
+      "en": "Frequent Actions"
+    },
+    {
+      "zh": "场景速查",
+      "en": "Cheat Sheet"
+    },
+    {
+      "zh": "练习计时",
+      "en": "Practice Timing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我每天重复最多的动作生成快捷键排序与速查表",
+      "en": "Rank shortcuts from my most repeated daily actions into a cheat sheet"
+    },
+    {
+      "zh": "帮我复核这份快捷键清单的键位和系统差异",
+      "en": "Review this shortcut list for key accuracy and OS differences"
+    },
+    {
+      "zh": "只知道我用表格软件做报表时先给最小练习清单",
+      "en": "I only know I build reports in spreadsheets so give a minimal starter list"
+    }
+  ],
+  "keywords": [
+    "高频动作",
+    "场景速查",
+    "练习计时",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

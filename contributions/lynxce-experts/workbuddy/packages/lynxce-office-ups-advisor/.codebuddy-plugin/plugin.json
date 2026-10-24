@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-ups-advisor",
+  "version": "1.0.0",
+  "description": "Size an office UPS: load watts, VA margin, backup minutes, battery cycle, purchase request form.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-ups-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-ups"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-ups-advisor",
+  "displayName": {
+    "zh": "UPS电源采购顾问",
+    "en": "Office UPS Purchase Advisor"
+  },
+  "profession": {
+    "zh": "办公室 UPS 不间断电源办公采购顾问",
+    "en": "Office UPS Sizing and Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公室UPS怎么选：按设备功率算容量与负载率、按电池容量估后备时长、定换电池周期，附采购申请单。",
+    "en": "Size an office UPS: load watts, VA margin, backup minutes, battery cycle, purchase request form."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "服务器和 NAS 要配多大的 UPS",
+    "en": "What UPS size for a server and NAS"
+  },
+  "plugin": "lynxce-office-ups-advisor",
+  "tags": [
+    {
+      "zh": "负载容量",
+      "en": "Load Sizing"
+    },
+    {
+      "zh": "后备时长",
+      "en": "Backup Runtime"
+    },
+    {
+      "zh": "电池更换",
+      "en": "Battery Replacement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "服务器和 NAS 要配多大的 UPS",
+      "en": "What UPS size for a server and NAS"
+    },
+    {
+      "zh": "UPS 停电能撑多少分钟怎么算",
+      "en": "How to estimate UPS backup minutes"
+    },
+    {
+      "zh": "UPS 电池多久要换一次",
+      "en": "How often to replace UPS batteries"
+    }
+  ],
+  "keywords": [
+    "负载容量",
+    "后备时长",
+    "电池更换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

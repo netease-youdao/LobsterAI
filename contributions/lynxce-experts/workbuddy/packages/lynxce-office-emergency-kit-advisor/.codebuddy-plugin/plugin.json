@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-emergency-kit-advisor",
+  "version": "1.0.0",
+  "description": "Plan office emergency kits: lights, power banks, first aid supplies, monthly checks, restock ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-emergency-kit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-emergency-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-emergency-kit-advisor",
+  "displayName": {
+    "zh": "办公应急物资顾问",
+    "en": "Office Emergency Supplies Advisor"
+  },
+  "profession": {
+    "zh": "办公室停电与应急物资储备办公采购顾问",
+    "en": "Office Outage and Emergency Supplies Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公室应急物资怎么备：按人数面积与关键点位配手电移动电源急救包耗材，定月检与到期补货，附台账。",
+    "en": "Plan office emergency kits: lights, power banks, first aid supplies, monthly checks, restock ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "六十人办公室应急物资备多少",
+    "en": "Emergency supplies for a sixty person office"
+  },
+  "plugin": "lynxce-office-emergency-kit-advisor",
+  "tags": [
+    {
+      "zh": "物资配置",
+      "en": "Supplies Sizing"
+    },
+    {
+      "zh": "月度检查",
+      "en": "Monthly Check"
+    },
+    {
+      "zh": "到期补货",
+      "en": "Expiry Restock"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "六十人办公室应急物资备多少",
+      "en": "Emergency supplies for a sixty person office"
+    },
+    {
+      "zh": "移动电源平时怎么存放和补电",
+      "en": "How to store and top up power banks"
+    },
+    {
+      "zh": "应急物资台账要记哪些内容",
+      "en": "What an emergency supplies ledger records"
+    }
+  ],
+  "keywords": [
+    "物资配置",
+    "月度检查",
+    "到期补货",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-gift-pack-acceptance-advisor",
+  "version": "1.0.0",
+  "description": "Track business gift packing, delivery acceptance and replacement shipment costs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-gift-pack-acceptance-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-gift-pack-acceptance"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-gift-pack-acceptance-advisor",
+  "displayName": {
+    "zh": "礼品配送验收助理",
+    "en": "Business Gift Packing and Delivery Acceptance Advisor"
+  },
+  "profession": {
+    "zh": "商务礼品包装与配送验收顾问",
+    "en": "Business Gift Packing and Delivery Acceptance Advisor"
+  },
+  "displayDescription": {
+    "zh": "按商务礼品批次与收件清单核对包装配送，计算破损缺件及补寄成本，交付装箱验收与异常追踪明细表。",
+    "en": "Track business gift packing, delivery acceptance and replacement shipment costs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "30套商务礼品包装配送预算怎么算",
+    "en": "Budget packing and delivery for thirty gift sets"
+  },
+  "plugin": "lynxce-office-gift-pack-acceptance-advisor",
+  "tags": [
+    {
+      "zh": "装箱核对",
+      "en": "Packing Checks"
+    },
+    {
+      "zh": "配送验收",
+      "en": "Delivery Acceptance"
+    },
+    {
+      "zh": "缺损追踪",
+      "en": "Damage Tracking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "30套商务礼品包装配送预算怎么算",
+      "en": "Budget packing and delivery for thirty gift sets"
+    },
+    {
+      "zh": "部分礼品待验收完好率怎么算",
+      "en": "Calculate acceptance rates with pending deliveries"
+    },
+    {
+      "zh": "破损补寄和供应方赔付怎么记",
+      "en": "Track damage reshipments and supplier compensation"
+    }
+  ],
+  "keywords": [
+    "装箱核对",
+    "配送验收",
+    "缺损追踪",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

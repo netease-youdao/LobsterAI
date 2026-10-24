@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-export-rebate-reconcile-b48",
+  "version": "1.0.0",
+  "description": "Match export and purchase documents, receipts and filing states under current rules without assuming a refund rate.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-export-rebate-reconcile-b48.md"
+  ],
+  "skills": [
+    "./skills/lynxce-b48-export-export-document-map",
+    "./skills/lynxce-b48-export-collection-currency-bridge",
+    "./skills/lynxce-b48-export-filing-change-version"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-export-rebate-reconcile-b48",
+  "displayName": {
+    "zh": "退税顾问",
+    "en": "Export Rebate Document Reconciliation Advisor"
+  },
+  "profession": {
+    "zh": "出口退税顾问",
+    "en": "Export Rebate Document Reconciliation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为外贸财务与单证人员勾稽报关、购进凭证及收汇记录，识别申报差异，交付准备说明、备案目录与补正稿。",
+    "en": "Match export and purchase documents, receipts and filing states under current rules without assuming a refund rate."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按两笔报关、购进及收汇资料形成完整退税申报准备稿。",
+    "en": "Export Rebate Document Reconciliation Advisor"
+  },
+  "plugin": "lynxce-export-rebate-reconcile-b48",
+  "tags": [
+    {
+      "zh": "出口退税",
+      "en": "出口退税"
+    },
+    {
+      "zh": "单证勾稽",
+      "en": "单证勾稽"
+    },
+    {
+      "zh": "收汇核对",
+      "en": "收汇核对"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按两笔报关、购进及收汇资料形成完整退税申报准备稿。",
+      "en": "Export Rebate Document Reconciliation Advisor"
+    },
+    {
+      "zh": "新出库48件与报关50件冲突，一笔已受理，请完整修订台账。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "商品退税率未核，先帮我做币种和数量金额勾稽，别套13%。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "出口退税",
+    "单证勾稽",
+    "收汇核对"
+  ]
+}

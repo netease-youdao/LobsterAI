@@ -1,0 +1,67 @@
+{
+  "name": "lynxce-videoedit-advisor",
+  "version": "1.0.1",
+  "description": "Turn footage notes and timecodes into a cut map, sound notes and a revision checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-videoedit-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-videoedit-advisor",
+  "displayName": {
+    "zh": "视频剪辑顾问",
+    "en": "Video Editing"
+  },
+  "profession": {
+    "zh": "视频剪辑节奏与叙事顾问",
+    "en": "Video Editing Rhythm & Narrative Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据素材清单与时间码梳理视频叙事节奏，交付剪辑决策表、声音处理单和改版对照稿，方便逐条执行复查",
+    "en": "Turn footage notes and timecodes into a cut map, sound notes and a revision checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把我的素材清单整理成60秒剪辑决策表，标明每段保留理由",
+    "en": "Build a 60-second cut map with reasons for each segment"
+  },
+  "plugin": "lynxce-videoedit-advisor",
+  "tags": [
+    {
+      "zh": "节奏决策",
+      "en": "Pacing decisions"
+    },
+    {
+      "zh": "剪辑清单",
+      "en": "Cut map"
+    },
+    {
+      "zh": "声音复查",
+      "en": "Sound review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把我的素材清单整理成60秒剪辑决策表，标明每段保留理由",
+      "en": "Build a 60-second cut map with reasons for each segment"
+    },
+    {
+      "zh": "根据这些掉点数据，给出两个开场版本和对照复查表",
+      "en": "Draft two openings and a comparison checklist from my retention notes"
+    },
+    {
+      "zh": "把这份时间码反馈转成逐条声音与转场修改单",
+      "en": "Turn timecoded feedback into sound and transition edit notes"
+    }
+  ],
+  "keywords": [
+    "节奏决策",
+    "剪辑清单",
+    "声音复查"
+  ],
+  "needEncrypt": true
+}

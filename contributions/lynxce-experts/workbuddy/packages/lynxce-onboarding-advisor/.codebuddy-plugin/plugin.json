@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-onboarding-advisor",
+  "version": "1.0.1",
+  "description": "Onboard new hires: day one, weekly goals, buddy system and checkpoints.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-onboarding-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-onboarding-30d"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-onboarding-advisor",
+  "displayName": {
+    "zh": "新人入职引导与带教顾问",
+    "en": "Employee Onboarding Advisor"
+  },
+  "profession": {
+    "zh": "新人入职引导与带教顾问",
+    "en": "Employee Onboarding Advisor"
+  },
+  "displayDescription": {
+    "zh": "新人怎么才能快速上手：第一天备什么、每周目标怎么定、带教怎么排、三十天复盘怎么做。",
+    "en": "Onboard new hires: day one, weekly goals, buddy system and checkpoints."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "新人第一周安排什么",
+    "en": "What should a new hire do in week one"
+  },
+  "plugin": "lynxce-onboarding-advisor",
+  "tags": [
+    {
+      "zh": "新人入职",
+      "en": "Onboarding"
+    },
+    {
+      "zh": "带教机制",
+      "en": "Buddy System"
+    },
+    {
+      "zh": "阶段目标",
+      "en": "Milestones"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新人第一周安排什么",
+      "en": "What should a new hire do in week one"
+    },
+    {
+      "zh": "带教该怎么做",
+      "en": "How should I mentor a new team member"
+    },
+    {
+      "zh": "帮我做一份入职清单",
+      "en": "Help me build an onboarding checklist"
+    }
+  ],
+  "keywords": [
+    "新人入职",
+    "带教机制",
+    "阶段目标",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

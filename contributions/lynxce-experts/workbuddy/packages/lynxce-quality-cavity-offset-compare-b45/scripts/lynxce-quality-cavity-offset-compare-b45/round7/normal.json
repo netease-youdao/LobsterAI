@@ -1,0 +1,56 @@
+{
+  "inputStatus": "假设",
+  "nominal": "10.00",
+  "lower": "9.90",
+  "inclusive": true,
+  "resolvedVersion": "本轮规格",
+  "groups": [
+    {
+      "cavity": "A",
+      "readings": [
+        "10.00",
+        "10.01",
+        "10.02"
+      ]
+    },
+    {
+      "cavity": "B",
+      "readings": [
+        "10.05",
+        "10.06",
+        "10.07"
+      ]
+    },
+    {
+      "cavity": "C",
+      "readings": [
+        "9.98",
+        "9.99",
+        "10.00"
+      ]
+    },
+    {
+      "cavity": "D",
+      "readings": [
+        "10.09",
+        "10.11",
+        "10.10"
+      ]
+    }
+  ],
+  "versions": [
+    {
+      "id": "本轮规格",
+      "upper": "10.10",
+      "source": "本轮给定上下限"
+    }
+  ],
+  "samplingPlan": {
+    "rounds": [
+      "R1",
+      "R2",
+      "R3"
+    ],
+    "perCavityPerRound": 3
+  }
+}

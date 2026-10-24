@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-chainstore-shift-open-item-handover-b43-advisor",
+  "version": "1.0.0",
+  "description": "Help business staff review supplied records and produce chain store open item shift handover tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-chainstore-shift-open-item-handover-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-chainstore-shift-open-item-handover-b43",
+    "./skills/lynxce-chainstore-shift-open-item-handover-b43-int-readback",
+    "./skills/lynxce-chainstore-shift-open-item-handover-b43-int-open-balance"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-chainstore-shift-open-item-handover-b43-advisor",
+  "displayName": {
+    "zh": "连锁门店交接专家",
+    "en": "Chain Store Open Item Shift Handover Advisor"
+  },
+  "profession": {
+    "zh": "连锁门店交接专家：持续营业门店的跨班未结事项承接",
+    "en": "Chain Store Open Item Shift Handover Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户提供的连锁门店未结事项交接表相关业务资料，整理事实、异常与待补证据，交付可复核文本表格成果。",
+    "en": "Help business staff review supplied records and produce chain store open item shift handover tables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "首次使用：请按我的资料生成连锁门店未结事项交接表",
+    "en": "Create the first review table from my records"
+  },
+  "plugin": "lynxce-chainstore-shift-open-item-handover-b43-advisor",
+  "tags": [
+    {
+      "zh": "连锁餐饮与零售",
+      "en": "Retail and Food Service"
+    },
+    {
+      "zh": "连锁门店未结事项交接表",
+      "en": "Evidence Workflow"
+    },
+    {
+      "zh": "事实表格成果",
+      "en": "Reviewable Tables"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "首次使用：请按我的资料生成连锁门店未结事项交接表",
+      "en": "Create the first review table from my records"
+    },
+    {
+      "zh": "异常处理：这些记录互相矛盾，先核实哪些字段",
+      "en": "Resolve conflicting records before revising results"
+    },
+    {
+      "zh": "进阶任务：追加新证据并对照前版复核成果",
+      "en": "Compare revisions after adding new evidence"
+    }
+  ],
+  "keywords": [
+    "连锁餐饮与零售",
+    "连锁门店未结事项交接表",
+    "事实表格成果"
+  ]
+}

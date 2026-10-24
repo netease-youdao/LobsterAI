@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-seal-strip-cut-plan-advisor",
+  "version": "1.0.0",
+  "description": "Plan seal strip fitting, cutting and stock replenishment.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-seal-strip-cut-plan-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-seal-strip-cut-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-seal-strip-cut-plan-advisor",
+  "displayName": {
+    "zh": "门窗密封条补料顾问",
+    "en": "Office Seal Strip Advisor"
+  },
+  "profession": {
+    "zh": "办公门窗密封条测量裁切与补料顾问",
+    "en": "Office Seal Strip Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公门窗密封条按缝隙与槽型实测适配，逐段核算裁切长度及整卷余量，扣除可用库存，输出补料验收表。",
+    "en": "Plan seal strip fitting, cutting and stock replenishment."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对办公门窗密封条测量裁切与补料的适配条件",
+    "en": "Check compatibility and required inputs"
+  },
+  "plugin": "lynxce-office-seal-strip-cut-plan-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "净购核算",
+      "en": "Net Purchase Calculation"
+    },
+    {
+      "zh": "异常复查",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对办公门窗密封条测量裁切与补料的适配条件",
+      "en": "Check compatibility and required inputs"
+    },
+    {
+      "zh": "按实测记录与库存计算补货数量",
+      "en": "Calculate purchases from measurements and stock"
+    },
+    {
+      "zh": "生成采购与异常复查记录表",
+      "en": "Build purchase and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "净购核算",
+    "异常复查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-quiet-hours-advisor",
+  "version": "1.0.2",
+  "description": "Turn seating layouts and a week of interruption logs into priorities, a focus-hours charter, call zones and a trial review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-quiet-hours-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-quiet-hours"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-quiet-hours-advisor",
+  "displayName": {
+    "zh": "专注时段公约顾问",
+    "en": "Focus Hours Advisor"
+  },
+  "profession": {
+    "zh": "办公噪音管理与专注时段公约顾问｜灵策智算",
+    "en": "Office Noise and Focus Hours Charter Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据工位布局与一周打断记录排出治理优先级，交付专注时段公约、通话讨论分区和四周试行复盘表。",
+    "en": "Turn seating layouts and a week of interruption logs into priorities, a focus-hours charter, call zones and a trial review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我们的工位布局和打断记录生成专注时段公约与分区方案",
+    "en": "Build a focus-hours charter and zoning plan from our layout and logs"
+  },
+  "plugin": "lynxce-quiet-hours-advisor",
+  "tags": [
+    {
+      "zh": "打断盘点",
+      "en": "Interruption Log"
+    },
+    {
+      "zh": "专注公约",
+      "en": "Focus Charter"
+    },
+    {
+      "zh": "试行复盘",
+      "en": "Trial Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的工位布局和打断记录生成专注时段公约与分区方案",
+      "en": "Build a focus-hours charter and zoning plan from our layout and logs"
+    },
+    {
+      "zh": "复核我们现有的办公安静公约和复盘数据是否站得住",
+      "en": "Review our existing quiet-office charter and review data"
+    },
+    {
+      "zh": "只知道开放办公区很吵先给一版最小盘点表和公约草稿",
+      "en": "Give a minimal log sheet and charter draft when only noise is reported"
+    }
+  ],
+  "keywords": [
+    "打断盘点",
+    "专注公约",
+    "试行复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

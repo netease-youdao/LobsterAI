@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-pay-discount-advisor",
+  "version": "1.0.1",
+  "description": "Stack payment discounts: coupon order, paid-amount thresholds, order splitting, refund clawback, final price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pay-discount-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pay-discount"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pay-discount-advisor",
+  "displayName": {
+    "zh": "支付立减与优惠叠加顺序核算顾问",
+    "en": "Payment Discount Stacking Order Advisor"
+  },
+  "profession": {
+    "zh": "11.11 支付立减与优惠叠加顺序核算顾问",
+    "en": "11.11 Payment Discount Stacking Order Advisor"
+  },
+  "displayDescription": {
+    "zh": "支付立减怎么叠：券与满减先后、支付渠道立减按实付门槛、多件拆单与退款扣回、到手价核算。",
+    "en": "Stack payment discounts: coupon order, paid-amount thresholds, order splitting, refund clawback, final price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "店铺券跨店满减和支付立减先算哪个",
+    "en": "Which applies first, coupons, threshold discounts or payment discounts"
+  },
+  "plugin": "lynxce-pay-discount-advisor",
+  "tags": [
+    {
+      "zh": "叠加顺序",
+      "en": "Stacking Order"
+    },
+    {
+      "zh": "门槛核对",
+      "en": "Threshold Check"
+    },
+    {
+      "zh": "退款扣回",
+      "en": "Refund Clawback"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "店铺券跨店满减和支付立减先算哪个",
+      "en": "Which applies first, coupons, threshold discounts or payment discounts"
+    },
+    {
+      "zh": "为什么结算页的支付立减没生效",
+      "en": "Why did the payment discount not apply at checkout"
+    },
+    {
+      "zh": "退掉一件衣服能退回多少钱",
+      "en": "How much do I get back if I return one item"
+    }
+  ],
+  "keywords": [
+    "叠加顺序",
+    "门槛核对",
+    "退款扣回",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

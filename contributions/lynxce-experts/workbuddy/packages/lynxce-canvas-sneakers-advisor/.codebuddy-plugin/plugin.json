@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-canvas-sneakers-advisor",
+  "version": "1.0.0",
+  "description": "Pick sneakers: size conversion, last width, upper, sole, cleaning and cost per wear.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-canvas-sneakers-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-canvas-sneakers"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-canvas-sneakers-advisor",
+  "displayName": {
+    "zh": "板鞋帆布鞋选购顾问",
+    "en": "Skate Shoe and Canvas Sneaker Advisor"
+  },
+  "profession": {
+    "zh": "11.11 板鞋小白鞋与帆布鞋选购顾问",
+    "en": "11.11 Skate Shoe, White Sneaker and Canvas Advisor"
+  },
+  "displayDescription": {
+    "zh": "板鞋帆布鞋怎么挑：脚长换算尺码、按脚宽比选鞋楦、比鞋面鞋底、清洗防黄、算每次成本。",
+    "en": "Pick sneakers: size conversion, last width, upper, sole, cleaning and cost per wear."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "脚长 25 厘米帆布鞋穿多大码",
+    "en": "What canvas shoe size fits a 25 cm foot"
+  },
+  "plugin": "lynxce-canvas-sneakers-advisor",
+  "tags": [
+    {
+      "zh": "尺码换算",
+      "en": "Size Conversion"
+    },
+    {
+      "zh": "鞋楦宽窄",
+      "en": "Last Width"
+    },
+    {
+      "zh": "清洗防黄",
+      "en": "Cleaning and Yellowing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "脚长 25 厘米帆布鞋穿多大码",
+      "en": "What canvas shoe size fits a 25 cm foot"
+    },
+    {
+      "zh": "脚宽的人买板鞋要大一码吗",
+      "en": "Should wide feet size up in skate shoes"
+    },
+    {
+      "zh": "小白鞋洗完发黄怎么办",
+      "en": "How to fix white sneakers that yellow after washing"
+    }
+  ],
+  "keywords": [
+    "尺码换算",
+    "鞋楦宽窄",
+    "清洗防黄",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

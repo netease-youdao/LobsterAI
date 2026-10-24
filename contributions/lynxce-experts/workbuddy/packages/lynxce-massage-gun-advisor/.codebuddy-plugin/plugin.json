@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-massage-gun-advisor",
+  "version": "1.0.1",
+  "description": "Pick massage guns: amplitude, frequency, noise, weight, battery, heads, and areas to avoid.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-massage-gun-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-massage-gun"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-massage-gun-advisor",
+  "displayName": {
+    "zh": "筋膜枪选购与安全使用顾问",
+    "en": "Massage Gun Selection and Safe Use Advisor"
+  },
+  "profession": {
+    "zh": "11.11 筋膜枪选购与安全使用顾问",
+    "en": "11.11 Massage Gun Selection and Safe Use Advisor"
+  },
+  "displayDescription": {
+    "zh": "筋膜枪怎么挑：比振幅与频率档、核噪音测试距离、看重量续航与按摩头，避开不宜使用的部位。",
+    "en": "Pick massage guns: amplitude, frequency, noise, weight, battery, heads, and areas to avoid."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "办公室放松肩背筋膜枪选几毫米振幅",
+    "en": "What amplitude suits shoulder relief at the office"
+  },
+  "plugin": "lynxce-massage-gun-advisor",
+  "tags": [
+    {
+      "zh": "振幅频率",
+      "en": "Amplitude and Frequency"
+    },
+    {
+      "zh": "噪音续航",
+      "en": "Noise and Battery"
+    },
+    {
+      "zh": "禁用部位",
+      "en": "Areas to Avoid"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "办公室放松肩背筋膜枪选几毫米振幅",
+      "en": "What amplitude suits shoulder relief at the office"
+    },
+    {
+      "zh": "筋膜枪噪音分贝怎么比才准",
+      "en": "How to compare massage gun noise ratings fairly"
+    },
+    {
+      "zh": "筋膜枪哪些部位不能打",
+      "en": "Which body areas should a massage gun avoid"
+    }
+  ],
+  "keywords": [
+    "振幅频率",
+    "噪音续航",
+    "禁用部位",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

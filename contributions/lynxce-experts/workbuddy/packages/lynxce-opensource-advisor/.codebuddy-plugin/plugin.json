@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-opensource-advisor",
+  "version": "1.0.1",
+  "description": "Turn repository facts and issue logs into a readiness checklist, triage rules, release calendar and weekly maintainer load review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-opensource-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-opensource-advisor",
+  "displayName": {
+    "zh": "开源项目运营顾问",
+    "en": "Open Source Ops"
+  },
+  "profession": {
+    "zh": "开源项目治理与社区运营顾问",
+    "en": "Open Source Governance and Community Operations Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据仓库现状与议题记录，整理开源就绪清单、议题分诊规则、发布节奏日历和维护者负载周报，便于每周复盘。",
+    "en": "Turn repository facts and issue logs into a readiness checklist, triage rules, release calendar and weekly maintainer load review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据仓库现状生成开源就绪清单和议题分诊规则",
+    "en": "Build a launch readiness checklist and triage rules from my repo facts"
+  },
+  "plugin": "lynxce-opensource-advisor",
+  "tags": [
+    {
+      "zh": "开源就绪",
+      "en": "Launch Readiness"
+    },
+    {
+      "zh": "议题分诊",
+      "en": "Issue Triage"
+    },
+    {
+      "zh": "发布节奏",
+      "en": "Release Cadence"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据仓库现状生成开源就绪清单和议题分诊规则",
+      "en": "Build a launch readiness checklist and triage rules from my repo facts"
+    },
+    {
+      "zh": "复核我现有的贡献指南和发布流程还缺哪些项",
+      "en": "Review my contributing guide and release process for gaps"
+    },
+    {
+      "zh": "只有议题导出表时先给本周分诊与负载小结",
+      "en": "With only an issue export, draft this week's triage and load summary"
+    }
+  ],
+  "keywords": [
+    "开源就绪",
+    "议题分诊",
+    "发布节奏",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

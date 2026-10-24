@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-trip-packing-advisor",
+  "version": "1.0.0",
+  "description": "Packing list by days and climate, gap purchase list and a pre departure checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-trip-packing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trip-packing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-trip-packing-advisor",
+  "displayName": {
+    "zh": "出差装备清单助理",
+    "en": "Trip Packing List Assistant"
+  },
+  "profession": {
+    "zh": "出差随身装备与差旅用品办公采购顾问",
+    "en": "Business Trip Gear and Travel Supplies Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "出差带什么：按行程天数与目的地气温列装备清单，对照已有物品出缺项采购单与行前核对表。",
+    "en": "Packing list by days and climate, gap purchase list and a pre departure checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "4 天 3 晚去北方出差带几件衣服",
+    "en": "How many clothes for a 4 day trip up north"
+  },
+  "plugin": "lynxce-trip-packing-advisor",
+  "tags": [
+    {
+      "zh": "衣物件数",
+      "en": "Clothing Count"
+    },
+    {
+      "zh": "安检核对",
+      "en": "Security Check"
+    },
+    {
+      "zh": "缺项采购",
+      "en": "Gap Purchase"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "4 天 3 晚去北方出差带几件衣服",
+      "en": "How many clothes for a 4 day trip up north"
+    },
+    {
+      "zh": "30000 毫安时充电宝能带上飞机吗",
+      "en": "Can a 30000 mAh power bank go on a plane"
+    },
+    {
+      "zh": "团队出差公共物品怎么分工带",
+      "en": "How to split shared items on a team trip"
+    }
+  ],
+  "keywords": [
+    "衣物件数",
+    "安检核对",
+    "缺项采购",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

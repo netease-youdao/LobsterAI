@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-sportsgear-advisor",
+  "version": "1.0.3",
+  "description": "Pick gear by sport and body: shoe types, sizing and how to size home equipment to your space.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sportsgear-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sports-gear"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sportsgear-advisor",
+  "displayName": {
+    "zh": "运动装备选购与鞋服核对顾问",
+    "en": "Sports Gear Buying Advisor"
+  },
+  "profession": {
+    "zh": "运动装备选购与鞋服核对顾问",
+    "en": "Sports Gear Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "按项目和身体条件挑运动装备：跑鞋类型怎么选、尺码怎么对照、家用器械按可用空间反推着买不踩坑。",
+    "en": "Pick gear by sport and body: shoe types, sizing and how to size home equipment to your space."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我该买哪种类型的跑鞋",
+    "en": "Which type of running shoe should I get"
+  },
+  "plugin": "lynxce-sportsgear-advisor",
+  "tags": [
+    {
+      "zh": "运动装备",
+      "en": "Sports Gear"
+    },
+    {
+      "zh": "鞋码核对",
+      "en": "Sizing"
+    },
+    {
+      "zh": "到手价",
+      "en": "Final Price"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我该买哪种类型的跑鞋",
+      "en": "Which type of running shoe should I get"
+    },
+    {
+      "zh": "家里这点空间能放什么器械",
+      "en": "What equipment fits in my space"
+    },
+    {
+      "zh": "这双鞋现在什么价",
+      "en": "What is the current price for these shoes"
+    }
+  ],
+  "keywords": [
+    "运动装备",
+    "鞋码核对",
+    "到手价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

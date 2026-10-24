@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-field-document-individual-seal-advisor",
+  "version": "1.0.0",
+  "description": "Check document bag fit, seals and handover counts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-field-document-individual-seal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-field-document-individual-seal"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-field-document-individual-seal-advisor",
+  "displayName": {
+    "zh": "外勤文件封装助理",
+    "en": "Document Seal Advisor"
+  },
+  "profession": {
+    "zh": "外勤文件逐份防水封装顾问",
+    "en": "Document Seal Advisor"
+  },
+  "displayDescription": {
+    "zh": "按外勤文件份数与装订厚度核对防水袋有效内尺寸，计算逐份封装和采购缺口，交付封口检查及交接表。",
+    "en": "Check document bag fit, seals and handover counts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "18份文件逐袋装需要买几包",
+    "en": "Plan pouch packs for 18 document sets"
+  },
+  "plugin": "lynxce-office-field-document-individual-seal-advisor",
+  "tags": [
+    {
+      "zh": "逐份封装",
+      "en": "Individual Seals"
+    },
+    {
+      "zh": "袋内适配",
+      "en": "Pouch Fit"
+    },
+    {
+      "zh": "交接核对",
+      "en": "Handover Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "18份文件逐袋装需要买几包",
+      "en": "Plan pouch packs for 18 document sets"
+    },
+    {
+      "zh": "厚册能否放进标称A4袋",
+      "en": "Check a thick bundle against usable pouch size"
+    },
+    {
+      "zh": "封口破损换袋如何更新交接表",
+      "en": "Track a pouch replacement and handover"
+    }
+  ],
+  "keywords": [
+    "逐份封装",
+    "袋内适配",
+    "交接核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

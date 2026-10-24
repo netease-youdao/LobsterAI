@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-retail-return-evidence-conflict-b43-advisor",
+  "version": "1.0.1",
+  "description": "Help business staff review supplied records and produce return evidence conflict communication tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-retail-return-evidence-conflict-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-retail-return-evidence-conflict-b43",
+    "./skills/lynxce-retail-return-evidence-conflict-b43-int-time-check",
+    "./skills/lynxce-retail-return-evidence-conflict-b43-int-reply-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-retail-return-evidence-conflict-b43-advisor",
+  "displayName": {
+    "zh": "退换货事实沟通专家",
+    "en": "Return Evidence Conflict Communication Advisor"
+  },
+  "profession": {
+    "zh": "退换货事实沟通专家：退换货双方陈述中的证据冲突",
+    "en": "Return Evidence Conflict Communication Advisor"
+  },
+  "displayDescription": {
+    "zh": "整理退换货双方陈述、订单和收寄凭据，交付事实分歧表、事件时间线与待核问题，生成不擅自归责的回复。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "整理这起退换货双方陈述，区分已知事实、分歧和待补凭据",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-retail-return-evidence-conflict-b43-advisor",
+  "tags": [
+    {
+      "zh": "电商零售",
+      "en": "Retail and Food Service"
+    },
+    {
+      "zh": "退换货事实冲突沟通表",
+      "en": "Evidence Workflow"
+    },
+    {
+      "zh": "事实表格成果",
+      "en": "Reviewable Tables"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "整理这起退换货双方陈述，区分已知事实、分歧和待补凭据",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "根据订单及收寄记录生成事件时间线，标出物品身份和时间冲突",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "把这段回复改成事实、分歧和下一核实动作，保留用户原诉求",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "电商零售",
+    "退换货事实冲突沟通表",
+    "事实表格成果"
+  ],
+  "needEncrypt": true
+}

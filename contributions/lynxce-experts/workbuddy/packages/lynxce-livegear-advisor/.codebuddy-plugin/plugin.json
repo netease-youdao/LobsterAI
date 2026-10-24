@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-livegear-advisor",
+  "version": "1.0.4",
+  "description": "Build a streaming setup audio first: microphones, lighting, network and space checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-livegear-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-livegear-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-livegear-advisor",
+  "displayName": {
+    "zh": "直播设备与录音器材选购顾问",
+    "en": "Streaming and Audio Gear Advisor"
+  },
+  "profession": {
+    "zh": "直播设备与录音器材选购顾问",
+    "en": "Streaming and Audio Gear Advisor"
+  },
+  "displayDescription": {
+    "zh": "直播设备先保声音再谈画面：麦克风怎么选、三灯怎么布、网络与空间怎么先确认再下单。",
+    "en": "Build a streaming setup audio first: microphones, lighting, network and space checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "这个预算先买什么",
+    "en": "What should I buy first on this budget"
+  },
+  "plugin": "lynxce-livegear-advisor",
+  "tags": [
+    {
+      "zh": "直播设备",
+      "en": "Streaming Gear"
+    },
+    {
+      "zh": "收音方案",
+      "en": "Audio"
+    },
+    {
+      "zh": "分阶段预算",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个预算先买什么",
+      "en": "What should I buy first on this budget"
+    },
+    {
+      "zh": "我这个房间怎么布光",
+      "en": "How do I light this room"
+    },
+    {
+      "zh": "麦克风该选哪种",
+      "en": "Which microphone type suits me"
+    }
+  ],
+  "keywords": [
+    "直播设备",
+    "收音方案",
+    "分阶段预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

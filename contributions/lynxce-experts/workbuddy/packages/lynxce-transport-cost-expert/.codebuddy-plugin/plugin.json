@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-transport-cost-expert",
+  "version": "1.0.1",
+  "description": "Break down per-trip and ton-km route costs, normalize carrier quotes to one tax basis, and list load and negotiation items.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-transport-cost-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-transport-cost-expert",
+  "displayName": {
+    "zh": "运输成本分析师",
+    "en": "Transport Cost Analyst"
+  },
+  "profession": {
+    "zh": "运输成本与承运报价分析师",
+    "en": "Transport Cost & Carrier Pricing Analyst"
+  },
+  "displayDescription": {
+    "zh": "根据线路车型货量与承运报价拆解每趟及每吨公里成本，统一税口径横向比价，输出装载测算和议价清单。",
+    "en": "Break down per-trip and ton-km route costs, normalize carrier quotes to one tax basis, and list load and negotiation items."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "根据线路车型和货量拆解每趟及每吨公里成本",
+    "en": "Break down per-trip and ton-km cost from route vehicle and volume"
+  },
+  "plugin": "lynxce-transport-cost-expert",
+  "tags": [
+    {
+      "zh": "成本拆解",
+      "en": "Cost Breakdown"
+    },
+    {
+      "zh": "报价归一",
+      "en": "Quote Normalization"
+    },
+    {
+      "zh": "装载测算",
+      "en": "Load Factor"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据线路车型和货量拆解每趟及每吨公里成本",
+      "en": "Break down per-trip and ton-km cost from route vehicle and volume"
+    },
+    {
+      "zh": "复核这份承运报价比价表的税口径和附加费",
+      "en": "Review this carrier quote comparison for tax basis and surcharges"
+    },
+    {
+      "zh": "只有一家报价时先给成本模板和待补清单",
+      "en": "With only one quote give a cost template and missing-info list"
+    }
+  ],
+  "keywords": [
+    "成本拆解",
+    "报价归一",
+    "装载测算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true,
+  "skills": []
+}

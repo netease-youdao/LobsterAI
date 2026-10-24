@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-partial-return-advisor",
+  "version": "1.0.1",
+  "description": "Estimate partial refunds: prorate discounts and red packets, per-item refund, whether returning a filler voids the deal.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-partial-return-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-partial-return"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-partial-return-advisor",
+  "displayName": {
+    "zh": "部分退货与优惠扣回核算顾问",
+    "en": "Partial Return and Discount Clawback Advisor"
+  },
+  "profession": {
+    "zh": "11.11 部分退货与优惠扣回核算顾问",
+    "en": "11.11 Partial Return and Discount Clawback Advisor"
+  },
+  "displayDescription": {
+    "zh": "退一件扣回多少优惠：满减跨店红包按比例分摊、单件预计退款、退凑单品是否导致优惠失效、以平台规则为准。",
+    "en": "Estimate partial refunds: prorate discounts and red packets, per-item refund, whether returning a filler voids the deal."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "用了满减退一件能退多少钱",
+    "en": "How much will I get back for one item from a discounted order"
+  },
+  "plugin": "lynxce-partial-return-advisor",
+  "tags": [
+    {
+      "zh": "优惠分摊",
+      "en": "Discount Proration"
+    },
+    {
+      "zh": "退款预估",
+      "en": "Refund Estimate"
+    },
+    {
+      "zh": "失效判断",
+      "en": "Threshold Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "用了满减退一件能退多少钱",
+      "en": "How much will I get back for one item from a discounted order"
+    },
+    {
+      "zh": "退掉凑单品会不会让满减失效",
+      "en": "Will returning the filler item void the discount"
+    },
+    {
+      "zh": "红包部分退货后还能退回吗",
+      "en": "Will the red packet be returned after a partial refund"
+    }
+  ],
+  "keywords": [
+    "优惠分摊",
+    "退款预估",
+    "失效判断",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

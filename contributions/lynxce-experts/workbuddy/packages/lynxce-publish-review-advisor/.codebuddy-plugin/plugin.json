@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-publish-review-advisor",
+  "version": "1.0.1",
+  "description": "Grade risk, assign three review levels, back-schedule deadlines, log approvals and handle corrections for public content.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-publish-review-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-publish-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-publish-review-advisor",
+  "displayName": {
+    "zh": "发布三审流程顾问",
+    "en": "Publishing Review Advisor"
+  },
+  "profession": {
+    "zh": "对外发布内容三审流程顾问｜灵策智算",
+    "en": "Public Content Three-level Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据发布渠道与待发稿件判定风险等级，提供三审分工、逐项核对清单、时限倒推、发布登记与更正记录。",
+    "en": "Grade risk, assign three review levels, back-schedule deadlines, log approvals and handle corrections for public content."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据我们的发布渠道和审核人搭建三审分工与清单",
+    "en": "Set up three-level review roles and checklists for our channels"
+  },
+  "plugin": "lynxce-publish-review-advisor",
+  "tags": [
+    {
+      "zh": "三审流程",
+      "en": "Three-level Review"
+    },
+    {
+      "zh": "核对清单",
+      "en": "Checklist"
+    },
+    {
+      "zh": "更正留痕",
+      "en": "Correction Records"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的发布渠道和审核人搭建三审分工与清单",
+      "en": "Set up three-level review roles and checklists for our channels"
+    },
+    {
+      "zh": "复核这篇待发稿件的风险等级和数字口径",
+      "en": "Review this draft's risk level and figures before publishing"
+    },
+    {
+      "zh": "只有稿件还没有审核人时先给分级和核对清单",
+      "en": "Give risk grading and checklists from a draft only"
+    }
+  ],
+  "keywords": [
+    "三审流程",
+    "核对清单",
+    "更正留痕",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

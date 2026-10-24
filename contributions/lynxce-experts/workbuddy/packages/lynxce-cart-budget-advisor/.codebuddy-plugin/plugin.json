@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-cart-budget-advisor",
+  "version": "1.0.2",
+  "description": "Clear a promo cart: tier must-buys vs optional, set a hard budget cap, batch orders by promo window, brake impulse buys.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cart-budget-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cart-budget"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cart-budget-advisor",
+  "displayName": {
+    "zh": "大促购物车分批下单与预算顾问",
+    "en": "Promo Cart Batching and Budget Advisor"
+  },
+  "profession": {
+    "zh": "大促购物车分批下单与预算顾问",
+    "en": "Promo Cart Batching and Budget Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促购物车怎么清：刚需与可买可不买分级、定预算上限、按活动时点分批下单、给冲动消费踩刹车。",
+    "en": "Clear a promo cart: tier must-buys vs optional, set a hard budget cap, batch orders by promo window, brake impulse buys."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我把大促购物车分级并定预算",
+    "en": "Tier my promo cart and set a budget"
+  },
+  "plugin": "lynxce-cart-budget-advisor",
+  "tags": [
+    {
+      "zh": "购物车分级",
+      "en": "Cart Tiering"
+    },
+    {
+      "zh": "预算封顶",
+      "en": "Budget Cap"
+    },
+    {
+      "zh": "分批下单",
+      "en": "Batched Orders"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把大促购物车分级并定预算",
+      "en": "Tier my promo cart and set a budget"
+    },
+    {
+      "zh": "这些商品分几批下单比较合适",
+      "en": "How should I batch these orders"
+    },
+    {
+      "zh": "怎么控制大促冲动消费",
+      "en": "How to curb impulse buying in a promo"
+    }
+  ],
+  "keywords": [
+    "购物车分级",
+    "预算封顶",
+    "分批下单",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

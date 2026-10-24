@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-microwave-rota-supply-handover-advisor",
+  "version": "1.0.0",
+  "description": "Calculate rota supplies and record cleaning handovers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-microwave-rota-supply-handover-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-microwave-rota-supply-handover"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-microwave-rota-supply-handover-advisor",
+  "displayName": {
+    "zh": "微波炉轮值耗材助理",
+    "en": "Microwave Rota Supply Handover Assistant"
+  },
+  "profession": {
+    "zh": "微波炉清洁轮值耗材交接核算助理",
+    "en": "Office Microwave Cleaning Rota Supply Handover Assistant"
+  },
+  "displayDescription": {
+    "zh": "微波炉清洁轮值怎么交接：按确认轮次核抹布与清洁耗材，算包装补货和余量，交付轮值表与异常移交记录。",
+    "en": "Calculate rota supplies and record cleaning handovers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两台微波炉四轮清洁需要多少耗材",
+    "en": "Calculate supplies for two devices and four rounds"
+  },
+  "plugin": "lynxce-office-microwave-rota-supply-handover-advisor",
+  "tags": [
+    {
+      "zh": "轮值交接",
+      "en": "Rota Handover"
+    },
+    {
+      "zh": "实耗复核",
+      "en": "Usage Review"
+    },
+    {
+      "zh": "异常移交",
+      "en": "Issue Handover"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两台微波炉四轮清洁需要多少耗材",
+      "en": "Calculate supplies for two devices and four rounds"
+    },
+    {
+      "zh": "停用后未执行轮次怎样核余量",
+      "en": "Reconcile supplies for rounds canceled after a fault"
+    },
+    {
+      "zh": "做清洁轮值耗材交接表",
+      "en": "Make a cleaning rota supply handover sheet"
+    }
+  ],
+  "keywords": [
+    "轮值交接",
+    "实耗复核",
+    "异常移交",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

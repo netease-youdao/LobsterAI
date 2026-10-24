@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kitchen-knife-advisor",
+  "version": "1.0.1",
+  "description": "Choose knives and boards: steel and hardness, slicing versus cleaver, real use in sets, board material and hygiene.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kitchen-knife-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kitchen-knife"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kitchen-knife-advisor",
+  "displayName": {
+    "zh": "厨房刀具与砧板选购顾问",
+    "en": "Kitchen Knife and Cutting Board Advisor"
+  },
+  "profession": {
+    "zh": "11.11 厨房刀具与砧板选购顾问",
+    "en": "11.11 Kitchen Knife and Cutting Board Advisor"
+  },
+  "displayDescription": {
+    "zh": "刀具砧板怎么选：钢材与硬度、切片刀砍骨刀分工、套装实际用到几把、砧板材质与生熟分开。",
+    "en": "Choose knives and boards: steel and hardness, slicing versus cleaver, real use in sets, board material and hygiene."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "常剁排骨该买什么样的刀",
+    "en": "Which knife suits chopping ribs"
+  },
+  "plugin": "lynxce-kitchen-knife-advisor",
+  "tags": [
+    {
+      "zh": "钢材硬度",
+      "en": "Steel and Hardness"
+    },
+    {
+      "zh": "套装拆算",
+      "en": "Set Value Check"
+    },
+    {
+      "zh": "砧板材质",
+      "en": "Board Material"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "常剁排骨该买什么样的刀",
+      "en": "Which knife suits chopping ribs"
+    },
+    {
+      "zh": "七件套刀具到底值不值",
+      "en": "Is a seven piece knife set worth it"
+    },
+    {
+      "zh": "木砧板和塑料砧板怎么选",
+      "en": "Wooden or plastic cutting board"
+    }
+  ],
+  "keywords": [
+    "钢材硬度",
+    "套装拆算",
+    "砧板材质",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

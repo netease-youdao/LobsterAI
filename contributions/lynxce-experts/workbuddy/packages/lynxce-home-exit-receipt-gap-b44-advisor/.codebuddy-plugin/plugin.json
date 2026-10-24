@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-home-exit-receipt-gap-b44-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied home records with three evidence-based workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-home-exit-receipt-gap-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-home-exit-receipt-gap-b44",
+    "./skills/lynxce-home-sealed-content-link-b44",
+    "./skills/lynxce-home-exit-condition-map-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-home-exit-receipt-gap-b44-advisor",
+  "displayName": {
+    "zh": "家政退出返还顾问",
+    "en": "Home Service Exit Receipt Gap Advisor"
+  },
+  "profession": {
+    "zh": "家政服务退出交接资料核对顾问",
+    "en": "Home Service Exit Receipt Gap Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户资料核对家政退出返还凭据核对，区分事实缺项与冲突，输出专项证据对照及人工复核记录。",
+    "en": "Review supplied home records with three evidence-based workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "collaboration",
+  "defaultInitPrompt": {
+    "zh": "请用现有资料生成家政退出返还凭据核对，未知项保留待补。",
+    "en": "Review the supplied records and mark missing evidence."
+  },
+  "plugin": "lynxce-home-exit-receipt-gap-b44-advisor",
+  "tags": [
+    {
+      "zh": "家政服务退出交接",
+      "en": "Domain records"
+    },
+    {
+      "zh": "证据核对",
+      "en": "Evidence review"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请用现有资料生成家政退出返还凭据核对，未知项保留待补。",
+      "en": "Review the supplied records and mark missing evidence."
+    },
+    {
+      "zh": "请单独运行封包件号回执关联，保留原值与算式。",
+      "en": "Run the first internal task with evidence and arithmetic."
+    },
+    {
+      "zh": "请核对服务退出条件证据表中的矛盾和边界条件。",
+      "en": "Review conflicts and boundaries in the second internal task."
+    }
+  ],
+  "keywords": [
+    "家政服务退出交接",
+    "证据核对",
+    "异常复核"
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-cross-border-compliance-expert",
+  "version": "1.0.1",
+  "description": "Check certificates, test reports and labels for completeness, validity and consistency; draft a document matrix and appeal outline.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cross-border-compliance-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cross-border-compliance-expert",
+  "displayName": {
+    "zh": "跨境认证资料顾问",
+    "en": "Cross-border Compliance Officer"
+  },
+  "profession": {
+    "zh": "认证资料与平台规则顾问",
+    "en": "Certification & Platform Rules Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据商品参数与现有证书报告核对认证资料是否齐全有效，输出文件时效矩阵、一致性问题清单和申诉材料框架。",
+    "en": "Check certificates, test reports and labels for completeness, validity and consistency; draft a document matrix and appeal outline."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "根据商品参数和现有证书生成认证资料矩阵和时效表",
+    "en": "Build a document matrix and validity table from specs and certificates"
+  },
+  "plugin": "lynxce-cross-border-compliance-expert",
+  "tags": [
+    {
+      "zh": "资料矩阵",
+      "en": "Document Matrix"
+    },
+    {
+      "zh": "时效核对",
+      "en": "Validity Check"
+    },
+    {
+      "zh": "申诉材料",
+      "en": "Appeal Pack"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据商品参数和现有证书生成认证资料矩阵和时效表",
+      "en": "Build a document matrix and validity table from specs and certificates"
+    },
+    {
+      "zh": "复核这份申诉稿和附件清单的事实与证据对应",
+      "en": "Review this appeal draft and attachments for fact-evidence match"
+    },
+    {
+      "zh": "只知道品类和目标市场时先给资料核对框架",
+      "en": "With only category and market give a document checklist outline"
+    }
+  ],
+  "keywords": [
+    "资料矩阵",
+    "时效核对",
+    "申诉材料",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true,
+  "skills": []
+}

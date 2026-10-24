@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-miniapp-advisor",
+  "version": "1.0.1",
+  "description": "Prepare submission evidence, rejection reviews and release observation plans from user materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-miniapp-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-miniapp-advisor-evidence",
+    "./skills/lynxce-miniapp-advisor-review",
+    "./skills/lynxce-miniapp-advisor-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-miniapp-advisor",
+  "displayName": {
+    "zh": "小程序上架顾问",
+    "en": "Mini Program Release"
+  },
+  "profession": {
+    "zh": "小程序提审与发布合规顾问",
+    "en": "Mini Program Review & Release Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料完成材料映射、驳回复核与发布观察，交付证据清单、异常决策和可复算样例及复核记录。",
+    "en": "Prepare submission evidence, rejection reviews and release observation plans from user materials."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "第一次提审,需要准备哪些材料",
+    "en": "First submission — what materials do I need"
+  },
+  "plugin": "lynxce-miniapp-advisor",
+  "tags": [
+    {
+      "zh": "提审准备",
+      "en": "Submission"
+    },
+    {
+      "zh": "驳回排查",
+      "en": "Rejections"
+    },
+    {
+      "zh": "灰度发布",
+      "en": "Staged Rollout"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "第一次提审,需要准备哪些材料",
+      "en": "First submission — what materials do I need"
+    },
+    {
+      "zh": "被驳回说类目与内容不符,怎么改",
+      "en": "Rejected for category mismatch — how do I fix it"
+    },
+    {
+      "zh": "发版怎么做灰度和回滚",
+      "en": "How should I do staged release and rollback"
+    }
+  ],
+  "keywords": [
+    "提审准备",
+    "驳回排查",
+    "灰度发布",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

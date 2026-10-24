@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-substitute-course-handover-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare reviewable records, exception checks and conditional decisions from supplied materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-substitute-course-handover-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-substitute-course-handover-b44",
+    "./skills/lynxce-substitute-course-handover-evidence-b44",
+    "./skills/lynxce-substitute-course-handover-followup-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-substitute-course-handover-b44-advisor",
+  "displayName": {
+    "zh": "培训代课交接顾问",
+    "en": "Substitute Course Handover Advisor"
+  },
+  "profession": {
+    "zh": "培训代课交接顾问",
+    "en": "Substitute Course Handover Advisor"
+  },
+  "displayDescription": {
+    "zh": "为培训代课双方核对已授段落、剩余课时与未答问题，形成接续起点、时间缺口及人工确认交接表。",
+    "en": "Prepare reviewable records, exception checks and conditional decisions from supplied materials."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我提供的资料完成代课剩余课时接续核对",
+    "en": "Prepare the focused record review"
+  },
+  "plugin": "lynxce-substitute-course-handover-b44-advisor",
+  "tags": [
+    {
+      "zh": "企业培训",
+      "en": "Domain Records"
+    },
+    {
+      "zh": "代课剩余课时接续",
+      "en": "Focused Review"
+    },
+    {
+      "zh": "人工待决资料",
+      "en": "Decision Evidence"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我提供的资料完成代课剩余课时接续核对",
+      "en": "Prepare the focused record review"
+    },
+    {
+      "zh": "请单独完成代课教案附件版本核查",
+      "en": "Review the specific evidence task"
+    },
+    {
+      "zh": "请按补充记录执行代课未答问题承接卡",
+      "en": "Review the follow-up records"
+    }
+  ],
+  "keywords": [
+    "企业培训",
+    "代课剩余课时接续",
+    "人工待决资料"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-garden-advisor",
+  "version": "1.0.4",
+  "description": "Light first for balcony gardening: what to plant, soil and pots, and starter tools.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-garden-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-garden-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-garden-advisor",
+  "displayName": {
+    "zh": "园艺农资与阳台种植采买顾问",
+    "en": "Gardening and Balcony Planting Advisor"
+  },
+  "profession": {
+    "zh": "园艺农资与阳台种植采买顾问",
+    "en": "Gardening and Balcony Planting Advisor"
+  },
+  "displayDescription": {
+    "zh": "阳台种植先看光照：朝向决定种什么、土和盆怎么选、工具买哪几样、季节怎么安排种植。",
+    "en": "Light first for balcony gardening: what to plant, soil and pots, and starter tools."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家阳台能种什么",
+    "en": "What can I grow on my balcony"
+  },
+  "plugin": "lynxce-garden-advisor",
+  "tags": [
+    {
+      "zh": "阳台种植",
+      "en": "Gardening"
+    },
+    {
+      "zh": "光照判断",
+      "en": "Light"
+    },
+    {
+      "zh": "新手清单",
+      "en": "Starter Kit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家阳台能种什么",
+      "en": "What can I grow on my balcony"
+    },
+    {
+      "zh": "土和盆怎么选",
+      "en": "Which soil and pot should I use"
+    },
+    {
+      "zh": "新手先买哪几样",
+      "en": "What should a beginner buy first"
+    }
+  ],
+  "keywords": [
+    "阳台种植",
+    "光照判断",
+    "新手清单",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

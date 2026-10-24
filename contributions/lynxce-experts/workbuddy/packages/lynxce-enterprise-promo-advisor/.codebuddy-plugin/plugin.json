@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-enterprise-promo-advisor",
+  "version": "1.0.1",
+  "description": "Run company sale purchases cleanly: bulk list, price records, invoice title and tax ID, acceptance and receipts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-enterprise-promo-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-enterprise-promo-purchase"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-enterprise-promo-advisor",
+  "displayName": {
+    "zh": "企业大促集中采购与发票对账顾问",
+    "en": "Enterprise Promo Bulk Purchase and Invoice Reconciliation Advisor"
+  },
+  "profession": {
+    "zh": "企业大促集中采购与发票对账顾问",
+    "en": "Enterprise Promo Bulk Purchase and Invoice Reconciliation Advisor"
+  },
+  "displayDescription": {
+    "zh": "公司趁大促集中采购怎么留痕：集采清单、比价留档、开票抬头税号、分批到货验收与报销凭证。",
+    "en": "Run company sale purchases cleanly: bulk list, price records, invoice title and tax ID, acceptance and receipts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我把各部门需求整理成集采清单并比价",
+    "en": "Turn team requests into a bulk list and compare prices"
+  },
+  "plugin": "lynxce-enterprise-promo-advisor",
+  "tags": [
+    {
+      "zh": "集采清单",
+      "en": "Bulk List"
+    },
+    {
+      "zh": "比价留档",
+      "en": "Price Records"
+    },
+    {
+      "zh": "发票对账",
+      "en": "Invoice Matching"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把各部门需求整理成集采清单并比价",
+      "en": "Turn team requests into a bulk list and compare prices"
+    },
+    {
+      "zh": "开专票要核对哪些信息",
+      "en": "What to check for a special VAT invoice"
+    },
+    {
+      "zh": "分批到货怎么验收和对账",
+      "en": "How to accept split deliveries and reconcile"
+    }
+  ],
+  "keywords": [
+    "集采清单",
+    "比价留档",
+    "发票对账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

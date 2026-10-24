@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-property-waste-bin-clearance-plan-b45",
+  "version": "1.0.0",
+  "description": "Plan bin clearance rounds from supplied volume profiles and usable capacity, with extra-bin scenarios and ending balances.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-property-waste-bin-clearance-plan-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-property-waste-bin-clearance-plan-inside-1-b45",
+    "./skills/lynxce-property-waste-bin-clearance-plan-inside-2-b45",
+    "./skills/lynxce-property-waste-bin-clearance-plan-inside-3-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-property-waste-bin-clearance-plan-b45",
+  "displayName": {
+    "zh": "清运规划师",
+    "en": "Community Bin Capacity and Clearance Planner"
+  },
+  "profession": {
+    "zh": "垃圾清运规划师",
+    "en": "Community Bin Capacity and Clearance Planner"
+  },
+  "displayDescription": {
+    "zh": "按分时投放体积、现有桶容与清运窗口计算满载节点，交付清运班次、增桶比较和漏班后的重排方案。",
+    "en": "Plan bin clearance rounds from supplied volume profiles and usable capacity, with extra-bin scenarios and ending balances."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两只120升桶上午总满，按分时体积帮我安排清运。",
+    "en": "Community Bin Capacity and Clearance Planner"
+  },
+  "plugin": "lynxce-property-waste-bin-clearance-plan-b45",
+  "tags": [
+    {
+      "zh": "垃圾清运",
+      "en": "垃圾清运"
+    },
+    {
+      "zh": "桶容测算",
+      "en": "桶容测算"
+    },
+    {
+      "zh": "清运排程",
+      "en": "清运排程"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两只120升桶上午总满，按分时体积帮我安排清运。",
+      "en": "Community Bin Capacity and Clearance Planner"
+    },
+    {
+      "zh": "加一只桶能少跑几趟，按现有数据比较方案。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "今天投放量比原计划多五成，给我新版班次。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "垃圾清运",
+    "桶容测算",
+    "清运排程"
+  ]
+}

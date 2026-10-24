@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-fresh-fruit-gift-advisor",
+  "version": "1.0.1",
+  "description": "Pick fruit gift boxes: season and origin, net weight per-jin price, cold chain and compensation, delivery, gift list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fresh-fruit-gift-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fresh-fruit-gift"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fresh-fruit-gift-advisor",
+  "displayName": {
+    "zh": "生鲜水果礼盒与产地直发选购顾问",
+    "en": "Fresh Fruit Gift Box and Farm Direct Advisor"
+  },
+  "profession": {
+    "zh": "11.11 生鲜水果礼盒与产地直发选购顾问",
+    "en": "11.11 Fresh Fruit Gift Box and Farm Direct Advisor"
+  },
+  "displayDescription": {
+    "zh": "水果礼盒怎么挑：对时令与产地、按净重换算单价、核冷链与坏果赔付规则、算到货时效、列送礼清单。",
+    "en": "Pick fruit gift boxes: season and origin, net weight per-jin price, cold chain and compensation, delivery, gift list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "5 斤装礼盒净重多少每斤到底多少钱",
+    "en": "What is the real per-jin price of a 5 jin gift box"
+  },
+  "plugin": "lynxce-fresh-fruit-gift-advisor",
+  "tags": [
+    {
+      "zh": "净重单价",
+      "en": "Net Weight Price"
+    },
+    {
+      "zh": "坏果赔付",
+      "en": "Bad Fruit Claims"
+    },
+    {
+      "zh": "到货时效",
+      "en": "Delivery Timing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "5 斤装礼盒净重多少每斤到底多少钱",
+      "en": "What is the real per-jin price of a 5 jin gift box"
+    },
+    {
+      "zh": "周五送到今天下单来得及吗",
+      "en": "If I order today will it arrive by Friday"
+    },
+    {
+      "zh": "坏果赔付要在多久内拍照报单",
+      "en": "How soon must I photograph and report bad fruit"
+    }
+  ],
+  "keywords": [
+    "净重单价",
+    "坏果赔付",
+    "到货时效",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

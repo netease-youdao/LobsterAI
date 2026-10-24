@@ -1,0 +1,470 @@
+{
+  "clues": {
+    "tools": "塔内有可检查灯具的工具",
+    "bay_map": "有可取的海湾图",
+    "locator_marks": "导片与定位点线索可见",
+    "assembly_diagram": "匣底有给出定位方向的装配图",
+    "lamp_repaired": "导片已按定位对齐",
+    "lamp_on": "该路径信号灯已经稳定亮起",
+    "signal_rhythm": "已见虚构遮光板节奏与其靠岸方向含义",
+    "map_taken": "已取下并带着海湾图",
+    "stone_route": "知道通往旧平台的石阶",
+    "bell_inside": "知道钟在塔内窗边可敲",
+    "reef_identified": "已有居民识别鸟翼礁石的帮助",
+    "clear_direction": "本次已向渡船给出清楚方向",
+    "wait_ack": "已与渡船形成等待回应",
+    "invalid_guidance": "本次未及时形成清楚引导",
+    "bent_lamp": "该路径导片被压弯灯不可用",
+    "abandoned_info": "已选择不用取得的信息",
+    "wrong_signal": "已发错遮光板节奏",
+    "missed_location": "离塔再回时已经错过渡船"
+  },
+  "plans": [
+    {
+      "id": "正常8节点3结局",
+      "entry": "N0",
+      "nodeBudget": 8,
+      "endingBudget": 3,
+      "buttonsPerScene": 2,
+      "initialClues": [
+        "tools",
+        "bay_map"
+      ],
+      "initialBindings": [
+        {
+          "clue": "tools",
+          "quote": "木匣"
+        },
+        {
+          "clue": "bay_map",
+          "quote": "海湾图"
+        }
+      ],
+      "condition": "按原正常条件的完整原创稿；无游戏数值变量，尚未真实试玩。",
+      "nodes": [
+        {
+          "id": "N0",
+          "title": "雾来到窗前",
+          "kind": "scene",
+          "text": "雾把海湾压成一张没有线条的纸。阿岚推开塔顶的门，发现信号灯没有亮——灯罩是凉的。桌上摆着老师傅留下的木匣，匣里有工具；墙上钉着一张旧海湾图，边角卷起。远处传来渡船短促的汽笛，一声，又一声。桌上压着一张纸条：\"先看清楚，再决定。\"你可以先弄清灯为什么不亮，也可以先找别的办法让船上的人知道岸在哪里。",
+          "providedClues": [],
+          "providedBindings": [],
+          "requiredClues": [],
+          "requiredBindings": [],
+          "buttons": [
+            {
+              "text": "打开灯具外壳，检查断开的部位。",
+              "target": "N1",
+              "requiredClues": [
+                "tools"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "tools",
+                  "quote": "检查"
+                }
+              ],
+              "outcome": "阿岚用木匣里的工具打开外壳，看清导片。",
+              "providedClues": [],
+              "providedBindings": []
+            },
+            {
+              "text": "取下海湾图，寻找其他引导办法。",
+              "target": "N2",
+              "requiredClues": [
+                "bay_map"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "bay_map",
+                  "quote": "海湾图"
+                }
+              ],
+              "outcome": "阿岚取下海湾图。",
+              "providedClues": [
+                "map_taken"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "map_taken",
+                  "quote": "取下海湾图"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "N1",
+          "title": "松动的银片",
+          "kind": "scene",
+          "text": "灯罩下没有碎裂的痕迹，只是一片银色导片滑出了刻槽。刻槽旁边有两个浅浅的定位点，阿岚记得它们应当相对，却记不清该朝哪一边。窗外的汽笛又响了一次，比刚才更近。用力把导片按回去似乎最快，可薄片也可能被折弯。匣底压着一幅简短的装配图，画着定位点的相对位置。",
+          "providedClues": [
+            "locator_marks",
+            "assembly_diagram"
+          ],
+          "providedBindings": [
+            {
+              "clue": "locator_marks",
+              "quote": "不存在的定位咒语"
+            },
+            {
+              "clue": "assembly_diagram",
+              "quote": "装配图"
+            }
+          ],
+          "requiredClues": [],
+          "requiredBindings": [],
+          "buttons": [
+            {
+              "text": "对照装配图，让定位点对齐。",
+              "target": "N3",
+              "requiredClues": [
+                "assembly_diagram",
+                "locator_marks"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "assembly_diagram",
+                  "quote": "装配图"
+                },
+                {
+                  "clue": "locator_marks",
+                  "quote": "定位点"
+                }
+              ],
+              "outcome": "导片已经按定位点对齐。",
+              "providedClues": [
+                "lamp_repaired"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "lamp_repaired",
+                  "quote": "导片已经按定位点对齐"
+                }
+              ]
+            },
+            {
+              "text": "直接用力压下导片，争取立刻点亮。",
+              "target": "E1",
+              "requiredClues": [
+                "locator_marks"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "locator_marks",
+                  "quote": "导片"
+                }
+              ],
+              "outcome": "导片被压弯，未及时形成清楚引导。",
+              "providedClues": [
+                "invalid_guidance"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "invalid_guidance",
+                  "quote": "未及时形成清楚引导"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "N2",
+          "title": "图背后的标记",
+          "kind": "scene",
+          "text": "阿岚把海湾图翻过来，背面画着一条沿岸石阶，尽头是能看见渡船的旧平台。窗边还挂着一口报雾钟，就在塔内，伸手可及。图上没有写潮水，但从这扇窗望出去，那条石阶尽头的平台并没有被水淹没。你可以带图下塔去平台，也可以留在塔内敲响报雾钟，让船上知道岸边有人。",
+          "providedClues": [
+            "stone_route",
+            "bell_inside",
+            "map_taken"
+          ],
+          "providedBindings": [
+            {
+              "clue": "stone_route",
+              "quote": "沿岸石阶"
+            },
+            {
+              "clue": "bell_inside",
+              "quote": "塔内"
+            },
+            {
+              "clue": "map_taken",
+              "quote": "阿岚把海湾图翻过来"
+            }
+          ],
+          "requiredClues": [],
+          "requiredBindings": [],
+          "buttons": [
+            {
+              "text": "带图沿可见的石阶走到旧平台，尝试提供方向。",
+              "target": "N4",
+              "requiredClues": [
+                "map_taken",
+                "stone_route"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "map_taken",
+                  "quote": "带图"
+                },
+                {
+                  "clue": "stone_route",
+                  "quote": "石阶"
+                }
+              ],
+              "outcome": "阿岚带着图走到平台。",
+              "providedClues": [],
+              "providedBindings": []
+            },
+            {
+              "text": "留在塔内敲响报雾钟，请渡船放慢等待。",
+              "target": "E2",
+              "requiredClues": [
+                "bell_inside"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "bell_inside",
+                  "quote": "塔内"
+                }
+              ],
+              "outcome": "钟声得到船上回应，双方彼此在等待。",
+              "providedClues": [
+                "wait_ack"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "wait_ack",
+                  "quote": "双方彼此在等待"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "N3",
+          "title": "灯重新发亮",
+          "kind": "scene",
+          "text": "定位点对齐后，暖色的光稳定地亮起来，光束在雾里留下短短的一段路。阿岚关好灯罩，风还在增强。纸条背面画着一套虚构的信号节奏，注明可以转动遮光板打出\"靠岸方向\"；也可以什么都不打，只让灯稳定地亮着，示意大家先等风小一些。两种做法都要付出不同的时间代价。",
+          "providedClues": [
+            "lamp_on",
+            "signal_rhythm"
+          ],
+          "providedBindings": [
+            {
+              "clue": "lamp_on",
+              "quote": "光稳定地亮起来"
+            },
+            {
+              "clue": "signal_rhythm",
+              "quote": "信号节奏"
+            }
+          ],
+          "requiredClues": [
+            "lamp_repaired"
+          ],
+          "requiredBindings": [
+            {
+              "clue": "lamp_repaired",
+              "quote": "定位点对齐后"
+            }
+          ],
+          "buttons": [
+            {
+              "text": "按照已给出的信号图，发出靠岸方向。",
+              "target": "E3",
+              "requiredClues": [
+                "lamp_on",
+                "signal_rhythm"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "lamp_on",
+                  "quote": "发出靠岸方向"
+                },
+                {
+                  "clue": "signal_rhythm",
+                  "quote": "信号图"
+                }
+              ],
+              "outcome": "亮起的灯按节奏发出了清楚方向。",
+              "providedClues": [
+                "clear_direction"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "clear_direction",
+                  "quote": "清楚方向"
+                }
+              ]
+            },
+            {
+              "text": "保持固定灯光，示意暂时等候。",
+              "target": "E2",
+              "requiredClues": [
+                "lamp_on"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "lamp_on",
+                  "quote": "灯光"
+                }
+              ],
+              "outcome": "船上回应了固定灯光，双方彼此在等待。",
+              "providedClues": [
+                "wait_ack"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "wait_ack",
+                  "quote": "双方彼此在等待"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "N4",
+          "title": "平台上的两个人",
+          "kind": "scene",
+          "text": "平台上还有一位提着空篮的居民，她也在等渡船。阿岚摊开图，她立刻认出图上那块形似鸟翼的礁石——她说，从船上看，那块礁石像一只朝北的翅膀。你可以请她一起把图上的信息变成船上看得见的动作；也可以担心弄错而把图收起来，独自等一个更稳妥的线索。",
+          "providedClues": [
+            "reef_identified"
+          ],
+          "providedBindings": [
+            {
+              "clue": "reef_identified",
+              "quote": "鸟翼"
+            }
+          ],
+          "requiredClues": [
+            "map_taken",
+            "stone_route"
+          ],
+          "requiredBindings": [
+            {
+              "clue": "map_taken",
+              "quote": "阿岚摊开图"
+            },
+            {
+              "clue": "stone_route",
+              "quote": "平台"
+            }
+          ],
+          "buttons": [
+            {
+              "text": "请居民指认礁石，一起给出清楚方向。",
+              "target": "E3",
+              "requiredClues": [
+                "reef_identified",
+                "map_taken"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "reef_identified",
+                  "quote": "礁石"
+                },
+                {
+                  "clue": "map_taken",
+                  "quote": "清楚方向"
+                }
+              ],
+              "outcome": "居民把图上的礁石变成船上看懂的动作，给出了清楚方向。",
+              "providedClues": [
+                "clear_direction"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "clear_direction",
+                  "quote": "清楚方向"
+                }
+              ]
+            },
+            {
+              "text": "先收起地图，独自等待更确定的线索。",
+              "target": "E1",
+              "requiredClues": [
+                "map_taken"
+              ],
+              "requiredBindings": [
+                {
+                  "clue": "map_taken",
+                  "quote": "地图"
+                }
+              ],
+              "outcome": "这一轮未及时形成清楚引导。",
+              "providedClues": [
+                "invalid_guidance"
+              ],
+              "providedBindings": [
+                {
+                  "clue": "invalid_guidance",
+                  "quote": "未及时形成清楚引导"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "E1",
+          "title": "错过第一班船",
+          "kind": "ending",
+          "text": "汽笛渐渐远去，本轮未及时形成清楚引导，第一班渡船没有靠岸。阿岚回到塔内桌边，记下最想重来的一步。海湾还在，下一班船也会来。此处只承接两路共有的本次结果，不说玩家既压弯导片又收起了地图。",
+          "providedClues": [],
+          "providedBindings": [],
+          "requiredClues": [
+            "invalid_guidance"
+          ],
+          "requiredBindings": [
+            {
+              "clue": "invalid_guidance",
+              "quote": "未及时形成清楚引导"
+            }
+          ],
+          "buttons": []
+        },
+        {
+          "id": "E2",
+          "title": "安全地等一等（结局）",
+          "kind": "ending",
+          "text": "渡船放慢了速度。岸上与船上的人，都知道彼此在等待。第一轮靠岸的时间被推迟了，雾仍然很浓，阿岚也没有把握所有条件都已准备好。你选择把\"我在等\"说清楚，而不是让别人去猜。海湾没有马上恢复热闹，但每个人都多得了一点准备的时间。",
+          "providedClues": [],
+          "providedBindings": [],
+          "requiredClues": [
+            "wait_ack"
+          ],
+          "requiredBindings": [
+            {
+              "clue": "wait_ack",
+              "quote": "彼此在等待"
+            }
+          ],
+          "buttons": []
+        },
+        {
+          "id": "E3",
+          "title": "彼此看见",
+          "kind": "ending",
+          "text": "雾里终于出现了彼此都能理解的清楚方向，渡船缓缓靠近，船头有人挥手。阿岚把已经确定的信息变成了别人可用的动作。靠岸后，你回到塔内桌边，在纸条背面写下：看清楚，也要说清楚。此处不要求两条路线都拿图、都修灯或都遇到居民。",
+          "providedClues": [],
+          "providedBindings": [],
+          "requiredClues": [
+            "clear_direction"
+          ],
+          "requiredBindings": [
+            {
+              "clue": "clear_direction",
+              "quote": "清楚方向"
+            }
+          ],
+          "buttons": []
+        }
+      ]
+    }
+  ],
+  "questions": [
+    "请确认受众年龄与阅读长度；本稿为温和原创练习。",
+    "是否保持8节点3结局预算？变更后完整重算。",
+    "是否仍不采用游戏数值变量？校验元数据只用于作者检查。"
+  ]
+}

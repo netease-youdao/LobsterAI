@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-charitable-donation-deduction-b50",
+  "version": "1.0.0",
+  "description": "Reconcile qualifying corporate donations, annual profit limits and carryforwards into complete evidence and revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-charitable-donation-deduction-b50.md"
+  ],
+  "skills": [
+    "./skills/lynxce-donation-channel-period-b50",
+    "./skills/lynxce-donation-limit-rollforward-b50",
+    "./skills/lynxce-donation-evidence-revision-b50"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-charitable-donation-deduction-b50",
+  "displayName": {
+    "zh": "捐赠顾问",
+    "en": "Corporate Donation Deduction Advisor"
+  },
+  "profession": {
+    "zh": "捐赠扣除顾问",
+    "en": "Corporate Donation Deduction Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务核对公益捐赠渠道、资格期间和票据，按年度利润与历史余额测算扣除，形成台账及完整补正稿。",
+    "en": "Reconcile qualifying corporate donations, annual profit limits and carryforwards into complete evidence and revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "核捐赠资格期间、票据及12%限额，写完整准备说明。",
+    "en": "Corporate Donation Deduction Advisor"
+  },
+  "plugin": "lynxce-charitable-donation-deduction-b50",
+  "tags": [
+    {
+      "zh": "公益捐赠",
+      "en": "公益捐赠"
+    },
+    {
+      "zh": "扣除限额",
+      "en": "扣除限额"
+    },
+    {
+      "zh": "结转台账",
+      "en": "结转台账"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核捐赠资格期间、票据及12%限额，写完整准备说明。",
+      "en": "Corporate Donation Deduction Advisor"
+    },
+    {
+      "zh": "利润总额两份摘要冲突，请重列全部捐赠和结转年度。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "直接捐赠和资格未核的款项，怎样如实补证而不重复扣除？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "公益捐赠",
+    "扣除限额",
+    "结转台账"
+  ]
+}

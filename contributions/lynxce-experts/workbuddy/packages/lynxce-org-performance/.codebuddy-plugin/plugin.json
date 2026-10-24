@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-org-performance",
+  "version": "1.0.1",
+  "description": "Turn strategy and role duties into OKR drafts, scored reviews, competency models and structured interview scorecards.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-org-performance.md"
+  ],
+  "skills": [
+    "./skills/lynxce-okr"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-org-performance",
+  "displayName": {
+    "zh": "OKR与人才评估顾问",
+    "en": "Org Performance Advisor"
+  },
+  "profession": {
+    "zh": "OKR与人才评估顾问",
+    "en": "OKR and Talent Assessment Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据战略目标与岗位职责整理OKR草案与对齐检查、线性评分复盘表，生成能力模型、结构化面试题与评分表。",
+    "en": "Turn strategy and role duties into OKR drafts, scored reviews, competency models and structured interview scorecards."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据上级目标生成团队本季度OKR与对齐说明",
+    "en": "Draft this quarter's team OKRs with alignment notes"
+  },
+  "plugin": "lynxce-org-performance",
+  "tags": [
+    {
+      "zh": "OKR制定",
+      "en": "OKR Planning"
+    },
+    {
+      "zh": "复盘评分",
+      "en": "OKR Scoring"
+    },
+    {
+      "zh": "结构化面试",
+      "en": "Structured Interview"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据上级目标生成团队本季度OKR与对齐说明",
+      "en": "Draft this quarter's team OKRs with alignment notes"
+    },
+    {
+      "zh": "复核我们上季度OKR评分和归因写得对不对",
+      "en": "Review our last-quarter OKR scores and root-cause notes"
+    },
+    {
+      "zh": "只有岗位名称时先给能力项框架和待补材料",
+      "en": "With only a job title, give a competency frame and missing inputs"
+    }
+  ],
+  "keywords": [
+    "OKR制定",
+    "复盘评分",
+    "结构化面试",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

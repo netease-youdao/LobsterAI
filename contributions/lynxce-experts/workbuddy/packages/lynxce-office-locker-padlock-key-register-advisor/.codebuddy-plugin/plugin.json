@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-locker-padlock-key-register-advisor",
+  "version": "1.0.0",
+  "description": "Register locker locks and sealed spare keys.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-locker-padlock-key-register-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-locker-padlock-key-register"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-locker-padlock-key-register-advisor",
+  "displayName": {
+    "zh": "储物柜锁钥登记顾问",
+    "en": "Locker Key Register Advisor"
+  },
+  "profession": {
+    "zh": "员工储物柜挂锁编号与备用钥匙登记顾问",
+    "en": "Locker Key Register Advisor"
+  },
+  "displayDescription": {
+    "zh": "员工储物柜按锁孔尺寸核对挂锁，逐柜绑定锁号与备用钥匙封存编号，核算缺锁补购，输出领用交接表。",
+    "en": "Register locker locks and sealed spare keys."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对员工储物柜挂锁编号与备用钥匙登记的输入条件",
+    "en": "Check inputs and compatibility"
+  },
+  "plugin": "lynxce-office-locker-padlock-key-register-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "台账核算",
+      "en": "Ledger Reconciliation"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对员工储物柜挂锁编号与备用钥匙登记的输入条件",
+      "en": "Check inputs and compatibility"
+    },
+    {
+      "zh": "依据确认数据计算净购与余量",
+      "en": "Calculate net purchases and remaining stock"
+    },
+    {
+      "zh": "生成专项台账与异常复核表",
+      "en": "Build records and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "台账核算",
+    "异常复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

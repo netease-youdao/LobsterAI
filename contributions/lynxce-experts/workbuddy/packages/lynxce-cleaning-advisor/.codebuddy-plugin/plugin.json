@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-cleaning-advisor",
+  "version": "1.0.4",
+  "description": "A minimal cleaning set: by stain type, by surface, and refill unit-price math.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cleaning-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cleaning-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cleaning-advisor",
+  "displayName": {
+    "zh": "家庭清洁用品与耗材选购顾问",
+    "en": "Household Cleaning Supplies Advisor"
+  },
+  "profession": {
+    "zh": "家庭清洁用品与耗材选购顾问",
+    "en": "Household Cleaning Supplies Advisor"
+  },
+  "displayDescription": {
+    "zh": "清洁用品少而精就够用：按污渍类型配四五样、按材质分区使用、补充装怎么算才是真的省。",
+    "en": "A minimal cleaning set: by stain type, by surface, and refill unit-price math."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里清洁用品配几样就够",
+    "en": "How many cleaning products do I actually need"
+  },
+  "plugin": "lynxce-cleaning-advisor",
+  "tags": [
+    {
+      "zh": "清洁用品",
+      "en": "Cleaning"
+    },
+    {
+      "zh": "分区使用",
+      "en": "By Surface"
+    },
+    {
+      "zh": "用量估算",
+      "en": "Usage"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里清洁用品配几样就够",
+      "en": "How many cleaning products do I actually need"
+    },
+    {
+      "zh": "这个污渍该用什么清洁剂",
+      "en": "Which cleaner works for this stain"
+    },
+    {
+      "zh": "补充装划算还是整瓶划算",
+      "en": "Refill packs or full bottles"
+    }
+  ],
+  "keywords": [
+    "清洁用品",
+    "分区使用",
+    "用量估算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

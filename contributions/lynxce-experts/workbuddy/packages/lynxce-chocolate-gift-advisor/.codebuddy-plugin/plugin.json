@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-chocolate-gift-advisor",
+  "version": "1.0.0",
+  "description": "Pick chocolate gifts: cocoa butter check, shelf life by gift date, cold delivery, price per 100g.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-chocolate-gift-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-chocolate-gift"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-chocolate-gift-advisor",
+  "displayName": {
+    "zh": "巧克力礼盒选购顾问",
+    "en": "Chocolate Gift Box Advisor"
+  },
+  "profession": {
+    "zh": "11.11 巧克力礼盒选购顾问",
+    "en": "11.11 Chocolate Gift Box Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "巧克力礼盒怎么挑：看名称配料识别代可可脂、按送礼日核剩余保质期、按气温定冷链运输、算百克价。",
+    "en": "Pick chocolate gifts: cocoa butter check, shelf life by gift date, cold delivery, price per 100g."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "怎么看巧克力是不是代可可脂",
+    "en": "How to spot cocoa butter substitute chocolate"
+  },
+  "plugin": "lynxce-chocolate-gift-advisor",
+  "tags": [
+    {
+      "zh": "代可可脂识别",
+      "en": "Cocoa Butter Check"
+    },
+    {
+      "zh": "剩余保质期",
+      "en": "Remaining Shelf Life"
+    },
+    {
+      "zh": "冷链运输",
+      "en": "Cold Delivery"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "怎么看巧克力是不是代可可脂",
+      "en": "How to spot cocoa butter substitute chocolate"
+    },
+    {
+      "zh": "送客户的巧克力保质期要剩多久",
+      "en": "How much shelf life a gift chocolate should keep"
+    },
+    {
+      "zh": "南方发巧克力要不要冷链",
+      "en": "Does chocolate need cold delivery in warm cities"
+    }
+  ],
+  "keywords": [
+    "代可可脂识别",
+    "剩余保质期",
+    "冷链运输",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

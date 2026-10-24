@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-overseas-shorts-advisor",
+  "version": "1.0.1",
+  "description": "Turn a source script and target market into benchmark notes, a localization table, subtitle timing, cultural checks and tests.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-overseas-shorts-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-overseas-shorts"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-overseas-shorts-advisor",
+  "displayName": {
+    "zh": "出海短视频本地化顾问",
+    "en": "Global Shorts Localization Advisor"
+  },
+  "profession": {
+    "zh": "出海短视频本地化顾问｜灵策智算",
+    "en": "Short Video Localization Advisor for Global Markets"
+  },
+  "displayDescription": {
+    "zh": "根据原视频脚本与目标市场产出对标调研表和本地化对照表，附字幕配音时长核算、文化合规清单与测试记录。",
+    "en": "Turn a source script and target market into benchmark notes, a localization table, subtitle timing, cultural checks and tests."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "根据我的原视频脚本和目标市场生成本地化对照表",
+    "en": "Build a localization table from my source script and target market"
+  },
+  "plugin": "lynxce-overseas-shorts-advisor",
+  "tags": [
+    {
+      "zh": "对标调研",
+      "en": "Benchmark Research"
+    },
+    {
+      "zh": "本地化对照",
+      "en": "Localization Table"
+    },
+    {
+      "zh": "文化合规",
+      "en": "Cultural Checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的原视频脚本和目标市场生成本地化对照表",
+      "en": "Build a localization table from my source script and target market"
+    },
+    {
+      "zh": "复核这版海外字幕的长度阅读速度和文化风险",
+      "en": "Review this overseas subtitle draft for length, reading speed and cultural risk"
+    },
+    {
+      "zh": "只知道目标国家时先给对标调研模板和检查清单",
+      "en": "Give a benchmark template and checklist when only the target country is known"
+    }
+  ],
+  "keywords": [
+    "对标调研",
+    "本地化对照",
+    "文化合规",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

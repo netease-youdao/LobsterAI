@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-purifier-advisor",
+  "version": "1.0.4",
+  "description": "Filters drive the real cost: reading specs, annual filter cost and installation checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-purifier-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-purifier-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-purifier-advisor",
+  "displayName": {
+    "zh": "净水与空气净化设备选购顾问",
+    "en": "Water and Air Purifier Advisor"
+  },
+  "profession": {
+    "zh": "净水与空气净化设备选购顾问",
+    "en": "Water and Air Purifier Advisor"
+  },
+  "displayDescription": {
+    "zh": "净水空净真实成本在滤芯：关键参数怎么读、年成本怎么算、安装条件要先核对哪几个数字。",
+    "en": "Filters drive the real cost: reading specs, annual filter cost and installation checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个面积该买多大的空净",
+    "en": "What purifier capacity fits this room"
+  },
+  "plugin": "lynxce-purifier-advisor",
+  "tags": [
+    {
+      "zh": "净水空净",
+      "en": "Purifiers"
+    },
+    {
+      "zh": "滤芯成本",
+      "en": "Filter Cost"
+    },
+    {
+      "zh": "安装核对",
+      "en": "Install Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个面积该买多大的空净",
+      "en": "What purifier capacity fits this room"
+    },
+    {
+      "zh": "这台净水器一年花多少",
+      "en": "What is the annual cost of this water purifier"
+    },
+    {
+      "zh": "厨下空间能装下吗",
+      "en": "Will it fit under my sink"
+    }
+  ],
+  "keywords": [
+    "净水空净",
+    "滤芯成本",
+    "安装核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-access-keys-advisor",
+  "version": "1.0.1",
+  "description": "Turn staff lists and card or key inventories into access tiers, issue logs, leaver and loss deactivation steps and audits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-access-keys-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-access-keys"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-access-keys-advisor",
+  "displayName": {
+    "zh": "门禁钥匙管理顾问",
+    "en": "Access Control Advisor"
+  },
+  "profession": {
+    "zh": "门禁卡与钥匙发放管理顾问｜灵策智算",
+    "en": "Access Card and Key Management Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据人员名单与门禁钥匙清单，生成权限分级表、发放回收登记、离职挂失停用流程和季度盘点差异表。",
+    "en": "Turn staff lists and card or key inventories into access tiers, issue logs, leaver and loss deactivation steps and audits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我的部门和区域清单生成门禁权限分级表与发放登记",
+    "en": "Build access tiers and an issue log from my departments and areas"
+  },
+  "plugin": "lynxce-access-keys-advisor",
+  "tags": [
+    {
+      "zh": "权限分级",
+      "en": "Access Tiers"
+    },
+    {
+      "zh": "发放回收",
+      "en": "Issue and Return"
+    },
+    {
+      "zh": "季度盘点",
+      "en": "Quarterly Audit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的部门和区域清单生成门禁权限分级表与发放登记",
+      "en": "Build access tiers and an issue log from my departments and areas"
+    },
+    {
+      "zh": "帮我复核这份离职停卡记录和钥匙登记有没有漏洞",
+      "en": "Review my leaver deactivation records and key log for gaps"
+    },
+    {
+      "zh": "只有在职人数和门禁有效卡数先给我一份盘点差异表",
+      "en": "Give me an audit gap sheet from only headcount and active card count"
+    }
+  ],
+  "keywords": [
+    "权限分级",
+    "发放回收",
+    "季度盘点",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

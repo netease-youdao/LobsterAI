@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-property-land-tax-source-b50",
+  "version": "1.0.0",
+  "description": "Reconcile corporate property and urban land tax sources, local parameters and full revisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-property-land-tax-source-b50.md"
+  ],
+  "skills": [
+    "./skills/property-land-object-source-ledger",
+    "./skills/property-land-period-tax-reconcile",
+    "./skills/property-land-change-full-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-property-land-tax-source-b50",
+  "displayName": {
+    "zh": "税源顾问",
+    "en": "Property and Land Tax Source Advisor"
+  },
+  "profession": {
+    "zh": "房土税顾问",
+    "en": "Property and Land Tax Source Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务梳理自用出租房产与占地资料，核对属地税额和期间，形成房土税底稿及完整变更说明。",
+    "en": "Reconcile corporate property and urban land tax sources, local parameters and full revisions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "两栋自用出租房产和一宗土地，帮我逐对象勾稽房土税底稿。",
+    "en": "Property and Land Tax Source Advisor"
+  },
+  "plugin": "lynxce-property-land-tax-source-b50",
+  "tags": [
+    {
+      "zh": "房产税",
+      "en": "房产税"
+    },
+    {
+      "zh": "土地使用税",
+      "en": "土地使用税"
+    },
+    {
+      "zh": "税源变更",
+      "en": "税源变更"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两栋自用出租房产和一宗土地，帮我逐对象勾稽房土税底稿。",
+      "en": "Property and Land Tax Source Advisor"
+    },
+    {
+      "zh": "测量面积与原税源不一致，请保留两源重出完整变更说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "还不知道土地等级和小微资格，哪些税额只能条件计算？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "房产税",
+    "土地使用税",
+    "税源变更"
+  ]
+}

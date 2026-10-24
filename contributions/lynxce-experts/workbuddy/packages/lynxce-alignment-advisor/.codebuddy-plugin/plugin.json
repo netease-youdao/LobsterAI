@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-alignment-advisor",
+  "version": "1.0.1",
+  "description": "Stop scope churn: requirement briefs, alignment steps and review checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-alignment-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-req-alignment"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-alignment-advisor",
+  "displayName": {
+    "zh": "跨部门需求对齐顾问",
+    "en": "Cross-team Requirement Advisor"
+  },
+  "profession": {
+    "zh": "跨部门需求对齐顾问",
+    "en": "Cross-team Requirement Advisor"
+  },
+  "displayDescription": {
+    "zh": "需求老变老返工怎么办：需求单写哪几项、对齐分几步、范围怎么锁住、评审会要看哪几项。",
+    "en": "Stop scope churn: requirement briefs, alignment steps and review checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "需求老变怎么控制",
+    "en": "How do I control constant scope changes"
+  },
+  "plugin": "lynxce-alignment-advisor",
+  "tags": [
+    {
+      "zh": "需求对齐",
+      "en": "Alignment"
+    },
+    {
+      "zh": "范围控制",
+      "en": "Scope"
+    },
+    {
+      "zh": "评审清单",
+      "en": "Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "需求老变怎么控制",
+      "en": "How do I control constant scope changes"
+    },
+    {
+      "zh": "帮我写一份需求单",
+      "en": "Help me write a requirement brief"
+    },
+    {
+      "zh": "评审会要问哪些问题",
+      "en": "Which questions should a review ask"
+    }
+  ],
+  "keywords": [
+    "需求对齐",
+    "范围控制",
+    "评审清单",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

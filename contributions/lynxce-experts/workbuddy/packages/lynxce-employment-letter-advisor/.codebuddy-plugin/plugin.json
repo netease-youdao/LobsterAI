@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-employment-letter-advisor",
+  "version": "1.0.1",
+  "description": "Build letter templates, intake checks, turnaround dates, seal logs, quarterly reconciliation and minimal-disclosure sending rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-employment-letter-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-employment-letter"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-employment-letter-advisor",
+  "displayName": {
+    "zh": "在职证明开具顾问",
+    "en": "Employment Letter Advisor"
+  },
+  "profession": {
+    "zh": "在职证明与介绍信开具办理顾问｜灵策智算",
+    "en": "Employment Verification and Introduction Letter Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据开具场景与接收方要求整理证明模板和受理核实清单，核算出具时限，完成用印登记对账与信息最小化外发。",
+    "en": "Build letter templates, intake checks, turnaround dates, seal logs, quarterly reconciliation and minimal-disclosure sending rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据开具场景和接收方要求生成证明模板与受理核实清单",
+    "en": "Build letter templates and intake checks for our scenarios and recipients"
+  },
+  "plugin": "lynxce-employment-letter-advisor",
+  "tags": [
+    {
+      "zh": "模板字段",
+      "en": "Letter Templates"
+    },
+    {
+      "zh": "用印审批",
+      "en": "Seal Approval"
+    },
+    {
+      "zh": "信息最小化",
+      "en": "Minimal Disclosure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据开具场景和接收方要求生成证明模板与受理核实清单",
+      "en": "Build letter templates and intake checks for our scenarios and recipients"
+    },
+    {
+      "zh": "复核这份证明的字段来源金额口径和用印外发流程",
+      "en": "Review this letter for field sources, income basis, sealing and sending"
+    },
+    {
+      "zh": "只知道要给银行开在职证明时先给最小字段版本",
+      "en": "Draft a minimal-field employment letter when only the bank use is known"
+    }
+  ],
+  "keywords": [
+    "模板字段",
+    "用印审批",
+    "信息最小化",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

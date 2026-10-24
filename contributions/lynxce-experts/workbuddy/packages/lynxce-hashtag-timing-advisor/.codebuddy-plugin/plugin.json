@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-hashtag-timing-advisor",
+  "version": "1.0.1",
+  "description": "Turn video content and past posting data into keyword and hashtag sets, post cards, time-slot test plans and result calls.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hashtag-timing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hashtag-timing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hashtag-timing-advisor",
+  "displayName": {
+    "zh": "话题与发布时间顾问",
+    "en": "Hashtag and Timing Advisor"
+  },
+  "profession": {
+    "zh": "短视频话题标签与发布时间顾问｜灵策智算",
+    "en": "Short Video Hashtag and Posting Time Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据视频内容与近期发布数据，生成关键词话题组合、单条发布卡、发布时段测试排期和结果判定表。",
+    "en": "Turn video content and past posting data into keyword and hashtag sets, post cards, time-slot test plans and result calls."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据这条视频内容生成关键词与话题组合的发布卡",
+    "en": "Build a post card with keywords and hashtags for this video"
+  },
+  "plugin": "lynxce-hashtag-timing-advisor",
+  "tags": [
+    {
+      "zh": "话题组合",
+      "en": "Hashtag Sets"
+    },
+    {
+      "zh": "关键词",
+      "en": "Keywords"
+    },
+    {
+      "zh": "时段测试",
+      "en": "Time-Slot Test"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这条视频内容生成关键词与话题组合的发布卡",
+      "en": "Build a post card with keywords and hashtags for this video"
+    },
+    {
+      "zh": "帮我复核这组话题和时段测试结果能不能下结论",
+      "en": "Check whether my hashtags and time-slot results support a conclusion"
+    },
+    {
+      "zh": "没有历史数据先给我一份三时段测试排期",
+      "en": "Give me a three-slot test schedule without past data"
+    }
+  ],
+  "keywords": [
+    "话题组合",
+    "关键词",
+    "时段测试",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

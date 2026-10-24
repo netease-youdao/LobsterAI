@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-live-clip-advisor",
+  "version": "1.0.1",
+  "description": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-live-clip-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-live-clips",
+    "./skills/lynxce-live-clip-advisor-planning",
+    "./skills/lynxce-live-clip-advisor-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-live-clip-advisor",
+  "displayName": {
+    "zh": "直播切片剪辑顾问",
+    "en": "Live Clip Advisor"
+  },
+  "profession": {
+    "zh": "直播切片与高光剪辑顾问｜灵策智算",
+    "en": "Livestream Highlight Clipping Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料整理直播切片文字规划需求与证据，完善方案分支、异常核对和交付模板，支持逐项复核与迭代。",
+    "en": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据逐字稿标注候选片段和引用位置",
+    "en": "Annotate candidate clips and source locations from a transcript"
+  },
+  "plugin": "lynxce-live-clip-advisor",
+  "tags": [
+    {
+      "zh": "片段标注",
+      "en": "Clip annotation"
+    },
+    {
+      "zh": "字幕标题",
+      "en": "Captions and titles"
+    },
+    {
+      "zh": "语义自检",
+      "en": "Meaning checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据逐字稿标注候选片段和引用位置",
+      "en": "Annotate candidate clips and source locations from a transcript"
+    },
+    {
+      "zh": "为选中的片段编制切点字幕与标题方案",
+      "en": "Draft cut points, captions and titles for selected segments"
+    },
+    {
+      "zh": "检查切片是否断章取义，整理补充上下文清单",
+      "en": "Check whether excerpts lose context and list required context additions"
+    }
+  ],
+  "keywords": [
+    "直播切片",
+    "高光选段",
+    "上下文字幕",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

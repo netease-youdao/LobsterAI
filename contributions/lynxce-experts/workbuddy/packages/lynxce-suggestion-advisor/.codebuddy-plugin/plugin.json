@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-suggestion-advisor",
+  "version": "1.0.1",
+  "description": "Turn raw employee suggestions into triage, owners, reply deadlines, on-time rates, monthly public replies and quarterly fixes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-suggestion-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-suggestion-loop"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-suggestion-advisor",
+  "displayName": {
+    "zh": "员工建议闭环顾问",
+    "en": "Employee Feedback Advisor"
+  },
+  "profession": {
+    "zh": "员工建议收集与反馈闭环顾问｜灵策智算",
+    "en": "Employee Suggestion Collection and Follow-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据收到的员工建议原文分流分级并指定责任人，计算回复时限和按时率，形成月度公开反馈与季度改进清单。",
+    "en": "Turn raw employee suggestions into triage, owners, reply deadlines, on-time rates, monthly public replies and quarterly fixes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据本月建议原文生成分级登记表和回复时限",
+    "en": "Build a triage register with reply deadlines from this month's suggestions"
+  },
+  "plugin": "lynxce-suggestion-advisor",
+  "tags": [
+    {
+      "zh": "建议分级",
+      "en": "Suggestion Triage"
+    },
+    {
+      "zh": "回复时限",
+      "en": "Reply Deadlines"
+    },
+    {
+      "zh": "公开反馈",
+      "en": "Public Follow-up"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据本月建议原文生成分级登记表和回复时限",
+      "en": "Build a triage register with reply deadlines from this month's suggestions"
+    },
+    {
+      "zh": "复核这份月度建议反馈公示的统计和措辞",
+      "en": "Review this monthly suggestion feedback notice for figures and wording"
+    },
+    {
+      "zh": "只有零散建议原文时先给去重分类初稿",
+      "en": "Draft a deduplicated categorized list from scattered raw suggestions"
+    }
+  ],
+  "keywords": [
+    "建议分级",
+    "回复时限",
+    "公开反馈",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

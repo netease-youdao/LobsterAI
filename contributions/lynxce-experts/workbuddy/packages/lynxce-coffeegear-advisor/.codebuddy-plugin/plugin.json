@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-coffeegear-advisor",
+  "version": "1.0.4",
+  "description": "Method first at home: why the grinder comes first and the order to buy gear in.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-coffeegear-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-coffeegear-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-coffeegear-advisor",
+  "displayName": {
+    "zh": "家用咖啡器具选购顾问",
+    "en": "Home Coffee Equipment Advisor"
+  },
+  "profession": {
+    "zh": "家用咖啡器具选购顾问",
+    "en": "Home Coffee Equipment Advisor"
+  },
+  "displayDescription": {
+    "zh": "在家做咖啡先定冲煮方式：磨豆机为什么最优先、器具按什么顺序买、每杯成本怎么算清楚。",
+    "en": "Method first at home: why the grinder comes first and the order to buy gear in."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "入门先买什么",
+    "en": "What should I buy first"
+  },
+  "plugin": "lynxce-coffeegear-advisor",
+  "tags": [
+    {
+      "zh": "咖啡器具",
+      "en": "Coffee Gear"
+    },
+    {
+      "zh": "磨豆机",
+      "en": "Grinder"
+    },
+    {
+      "zh": "每杯成本",
+      "en": "Cost per Cup"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "入门先买什么",
+      "en": "What should I buy first"
+    },
+    {
+      "zh": "磨豆机该花多少钱",
+      "en": "How much should I spend on a grinder"
+    },
+    {
+      "zh": "在家做一杯要多少钱",
+      "en": "What does a home cup actually cost"
+    }
+  ],
+  "keywords": [
+    "咖啡器具",
+    "磨豆机",
+    "每杯成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-innovation-voucher-redemption-b49",
+  "version": "1.0.0",
+  "description": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-innovation-voucher-redemption-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-innovation-voucher-route",
+    "./skills/lynxce-innovation-voucher-ledger",
+    "./skills/lynxce-innovation-voucher-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-innovation-voucher-redemption-b49",
+  "displayName": {
+    "zh": "创新券顾问",
+    "en": "Innovation Voucher Advisor"
+  },
+  "profession": {
+    "zh": "创新券申领顾问",
+    "en": "Innovation Voucher Advisor"
+  },
+  "displayDescription": {
+    "zh": "为科技企业核对创新券类别、科研服务与实际合同额，梳理领券用券和兑现材料，完成额度底稿与补正稿。",
+    "en": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按本轮创新券规则和服务合同写用券说明。",
+    "en": "Innovation Voucher Advisor"
+  },
+  "plugin": "lynxce-innovation-voucher-redemption-b49",
+  "tags": [
+    {
+      "zh": "创新券申领",
+      "en": "创新券申领"
+    },
+    {
+      "zh": "科研服务",
+      "en": "科研服务"
+    },
+    {
+      "zh": "额度兑现",
+      "en": "额度兑现"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按本轮创新券规则和服务合同写用券说明。",
+      "en": "Innovation Voucher Advisor"
+    },
+    {
+      "zh": "普通券与算力券额度不同，帮我分账核算。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "算力结算8万与6万冲突，请重出完整台账和V2。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "创新券申领",
+    "科研服务",
+    "额度兑现"
+  ]
+}

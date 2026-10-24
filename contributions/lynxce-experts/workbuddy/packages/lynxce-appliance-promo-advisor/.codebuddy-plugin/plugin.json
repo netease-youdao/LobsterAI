@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-appliance-promo-advisor",
+  "version": "1.0.3",
+  "description": "Work out the real net price of promo appliances, plan delivery and install windows, old-unit removal and extended warranty.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-appliance-promo-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-appliance-promo"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-appliance-promo-advisor",
+  "displayName": {
+    "zh": "大家电大促到手价与送装排期顾问",
+    "en": "Major Appliance Promo Net Price and Delivery Advisor"
+  },
+  "profession": {
+    "zh": "大家电大促到手价与送装排期顾问",
+    "en": "Major Appliance Promo Net Price and Delivery Advisor"
+  },
+  "displayDescription": {
+    "zh": "大家电大促怎么算清到手价：券与满减拆解、送装时间窗、旧机拆除回收、延保值不值得买。",
+    "en": "Work out the real net price of promo appliances, plan delivery and install windows, old-unit removal and extended warranty."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我算这台冰箱大促的真实到手价",
+    "en": "Work out the real net price of this fridge"
+  },
+  "plugin": "lynxce-appliance-promo-advisor",
+  "tags": [
+    {
+      "zh": "到手价拆解",
+      "en": "Net Price Breakdown"
+    },
+    {
+      "zh": "送装排期",
+      "en": "Delivery Scheduling"
+    },
+    {
+      "zh": "延保判断",
+      "en": "Warranty Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我算这台冰箱大促的真实到手价",
+      "en": "Work out the real net price of this fridge"
+    },
+    {
+      "zh": "月底搬家，空调洗衣机什么时候下单来得及",
+      "en": "When to order appliances before my move"
+    },
+    {
+      "zh": "大家电的延保到底值不值得买",
+      "en": "Is extended warranty worth it"
+    }
+  ],
+  "keywords": [
+    "到手价拆解",
+    "送装排期",
+    "延保判断",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

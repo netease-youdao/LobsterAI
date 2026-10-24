@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-localdeal-advisor",
+  "version": "1.0.3",
+  "description": "Do the math on local deals: break-even for vouchers and cards, usage limits, refunds and prepayment risk.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-localdeal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-local-deals"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-localdeal-advisor",
+  "displayName": {
+    "zh": "本地生活优惠与出行折扣顾问",
+    "en": "Local Deals Advisory"
+  },
+  "profession": {
+    "zh": "本地生活优惠与出行折扣顾问",
+    "en": "Local Deals Advisory"
+  },
+  "displayDescription": {
+    "zh": "本地优惠先算回本：团购券与会员卡的回本次数、使用限制、退款规则与预付风险怎么判断。",
+    "en": "Do the math on local deals: break-even for vouchers and cards, usage limits, refunds and prepayment risk."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这张会员卡值得办吗",
+    "en": "Is this membership card worth it"
+  },
+  "plugin": "lynxce-localdeal-advisor",
+  "tags": [
+    {
+      "zh": "本地优惠",
+      "en": "Local Deals"
+    },
+    {
+      "zh": "回本核算",
+      "en": "Break-even"
+    },
+    {
+      "zh": "使用限制",
+      "en": "Terms"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这张会员卡值得办吗",
+      "en": "Is this membership card worth it"
+    },
+    {
+      "zh": "帮我算算团购券划不划算",
+      "en": "Is this group-buy voucher a good deal"
+    },
+    {
+      "zh": "今天有什么外卖红包可以领",
+      "en": "Any food delivery vouchers I can grab today"
+    }
+  ],
+  "keywords": [
+    "本地优惠",
+    "回本核算",
+    "使用限制",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

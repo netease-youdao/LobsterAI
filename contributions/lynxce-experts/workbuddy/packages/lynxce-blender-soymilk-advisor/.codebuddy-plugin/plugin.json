@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-blender-soymilk-advisor",
+  "version": "1.0.1",
+  "description": "Pick blenders, soymilk makers and juicers: capacity, speed and noise, heating, cleaning, use-case fit.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-blender-soymilk-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-blender-soymilk"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-blender-soymilk-advisor",
+  "displayName": {
+    "zh": "破壁机豆浆机榨汁机选购顾问",
+    "en": "Blender, Soymilk Maker and Juicer Advisor"
+  },
+  "profession": {
+    "zh": "11.11 破壁机豆浆机榨汁机选购顾问",
+    "en": "11.11 Blender, Soymilk Maker and Juicer Advisor"
+  },
+  "displayDescription": {
+    "zh": "破壁机豆浆机榨汁机怎么挑：按人数定容量、看转速噪音与加热、核清洗方式、按用途在三类里取舍。",
+    "en": "Pick blenders, soymilk makers and juicers: capacity, speed and noise, heating, cleaning, use-case fit."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三口人打豆浆破壁机买多大容量",
+    "en": "What blender capacity suits soymilk for three people"
+  },
+  "plugin": "lynxce-blender-soymilk-advisor",
+  "tags": [
+    {
+      "zh": "容量人数",
+      "en": "Capacity by Household"
+    },
+    {
+      "zh": "转速噪音",
+      "en": "Speed and Noise"
+    },
+    {
+      "zh": "加热清洗",
+      "en": "Heating and Cleaning"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三口人打豆浆破壁机买多大容量",
+      "en": "What blender capacity suits soymilk for three people"
+    },
+    {
+      "zh": "早上用破壁机怕吵怎么选",
+      "en": "How to pick a quiet blender for morning use"
+    },
+    {
+      "zh": "榨果汁选破壁机还是原汁机",
+      "en": "Blender or slow juicer for fruit juice"
+    }
+  ],
+  "keywords": [
+    "容量人数",
+    "转速噪音",
+    "加热清洗",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

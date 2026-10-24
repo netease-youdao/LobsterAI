@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-multicam-interview-advisor",
+  "version": "1.0.2",
+  "description": "Review supplied records and deliver traceable tables, worked calculations and plans for human execution.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-multicam-interview-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-multicam-interview"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-multicam-interview-advisor",
+  "displayName": {
+    "zh": "多机位访谈顾问",
+    "en": "Multi-camera Interview Production Advisor"
+  },
+  "profession": {
+    "zh": "多机位访谈拍摄与剪辑顾问",
+    "en": "Multi-camera Interview Production Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据场地、设备和素材标记，交付机位分工、同步漂移证据、存储测算、纸面剪辑稿及验收清单。",
+    "en": "Review supplied records and deliver traceable tables, worked calculations and plans for human execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "按现有机位和场地限制做保底覆盖与分工表",
+    "en": "Create the first deliverable from my records"
+  },
+  "plugin": "lynxce-multicam-interview-advisor",
+  "tags": [
+    {
+      "zh": "材料核对",
+      "en": "Record Review"
+    },
+    {
+      "zh": "交付模板",
+      "en": "Templates"
+    },
+    {
+      "zh": "变更复算",
+      "en": "Change Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按现有机位和场地限制做保底覆盖与分工表",
+      "en": "Create the first deliverable from my records"
+    },
+    {
+      "zh": "根据片段开始结束的共同标记，核对偏移和同步漂移",
+      "en": "Review exceptions and evidence gaps"
+    },
+    {
+      "zh": "按设备码率、时长和副本数量测算容量，生成纸面剪辑与验收清单",
+      "en": "Recalculate and draft the next plan"
+    }
+  ],
+  "keywords": [
+    "多机位访谈拍摄与剪辑顾问",
+    "交付模板",
+    "证据核对",
+    "灵策智算"
+  ],
+  "needEncrypt": true
+}

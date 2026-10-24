@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-lucky-bag-advisor",
+  "version": "1.0.1",
+  "description": "Judge lucky bags: expected value from disclosed odds, unwanted items at zero, hard budget cap, no minors, no chasing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-lucky-bag-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-lucky-bag"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-lucky-bag-advisor",
+  "displayName": {
+    "zh": "福袋盲盒期望价值顾问",
+    "en": "Lucky Bag and Blind Box Expected Value Advisor"
+  },
+  "profession": {
+    "zh": "11.11 福袋盲盒期望价值顾问",
+    "en": "11.11 Lucky Bag and Blind Box Expected Value Advisor"
+  },
+  "displayDescription": {
+    "zh": "福袋盲盒值不值：按公示概率算期望价值、不需要款按零计、预算封顶不连抽、未成年人不参与。",
+    "en": "Judge lucky bags: expected value from disclosed odds, unwanted items at zero, hard budget cap, no minors, no chasing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个福袋按概率算值不值",
+    "en": "Is this lucky bag worth it by the odds"
+  },
+  "plugin": "lynxce-lucky-bag-advisor",
+  "tags": [
+    {
+      "zh": "期望价值",
+      "en": "Expected Value"
+    },
+    {
+      "zh": "预算封顶",
+      "en": "Budget Cap"
+    },
+    {
+      "zh": "理性止步",
+      "en": "Stop Rule"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个福袋按概率算值不值",
+      "en": "Is this lucky bag worth it by the odds"
+    },
+    {
+      "zh": "想抽到隐藏款要花多少钱",
+      "en": "How much would it cost to get the rare item"
+    },
+    {
+      "zh": "我这个月最多该花多少在盲盒上",
+      "en": "How much should I cap blind box spending this month"
+    }
+  ],
+  "keywords": [
+    "期望价值",
+    "预算封顶",
+    "理性止步",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

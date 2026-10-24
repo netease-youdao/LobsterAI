@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-phone-shooting-advisor",
+  "version": "1.0.1",
+  "description": "Turn a topic and aspect ratio into phone settings, a shot list with motivated moves, timing and storage checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-phone-shooting-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-phone-shooting"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-phone-shooting-advisor",
+  "displayName": {
+    "zh": "手机拍摄运镜顾问",
+    "en": "Phone Filming Advisor"
+  },
+  "profession": {
+    "zh": "手机拍摄运镜与构图顾问｜灵策智算",
+    "en": "Phone Camera Movement and Framing Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据拍摄主题与发布画幅产出手机参数设置单和镜头清单，附运镜动机、时长存储核算与开拍前检查表。",
+    "en": "Turn a topic and aspect ratio into phone settings, a shot list with motivated moves, timing and storage checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的拍摄主题和发布画幅生成手机镜头清单",
+    "en": "Build a phone shot list from my topic and aspect ratio"
+  },
+  "plugin": "lynxce-phone-shooting-advisor",
+  "tags": [
+    {
+      "zh": "镜头清单",
+      "en": "Shot List"
+    },
+    {
+      "zh": "运镜动机",
+      "en": "Motivated Moves"
+    },
+    {
+      "zh": "拍摄设置",
+      "en": "Phone Settings"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的拍摄主题和发布画幅生成手机镜头清单",
+      "en": "Build a phone shot list from my topic and aspect ratio"
+    },
+    {
+      "zh": "复核这份镜头清单的景别运镜和时长是否合理",
+      "en": "Review this shot list for shot sizes, moves and timing"
+    },
+    {
+      "zh": "只知道拍摄场景时先给参数设置和开拍检查初稿",
+      "en": "Draft settings and a pre-shoot check when only the location is known"
+    }
+  ],
+  "keywords": [
+    "镜头清单",
+    "运镜动机",
+    "拍摄设置",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

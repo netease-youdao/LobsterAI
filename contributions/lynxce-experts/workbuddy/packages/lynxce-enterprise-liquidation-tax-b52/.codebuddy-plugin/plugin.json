@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-enterprise-liquidation-tax-b52",
+  "version": "1.0.0",
+  "description": "Enterprise Liquidation Tax Advisor evidence worksheets and complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-enterprise-liquidation-tax-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-liquidation-basis-bridge-b52",
+    "./skills/lynxce-liquidation-residual-allocation-b52",
+    "./skills/lynxce-liquidation-full-revision-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-enterprise-liquidation-tax-b52",
+  "displayName": {
+    "zh": "清算税顾问",
+    "en": "Enterprise Liquidation Tax Advisor"
+  },
+  "profession": {
+    "zh": "企业清算税务顾问",
+    "en": "Enterprise Liquidation Tax Advisor"
+  },
+  "displayDescription": {
+    "zh": "为已进入清算的企业财务核对资产税基和债务清偿，交付清算所得底稿、剩余财产分配及完整修订说明。",
+    "en": "Enterprise Liquidation Tax Advisor evidence worksheets and complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "企业已进入清算，按资产债务明细做所得税底稿。",
+    "en": "Enterprise Liquidation Tax Advisor"
+  },
+  "plugin": "lynxce-enterprise-liquidation-tax-b52",
+  "tags": [
+    {
+      "zh": "企业清算",
+      "en": "企业清算"
+    },
+    {
+      "zh": "清算所得税",
+      "en": "清算所得税"
+    },
+    {
+      "zh": "剩余财产",
+      "en": "剩余财产"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "企业已进入清算，按资产债务明细做所得税底稿。",
+      "en": "Enterprise Liquidation Tax Advisor"
+    },
+    {
+      "zh": "设备变现价格两稿冲突，完整重算企业及股东分配。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "股东投资成本和注册资本不同，该怎样留证？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "企业清算",
+    "清算所得税",
+    "剩余财产"
+  ]
+}

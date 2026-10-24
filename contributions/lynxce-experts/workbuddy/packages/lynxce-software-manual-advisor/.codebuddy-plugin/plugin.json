@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-software-manual-advisor",
+  "version": "1.0.1",
+  "description": "Turn supplied screens and workflows into task guides, screenshot annotation lists, error tables and trial records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-software-manual-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-software-manual"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-software-manual-advisor",
+  "displayName": {
+    "zh": "操作手册编写顾问",
+    "en": "User Guide Writer"
+  },
+  "profession": {
+    "zh": "软件操作手册与截图说明编写顾问｜灵策智算",
+    "en": "Software User Guide and Screenshot Writing Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据软件界面与流程材料编写任务操作页，提供截图标注清单和报错处理表，附新人试做记录供版本维护。",
+    "en": "Turn supplied screens and workflows into task guides, screenshot annotation lists, error tables and trial records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据界面材料生成可复制的报销任务操作页",
+    "en": "Build a copyable expense task guide from supplied screen materials"
+  },
+  "plugin": "lynxce-software-manual-advisor",
+  "tags": [
+    {
+      "zh": "任务手册",
+      "en": "Task Guide"
+    },
+    {
+      "zh": "截图说明",
+      "en": "Screenshot Notes"
+    },
+    {
+      "zh": "试做验收",
+      "en": "Trial Acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据界面材料生成可复制的报销任务操作页",
+      "en": "Build a copyable expense task guide from supplied screen materials"
+    },
+    {
+      "zh": "把这批截图整理成编号标注与替换维护清单",
+      "en": "Organize screenshots into annotation and replacement lists"
+    },
+    {
+      "zh": "根据报错和试做记录生成常见问题与修订表",
+      "en": "Turn errors and trial records into an FAQ and revision table"
+    }
+  ],
+  "keywords": [
+    "任务手册",
+    "截图说明",
+    "试做验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

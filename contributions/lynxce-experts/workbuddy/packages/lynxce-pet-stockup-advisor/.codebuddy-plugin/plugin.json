@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-pet-stockup-advisor",
+  "version": "1.0.2",
+  "description": "Plan pet food stock-up from daily feeding, pick bag sizes by after-opening life, allow transitions, compare price per kg.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pet-stockup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pet-stockup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pet-stockup-advisor",
+  "displayName": {
+    "zh": "宠物口粮大促囤货与效期顾问",
+    "en": "Pet Food Promo Stock-up and Expiry Advisor"
+  },
+  "profession": {
+    "zh": "宠物口粮大促囤货与效期顾问",
+    "en": "Pet Food Promo Stock-up and Expiry Advisor"
+  },
+  "displayDescription": {
+    "zh": "宠物口粮大促囤多少：日喂量乘天数算用量，按开封保存期选规格，换粮留过渡，折算每公斤单价。",
+    "en": "Plan pet food stock-up from daily feeding, pick bag sizes by after-opening life, allow transitions, compare price per kg."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家猫粮大促囤多少、买哪个规格",
+    "en": "How much cat food and which bag size"
+  },
+  "plugin": "lynxce-pet-stockup-advisor",
+  "tags": [
+    {
+      "zh": "日喂量测算",
+      "en": "Daily Feeding Math"
+    },
+    {
+      "zh": "开封保存",
+      "en": "After-opening Storage"
+    },
+    {
+      "zh": "换粮过渡",
+      "en": "Food Transition"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家猫粮大促囤多少、买哪个规格",
+      "en": "How much cat food and which bag size"
+    },
+    {
+      "zh": "大包粮开封后能放多久",
+      "en": "How long does a big bag last once opened"
+    },
+    {
+      "zh": "打算换粮，大促能不能直接囤新粮",
+      "en": "Can I stock a new food I am switching to"
+    }
+  ],
+  "keywords": [
+    "日喂量测算",
+    "开封保存",
+    "换粮过渡",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

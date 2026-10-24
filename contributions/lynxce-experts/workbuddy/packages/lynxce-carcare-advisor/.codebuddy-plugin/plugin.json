@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-carcare-advisor",
+  "version": "1.0.1",
+  "description": "Organize supplied maintenance manuals and service quotes into records, cost checks and questions for professionals.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-carcare-advisor.md"
+  ],
+  "skills": [
+    "./skills/carcare-schedule",
+    "./skills/carcare-quotes",
+    "./skills/carcare-questions"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-carcare-advisor",
+  "displayName": {
+    "zh": "汽车保养顾问",
+    "en": "Car Care Advisor"
+  },
+  "profession": {
+    "zh": "汽车保养计划与维修沟通顾问",
+    "en": "Car Maintenance & Service Advisor"
+  },
+  "displayDescription": {
+    "zh": "按用户提供的保养手册与维修材料整理周期和费用，区分建议与检测证据，输出保养台账及门店询问清单",
+    "en": "Organize supplied maintenance manuals and service quotes into records, cost checks and questions for professionals."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "六万公里该做哪些保养,哪些可以缓",
+    "en": "What service is due at 60k km and what can wait"
+  },
+  "plugin": "lynxce-carcare-advisor",
+  "tags": [
+    {
+      "zh": "保养计划",
+      "en": "Service Plan"
+    },
+    {
+      "zh": "报价核对",
+      "en": "Quote Review"
+    },
+    {
+      "zh": "沟通话术",
+      "en": "Service Talk"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "六万公里该做哪些保养,哪些可以缓",
+      "en": "What service is due at 60k km and what can wait"
+    },
+    {
+      "zh": "这张维修报价单帮我看看哪些是必要的",
+      "en": "Review this repair quote — what is actually necessary"
+    },
+    {
+      "zh": "修理厂说要换这个件,我该怎么问",
+      "en": "The shop says this part needs replacing — what should I ask"
+    }
+  ],
+  "keywords": [
+    "保养计划",
+    "报价核对",
+    "沟通话术",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "buyout",
+    "payMode": 1,
+    "priceFen": 999,
+    "durationDays": 0
+  },
+  "needEncrypt": true
+}

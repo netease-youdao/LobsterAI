@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-b2b-sales",
+  "version": "1.0.1",
+  "description": "Turn supplied sales notes into discovery evidence, a decision map, deal diagnostics and follow-up drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-b2b-sales.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sales-followup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-b2b-sales",
+  "displayName": {
+    "zh": "B2B 销售顾问",
+    "en": "B2B Sales Advisor"
+  },
+  "profession": {
+    "zh": "客户拜访与商机推进顾问",
+    "en": "Client Discovery and Pipeline Advisor"
+  },
+  "displayDescription": {
+    "zh": "围绕客户提供的拜访材料，交付需求证据表、决策链地图、商机卡点诊断与分阶段跟进话术及复盘清单。",
+    "en": "Turn supplied sales notes into discovery evidence, a decision map, deal diagnostics and follow-up drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "按我的客户背景制作拜访提纲、五个需求问题和会后纪要模板",
+    "en": "Create a visit plan, five discovery questions and meeting notes."
+  },
+  "plugin": "lynxce-b2b-sales",
+  "tags": [
+    {
+      "zh": "需求证据",
+      "en": "Discovery Evidence"
+    },
+    {
+      "zh": "决策链",
+      "en": "Decision Map"
+    },
+    {
+      "zh": "商机跟进",
+      "en": "Deal Follow-up"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按我的客户背景制作拜访提纲、五个需求问题和会后纪要模板",
+      "en": "Create a visit plan, five discovery questions and meeting notes."
+    },
+    {
+      "zh": "把这份纪要整理成需求证据表与决策链缺口清单",
+      "en": "Convert these notes into evidence and decision-chain gaps."
+    },
+    {
+      "zh": "按最近三次沟通制作卡单诊断和下一轮跟进话术",
+      "en": "Diagnose this stalled deal and draft the next follow-up."
+    }
+  ],
+  "keywords": [
+    "需求证据",
+    "决策链",
+    "商机跟进"
+  ],
+  "needEncrypt": true
+}

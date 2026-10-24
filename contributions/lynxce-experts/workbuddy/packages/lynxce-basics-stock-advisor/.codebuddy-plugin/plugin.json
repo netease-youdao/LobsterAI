@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-basics-stock-advisor",
+  "version": "1.0.1",
+  "description": "Stock up socks and underwear: yearly need by replacement cycle, multipack unit price, try one first, return rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-basics-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-basics-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-basics-stock-advisor",
+  "displayName": {
+    "zh": "基础款衣物囤货顾问",
+    "en": "Basic Clothing Stock-up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 基础款衣物囤货顾问",
+    "en": "11.11 Basic Clothing Stock-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "基础款怎么囤：按更换周期算年用量、多件装单件价、先试一件核尺码面料、贴身衣物退换规则。",
+    "en": "Stock up socks and underwear: yearly need by replacement cycle, multipack unit price, try one first, return rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "袜子内裤一年要囤多少",
+    "en": "How many socks and underwear do I need a year"
+  },
+  "plugin": "lynxce-basics-stock-advisor",
+  "tags": [
+    {
+      "zh": "年用量核算",
+      "en": "Yearly Need"
+    },
+    {
+      "zh": "单件价换算",
+      "en": "Unit Price"
+    },
+    {
+      "zh": "退换规则",
+      "en": "Return Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "袜子内裤一年要囤多少",
+      "en": "How many socks and underwear do I need a year"
+    },
+    {
+      "zh": "多件装算下来单件多少钱",
+      "en": "What is the per-piece price of this multipack"
+    },
+    {
+      "zh": "内衣拆封了还能退吗",
+      "en": "Can I return underwear after opening"
+    }
+  ],
+  "keywords": [
+    "年用量核算",
+    "单件价换算",
+    "退换规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

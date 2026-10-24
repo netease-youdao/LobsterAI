@@ -1,0 +1,74 @@
+{
+  "name": "lynxce-takeout-assistant",
+  "version": "1.0.3",
+  "description": "Takes the guesswork out of food delivery: picks restaurants by taste and budget, reads reviews critically, and computes the real cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-takeout-assistant.md"
+  ],
+  "skills": [
+    "./skills/lynxce-takeout-order",
+    "./skills/lynxce-takeout-pick"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  },
+  "expertType": "agent",
+  "agentName": "lynxce-takeout-assistant",
+  "displayName": {
+    "zh": "点单省钱",
+    "en": "Order & Save"
+  },
+  "profession": {
+    "zh": "外卖助手",
+    "en": "Delivery Assistant"
+  },
+  "displayDescription": {
+    "zh": "点外卖不再纠结：按口味和预算挑店、看懂评价避坑，红包满减与配送费一起算清到手价。",
+    "en": "Takes the guesswork out of food delivery: picks restaurants by taste and budget, reads reviews critically, and computes the real cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "今天中午吃什么,预算 30 以内",
+    "en": "What should I have for lunch under 30 yuan"
+  },
+  "plugin": "lynxce-takeout-assistant",
+  "tags": [
+    {
+      "zh": "选店避坑",
+      "en": "Pick & Avoid"
+    },
+    {
+      "zh": "红包核算",
+      "en": "Red Packets"
+    },
+    {
+      "zh": "拼单AA",
+      "en": "Group Order"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "今天中午吃什么,预算 30 以内",
+      "en": "What should I have for lunch under 30 yuan"
+    },
+    {
+      "zh": "这单怎么点最划算",
+      "en": "How do I order this to get the best real price"
+    },
+    {
+      "zh": "五个人拼单,帮我配一下菜和分摊",
+      "en": "Plan a group order for five and split the bill"
+    }
+  ],
+  "keywords": [
+    "选店避坑",
+    "红包核算",
+    "拼单AA",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

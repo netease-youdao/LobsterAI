@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kitchenappliance-advisor",
+  "version": "1.0.4",
+  "description": "Buy kitchen gadgets you will actually use: habits first, specs and cleaning.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kitchenappliance-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kitchenappliance-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kitchenappliance-advisor",
+  "displayName": {
+    "zh": "厨房小家电选购顾问",
+    "en": "Small Kitchen Appliance Advisor"
+  },
+  "profession": {
+    "zh": "厨房小家电选购顾问",
+    "en": "Small Kitchen Appliance Advisor"
+  },
+  "displayDescription": {
+    "zh": "厨房小家电怎么买不吃灰：按做饭习惯挑、容量怎么定、参数怎么读、清洗难度怎么先看清。",
+    "en": "Buy kitchen gadgets you will actually use: habits first, specs and cleaning."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "空气炸锅值不值得买",
+    "en": "Is an air fryer worth buying"
+  },
+  "plugin": "lynxce-kitchenappliance-advisor",
+  "tags": [
+    {
+      "zh": "厨房小家电",
+      "en": "Kitchen Gadgets"
+    },
+    {
+      "zh": "使用频率",
+      "en": "Real Usage"
+    },
+    {
+      "zh": "清洗难度",
+      "en": "Cleaning"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "空气炸锅值不值得买",
+      "en": "Is an air fryer worth buying"
+    },
+    {
+      "zh": "这个容量适合几口人",
+      "en": "What capacity suits my family size"
+    },
+    {
+      "zh": "厨房小家电先买哪几件",
+      "en": "Which kitchen gadgets should I buy first"
+    }
+  ],
+  "keywords": [
+    "厨房小家电",
+    "使用频率",
+    "清洗难度",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-fleet-car-care-advisor",
+  "version": "1.0.0",
+  "description": "Manage company cars: service intervals by mileage, wash frequency and cost ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fleet-car-care-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fleet-car-care"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fleet-car-care-advisor",
+  "displayName": {
+    "zh": "公务车费用核算助理",
+    "en": "Company Car Cost Assistant"
+  },
+  "profession": {
+    "zh": "公务车保养与洗车费用核算助理",
+    "en": "Company Car Maintenance and Wash Cost Assistant"
+  },
+  "displayDescription": {
+    "zh": "公务车怎么管：按里程定保养周期，定洗车频次与月结费用，逐车核对账单，出车辆费用台账。",
+    "en": "Manage company cars: service intervals by mileage, wash frequency and cost ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "公务车下次保养日期怎么算",
+    "en": "How to calculate the next car service date"
+  },
+  "plugin": "lynxce-fleet-car-care-advisor",
+  "tags": [
+    {
+      "zh": "保养周期",
+      "en": "Service Interval"
+    },
+    {
+      "zh": "洗车月结",
+      "en": "Wash Statement"
+    },
+    {
+      "zh": "费用台账",
+      "en": "Cost Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "公务车下次保养日期怎么算",
+      "en": "How to calculate the next car service date"
+    },
+    {
+      "zh": "洗车套餐和按次结算哪个更合适",
+      "en": "Car wash package or pay per wash"
+    },
+    {
+      "zh": "帮我核对本月洗车账单并做车辆台账",
+      "en": "Reconcile this month car wash bill and build a ledger"
+    }
+  ],
+  "keywords": [
+    "保养周期",
+    "洗车月结",
+    "费用台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

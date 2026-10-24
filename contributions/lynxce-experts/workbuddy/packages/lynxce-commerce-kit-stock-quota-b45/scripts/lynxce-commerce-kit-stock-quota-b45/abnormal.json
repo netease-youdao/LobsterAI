@@ -1,0 +1,76 @@
+{
+  "inputStatus": "假设试跑输入",
+  "snapshot": "本轮快照，具体时点待补",
+  "skus": [
+    {
+      "id": "A",
+      "usage": {
+        "杯": 2,
+        "盖": 1
+      },
+      "cap": 30
+    },
+    {
+      "id": "B",
+      "usage": {
+        "杯": 1,
+        "盖": 2
+      },
+      "cap": null
+    }
+  ],
+  "branches": [
+    {
+      "id": "库存表基线",
+      "source": "沿用库存表已扣基线的条件演算",
+      "components": [
+        {
+          "id": "杯",
+          "inventory": 100,
+          "extraDeduction": 0,
+          "reserve": 10,
+          "source": "用户给定杯100，已扣且无其他扣减"
+        },
+        {
+          "id": "盖",
+          "inventory": 80,
+          "extraDeduction": null,
+          "reserve": 10,
+          "source": "库存表80，沿用已扣基线演算",
+          "assumptions": {
+            "extraDeduction": {
+              "value": 0,
+              "condition": "库存表80沿用已扣历史订单且无其他扣减口径"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "实盘来源条件",
+      "source": "实盘表68；是否已扣历史订单未知",
+      "components": [
+        {
+          "id": "杯",
+          "inventory": 100,
+          "extraDeduction": 0,
+          "reserve": 10,
+          "source": "用户确认杯100已扣且无其他扣减"
+        },
+        {
+          "id": "盖",
+          "inventory": 68,
+          "extraDeduction": null,
+          "reserve": 10,
+          "source": "实盘表68，扣减口径待确认",
+          "assumptions": {
+            "extraDeduction": {
+              "value": 0,
+              "condition": "实盘盖68也已扣历史订单且无额外扣减"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

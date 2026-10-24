@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-home-safe-advisor",
+  "version": "1.0.0",
+  "description": "Pick home safes: inner size, anti theft grade, lock type, emergency access and anchoring.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-home-safe-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-home-safe"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-home-safe-advisor",
+  "displayName": {
+    "zh": "家用保险柜选购顾问",
+    "en": "Home Safe Advisor"
+  },
+  "profession": {
+    "zh": "11.11 家用保险柜选购顾问",
+    "en": "11.11 Home Safe Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "保险柜怎么挑：按存放物定内腔尺寸、核防盗标准与级别、选锁具与应急开启、量重量与固定方式。",
+    "en": "Pick home safes: inner size, anti theft grade, lock type, emergency access and anchoring."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "放笔记本电脑的保险柜内腔要多大",
+    "en": "What inner size fits a laptop in a home safe"
+  },
+  "plugin": "lynxce-home-safe-advisor",
+  "tags": [
+    {
+      "zh": "内腔尺寸",
+      "en": "Inner Cavity"
+    },
+    {
+      "zh": "防盗级别",
+      "en": "Anti Theft Grade"
+    },
+    {
+      "zh": "螺栓固定",
+      "en": "Bolt Down Anchoring"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "放笔记本电脑的保险柜内腔要多大",
+      "en": "What inner size fits a laptop in a home safe"
+    },
+    {
+      "zh": "保险柜怎么看是不是执行防盗国家标准",
+      "en": "How to check a safe meets the anti theft standard"
+    },
+    {
+      "zh": "放衣柜里的保险柜怎么固定才牢",
+      "en": "How to anchor a safe placed inside a wardrobe"
+    }
+  ],
+  "keywords": [
+    "内腔尺寸",
+    "防盗级别",
+    "螺栓固定",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-backup-drive-advisor",
+  "version": "1.0.0",
+  "description": "Plan department backup: 3-2-1 rule, capacity sizing, encryption, rotation, drills, purchase list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-backup-drive-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-backup-drive"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-backup-drive-advisor",
+  "displayName": {
+    "zh": "部门数据备份顾问",
+    "en": "Department Backup Advisor"
+  },
+  "profession": {
+    "zh": "移动硬盘与部门数据备份办公采购顾问",
+    "en": "Portable Drive and Department Backup Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "部门数据怎么备份：按3-2-1法排副本与异地、按数据量增长和版本算容量、定加密轮换演练，附采购单。",
+    "en": "Plan department backup: 3-2-1 rule, capacity sizing, encryption, rotation, drills, purchase list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "部门数据备份要买多大的移动硬盘",
+    "en": "What drive size a department backup needs"
+  },
+  "plugin": "lynxce-office-backup-drive-advisor",
+  "tags": [
+    {
+      "zh": "3-2-1 备份",
+      "en": "3-2-1 Backup Rule"
+    },
+    {
+      "zh": "容量估算",
+      "en": "Capacity Sizing"
+    },
+    {
+      "zh": "加密轮换",
+      "en": "Encryption and Rotation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "部门数据备份要买多大的移动硬盘",
+      "en": "What drive size a department backup needs"
+    },
+    {
+      "zh": "3-2-1 备份法在办公室怎么落地",
+      "en": "How to apply the 3-2-1 rule in an office"
+    },
+    {
+      "zh": "移动硬盘备份要不要加密",
+      "en": "Should backup drives be encrypted"
+    }
+  ],
+  "keywords": [
+    "3-2-1 备份",
+    "容量估算",
+    "加密轮换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

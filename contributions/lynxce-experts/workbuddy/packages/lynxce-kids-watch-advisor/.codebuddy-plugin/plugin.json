@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kids-watch-advisor",
+  "version": "1.0.1",
+  "description": "Pick kids phone watches: positioning, yearly plan fee, waterproof, battery, parental control, trade-in.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kids-watch-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kids-watch"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kids-watch-advisor",
+  "displayName": {
+    "zh": "儿童电话手表选购顾问",
+    "en": "Kids Phone Watch and Plan Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 儿童电话手表选购与话费年成本核算顾问",
+    "en": "11.11 Kids Phone Watch and Plan Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "儿童手表怎么挑：看定位方式、算话费套餐年成本、核防水与续航、看家长管控、算旧表折抵。",
+    "en": "Pick kids phone watches: positioning, yearly plan fee, waterproof, battery, parental control, trade-in."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两款儿童手表算上话费哪个更划算",
+    "en": "Which kids watch is cheaper once plan fees are counted"
+  },
+  "plugin": "lynxce-kids-watch-advisor",
+  "tags": [
+    {
+      "zh": "定位方式",
+      "en": "Positioning"
+    },
+    {
+      "zh": "话费年成本",
+      "en": "Yearly Plan Cost"
+    },
+    {
+      "zh": "家长管控",
+      "en": "Parental Control"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两款儿童手表算上话费哪个更划算",
+      "en": "Which kids watch is cheaper once plan fees are counted"
+    },
+    {
+      "zh": "儿童手表定位准不准看什么",
+      "en": "What decides how well a kids watch locates"
+    },
+    {
+      "zh": "旧儿童手表折抵后值不值得换",
+      "en": "Is trading in the old kids watch worth it"
+    }
+  ],
+  "keywords": [
+    "定位方式",
+    "话费年成本",
+    "家长管控",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

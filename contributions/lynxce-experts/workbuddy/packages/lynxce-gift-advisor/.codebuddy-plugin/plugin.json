@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-gift-advisor",
+  "version": "1.0.3",
+  "description": "Start from relationship and occasion: budget tiers, selection criteria, lead time and etiquette cautions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-gift-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-gift-planning"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-gift-advisor",
+  "displayName": {
+    "zh": "送礼选品与场合预算顾问",
+    "en": "Gift Selection Advisor"
+  },
+  "profession": {
+    "zh": "送礼选品与场合预算顾问",
+    "en": "Gift Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "送礼先定关系与场合：预算怎么分档、选品标准是什么、提前量与常见忌讳怎么提前规避掉。",
+    "en": "Start from relationship and occasion: budget tiers, selection criteria, lead time and etiquette cautions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "给长辈送什么比较合适",
+    "en": "What is a good gift for an elder"
+  },
+  "plugin": "lynxce-gift-advisor",
+  "tags": [
+    {
+      "zh": "送礼选品",
+      "en": "Gifting"
+    },
+    {
+      "zh": "预算分档",
+      "en": "Budget Tiers"
+    },
+    {
+      "zh": "场合礼节",
+      "en": "Etiquette"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "给长辈送什么比较合适",
+      "en": "What is a good gift for an elder"
+    },
+    {
+      "zh": "这个预算能选什么",
+      "en": "What can I get within this budget"
+    },
+    {
+      "zh": "帮我看看现在有什么优惠",
+      "en": "Check what deals are available now"
+    }
+  ],
+  "keywords": [
+    "送礼选品",
+    "预算分档",
+    "场合礼节",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

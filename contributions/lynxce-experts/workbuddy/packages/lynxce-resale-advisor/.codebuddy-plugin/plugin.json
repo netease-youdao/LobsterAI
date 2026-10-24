@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-resale-advisor",
+  "version": "1.0.4",
+  "description": "Sell used items well: condition grading, price anchoring and transaction risk control.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-resale-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-resale-pricing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-resale-advisor",
+  "displayName": {
+    "zh": "闲置转卖与二手定价顾问",
+    "en": "Resale Pricing Advisor"
+  },
+  "profession": {
+    "zh": "闲置转卖与二手定价顾问",
+    "en": "Resale Pricing Advisor"
+  },
+  "displayDescription": {
+    "zh": "闲置卖得掉又不吃亏：成色怎么分四档、定价该锚什么价、描述与交易风险分别怎么控住。",
+    "en": "Sell used items well: condition grading, price anchoring and transaction risk control."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个东西大概能卖多少",
+    "en": "Roughly how much can I sell this for"
+  },
+  "plugin": "lynxce-resale-advisor",
+  "tags": [
+    {
+      "zh": "闲置转卖",
+      "en": "Resale"
+    },
+    {
+      "zh": "成色分级",
+      "en": "Grading"
+    },
+    {
+      "zh": "交易安全",
+      "en": "Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个东西大概能卖多少",
+      "en": "Roughly how much can I sell this for"
+    },
+    {
+      "zh": "帮我写一份转卖描述",
+      "en": "Draft a resale listing for me"
+    },
+    {
+      "zh": "买家提出这种交易方式安全吗",
+      "en": "Is this proposed transaction safe"
+    }
+  ],
+  "keywords": [
+    "闲置转卖",
+    "成色分级",
+    "交易安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}
