@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-beat-mashup-advisor",
+  "version": "1.0.2",
+  "description": "Turn a licensed track and footage list into song sections, beat marker frames, clip-to-beat matching and export settings.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-beat-mashup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-beat-mashup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-beat-mashup-advisor",
+  "displayName": {
+    "zh": "卡点混剪顾问",
+    "en": "Beat Montage Advisor"
+  },
+  "profession": {
+    "zh": "混剪与卡点视频制作顾问｜灵策智算",
+    "en": "Beat-synced Montage Editing Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据音乐与素材清单划分曲目段落并算出鼓点帧号，排出素材分级对位与切点密度，交付可照做的卡点剪辑方案。",
+    "en": "Turn a licensed track and footage list into song sections, beat marker frames, clip-to-beat matching and export settings."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据这首歌的速度和我的素材生成分段与鼓点对位表",
+    "en": "Build sections and a beat-matched clip table from this track and my footage"
+  },
+  "plugin": "lynxce-beat-mashup-advisor",
+  "tags": [
+    {
+      "zh": "鼓点标记",
+      "en": "Beat Markers"
+    },
+    {
+      "zh": "素材对位",
+      "en": "Clip Matching"
+    },
+    {
+      "zh": "节奏结构",
+      "en": "Rhythm Structure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这首歌的速度和我的素材生成分段与鼓点对位表",
+      "en": "Build sections and a beat-matched clip table from this track and my footage"
+    },
+    {
+      "zh": "复核我这版卡点工程的标记帧号和切点密度",
+      "en": "Review the marker frames and cut density in my beat edit"
+    },
+    {
+      "zh": "还没定歌时先给按小节的结构模板和素材需求",
+      "en": "Give a bar-based structure and footage needs before the track is chosen"
+    }
+  ],
+  "keywords": [
+    "鼓点标记",
+    "素材对位",
+    "节奏结构",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-nonresident-withholding-b50",
+  "version": "1.0.0",
+  "description": "Prepare corporate nonresident withholding evidence, conditional calculations and full revisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-nonresident-withholding-b50.md"
+  ],
+  "skills": [
+    "./skills/nonresident-income-source-evidence",
+    "./skills/nonresident-gross-net-tax-bridge",
+    "./skills/nonresident-trigger-treaty-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-nonresident-withholding-b50",
+  "displayName": {
+    "zh": "扣缴顾问",
+    "en": "Nonresident Withholding Advisor"
+  },
+  "profession": {
+    "zh": "非居民扣缴顾问",
+    "en": "Nonresident Withholding Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务核对境外付款合同、所得来源与协定资料，形成源泉扣缴测算、证据底稿及完整冲突修订稿。",
+    "en": "Prepare corporate nonresident withholding evidence, conditional calculations and full revisions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "境外专利许可费由谁承担所得税，帮我核合同和扣缴底稿。",
+    "en": "Nonresident Withholding Advisor"
+  },
+  "plugin": "lynxce-nonresident-withholding-b50",
+  "tags": [
+    {
+      "zh": "非居民扣缴",
+      "en": "非居民扣缴"
+    },
+    {
+      "zh": "对外付款",
+      "en": "对外付款"
+    },
+    {
+      "zh": "协定资料",
+      "en": "协定资料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "境外专利许可费由谁承担所得税，帮我核合同和扣缴底稿。",
+      "en": "Nonresident Withholding Advisor"
+    },
+    {
+      "zh": "对方邮件说净收款与合同含税价冲突，请完整重出两口径说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "有税收居民证明但缺受益所有人资料，哪些待遇仍不能确定？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "非居民扣缴",
+    "对外付款",
+    "协定资料"
+  ]
+}

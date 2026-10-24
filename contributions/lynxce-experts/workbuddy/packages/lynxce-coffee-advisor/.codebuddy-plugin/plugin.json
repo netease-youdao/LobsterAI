@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-coffee-advisor",
+  "version": "1.0.1",
+  "description": "Turn extraction data, recipes and bar timings into dial-in logs, costed recipe cards, bottleneck tables and blind test sheets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-coffee-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-coffee-advisor",
+  "displayName": {
+    "zh": "咖啡茶饮出品顾问",
+    "en": "Coffee & Tea Ops"
+  },
+  "profession": {
+    "zh": "咖啡茶饮出品与菜单顾问",
+    "en": "Coffee & Tea Product Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据萃取参数配方与出杯测时，交付调参记录、含成本毛利的标准配方卡、工位瓶颈产能表和新品盲测单。",
+    "en": "Turn extraction data, recipes and bar timings into dial-in logs, costed recipe cards, bottleneck tables and blind test sheets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据我这杯浓缩的粉量出液和用时给出调参记录",
+    "en": "Build a dial-in log from my espresso dose yield and time"
+  },
+  "plugin": "lynxce-coffee-advisor",
+  "tags": [
+    {
+      "zh": "萃取调参",
+      "en": "Dial-in"
+    },
+    {
+      "zh": "标准配方卡",
+      "en": "Recipe Card"
+    },
+    {
+      "zh": "出杯动线",
+      "en": "Bar Flow"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我这杯浓缩的粉量出液和用时给出调参记录",
+      "en": "Build a dial-in log from my espresso dose yield and time"
+    },
+    {
+      "zh": "帮我复核这张配方卡的用量公差成本和毛利",
+      "en": "Check the amounts tolerances cost and margin on this recipe card"
+    },
+    {
+      "zh": "只知道高峰出杯慢时先给工位测时表和瓶颈算法",
+      "en": "With only slow peak service give me a station timing sheet"
+    }
+  ],
+  "keywords": [
+    "萃取调参",
+    "标准配方卡",
+    "出杯动线",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

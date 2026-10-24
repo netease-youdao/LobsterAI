@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-pajamas-homewear-advisor",
+  "version": "1.0.1",
+  "description": "Choose pajamas: fabric weight by season, sizing with ease, pilling and shrinkage, price per set.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pajamas-homewear-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pajamas-homewear"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pajamas-homewear-advisor",
+  "displayName": {
+    "zh": "睡衣家居服选购顾问",
+    "en": "Pajamas and Loungewear Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 睡衣家居服选购顾问",
+    "en": "11.11 Pajamas and Loungewear Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "睡衣家居服怎么选：面料克重按季节、尺码按胸围放量、起球与缩水风险、套装单价与多件价。",
+    "en": "Choose pajamas: fabric weight by season, sizing with ease, pilling and shrinkage, price per set."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "南方冬天在家穿什么面料的睡衣",
+    "en": "Which pajama fabric for a cold southern winter"
+  },
+  "plugin": "lynxce-pajamas-homewear-advisor",
+  "tags": [
+    {
+      "zh": "面料克重",
+      "en": "Fabric Weight"
+    },
+    {
+      "zh": "尺码放量",
+      "en": "Size and Ease"
+    },
+    {
+      "zh": "缩水起球",
+      "en": "Shrink and Pilling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "南方冬天在家穿什么面料的睡衣",
+      "en": "Which pajama fabric for a cold southern winter"
+    },
+    {
+      "zh": "胸围 88 宽松款选哪个码",
+      "en": "Which size for an 88 cm chest in a loose fit"
+    },
+    {
+      "zh": "买两套的优惠到底省多少",
+      "en": "How much does the two-set deal really save"
+    }
+  ],
+  "keywords": [
+    "面料克重",
+    "尺码放量",
+    "缩水起球",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

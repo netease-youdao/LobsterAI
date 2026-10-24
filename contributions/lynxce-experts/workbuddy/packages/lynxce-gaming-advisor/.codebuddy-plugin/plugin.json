@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-gaming-advisor",
+  "version": "1.0.4",
+  "description": "Pick a gaming setup: console choice, display matching, peripherals and real game costs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-gaming-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-gaming-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-gaming-advisor",
+  "displayName": {
+    "zh": "游戏主机与外设选购顾问",
+    "en": "Game Console and Peripheral Advisor"
+  },
+  "profession": {
+    "zh": "游戏主机与外设选购顾问",
+    "en": "Game Console and Peripheral Advisor"
+  },
+  "displayDescription": {
+    "zh": "游戏设备怎么配才对：平台按品类选、显示规格怎么匹配、外设与游戏本体成本一起算清。",
+    "en": "Pick a gaming setup: console choice, display matching, peripherals and real game costs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "03-GameSpatial",
+  "defaultInitPrompt": {
+    "zh": "我该买哪个平台",
+    "en": "Which platform should I get"
+  },
+  "plugin": "lynxce-gaming-advisor",
+  "tags": [
+    {
+      "zh": "游戏主机",
+      "en": "Consoles"
+    },
+    {
+      "zh": "外设搭配",
+      "en": "Peripherals"
+    },
+    {
+      "zh": "总成本",
+      "en": "Total Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我该买哪个平台",
+      "en": "Which platform should I get"
+    },
+    {
+      "zh": "显示器要什么规格",
+      "en": "What display specs do I need"
+    },
+    {
+      "zh": "帮我算一下总花费",
+      "en": "Estimate the total spend"
+    }
+  ],
+  "keywords": [
+    "游戏主机",
+    "外设搭配",
+    "总成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

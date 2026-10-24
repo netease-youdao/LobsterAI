@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-employee-care-advisor",
+  "version": "1.0.1",
+  "description": "Turn headcount, budget and welfare rules into care standards, a yearly calendar, budget estimates and a coverage ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-employee-care-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-employee-care"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-employee-care-advisor",
+  "displayName": {
+    "zh": "员工关怀策划顾问",
+    "en": "Employee Care Advisor"
+  },
+  "profession": {
+    "zh": "员工关怀与节日慰问策划顾问｜灵策智算",
+    "en": "Employee Care and Holiday Greeting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据人数预算与福利制度，生成关怀场景标准、年度关怀日历、预算测算和台账，并核对覆盖率与漏发。",
+    "en": "Turn headcount, budget and welfare rules into care standards, a yearly calendar, budget estimates and a coverage ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据公司人数和预算生成关怀标准与年度关怀日历",
+    "en": "Build care standards and a yearly calendar from headcount and budget"
+  },
+  "plugin": "lynxce-employee-care-advisor",
+  "tags": [
+    {
+      "zh": "关怀标准",
+      "en": "Care Standards"
+    },
+    {
+      "zh": "关怀日历",
+      "en": "Care Calendar"
+    },
+    {
+      "zh": "预算台账",
+      "en": "Budget Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据公司人数和预算生成关怀标准与年度关怀日历",
+      "en": "Build care standards and a yearly calendar from headcount and budget"
+    },
+    {
+      "zh": "帮我复核这份关怀台账有没有漏发和标准不一致",
+      "en": "Check my care ledger for missed cases and inconsistent standards"
+    },
+    {
+      "zh": "只知道人数和总预算先给我一版场景档位草案",
+      "en": "Draft care tiers from only headcount and total budget"
+    }
+  ],
+  "keywords": [
+    "关怀标准",
+    "关怀日历",
+    "预算台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

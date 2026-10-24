@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-desk-peripheral-care-advisor",
+  "version": "1.0.0",
+  "description": "Plan shared desk keyboard and mouse cleaning, spare stock and replacement costs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-desk-peripheral-care-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-desk-peripheral-care"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-desk-peripheral-care-advisor",
+  "displayName": {
+    "zh": "共享键鼠维护助理",
+    "en": "Shared Desk Peripheral Care and Replacement Advisor"
+  },
+  "profession": {
+    "zh": "共享工位键鼠卫生与更换计划顾问",
+    "en": "Shared Desk Peripheral Care and Replacement Advisor"
+  },
+  "displayDescription": {
+    "zh": "按共享工位键鼠使用记录安排清洁与更换，区分污损故障和备件缺口，核算耗材预算并交付周期维护表。",
+    "en": "Plan shared desk keyboard and mouse cleaning, spare stock and replacement costs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "20个共享工位怎么排键鼠维护",
+    "en": "Plan peripheral care for twenty shared desks"
+  },
+  "plugin": "lynxce-office-desk-peripheral-care-advisor",
+  "tags": [
+    {
+      "zh": "清洁排期",
+      "en": "Cleaning Plan"
+    },
+    {
+      "zh": "备件核算",
+      "en": "Spare Stock"
+    },
+    {
+      "zh": "故障更换",
+      "en": "Replacement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "20个共享工位怎么排键鼠维护",
+      "en": "Plan peripheral care for twenty shared desks"
+    },
+    {
+      "zh": "清洁耗材和备用键盘采购怎么算",
+      "en": "Calculate cleaning supplies and spare keyboards"
+    },
+    {
+      "zh": "清洁后键盘失灵如何记录处理",
+      "en": "Record and resolve keyboard failure after cleaning"
+    }
+  ],
+  "keywords": [
+    "清洁排期",
+    "备件核算",
+    "故障更换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

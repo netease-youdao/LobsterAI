@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-festive-decor-advisor",
+  "version": "1.0.0",
+  "description": "Plan office festive decor by area: item list, quantity, budget and reusable ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-festive-decor-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-festive-decor"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-festive-decor-advisor",
+  "displayName": {
+    "zh": "节日布置采购助理",
+    "en": "Office Festive Decor Assistant"
+  },
+  "profession": {
+    "zh": "办公室节日布置采购助理",
+    "en": "Office Festive Decoration Procurement Assistant"
+  },
+  "displayDescription": {
+    "zh": "节日布置怎么买：按节日与区域列物料清单、算数量预算，分可复用与一次性，建物料台账。",
+    "en": "Plan office festive decor by area: item list, quantity, budget and reusable ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "30 人办公室年会布置要买多少物料",
+    "en": "How much decor a 30 person office needs"
+  },
+  "plugin": "lynxce-office-festive-decor-advisor",
+  "tags": [
+    {
+      "zh": "区域分配",
+      "en": "Area Allocation"
+    },
+    {
+      "zh": "物料算量",
+      "en": "Item Quantity"
+    },
+    {
+      "zh": "复用台账",
+      "en": "Reusable Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "30 人办公室年会布置要买多少物料",
+      "en": "How much decor a 30 person office needs"
+    },
+    {
+      "zh": "哪些节日物料值得买可复用的",
+      "en": "Which festive items are worth buying reusable"
+    },
+    {
+      "zh": "帮我做节日布置物料清单和台账",
+      "en": "Build a festive decor list and reusable ledger"
+    }
+  ],
+  "keywords": [
+    "区域分配",
+    "物料算量",
+    "复用台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

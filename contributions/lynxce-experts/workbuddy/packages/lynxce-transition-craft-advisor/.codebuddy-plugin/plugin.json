@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-transition-craft-advisor",
+  "version": "1.0.3",
+  "description": "Turn shot notes, frame rate and problem cuts into a continuity sheet, frame and timecode math, audio overlaps and a review list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-transition-craft-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-transition-craft"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-transition-craft-advisor",
+  "displayName": {
+    "zh": "转场衔接顾问",
+    "en": "Transition Craft Advisor"
+  },
+  "profession": {
+    "zh": "转场与镜头衔接技法顾问｜灵策智算",
+    "en": "Transition and Shot Continuity Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据镜头列表、帧率与卡点描述，交付衔接点诊断、过渡帧数与时码换算、声音搭接方案和逐段复看清单。",
+    "en": "Turn shot notes, frame rate and problem cuts into a continuity sheet, frame and timecode math, audio overlaps and a review list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的镜头列表和帧率生成衔接表与过渡帧数",
+    "en": "Build a continuity sheet and transition frame counts from my shot list"
+  },
+  "plugin": "lynxce-transition-craft-advisor",
+  "tags": [
+    {
+      "zh": "镜头衔接",
+      "en": "Shot Continuity"
+    },
+    {
+      "zh": "帧数换算",
+      "en": "Frame Math"
+    },
+    {
+      "zh": "声音搭接",
+      "en": "Audio Overlap"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的镜头列表和帧率生成衔接表与过渡帧数",
+      "en": "Build a continuity sheet and transition frame counts from my shot list"
+    },
+    {
+      "zh": "帮我复看这几个剪辑点为什么会跳和越轴",
+      "en": "Review why these cuts feel jumpy or cross the line"
+    },
+    {
+      "zh": "只知道换场景生硬先给最小衔接方案",
+      "en": "Give a minimal continuity fix when scene changes feel abrupt"
+    }
+  ],
+  "keywords": [
+    "镜头衔接",
+    "帧数换算",
+    "声音搭接",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

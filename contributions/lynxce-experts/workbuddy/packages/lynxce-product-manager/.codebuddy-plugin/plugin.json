@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-product-manager",
+  "version": "1.0.1",
+  "description": "Offline, user-material-based workflow assistance with traceable drafts and explicit review decisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-product-manager.md"
+  ],
+  "skills": [
+    "./skills/lynxce-prd-writer",
+    "./skills/lynxce-user-interview",
+    "./skills/lynxce-competitor-analysis"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-product-manager",
+  "displayName": {
+    "zh": "产品经理专家",
+    "en": "Product Manager"
+  },
+  "profession": {
+    "zh": "需求澄清与PRD撰写顾问",
+    "en": "Requirements & PRD Advisor"
+  },
+  "displayDescription": {
+    "zh": "将想法和访谈材料转成需求范围、状态分支及验收标准，交付可审查PRD草稿和变更影响清单。",
+    "en": "Turn supplied materials into traceable drafts, checked calculations and review templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "01-ProductDesign",
+  "defaultInitPrompt": {
+    "zh": "帮我把这个想法写成一份PRD",
+    "en": "Turn this idea into a PRD"
+  },
+  "plugin": "lynxce-product-manager",
+  "tags": [
+    {
+      "zh": "需求澄清",
+      "en": "Requirements"
+    },
+    {
+      "zh": "PRD撰写",
+      "en": "PRD"
+    },
+    {
+      "zh": "用户研究",
+      "en": "User Research"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把这个想法写成一份PRD",
+      "en": "Turn this idea into a PRD"
+    },
+    {
+      "zh": "设计一份用户访谈提纲",
+      "en": "Design a user interview guide"
+    },
+    {
+      "zh": "拆解这两个竞品的差异",
+      "en": "Break down the differences between these two competitors"
+    }
+  ],
+  "keywords": [
+    "需求澄清",
+    "PRD撰写",
+    "用户研究",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

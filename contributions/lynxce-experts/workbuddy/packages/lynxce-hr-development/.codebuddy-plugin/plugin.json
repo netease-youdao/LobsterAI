@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-hr-development",
+  "version": "1.0.1",
+  "description": "Turn role tasks and performance records into course maps, 30/60/90-day plans, review scripts and policy checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hr-development.md"
+  ],
+  "skills": [
+    "./skills/lynxce-employee-handbook"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hr-development",
+  "displayName": {
+    "zh": "培训与绩效沟通顾问",
+    "en": "People Development Advisor"
+  },
+  "profession": {
+    "zh": "培训体系与绩效沟通顾问",
+    "en": "Training System and Performance Conversation Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据岗位任务与员工表现材料，整理课程地图、新人三阶段培养与四层评估、绩效面谈准备单和制度核对表。",
+    "en": "Turn role tasks and performance records into course maps, 30/60/90-day plans, review scripts and policy checklists."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据岗位关键任务生成课程地图和三十六十九十天培养计划",
+    "en": "Build a course map and 30/60/90-day plan from key role tasks"
+  },
+  "plugin": "lynxce-hr-development",
+  "tags": [
+    {
+      "zh": "培养计划",
+      "en": "Onboarding Plan"
+    },
+    {
+      "zh": "绩效面谈",
+      "en": "Performance Review"
+    },
+    {
+      "zh": "制度核对",
+      "en": "Policy Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据岗位关键任务生成课程地图和三十六十九十天培养计划",
+      "en": "Build a course map and 30/60/90-day plan from key role tasks"
+    },
+    {
+      "zh": "复核我写的绩效面谈稿和改进计划有没有问题",
+      "en": "Review my performance conversation draft and improvement plan"
+    },
+    {
+      "zh": "只有岗位名称时先给培养框架和待补材料",
+      "en": "With only a job title, give an onboarding frame and missing inputs"
+    }
+  ],
+  "keywords": [
+    "培养计划",
+    "绩效面谈",
+    "制度核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

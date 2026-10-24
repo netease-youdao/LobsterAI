@@ -1,0 +1,143 @@
+{
+  "inputStatus": "假设",
+  "budget": 1000,
+  "fixedCost": 0,
+  "displayCapacity": null,
+  "resolvedBranch": null,
+  "requireAllProducts": true,
+  "products": [
+    {
+      "id": "A",
+      "price": 40,
+      "moq": 4,
+      "increment": 2
+    },
+    {
+      "id": "B",
+      "price": 60,
+      "moq": 2,
+      "increment": 2
+    },
+    {
+      "id": "C",
+      "price": 100,
+      "moq": 1,
+      "increment": 1
+    }
+  ],
+  "branches": [
+    {
+      "id": "C8",
+      "condition": "销售表C可供8件口径被确认有效",
+      "availability": {
+        "A": "充足",
+        "B": "充足",
+        "C": 8
+      }
+    },
+    {
+      "id": "C1",
+      "condition": "仓库C可供1件口径被确认有效",
+      "availability": {
+        "A": "充足",
+        "B": "充足",
+        "C": 1
+      }
+    }
+  ],
+  "designs": [
+    {
+      "id": "覆盖",
+      "quantity": {
+        "A": 8,
+        "B": 6,
+        "C": 2
+      },
+      "allocation": {
+        "A": {
+          "displayTarget": 2,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        },
+        "B": {
+          "displayTarget": 2,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        },
+        "C": {
+          "displayTarget": 1,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        }
+      },
+      "capToAvailable": true,
+      "parentId": null
+    },
+    {
+      "id": "高档",
+      "quantity": {
+        "A": 4,
+        "B": 4,
+        "C": 5
+      },
+      "allocation": {
+        "A": {
+          "displayTarget": 2,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        },
+        "B": {
+          "displayTarget": 2,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        },
+        "C": {
+          "displayTarget": 2,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        }
+      },
+      "capToAvailable": true,
+      "parentId": null
+    },
+    {
+      "id": "中档补强",
+      "quantity": {
+        "A": 4,
+        "B": 6,
+        "C": 1
+      },
+      "allocation": {
+        "A": {
+          "displayTarget": 2,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        },
+        "B": {
+          "displayTarget": 2,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        },
+        "C": {
+          "displayTarget": 1,
+          "consumed": 0,
+          "basis": "假设分配与演示消耗0"
+        }
+      },
+      "capToAvailable": true,
+      "parentId": "高档"
+    }
+  ],
+  "weekly": [
+    {
+      "sku": "A",
+      "basis": "假设，未给补入不能填0",
+      "opening": 8,
+      "incoming": null,
+      "sold": 3,
+      "given": 0,
+      "damaged": 0,
+      "transferOut": 0
+    }
+  ]
+}

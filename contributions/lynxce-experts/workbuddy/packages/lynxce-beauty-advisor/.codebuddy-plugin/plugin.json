@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-beauty-advisor",
+  "version": "1.0.3",
+  "description": "Plan the routine before buying: reading ingredient lists, layering actives, authentic channels and unit price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-beauty-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-beauty-buying"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-beauty-advisor",
+  "displayName": {
+    "zh": "护肤彩妆选购与成分核对顾问",
+    "en": "Beauty Product Selection Advisor"
+  },
+  "profession": {
+    "zh": "护肤彩妆选购与成分核对顾问",
+    "en": "Beauty Product Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "先排护肤步骤再买东西：成分表怎么读、功效品怎么叠加使用、正品渠道与每毫升单价怎么核。",
+    "en": "Plan the routine before buying: reading ingredient lists, layering actives, authentic channels and unit price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我这个肤质该怎么排步骤",
+    "en": "How should I structure my routine"
+  },
+  "plugin": "lynxce-beauty-advisor",
+  "tags": [
+    {
+      "zh": "护肤选购",
+      "en": "Skincare"
+    },
+    {
+      "zh": "成分核对",
+      "en": "Ingredients"
+    },
+    {
+      "zh": "单价换算",
+      "en": "Unit Price"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这个肤质该怎么排步骤",
+      "en": "How should I structure my routine"
+    },
+    {
+      "zh": "这两瓶精华成分差在哪",
+      "en": "How do these two serums differ by ingredients"
+    },
+    {
+      "zh": "帮我看看这个价格划不划算",
+      "en": "Is this price worth it"
+    }
+  ],
+  "keywords": [
+    "护肤选购",
+    "成分核对",
+    "单价换算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

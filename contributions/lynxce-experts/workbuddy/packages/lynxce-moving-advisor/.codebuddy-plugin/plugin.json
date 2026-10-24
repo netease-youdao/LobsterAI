@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-moving-advisor",
+  "version": "1.0.4",
+  "description": "Move in three phases: day-one essentials, week-one additions and handover evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-moving-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-moving-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-moving-advisor",
+  "displayName": {
+    "zh": "租房搬家与入住采买顾问",
+    "en": "Moving and Setup Advisor"
+  },
+  "profession": {
+    "zh": "租房搬家与入住采买顾问",
+    "en": "Moving and Setup Advisor"
+  },
+  "displayDescription": {
+    "zh": "搬家分三段买最省钱：当天必需品、住一周再补，交接验收要拍什么、留哪些证据都说清。",
+    "en": "Move in three phases: day-one essentials, week-one additions and handover evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "入住当天要准备什么",
+    "en": "What do I need on move-in day"
+  },
+  "plugin": "lynxce-moving-advisor",
+  "tags": [
+    {
+      "zh": "搬家入住",
+      "en": "Moving"
+    },
+    {
+      "zh": "分阶段采买",
+      "en": "Phased"
+    },
+    {
+      "zh": "交接验收",
+      "en": "Handover"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "入住当天要准备什么",
+      "en": "What do I need on move-in day"
+    },
+    {
+      "zh": "交接的时候要拍哪些照片",
+      "en": "What should I photograph at handover"
+    },
+    {
+      "zh": "搬家费用一般怎么算",
+      "en": "How is moving cost usually calculated"
+    }
+  ],
+  "keywords": [
+    "搬家入住",
+    "分阶段采买",
+    "交接验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-after-sales-expert",
+  "version": "1.0.1",
+  "description": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-after-sales-expert.md"
+  ],
+  "skills": [
+    "./skills/lynxce-service-ticket",
+    "./skills/lynxce-after-sales-expert-planning",
+    "./skills/lynxce-after-sales-expert-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-after-sales-expert",
+  "displayName": {
+    "zh": "售后工单专家",
+    "en": "After-sales Specialist"
+  },
+  "profession": {
+    "zh": "客诉处理与工单闭环顾问",
+    "en": "Complaint Handling & Ticket Closure Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料整理售后工单材料闭环需求与证据，完善方案分支、异常核对和交付模板，支持逐项复核与迭代。",
+    "en": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "整理工单诉求与证据，不确定事实单独标记",
+    "en": "Organize ticket requests and evidence, flagging uncertain facts"
+  },
+  "plugin": "lynxce-after-sales-expert",
+  "tags": [
+    {
+      "zh": "诉求归类",
+      "en": "Issue classification"
+    },
+    {
+      "zh": "回复草案",
+      "en": "Response draft"
+    },
+    {
+      "zh": "闭环核验",
+      "en": "Closure checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "整理工单诉求与证据，不确定事实单独标记",
+      "en": "Organize ticket requests and evidence, flagging uncertain facts"
+    },
+    {
+      "zh": "比较处理选项并写一份可人工确认的回复",
+      "en": "Compare handling options and draft a response for human approval"
+    },
+    {
+      "zh": "检查工单是否闭环，列出遗漏与复发原因材料",
+      "en": "Check ticket closure and list missing items and recurrence evidence"
+    }
+  ],
+  "keywords": [
+    "工单分级",
+    "客诉话术",
+    "补偿方案",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-books-advisor",
+  "version": "1.0.3",
+  "description": "Check the edition first: buy to a reading plan, verify versions and translations, and cost out supplies.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-books-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-book-supplies"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-books-advisor",
+  "displayName": {
+    "zh": "图书选版本与学习用品顾问",
+    "en": "Books & Study Supplies Advisor"
+  },
+  "profession": {
+    "zh": "图书选版本与学习用品顾问",
+    "en": "Books & Study Supplies Advisor"
+  },
+  "displayDescription": {
+    "zh": "买书先看版本：按阅读计划买、版次与译本怎么核对、学习用品与打印耗材成本怎么算清。",
+    "en": "Check the edition first: buy to a reading plan, verify versions and translations, and cost out supplies."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "入门这个领域该读哪几本",
+    "en": "Which books should I start with in this field"
+  },
+  "plugin": "lynxce-books-advisor",
+  "tags": [
+    {
+      "zh": "图书选购",
+      "en": "Books"
+    },
+    {
+      "zh": "版本核对",
+      "en": "Editions"
+    },
+    {
+      "zh": "学习用品",
+      "en": "Supplies"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "入门这个领域该读哪几本",
+      "en": "Which books should I start with in this field"
+    },
+    {
+      "zh": "这本书哪个译本更好",
+      "en": "Which translation of this book is better"
+    },
+    {
+      "zh": "帮我比一下这套教辅的价格",
+      "en": "Compare prices for this workbook set"
+    }
+  ],
+  "keywords": [
+    "图书选购",
+    "版本核对",
+    "学习用品",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

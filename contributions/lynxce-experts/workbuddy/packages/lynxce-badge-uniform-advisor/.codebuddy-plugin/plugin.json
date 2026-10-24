@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-badge-uniform-advisor",
+  "version": "1.0.2",
+  "description": "Turn staff lists and issue standards into size orders, signed issue logs, replacement records, exit return checklists and half-year audits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-badge-uniform-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-badge-uniform"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-badge-uniform-advisor",
+  "displayName": {
+    "zh": "工牌工服管理顾问",
+    "en": "Badge and Uniform Advisor"
+  },
+  "profession": {
+    "zh": "工牌与工服发放回收管理顾问｜灵策智算",
+    "en": "Badge and Uniform Issue and Return Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据在职名单与岗位配发标准，交付尺码备货汇总、发放签收台账、补办登记、离职回收单和半年盘点差异表。",
+    "en": "Turn staff lists and issue standards into size orders, signed issue logs, replacement records, exit return checklists and half-year audits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据在职名单和岗位标准生成尺码备货汇总与发放签收台账",
+    "en": "Build size orders and a signed issue log from our staff list and role standards"
+  },
+  "plugin": "lynxce-badge-uniform-advisor",
+  "tags": [
+    {
+      "zh": "尺码备货",
+      "en": "Size Planning"
+    },
+    {
+      "zh": "签收台账",
+      "en": "Issue Log"
+    },
+    {
+      "zh": "盘点差异",
+      "en": "Audit Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据在职名单和岗位标准生成尺码备货汇总与发放签收台账",
+      "en": "Build size orders and a signed issue log from our staff list and role standards"
+    },
+    {
+      "zh": "复核这份门禁有效卡导出和在职名单的差异",
+      "en": "Reconcile this access card export against the current staff list"
+    },
+    {
+      "zh": "只有在职人数时先给尺码采集表和台账模板",
+      "en": "With only headcount give a size survey and log templates"
+    }
+  ],
+  "keywords": [
+    "尺码备货",
+    "签收台账",
+    "盘点差异",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

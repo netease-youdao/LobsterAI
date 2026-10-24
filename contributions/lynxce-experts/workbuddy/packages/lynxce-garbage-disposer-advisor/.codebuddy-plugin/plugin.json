@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-garbage-disposer-advisor",
+  "version": "1.0.1",
+  "description": "Pick garbage disposers: property and drainage rules, sink drain fit, power and grinding stages, install fee.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-garbage-disposer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-garbage-disposer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-garbage-disposer-advisor",
+  "displayName": {
+    "zh": "厨余垃圾处理器选购顾问",
+    "en": "Garbage Disposer Picker and Install Advisor"
+  },
+  "profession": {
+    "zh": "11.11 厨余垃圾处理器选购与安装核对顾问",
+    "en": "11.11 Garbage Disposer Picker and Install Advisor"
+  },
+  "displayDescription": {
+    "zh": "厨余垃圾处理器怎么挑：先问物业与排水规定、核水槽下水匹配、按人数定功率与研磨、算安装费。",
+    "en": "Pick garbage disposers: property and drainage rules, sink drain fit, power and grinding stages, install fee."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "装厨余垃圾处理器要先问物业什么",
+    "en": "What should I ask property management before installing a disposer"
+  },
+  "plugin": "lynxce-garbage-disposer-advisor",
+  "tags": [
+    {
+      "zh": "物业规定",
+      "en": "Property Rules"
+    },
+    {
+      "zh": "下水匹配",
+      "en": "Drain Fit"
+    },
+    {
+      "zh": "功率研磨",
+      "en": "Power and Grinding"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "装厨余垃圾处理器要先问物业什么",
+      "en": "What should I ask property management before installing a disposer"
+    },
+    {
+      "zh": "四口之家常有骨头选多大功率",
+      "en": "What motor power suits a family of four with bones"
+    },
+    {
+      "zh": "下水口 114 毫米能装哪种处理器",
+      "en": "Which disposer fits a 114 millimeter drain opening"
+    }
+  ],
+  "keywords": [
+    "物业规定",
+    "下水匹配",
+    "功率研磨",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

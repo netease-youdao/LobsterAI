@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-subscription-advisor",
+  "version": "1.0.1",
+  "description": "Take control of recurring charges: reconcile from three sources, keep-or-cancel criteria and renewal reminders.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-subscription-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-subscription-audit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-subscription-advisor",
+  "displayName": {
+    "zh": "订阅与会员费清理顾问",
+    "en": "Subscription Audit Advisor"
+  },
+  "profession": {
+    "zh": "订阅与会员费清理顾问",
+    "en": "Subscription Audit Advisor"
+  },
+  "displayDescription": {
+    "zh": "把自动续费理清楚：三个入口对账、留退判断标准、取消路径与续费提醒具体怎么设起来。",
+    "en": "Take control of recurring charges: reconcile from three sources, keep-or-cancel criteria and renewal reminders."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我盘一下有哪些自动续费",
+    "en": "Help me inventory my auto-renewals"
+  },
+  "plugin": "lynxce-subscription-advisor",
+  "tags": [
+    {
+      "zh": "订阅盘点",
+      "en": "Subscriptions"
+    },
+    {
+      "zh": "留退判断",
+      "en": "Keep or Cancel"
+    },
+    {
+      "zh": "续费提醒",
+      "en": "Reminders"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我盘一下有哪些自动续费",
+      "en": "Help me inventory my auto-renewals"
+    },
+    {
+      "zh": "这个会员还要不要续",
+      "en": "Should I renew this membership"
+    },
+    {
+      "zh": "取消订阅要注意什么",
+      "en": "What should I watch out for when cancelling"
+    }
+  ],
+  "keywords": [
+    "订阅盘点",
+    "留退判断",
+    "续费提醒",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

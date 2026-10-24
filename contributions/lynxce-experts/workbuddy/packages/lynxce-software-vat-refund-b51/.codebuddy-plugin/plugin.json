@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-software-vat-refund-b51",
+  "version": "1.0.0",
+  "description": "Software VAT Refund Advisor evidence, calculations and full revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-software-vat-refund-b51.md"
+  ],
+  "skills": [
+    "./skills/software-current-scope",
+    "./skills/software-input-apportionment",
+    "./skills/software-refund-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-software-vat-refund-b51",
+  "displayName": {
+    "zh": "软件税顾问",
+    "en": "Software VAT Refund Advisor"
+  },
+  "profession": {
+    "zh": "软件退税顾问",
+    "en": "Software VAT Refund Advisor"
+  },
+  "displayDescription": {
+    "zh": "为软件企业财务核对产品范围、软硬件收入和进项分摊，形成超税负测算、退税底稿及完整冲突修订稿。",
+    "en": "Software VAT Refund Advisor evidence, calculations and full revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "普通软件和嵌入式软件一起销售，帮我做当期退税底稿。",
+    "en": "Software VAT Refund Advisor"
+  },
+  "plugin": "lynxce-software-vat-refund-b51",
+  "tags": [
+    {
+      "zh": "软件退税",
+      "en": "软件退税"
+    },
+    {
+      "zh": "即征即退",
+      "en": "即征即退"
+    },
+    {
+      "zh": "进项分摊",
+      "en": "进项分摊"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "普通软件和嵌入式软件一起销售，帮我做当期退税底稿。",
+      "en": "Software VAT Refund Advisor"
+    },
+    {
+      "zh": "硬件同期均价有两个版本，请完整重算软硬件与进项。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "只有著作权证书但交易含云服务，哪些收入还不能纳入？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "软件退税",
+    "即征即退",
+    "进项分摊"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bid-binding-advisor",
+  "version": "1.0.0",
+  "description": "Bind bid documents: method by page count, backward schedule, work order and supplies cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bid-binding-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bid-binding"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bid-binding-advisor",
+  "displayName": {
+    "zh": "标书装订作业助理",
+    "en": "Bid Binding Work Order Assistant"
+  },
+  "profession": {
+    "zh": "标书装订与胶装作业办公采购顾问",
+    "en": "Bid Document Binding and Supplies Advisor"
+  },
+  "displayDescription": {
+    "zh": "标书怎么装订：按页数选打孔热熔或胶装，按份数与截止时间倒排工期，出装订作业单与耗材核算表。",
+    "en": "Bind bid documents: method by page count, backward schedule, work order and supplies cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "300 页标书该胶装还是热熔",
+    "en": "Perfect binding or thermal binding for 300 pages"
+  },
+  "plugin": "lynxce-bid-binding-advisor",
+  "tags": [
+    {
+      "zh": "装订方式",
+      "en": "Binding Method"
+    },
+    {
+      "zh": "倒排工期",
+      "en": "Backward Schedule"
+    },
+    {
+      "zh": "耗材核算",
+      "en": "Supplies Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "300 页标书该胶装还是热熔",
+      "en": "Perfect binding or thermal binding for 300 pages"
+    },
+    {
+      "zh": "离递交截止还有一天怎么排工期",
+      "en": "How to schedule binding one day before deadline"
+    },
+    {
+      "zh": "自己买胶装机还是找打印店",
+      "en": "Buy a binding machine or use a print shop"
+    }
+  ],
+  "keywords": [
+    "装订方式",
+    "倒排工期",
+    "耗材核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-addon-purchase-advisor",
+  "version": "1.0.1",
+  "description": "Judge add-on deals: real discount versus standalone price, cost of reaching the threshold, real need, return handling.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-addon-purchase-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-addon-purchase"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-addon-purchase-advisor",
+  "displayName": {
+    "zh": "加价购与换购核算顾问",
+    "en": "Add-on and Trade-up Purchase Advisor"
+  },
+  "profession": {
+    "zh": "11.11 加价购与换购核算顾问",
+    "en": "11.11 Add-on and Trade-up Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "加价购换购值不值：加价后与单买价的实际折扣、凑主商品门槛的成本、换购品是否真需要、退货时怎么处理。",
+    "en": "Judge add-on deals: real discount versus standalone price, cost of reaching the threshold, real need, return handling."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "加 29 元换购这个值不值",
+    "en": "Is paying 29 more for this trade-up worth it"
+  },
+  "plugin": "lynxce-addon-purchase-advisor",
+  "tags": [
+    {
+      "zh": "实际折扣",
+      "en": "Real Discount"
+    },
+    {
+      "zh": "凑单成本",
+      "en": "Padding Cost"
+    },
+    {
+      "zh": "需要度判断",
+      "en": "Need Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "加 29 元换购这个值不值",
+      "en": "Is paying 29 more for this trade-up worth it"
+    },
+    {
+      "zh": "为了够换购门槛要不要凑单",
+      "en": "Should I pad my cart to reach the add-on threshold"
+    },
+    {
+      "zh": "退主商品时换购品怎么处理",
+      "en": "What happens to the add-on item if I return the main item"
+    }
+  ],
+  "keywords": [
+    "实际折扣",
+    "凑单成本",
+    "需要度判断",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

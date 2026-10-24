@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-dust-mite-advisor",
+  "version": "1.0.1",
+  "description": "Pick a mite remover: suction and tapping specs, UV and hot air limits, filter cost, compared with washing and drying.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dust-mite-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-dust-mite"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dust-mite-advisor",
+  "displayName": {
+    "zh": "除螨仪与床品除螨方案顾问",
+    "en": "Dust Mite Remover and Bedding Care Advisor"
+  },
+  "profession": {
+    "zh": "11.11 除螨仪与床品除螨方案顾问",
+    "en": "11.11 Dust Mite Remover and Bedding Care Advisor"
+  },
+  "displayDescription": {
+    "zh": "除螨仪怎么选：吸力与拍打频率、紫外线热风功能边界、滤网耗材年成本、与洗晒方案对比。",
+    "en": "Pick a mite remover: suction and tapping specs, UV and hot air limits, filter cost, compared with washing and drying."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这台除螨仪值不值得买",
+    "en": "Is this dust mite remover worth buying"
+  },
+  "plugin": "lynxce-dust-mite-advisor",
+  "tags": [
+    {
+      "zh": "参数判断",
+      "en": "Spec Check"
+    },
+    {
+      "zh": "耗材成本",
+      "en": "Filter Cost"
+    },
+    {
+      "zh": "洗晒对比",
+      "en": "Wash Comparison"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这台除螨仪值不值得买",
+      "en": "Is this dust mite remover worth buying"
+    },
+    {
+      "zh": "除螨仪和勤洗床品哪个更划算",
+      "en": "Is a mite remover cheaper than washing bedding often"
+    },
+    {
+      "zh": "紫外线除螨到底有没有用",
+      "en": "Does the UV lamp on a mite remover really matter"
+    }
+  ],
+  "keywords": [
+    "参数判断",
+    "耗材成本",
+    "洗晒对比",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

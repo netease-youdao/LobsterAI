@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-translator-device-advisor",
+  "version": "1.0.0",
+  "description": "Equip trips with translators: languages, offline packs, accuracy test, device pool, request form.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-translator-device-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-translator-device"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-translator-device-advisor",
+  "displayName": {
+    "zh": "商务翻译机选型助理",
+    "en": "Business Translator Device Advisor"
+  },
+  "profession": {
+    "zh": "商务翻译机与翻译笔办公采购顾问",
+    "en": "Business Translator Device and Pen Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "出差翻译机怎么配：按目的地核语种与离线包、用行业句实测准确率延迟、分对话与阅读场景，附设备申领单。",
+    "en": "Equip trips with translators: languages, offline packs, accuracy test, device pool, request form."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "去越南工厂出差翻译机怎么选",
+    "en": "Which translator for a factory trip to Vietnam"
+  },
+  "plugin": "lynxce-translator-device-advisor",
+  "tags": [
+    {
+      "zh": "离线语种包",
+      "en": "Offline Language Packs"
+    },
+    {
+      "zh": "行业句实测",
+      "en": "Industry Phrase Test"
+    },
+    {
+      "zh": "设备申领",
+      "en": "Device Request Form"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "去越南工厂出差翻译机怎么选",
+      "en": "Which translator for a factory trip to Vietnam"
+    },
+    {
+      "zh": "翻译机和翻译笔有什么区别",
+      "en": "Translator device versus scanning translation pen"
+    },
+    {
+      "zh": "公司要备几台翻译机轮流用",
+      "en": "How many shared translators a company needs"
+    }
+  ],
+  "keywords": [
+    "离线语种包",
+    "行业句实测",
+    "设备申领",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

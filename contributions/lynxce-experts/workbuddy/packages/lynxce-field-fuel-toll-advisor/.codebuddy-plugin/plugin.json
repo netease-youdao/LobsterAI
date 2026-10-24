@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-field-fuel-toll-advisor",
+  "version": "1.0.0",
+  "description": "Fuel by mileage and consumption, toll and parking match, and a field expense sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-field-fuel-toll-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-field-fuel-toll"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-field-fuel-toll-advisor",
+  "displayName": {
+    "zh": "外勤油费报销助理",
+    "en": "Field Fuel and Toll Assistant"
+  },
+  "profession": {
+    "zh": "销售外勤油费与通行费报销核算助理",
+    "en": "Field Sales Fuel, Toll and Parking Expense Assistant"
+  },
+  "displayDescription": {
+    "zh": "外勤油费怎么报：按里程与百公里油耗算油费，核对通行费停车费与拜访记录，出外勤报销明细表。",
+    "en": "Fuel by mileage and consumption, toll and parking match, and a field expense sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一周跑了 412 公里油费怎么算",
+    "en": "How to compute fuel cost for 412 km in a week"
+  },
+  "plugin": "lynxce-field-fuel-toll-advisor",
+  "tags": [
+    {
+      "zh": "里程核对",
+      "en": "Mileage Check"
+    },
+    {
+      "zh": "油费核算",
+      "en": "Fuel Cost"
+    },
+    {
+      "zh": "票据匹配",
+      "en": "Receipt Match"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一周跑了 412 公里油费怎么算",
+      "en": "How to compute fuel cost for 412 km in a week"
+    },
+    {
+      "zh": "实际里程比导航多三成怎么写说明",
+      "en": "How to explain mileage 30 percent over navigation"
+    },
+    {
+      "zh": "通行费票据日期对不上怎么办",
+      "en": "What if toll receipt dates do not match visits"
+    }
+  ],
+  "keywords": [
+    "里程核对",
+    "油费核算",
+    "票据匹配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

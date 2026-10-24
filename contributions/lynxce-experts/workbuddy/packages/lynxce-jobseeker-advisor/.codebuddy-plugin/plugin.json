@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-jobseeker-advisor",
+  "version": "1.0.2",
+  "description": "Turns experience into results: resume structure and quantification, interview stories and role-fit self-assessment.",
+  "author": {
+    "name": "灵策智算 LynxceAI",
+    "email": "contact@lynxce.cn"
+  },
+  "agents": [
+    "./agents/lynxce-jobseeker-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-resume-coach"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-jobseeker-advisor",
+  "displayName": {
+    "zh": "灵策智算",
+    "en": "Job Search Coach"
+  },
+  "profession": {
+    "zh": "简历优化与面试辅导顾问",
+    "en": "Resume & Interview Coach"
+  },
+  "displayDescription": {
+    "zh": "把经历讲成成果：简历结构与量化改写、面试故事的准备方法，以及目标岗位匹配度的自查。",
+    "en": "Turns experience into results: resume structure and quantification, interview stories and role-fit self-assessment."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我把这段经历改得有说服力",
+    "en": "Rewrite this experience to be more convincing"
+  },
+  "plugin": "lynxce-jobseeker-advisor",
+  "tags": [
+    {
+      "zh": "简历优化",
+      "en": "Resume"
+    },
+    {
+      "zh": "面试准备",
+      "en": "Interview"
+    },
+    {
+      "zh": "岗位匹配",
+      "en": "Role Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把这段经历改得有说服力",
+      "en": "Rewrite this experience to be more convincing"
+    },
+    {
+      "zh": "这个岗位我该准备哪些问题",
+      "en": "What questions should I prepare for this role"
+    },
+    {
+      "zh": "简历投出去没回音,问题在哪",
+      "en": "No replies to my resume — what is wrong"
+    }
+  ],
+  "homepage": "https://ai.lynxce.cn",
+  "keywords": [
+    "简历优化",
+    "面试准备",
+    "岗位匹配",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

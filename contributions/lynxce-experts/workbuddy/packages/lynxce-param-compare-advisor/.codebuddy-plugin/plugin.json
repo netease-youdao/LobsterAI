@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-param-compare-advisor",
+  "version": "1.0.2",
+  "description": "Choose among similar-priced items: key specs by category, drop marketing specs, weighted scores and value.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-param-compare-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-param-compare"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-param-compare-advisor",
+  "displayName": {
+    "zh": "同价位多款商品参数对比顾问",
+    "en": "Same-Price Product Spec Comparison Advisor"
+  },
+  "profession": {
+    "zh": "11.11 同价位多款商品参数对比顾问",
+    "en": "11.11 Same-Price Product Spec Comparison Advisor"
+  },
+  "displayDescription": {
+    "zh": "同价位几款怎么选：按品类提取关键参数、剔除营销参数、加权打分，结合到手价算性价比。",
+    "en": "Choose among similar-priced items: key specs by category, drop marketing specs, weighted scores and value."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这几款差不多价格的该选哪个",
+    "en": "Which of these similarly priced items should I pick"
+  },
+  "plugin": "lynxce-param-compare-advisor",
+  "tags": [
+    {
+      "zh": "加权打分",
+      "en": "Weighted Scoring"
+    },
+    {
+      "zh": "营销参数剔除",
+      "en": "Marketing Spec Filter"
+    },
+    {
+      "zh": "性价比排名",
+      "en": "Value Ranking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这几款差不多价格的该选哪个",
+      "en": "Which of these similarly priced items should I pick"
+    },
+    {
+      "zh": "帮我把这几款的参数做成对比表",
+      "en": "Put the specs of these items into a comparison table"
+    },
+    {
+      "zh": "哪些参数是营销噱头可以不看",
+      "en": "Which specs are just marketing and can be ignored"
+    }
+  ],
+  "keywords": [
+    "加权打分",
+    "营销参数剔除",
+    "性价比排名",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

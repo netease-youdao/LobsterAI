@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-tax-loss-carryforward-b50",
+  "version": "1.0.0",
+  "description": "Trace corporate tax loss vintages, eligibility years, carryforward limits and correction evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tax-loss-carryforward-b50.md"
+  ],
+  "skills": [
+    "./skills/tax-loss-vintage-eligibility",
+    "./skills/tax-loss-yearly-rollforward",
+    "./skills/tax-loss-correction-full-dossier"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tax-loss-carryforward-b50",
+  "displayName": {
+    "zh": "亏损顾问",
+    "en": "Tax Loss Carryforward Advisor"
+  },
+  "profession": {
+    "zh": "亏损结转顾问",
+    "en": "Tax Loss Carryforward Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务追溯历年税务亏损、弥补和资格变化，核对结转期限与申报勾稽，形成完整台账及更正准备稿。",
+    "en": "Trace corporate tax loss vintages, eligibility years, carryforward limits and correction evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "逐年税务亏损和盈利已有，帮我重建每批亏损余额及到期年。",
+    "en": "Tax Loss Carryforward Advisor"
+  },
+  "plugin": "lynxce-tax-loss-carryforward-b50",
+  "tags": [
+    {
+      "zh": "亏损弥补",
+      "en": "亏损弥补"
+    },
+    {
+      "zh": "结转期限",
+      "en": "结转期限"
+    },
+    {
+      "zh": "历史更正",
+      "en": "历史更正"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "逐年税务亏损和盈利已有，帮我重建每批亏损余额及到期年。",
+      "en": "Tax Loss Carryforward Advisor"
+    },
+    {
+      "zh": "高新或科小资格变化后，哪些历史亏损期限有依据延长？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "历史亏损额出现两个版本，请把全部后续年度完整重跑。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "亏损弥补",
+    "结转期限",
+    "历史更正"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-projector-stand-fold-load-check-advisor",
+  "version": "1.0.0",
+  "description": "Check folded stand fit and projector load compatibility.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-projector-stand-fold-load-check-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-projector-stand-fold-load-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-projector-stand-fold-load-check-advisor",
+  "displayName": {
+    "zh": "投影支架收纳核对助理",
+    "en": "Projector Stand Fit Assistant"
+  },
+  "profession": {
+    "zh": "便携投影支架收纳尺寸与负重核对助理",
+    "en": "Portable Projector Stand Storage and Load Assistant"
+  },
+  "displayDescription": {
+    "zh": "便携投影支架怎么收：核折叠外廓、包内净尺寸与设备总重，逐项确认承载和接口，交付适配表与采购核算。",
+    "en": "Check folded stand fit and projector load compatibility."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "折叠支架加缓冲余量能装进包吗",
+    "en": "Check folded stand dimensions with packing allowance"
+  },
+  "plugin": "lynxce-office-projector-stand-fold-load-check-advisor",
+  "tags": [
+    {
+      "zh": "收纳净尺寸",
+      "en": "Storage Dimensions"
+    },
+    {
+      "zh": "负重核对",
+      "en": "Load Check"
+    },
+    {
+      "zh": "接口适配",
+      "en": "Mount Compatibility"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "折叠支架加缓冲余量能装进包吗",
+      "en": "Check folded stand dimensions with packing allowance"
+    },
+    {
+      "zh": "投影机附件与携行总重怎样分开算",
+      "en": "Separate mounted load from total carrying weight"
+    },
+    {
+      "zh": "做支架尺寸负重与采购对比表",
+      "en": "Make a stand fit load and purchase comparison"
+    }
+  ],
+  "keywords": [
+    "收纳净尺寸",
+    "负重核对",
+    "接口适配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

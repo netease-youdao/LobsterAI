@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kitchenware-advisor",
+  "version": "1.0.4",
+  "description": "Match cookware to stove and cooking style: materials, sizing and useful small appliances.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kitchenware-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kitchenware-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kitchenware-advisor",
+  "displayName": {
+    "zh": "厨房用品与锅具选购顾问",
+    "en": "Kitchenware Buying Advisor"
+  },
+  "profession": {
+    "zh": "厨房用品与锅具选购顾问",
+    "en": "Kitchenware Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "厨具按灶具和常做的菜来选：锅体材质怎么取舍、口径怎么定、小家电哪些买了真的会一直用。",
+    "en": "Match cookware to stove and cooking style: materials, sizing and useful small appliances."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "电磁炉能用什么锅",
+    "en": "Which pots work on an induction hob"
+  },
+  "plugin": "lynxce-kitchenware-advisor",
+  "tags": [
+    {
+      "zh": "厨具选购",
+      "en": "Cookware"
+    },
+    {
+      "zh": "材质取舍",
+      "en": "Materials"
+    },
+    {
+      "zh": "收纳规划",
+      "en": "Storage"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "电磁炉能用什么锅",
+      "en": "Which pots work on an induction hob"
+    },
+    {
+      "zh": "我家该买多大的炒锅",
+      "en": "What wok size fits my family"
+    },
+    {
+      "zh": "这个小家电值得买吗",
+      "en": "Is this small appliance worth buying"
+    }
+  ],
+  "keywords": [
+    "厨具选购",
+    "材质取舍",
+    "收纳规划",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

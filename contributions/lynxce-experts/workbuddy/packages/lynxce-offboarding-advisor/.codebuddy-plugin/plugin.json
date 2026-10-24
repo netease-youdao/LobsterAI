@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-offboarding-advisor",
+  "version": "1.0.1",
+  "description": "Build offboarding handovers with work ownership, asset returns, access change evidence and unresolved item checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-offboarding-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-offboarding-checklist"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-offboarding-advisor",
+  "displayName": {
+    "zh": "离职交接顾问",
+    "en": "Offboarding Advisor"
+  },
+  "profession": {
+    "zh": "员工离职手续与物品账号回收顾问｜灵策智算",
+    "en": "Employee Offboarding and Asset Recovery Advisor"
+  },
+  "displayDescription": {
+    "zh": "把离职事项整理为工作资产权限交接总表串联承接授权操作回执与例外核对清楚未结事项和证明结算材料缺口",
+    "en": "Build offboarding handovers with work ownership, asset returns, access change evidence and unresolved item checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请把这名员工的在办工作资产和账号整理成交接总表",
+    "en": "Build an offboarding register for ongoing work assets and accounts"
+  },
+  "plugin": "lynxce-offboarding-advisor",
+  "tags": [
+    {
+      "zh": "离职交接",
+      "en": "Offboarding"
+    },
+    {
+      "zh": "权限回执",
+      "en": "Access Evidence"
+    },
+    {
+      "zh": "资产核对",
+      "en": "Asset Returns"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请把这名员工的在办工作资产和账号整理成交接总表",
+      "en": "Build an offboarding register for ongoing work assets and accounts"
+    },
+    {
+      "zh": "请核对账号停用前的承接依赖并交付操作回执清单",
+      "en": "Review ownership transfer dependencies and access evidence needs"
+    },
+    {
+      "zh": "请按已提供回执交付未闭环事项与资料缺口表",
+      "en": "Identify unresolved handover items from the supplied evidence"
+    }
+  ],
+  "keywords": [
+    "离职交接",
+    "权限回执",
+    "资产核对"
+  ],
+  "needEncrypt": true
+}

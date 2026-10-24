@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-books-advisor",
+  "version": "1.0.2",
+  "description": "Stock up on books smartly: bundle for thresholds by priority, pick editions, weigh ebook vs print, plan reading.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-books-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-books"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-books-advisor",
+  "displayName": {
+    "zh": "囤书与图书满减核算顾问",
+    "en": "Book Stock-Up and Discount Advisor"
+  },
+  "profession": {
+    "zh": "11.11 囤书与图书满减核算顾问",
+    "en": "11.11 Book Stock-Up and Discount Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促囤书怎么凑满减：按书单优先级凑单、出版社印次与装帧选择、电子书纸书取舍与阅读计划。",
+    "en": "Stock up on books smartly: bundle for thresholds by priority, pick editions, weigh ebook vs print, plan reading."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的书单怎么凑满减更合适",
+    "en": "How should I bundle my reading list for the discount"
+  },
+  "plugin": "lynxce-promo-books-advisor",
+  "tags": [
+    {
+      "zh": "图书满减",
+      "en": "Book Discounts"
+    },
+    {
+      "zh": "版本选择",
+      "en": "Edition Choice"
+    },
+    {
+      "zh": "阅读计划",
+      "en": "Reading Plan"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的书单怎么凑满减更合适",
+      "en": "How should I bundle my reading list for the discount"
+    },
+    {
+      "zh": "同一本书选哪个版本好",
+      "en": "Which edition of this book should I choose"
+    },
+    {
+      "zh": "电子书和纸书该买哪个",
+      "en": "Should I buy the ebook or the print edition"
+    }
+  ],
+  "keywords": [
+    "图书满减",
+    "版本选择",
+    "阅读计划",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

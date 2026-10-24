@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ski-advisor",
+  "version": "1.0.4",
+  "description": "Rent before you buy: which ski gear to own, sizing rules and the full trip budget.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ski-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ski-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ski-advisor",
+  "displayName": {
+    "zh": "滑雪装备选购与雪场行程顾问",
+    "en": "Ski Gear and Trip Advisor"
+  },
+  "profession": {
+    "zh": "滑雪装备选购与雪场行程顾问",
+    "en": "Ski Gear and Trip Advisor"
+  },
+  "displayDescription": {
+    "zh": "滑雪先租后买最省钱：哪些必须自己买、尺寸怎么定、护具怎么配、雪场总花费怎么算清楚。",
+    "en": "Rent before you buy: which ski gear to own, sizing rules and the full trip budget."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "第一次滑雪要买什么",
+    "en": "What do I need for my first ski trip"
+  },
+  "plugin": "lynxce-ski-advisor",
+  "tags": [
+    {
+      "zh": "滑雪装备",
+      "en": "Ski Gear"
+    },
+    {
+      "zh": "租买取舍",
+      "en": "Rent or Buy"
+    },
+    {
+      "zh": "行程预算",
+      "en": "Trip Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "第一次滑雪要买什么",
+      "en": "What do I need for my first ski trip"
+    },
+    {
+      "zh": "这个雪鞋尺码合适吗",
+      "en": "Is this boot size right for me"
+    },
+    {
+      "zh": "帮我算一趟雪场花费",
+      "en": "Estimate the cost of this ski trip"
+    }
+  ],
+  "keywords": [
+    "滑雪装备",
+    "租买取舍",
+    "行程预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

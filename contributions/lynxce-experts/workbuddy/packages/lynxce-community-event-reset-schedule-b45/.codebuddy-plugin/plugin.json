@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-community-event-reset-schedule-b45",
+  "version": "1.0.0",
+  "description": "Turn community event inventory and original layout into a timed reset plan, return assignments and unfinished-work handover.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-community-event-reset-schedule-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-community-event-reset-schedule-inside-1-b45",
+    "./skills/lynxce-community-event-reset-schedule-inside-2-b45",
+    "./skills/lynxce-community-event-reset-schedule-inside-3-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-community-event-reset-schedule-b45",
+  "displayName": {
+    "zh": "撤场统筹师",
+    "en": "Community Event Reset Scheduler"
+  },
+  "profession": {
+    "zh": "活动撤场统筹师",
+    "en": "Community Event Reset Scheduler"
+  },
+  "displayDescription": {
+    "zh": "将社区活动撤场拆成有前后顺序的任务，安排人员、分钟与物品归位，交付撤场时间卡和遗留事项交接稿。",
+    "en": "Turn community event inventory and original layout into a timed reset plan, return assignments and unfinished-work handover."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "活动结束后四十分钟要还场，帮我排三人撤场顺序。",
+    "en": "Community Event Reset Scheduler"
+  },
+  "plugin": "lynxce-community-event-reset-schedule-b45",
+  "tags": [
+    {
+      "zh": "活动撤场",
+      "en": "活动撤场"
+    },
+    {
+      "zh": "人员排程",
+      "en": "人员排程"
+    },
+    {
+      "zh": "物品归位",
+      "en": "物品归位"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "活动结束后四十分钟要还场，帮我排三人撤场顺序。",
+      "en": "Community Event Reset Scheduler"
+    },
+    {
+      "zh": "椅子和展板要回不同库房，直接给出归位任务。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "少一个人时哪些任务会延迟，写新版交接说明。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "活动撤场",
+    "人员排程",
+    "物品归位"
+  ]
+}

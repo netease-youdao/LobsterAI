@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-product-video-advisor",
+  "version": "1.0.1",
+  "description": "Create product demonstration scripts with claim evidence, shot-by-shot narration and a prop checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-product-video-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-product-video-script"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-product-video-advisor",
+  "displayName": {
+    "zh": "商品短视频脚本顾问",
+    "en": "Product Video Advisor"
+  },
+  "profession": {
+    "zh": "商品展示短视频脚本顾问｜灵策智算",
+    "en": "Product Showcase Short Video Script Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "把商品资料转成可拍摄的展示脚本，交付卖点证据表、逐镜口播字幕与道具清单，标明适用条件和缺失材料",
+    "en": "Create product demonstration scripts with claim evidence, shot-by-shot narration and a prop checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据商品资料写一份30秒逐镜脚本并标出每个卖点的证据",
+    "en": "Create a 30-second shot script with evidence for each product claim"
+  },
+  "plugin": "lynxce-product-video-advisor",
+  "tags": [
+    {
+      "zh": "卖点证据",
+      "en": "Claim evidence"
+    },
+    {
+      "zh": "逐镜脚本",
+      "en": "Shot script"
+    },
+    {
+      "zh": "展示条件",
+      "en": "Demo conditions"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据商品资料写一份30秒逐镜脚本并标出每个卖点的证据",
+      "en": "Create a 30-second shot script with evidence for each product claim"
+    },
+    {
+      "zh": "把这些商品宣传句改成有材料支持的演示口播",
+      "en": "Rewrite product claims as demonstrations supported by my materials"
+    },
+    {
+      "zh": "给这个商品做15秒与30秒两版脚本及共用拍摄清单",
+      "en": "Build 15-second and 30-second scripts with a shared shot list"
+    }
+  ],
+  "keywords": [
+    "卖点证据",
+    "逐镜脚本",
+    "展示条件"
+  ],
+  "needEncrypt": true
+}

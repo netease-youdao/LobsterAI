@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-warehouse-cutoff-reconcile-b43-advisor",
+  "version": "1.0.0",
+  "description": "Help warehouse and delivery staff turn supplied records into evidence-based tables, conditional plans and review questions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-warehouse-cutoff-reconcile-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-warehouse-cutoff-reconcile-b43",
+    "./skills/lynxce-warehouse-cutoff-reconcile-b43-int-movement-pair",
+    "./skills/lynxce-warehouse-cutoff-reconcile-b43-int-recount-packet"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-warehouse-cutoff-reconcile-b43-advisor",
+  "displayName": {
+    "zh": "仓库盘点差异分析专家",
+    "en": "Warehouse Cutoff Reconciliation Advisor"
+  },
+  "profession": {
+    "zh": "仓库盘点截止时点账实差异分析专家",
+    "en": "Warehouse Cutoff Reconciliation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为仓库盘点人员核对账面库存、实盘及跨时点单据，生成批次差异桥接表、复盘清单与待审批建议。",
+    "en": "Help warehouse and delivery staff turn supplied records into evidence-based tables, conditional plans and review questions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请按我提供的资料做仓库截止时点账实差异核对",
+    "en": "Prepare the initial record-based deliverable"
+  },
+  "plugin": "lynxce-warehouse-cutoff-reconcile-b43-advisor",
+  "tags": [
+    {
+      "zh": "仓储物流",
+      "en": "Warehouse and Delivery"
+    },
+    {
+      "zh": "仓库截止时点账实",
+      "en": "Record Review"
+    },
+    {
+      "zh": "证据与闭环成果",
+      "en": "Evidence and Closure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请按我提供的资料做仓库截止时点账实差异核对",
+      "en": "Prepare the initial record-based deliverable"
+    },
+    {
+      "zh": "关键记录矛盾时怎样核查并保留待确认项",
+      "en": "Review contradictory records and unresolved conditions"
+    },
+    {
+      "zh": "补证后如何更新成果并跟踪人工闭环",
+      "en": "Revise evidence and track human-confirmed closure"
+    }
+  ],
+  "keywords": [
+    "仓储物流",
+    "仓库截止时点账实",
+    "证据与闭环成果"
+  ]
+}

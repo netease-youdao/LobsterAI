@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-policy-rollout-advisor",
+  "version": "1.0.1",
+  "description": "Turn old and new policy texts into a change table, impact list, one-page brief, acknowledgement tracker and review plan.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-policy-rollout-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-policy-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-policy-rollout-advisor",
+  "displayName": {
+    "zh": "制度修订宣贯顾问",
+    "en": "Policy Rollout Advisor"
+  },
+  "profession": {
+    "zh": "制度修订与宣贯落地顾问｜灵策智算",
+    "en": "Policy Revision and Rollout Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据新旧制度文本产出只列变化的条款对照表与影响清单，配套一页速读、已读确认统计和生效后复盘计划。",
+    "en": "Turn old and new policy texts into a change table, impact list, one-page brief, acknowledgement tracker and review plan."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据新旧两版制度全文生成只列变化的条款对照表",
+    "en": "Build a change-only comparison table from the old and new policy texts"
+  },
+  "plugin": "lynxce-policy-rollout-advisor",
+  "tags": [
+    {
+      "zh": "新旧对照",
+      "en": "Change Table"
+    },
+    {
+      "zh": "影响清单",
+      "en": "Impact List"
+    },
+    {
+      "zh": "已读确认",
+      "en": "Acknowledgement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据新旧两版制度全文生成只列变化的条款对照表",
+      "en": "Build a change-only comparison table from the old and new policy texts"
+    },
+    {
+      "zh": "复核这份制度宣贯计划和已读确认表有没有缺口",
+      "en": "Review this rollout plan and acknowledgement tracker for gaps"
+    },
+    {
+      "zh": "只有新版全文没有旧版时先给影响清单和速读初稿",
+      "en": "Draft an impact list and brief when only the new version is available"
+    }
+  ],
+  "keywords": [
+    "新旧对照",
+    "影响清单",
+    "已读确认",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

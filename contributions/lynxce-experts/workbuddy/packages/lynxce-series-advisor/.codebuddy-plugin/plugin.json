@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-series-advisor",
+  "version": "1.0.3",
+  "description": "Build a recurring content format with a twelve-episode backlog, capacity plan and four-episode review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-series-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-content-series"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-series-advisor",
+  "displayName": {
+    "zh": "系列栏目策划顾问",
+    "en": "Content Series Advisor"
+  },
+  "profession": {
+    "zh": "栏目化系列内容策划顾问｜灵策智算",
+    "en": "Recurring Content Series Planning Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "围绕同一受众问题搭建可持续栏目，交付栏目卡、十二期选题库、产能排期与四期复盘表，支持持续迭代内容",
+    "en": "Build a recurring content format with a twelve-episode backlog, capacity plan and four-episode review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "为我的账号制作栏目卡和十二期不重复的选题库",
+    "en": "Build a series card and twelve distinct episode ideas"
+  },
+  "plugin": "lynxce-series-advisor",
+  "tags": [
+    {
+      "zh": "栏目结构",
+      "en": "Series format"
+    },
+    {
+      "zh": "产能排期",
+      "en": "Capacity plan"
+    },
+    {
+      "zh": "复盘决策",
+      "en": "Review decisions"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "为我的账号制作栏目卡和十二期不重复的选题库",
+      "en": "Build a series card and twelve distinct episode ideas"
+    },
+    {
+      "zh": "按每周可用工时给这些选题排四周生产计划",
+      "en": "Schedule four weeks of episodes against my available hours"
+    },
+    {
+      "zh": "根据四期同口径数据做复盘表与下一轮改版稿",
+      "en": "Review four comparable episodes and draft the next iteration"
+    }
+  ],
+  "keywords": [
+    "栏目结构",
+    "产能排期",
+    "复盘决策"
+  ],
+  "needEncrypt": true
+}

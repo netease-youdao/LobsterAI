@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-restaurant-peak-station-coordination-b43-advisor",
+  "version": "1.0.1",
+  "description": "Help business staff review supplied records and produce restaurant peak station coordination tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-restaurant-peak-station-coordination-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-restaurant-peak-station-coordination-b43",
+    "./skills/lynxce-restaurant-peak-station-coordination-b43-int-load-ledger",
+    "./skills/lynxce-restaurant-peak-station-coordination-b43-int-issue-card"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-restaurant-peak-station-coordination-b43-advisor",
+  "displayName": {
+    "zh": "高峰出餐协同专家",
+    "en": "Restaurant Peak Station Coordination Advisor"
+  },
+  "profession": {
+    "zh": "高峰出餐协同专家：高峰窗口的制作装配交付工序负荷",
+    "en": "Restaurant Peak Station Coordination Advisor"
+  },
+  "displayDescription": {
+    "zh": "输入高峰订单、工序用时和在岗信息，复算各工序负荷，交付瓶颈表、协同草案及缺件重做传递卡。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按这段高峰订单与实测工时，计算制作、装配和交付的工序负荷",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-restaurant-peak-station-coordination-b43-advisor",
+  "tags": [
+    {
+      "zh": "连锁餐饮",
+      "en": "Retail and Food Service"
+    },
+    {
+      "zh": "餐饮高峰工序协同表",
+      "en": "Evidence Workflow"
+    },
+    {
+      "zh": "事实表格成果",
+      "en": "Reviewable Tables"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按这段高峰订单与实测工时，计算制作、装配和交付的工序负荷",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "缺件和重做打乱出餐，请给按订单编号的责任站与核实清单",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "核对现有人手和技能矩阵，给可讨论的协同方案及限制条件",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "连锁餐饮",
+    "餐饮高峰工序协同表",
+    "事实表格成果"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-store-temporary-closure-reopen-tasks-b44-advisor",
+  "version": "1.0.0",
+  "description": "Help staff review temporary store closure reopening tasks with three focused evidence workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-store-temporary-closure-reopen-tasks-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-store-temporary-closure-reopen-tasks-b44",
+    "./skills/lynxce-reopen-task-dependency-cycle-check-b44",
+    "./skills/lynxce-reopen-paused-business-resume-confirm-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-store-temporary-closure-reopen-tasks-b44-advisor",
+  "displayName": {
+    "zh": "门店复业任务核对专家",
+    "en": "Store Reopening Task Advisor"
+  },
+  "profession": {
+    "zh": "门店复业任务核对专家",
+    "en": "Store Reopening Task Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助门店负责人按临时闭店记录核对复业任务与前置依赖，区分完成及阻塞，交付恢复业务待确认清单。",
+    "en": "Help staff review temporary store closure reopening tasks with three focused evidence workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我的资料生成临时闭店复业任务依赖核对",
+    "en": "Create the review from my supplied records"
+  },
+  "plugin": "lynxce-store-temporary-closure-reopen-tasks-b44-advisor",
+  "tags": [
+    {
+      "zh": "零售门店运营",
+      "en": "Domain Workflow"
+    },
+    {
+      "zh": "临时闭店复业任务依赖核对",
+      "en": "Evidence Review"
+    },
+    {
+      "zh": "人工复核",
+      "en": "Human Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我的资料生成临时闭店复业任务依赖核对",
+      "en": "Create the review from my supplied records"
+    },
+    {
+      "zh": "请保留这些矛盾原值并列最少补证材料",
+      "en": "Keep conflicting values and list missing evidence"
+    },
+    {
+      "zh": "请追加新记录并复算受影响的版本差异",
+      "en": "Compare new evidence and recalculate affected rows"
+    }
+  ],
+  "keywords": [
+    "零售门店运营",
+    "临时闭店复业任务依赖核对",
+    "人工复核"
+  ]
+}

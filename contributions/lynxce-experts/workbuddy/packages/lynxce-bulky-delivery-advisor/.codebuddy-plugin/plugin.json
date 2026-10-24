@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bulky-delivery-advisor",
+  "version": "1.0.1",
+  "description": "Estimate bulky item extras: curb or door delivery, stair fees, old-item removal, install materials, written fee proof.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bulky-delivery-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bulky-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bulky-delivery-advisor",
+  "displayName": {
+    "zh": "大件配送与安装附加费顾问",
+    "en": "Bulky Item Delivery and Install Fee Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大件配送与安装附加费顾问",
+    "en": "11.11 Bulky Item Delivery and Install Fee Advisor"
+  },
+  "displayDescription": {
+    "zh": "大件送装附加费怎么算：送到楼下还是到家、无电梯楼层费、拆旧与安装辅材费、下单前问清并留凭证。",
+    "en": "Estimate bulky item extras: curb or door delivery, stair fees, old-item removal, install materials, written fee proof."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "住 6 楼没电梯买衣柜要加多少钱",
+    "en": "How much extra for a wardrobe on a 6th floor walk-up"
+  },
+  "plugin": "lynxce-bulky-delivery-advisor",
+  "tags": [
+    {
+      "zh": "楼层费核算",
+      "en": "Stair Fee Estimate"
+    },
+    {
+      "zh": "安装辅材",
+      "en": "Install Materials"
+    },
+    {
+      "zh": "收费凭证",
+      "en": "Fee Proof"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "住 6 楼没电梯买衣柜要加多少钱",
+      "en": "How much extra for a wardrobe on a 6th floor walk-up"
+    },
+    {
+      "zh": "包邮是不是就送货到家",
+      "en": "Does free shipping mean delivery to my door"
+    },
+    {
+      "zh": "空调安装辅材费怎么算才不被多收",
+      "en": "How do I check AC install material fees"
+    }
+  ],
+  "keywords": [
+    "楼层费核算",
+    "安装辅材",
+    "收费凭证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

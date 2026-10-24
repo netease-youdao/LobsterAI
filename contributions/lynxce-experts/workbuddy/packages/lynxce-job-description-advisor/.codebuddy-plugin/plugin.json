@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-job-description-advisor",
+  "version": "1.0.1",
+  "description": "Turn role interviews into job descriptions, authority maps and metric definitions with workload and handoff checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-job-description-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-job-description"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-job-description-advisor",
+  "displayName": {
+    "zh": "岗位说明书顾问",
+    "en": "Job Description Advisor"
+  },
+  "profession": {
+    "zh": "岗位说明书撰写与职责梳理顾问｜灵策智算",
+    "en": "Job Description and Role Clarification Advisor"
+  },
+  "displayDescription": {
+    "zh": "将岗位访谈整理成职责说明书权限接口与指标字典核对时间分配上下游交付和可验证条件形成可评审岗位稿",
+    "en": "Turn role interviews into job descriptions, authority maps and metric definitions with workload and handoff checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请把这些岗位访谈整理成完整说明书和职责占比表",
+    "en": "Turn these interview notes into a job description and workload table"
+  },
+  "plugin": "lynxce-job-description-advisor",
+  "tags": [
+    {
+      "zh": "职责说明",
+      "en": "Role Duties"
+    },
+    {
+      "zh": "协作权限",
+      "en": "Authority Map"
+    },
+    {
+      "zh": "指标字典",
+      "en": "Metric Dictionary"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请把这些岗位访谈整理成完整说明书和职责占比表",
+      "en": "Turn these interview notes into a job description and workload table"
+    },
+    {
+      "zh": "请拆清两个岗位的牵头配合与批准权限并交付接口表",
+      "en": "Map ownership support and approval for these overlapping roles"
+    },
+    {
+      "zh": "请将岗位指标写成含分母来源和周期的指标字典",
+      "en": "Define role metrics with denominators sources and review periods"
+    }
+  ],
+  "keywords": [
+    "职责说明",
+    "协作权限",
+    "指标字典"
+  ],
+  "needEncrypt": true
+}

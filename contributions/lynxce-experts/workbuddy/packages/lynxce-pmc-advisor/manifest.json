@@ -1,0 +1,11 @@
+{
+  "name": "lynxce-pmc-advisor",
+  "version": "1.0.1",
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "pricingRationale": "持续工作流迭代复用；沿用分片快照价格，价值来自专用方法、交付表及复算，不增加工具或结果保证。"
+}

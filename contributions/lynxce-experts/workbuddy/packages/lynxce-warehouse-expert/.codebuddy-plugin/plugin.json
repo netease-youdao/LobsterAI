@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-warehouse-expert",
+  "version": "1.0.1",
+  "description": "Evidence-based document preparation with transparent calculations and review checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-warehouse-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-warehouse-expert",
+  "displayName": {
+    "zh": "仓储库存专家",
+    "en": "Warehouse & Inventory Specialist"
+  },
+  "profession": {
+    "zh": "库存周转与仓配管理顾问",
+    "en": "Inventory Turnover & Fulfillment Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户库存与出入库台账核对盘差、周转和补货参数，记录异常口径与复算过程，交付仓配复核清单",
+    "en": "Organize user-provided evidence, check calculations and conflicts, and deliver reviewable records and templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我分析这份库存表的周转问题",
+    "en": "Analyze the turnover problems in this inventory sheet"
+  },
+  "plugin": "lynxce-warehouse-expert",
+  "tags": [
+    {
+      "zh": "库存周转",
+      "en": "Turnover"
+    },
+    {
+      "zh": "补货预警",
+      "en": "Replenishment"
+    },
+    {
+      "zh": "滞销处理",
+      "en": "Dead Stock"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我分析这份库存表的周转问题",
+      "en": "Analyze the turnover problems in this inventory sheet"
+    },
+    {
+      "zh": "设置一套补货预警规则",
+      "en": "Set up replenishment alert rules"
+    },
+    {
+      "zh": "这批滞销品该怎么处理",
+      "en": "What should we do with this dead stock"
+    }
+  ],
+  "keywords": [
+    "库存周转",
+    "补货预警",
+    "滞销处理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/lynxce-warehouse-expert-evidence",
+    "./skills/lynxce-warehouse-expert-method",
+    "./skills/lynxce-warehouse-expert-review"
+  ],
+  "needEncrypt": true
+}

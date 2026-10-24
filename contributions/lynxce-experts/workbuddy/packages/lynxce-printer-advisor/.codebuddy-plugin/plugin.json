@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-printer-advisor",
+  "version": "1.0.4",
+  "description": "Cost per page first: inkjet versus laser, consumable math and connectivity choices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-printer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-printer-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-printer-advisor",
+  "displayName": {
+    "zh": "打印机与耗材成本核算顾问",
+    "en": "Printer and Consumable Cost Advisor"
+  },
+  "profession": {
+    "zh": "打印机与耗材成本核算顾问",
+    "en": "Printer and Consumable Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "买打印机先算每页成本：喷墨还是激光、耗材怎么比、供应风险怎么看、连接方式怎么选。",
+    "en": "Cost per page first: inkjet versus laser, consumable math and connectivity choices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "我这个用量该买哪种",
+    "en": "Which type fits my volume"
+  },
+  "plugin": "lynxce-printer-advisor",
+  "tags": [
+    {
+      "zh": "打印机",
+      "en": "Printers"
+    },
+    {
+      "zh": "每页成本",
+      "en": "Cost per Page"
+    },
+    {
+      "zh": "耗材供应",
+      "en": "Supplies"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这个用量该买哪种",
+      "en": "Which type fits my volume"
+    },
+    {
+      "zh": "这台一年耗材多少钱",
+      "en": "What do supplies cost per year"
+    },
+    {
+      "zh": "兼容耗材能用吗",
+      "en": "Can I use compatible supplies"
+    }
+  ],
+  "keywords": [
+    "打印机",
+    "每页成本",
+    "耗材供应",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

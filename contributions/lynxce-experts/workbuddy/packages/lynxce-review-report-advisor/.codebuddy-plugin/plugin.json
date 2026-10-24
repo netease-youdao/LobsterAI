@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-review-report-advisor",
+  "version": "1.0.1",
+  "description": "Year-end reviews and promotion pitches with quantified results and rehearsed Q&A.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-review-report-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-review-report"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-review-report-advisor",
+  "displayName": {
+    "zh": "述职报告与晋升答辩顾问",
+    "en": "Performance Review and Promotion Advisor"
+  },
+  "profession": {
+    "zh": "述职报告与晋升答辩顾问",
+    "en": "Performance Review and Promotion Advisor"
+  },
+  "displayDescription": {
+    "zh": "年终述职和晋升答辩怎么写：成果怎么量化、结构怎么排、证据怎么备、评委追问怎么提前准备好。",
+    "en": "Year-end reviews and promotion pitches with quantified results and rehearsed Q&A."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我写年终述职的结构",
+    "en": "Help me structure my year-end review"
+  },
+  "plugin": "lynxce-review-report-advisor",
+  "tags": [
+    {
+      "zh": "述职报告",
+      "en": "Performance Review"
+    },
+    {
+      "zh": "晋升答辩",
+      "en": "Promotion Pitch"
+    },
+    {
+      "zh": "成果量化",
+      "en": "Quantified Results"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写年终述职的结构",
+      "en": "Help me structure my year-end review"
+    },
+    {
+      "zh": "这段工作经历怎么量化",
+      "en": "How do I quantify this work"
+    },
+    {
+      "zh": "晋升答辩评委可能问什么",
+      "en": "What will the promotion panel ask"
+    }
+  ],
+  "keywords": [
+    "述职报告",
+    "晋升答辩",
+    "成果量化",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-training-group-timer-rotation-advisor",
+  "version": "1.0.0",
+  "description": "Plan training groups, timer stock and round schedules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-training-group-timer-rotation-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-training-group-timer-rotation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-training-group-timer-rotation-advisor",
+  "displayName": {
+    "zh": "培训分组计时助理",
+    "en": "Training Group Timer Advisor"
+  },
+  "profession": {
+    "zh": "培训分组计时器轮次安排顾问",
+    "en": "Training Group Timer Advisor"
+  },
+  "displayDescription": {
+    "zh": "按培训人数与并行小组核对计时器配置，安排讨论轮次和换场缓冲，计算器材缺口并交付排期复核表。",
+    "en": "Plan training groups, timer stock and round schedules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "30人分组轮换要几台计时器",
+    "en": "Plan timers for thirty participants"
+  },
+  "plugin": "lynxce-office-training-group-timer-rotation-advisor",
+  "tags": [
+    {
+      "zh": "分组排期",
+      "en": "Group Schedule"
+    },
+    {
+      "zh": "并行器材",
+      "en": "Parallel Timers"
+    },
+    {
+      "zh": "超时复核",
+      "en": "Time Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "30人分组轮换要几台计时器",
+      "en": "Plan timers for thirty participants"
+    },
+    {
+      "zh": "换场时间如何计入总时长",
+      "en": "Include changeovers in total training time"
+    },
+    {
+      "zh": "临时增员后如何重排轮次",
+      "en": "Reschedule rounds after attendance grows"
+    }
+  ],
+  "keywords": [
+    "分组排期",
+    "并行器材",
+    "超时复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

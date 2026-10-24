@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-brand-pr",
+  "version": "1.0.1",
+  "description": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-brand-pr.md"
+  ],
+  "skills": [
+    "./skills/lynxce-crisis-pr",
+    "./skills/lynxce-event-planning",
+    "./skills/lynxce-brand-pr-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-brand-pr",
+  "displayName": {
+    "zh": "品牌公关顾问",
+    "en": "Brand PR Advisor"
+  },
+  "profession": {
+    "zh": "危机应对与品牌传播顾问",
+    "en": "Crisis Response & Brand Communications Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料整理品牌公关需求与证据，完善方案分支、异常核对和交付模板，支持逐项复核与迭代。",
+    "en": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "依据资料建立品牌公关事实台账与待核实项",
+    "en": "Build a brand communications fact ledger and unresolved questions"
+  },
+  "plugin": "lynxce-brand-pr",
+  "tags": [
+    {
+      "zh": "事实台账",
+      "en": "Fact ledger"
+    },
+    {
+      "zh": "声明草稿",
+      "en": "Statement draft"
+    },
+    {
+      "zh": "版本复盘",
+      "en": "Version review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "依据资料建立品牌公关事实台账与待核实项",
+      "en": "Build a brand communications fact ledger and unresolved questions"
+    },
+    {
+      "zh": "根据已确认事实起草声明和三类追问回答",
+      "en": "Draft a statement and responses to three follow-up question types from confirmed facts"
+    },
+    {
+      "zh": "比较两版口径差异并整理传播复盘表",
+      "en": "Compare message versions and prepare a communications review table"
+    }
+  ],
+  "keywords": [
+    "危机公关",
+    "新闻稿",
+    "活动策划",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

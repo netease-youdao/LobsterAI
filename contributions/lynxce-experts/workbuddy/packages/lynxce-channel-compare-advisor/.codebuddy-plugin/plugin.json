@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-channel-compare-advisor",
+  "version": "1.0.2",
+  "description": "Compare the same item across channels: landed price, invoice, warranty, shipper, return rules, and when a subsidy channel wins.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-channel-compare-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-channel-compare"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-channel-compare-advisor",
+  "displayName": {
+    "zh": "品牌旗舰店与补贴渠道比价顾问",
+    "en": "Sales Channel Price Comparison Advisor"
+  },
+  "profession": {
+    "zh": "11.11 品牌旗舰店与补贴渠道比价顾问",
+    "en": "11.11 Sales Channel Price Comparison Advisor"
+  },
+  "displayDescription": {
+    "zh": "同款商品该在哪买：到手价对比、发票保修与发货方核对、退换规则差异、补贴渠道何时划算。",
+    "en": "Compare the same item across channels: landed price, invoice, warranty, shipper, return rules, and when a subsidy channel wins."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "旗舰店和补贴频道该选哪个",
+    "en": "Should I buy from the flagship store or the subsidy channel"
+  },
+  "plugin": "lynxce-channel-compare-advisor",
+  "tags": [
+    {
+      "zh": "到手价对比",
+      "en": "Price Comparison"
+    },
+    {
+      "zh": "发货与保修",
+      "en": "Shipping and Warranty"
+    },
+    {
+      "zh": "退换规则",
+      "en": "Return Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "旗舰店和补贴频道该选哪个",
+      "en": "Should I buy from the flagship store or the subsidy channel"
+    },
+    {
+      "zh": "补贴频道的东西是正品吗",
+      "en": "Is the item from the subsidy channel authentic"
+    },
+    {
+      "zh": "不同渠道买的东西保修一样吗",
+      "en": "Is the warranty the same across channels"
+    }
+  ],
+  "keywords": [
+    "到手价对比",
+    "发货与保修",
+    "退换规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

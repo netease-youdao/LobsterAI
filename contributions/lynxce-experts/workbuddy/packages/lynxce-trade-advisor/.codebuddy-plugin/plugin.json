@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-trade-advisor",
+  "version": "1.0.1",
+  "description": "Turn product costs and shipping terms into Incoterms splits, price chains, payment-term checks and L/C review lists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-trade-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trade-quotation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-trade-advisor",
+  "displayName": {
+    "zh": "外贸报价结算顾问",
+    "en": "Export Business Advisor"
+  },
+  "profession": {
+    "zh": "外贸报价与国际结算顾问",
+    "en": "Export Quotation and Settlement Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据产品成本与运输条件，整理贸易术语分界、报价价格链与付款条款核对表，附信用证审证清单和报价单条款。",
+    "en": "Turn product costs and shipping terms into Incoterms splits, price chains, payment-term checks and L/C review lists."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "根据成本和运费生成从工厂交货到到岸价的报价价格链",
+    "en": "Build an EXW-to-CIF price chain from my costs and freight"
+  },
+  "plugin": "lynxce-trade-advisor",
+  "tags": [
+    {
+      "zh": "贸易术语",
+      "en": "Incoterms"
+    },
+    {
+      "zh": "报价测算",
+      "en": "Quote Costing"
+    },
+    {
+      "zh": "结算核对",
+      "en": "Payment Term Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据成本和运费生成从工厂交货到到岸价的报价价格链",
+      "en": "Build an EXW-to-CIF price chain from my costs and freight"
+    },
+    {
+      "zh": "复核我这份报价单和信用证条款有没有漏项与冲突",
+      "en": "Review my quotation and L/C terms for gaps and conflicts"
+    },
+    {
+      "zh": "只有采购价和目的港时先给报价结构和待补项",
+      "en": "With only purchase cost and destination port, give the quote structure and gaps"
+    }
+  ],
+  "keywords": [
+    "贸易术语",
+    "报价测算",
+    "结算核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

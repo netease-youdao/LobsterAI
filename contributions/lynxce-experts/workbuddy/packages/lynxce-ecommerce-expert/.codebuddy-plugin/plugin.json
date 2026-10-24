@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-ecommerce-expert",
+  "version": "1.0.1",
+  "description": "Decompose GMV change into visitors, conversion, order value and channels, locate drops, and draft campaign price floors and reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ecommerce-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ecommerce-expert",
+  "displayName": {
+    "zh": "店铺增长与转化顾问",
+    "en": "E-commerce Operator"
+  },
+  "profession": {
+    "zh": "店铺增长与转化优化顾问",
+    "en": "Store Growth & Conversion Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据两期经营数据把成交额变化拆到访客转化客单与渠道，定位掉量环节，输出活动价格底线和复盘表。",
+    "en": "Decompose GMV change into visitors, conversion, order value and channels, locate drops, and draft campaign price floors and reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "根据两期经营数据拆解成交额变化并定位掉量环节",
+    "en": "Break down GMV change across two periods and locate the drop"
+  },
+  "plugin": "lynxce-ecommerce-expert",
+  "tags": [
+    {
+      "zh": "成交拆解",
+      "en": "GMV Breakdown"
+    },
+    {
+      "zh": "掉量定位",
+      "en": "Drop Diagnosis"
+    },
+    {
+      "zh": "活动复盘",
+      "en": "Campaign Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据两期经营数据拆解成交额变化并定位掉量环节",
+      "en": "Break down GMV change across two periods and locate the drop"
+    },
+    {
+      "zh": "复核这份活动方案的价格底线和满减力度",
+      "en": "Review this campaign plan for price floor and discount depth"
+    },
+    {
+      "zh": "只说销量下滑时先给拆解模板和必需数据清单",
+      "en": "With only a sales-drop claim give a breakdown template and data list"
+    }
+  ],
+  "keywords": [
+    "成交拆解",
+    "掉量定位",
+    "活动复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true,
+  "skills": []
+}

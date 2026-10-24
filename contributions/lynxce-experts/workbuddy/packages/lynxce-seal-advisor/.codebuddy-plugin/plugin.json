@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-seal-advisor",
+  "version": "1.0.1",
+  "description": "Turn seal inventory and approval roles into a custody register, approval matrix, usage log, off-site checks and monthly reconciliation.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-seal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-seal-usage"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-seal-advisor",
+  "displayName": {
+    "zh": "印章管理顾问",
+    "en": "Company Seal Advisor"
+  },
+  "profession": {
+    "zh": "印章保管与用印审批顾问｜灵策智算",
+    "en": "Company Seal Custody and Approval Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据公司印章现状与审批分工，交付印章台账、用印审批矩阵、用印登记与外带核验表，以及月度对账单。",
+    "en": "Turn seal inventory and approval roles into a custody register, approval matrix, usage log, off-site checks and monthly reconciliation."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我们的印章和人员分工生成保管台账与用印审批矩阵",
+    "en": "Build a custody register and approval matrix from our seals and roles"
+  },
+  "plugin": "lynxce-seal-advisor",
+  "tags": [
+    {
+      "zh": "印章台账",
+      "en": "Seal Register"
+    },
+    {
+      "zh": "用印审批",
+      "en": "Stamping Approval"
+    },
+    {
+      "zh": "月度对账",
+      "en": "Monthly Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的印章和人员分工生成保管台账与用印审批矩阵",
+      "en": "Build a custody register and approval matrix from our seals and roles"
+    },
+    {
+      "zh": "帮我核对这个月的用印登记表和审批单有哪些差异",
+      "en": "Reconcile this month's seal usage log against the approval forms"
+    },
+    {
+      "zh": "只知道有公章和合同章先给一套最小用印规则",
+      "en": "Give minimal stamping rules when we only know of two seals"
+    }
+  ],
+  "keywords": [
+    "印章台账",
+    "用印审批",
+    "月度对账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

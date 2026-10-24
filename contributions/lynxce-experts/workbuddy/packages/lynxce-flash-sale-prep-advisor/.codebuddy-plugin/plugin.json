@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-flash-sale-prep-advisor",
+  "version": "1.0.2",
+  "description": "Prepare for a flash sale: cart and payment presets, time sync, quota rules, and fallback options if you miss it.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-flash-sale-prep-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-flash-sale-prep"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-flash-sale-prep-advisor",
+  "displayName": {
+    "zh": "整点抢券与限量秒杀准备顾问",
+    "en": "Flash Sale Preparation Advisor"
+  },
+  "profession": {
+    "zh": "11.11 整点抢券与限量秒杀准备顾问",
+    "en": "11.11 Flash Sale Preparation Advisor"
+  },
+  "displayDescription": {
+    "zh": "整点秒杀怎么准备：提前加购与地址支付预设、时间校准、限量口径核对、抢不到的备选方案。",
+    "en": "Prepare for a flash sale: cart and payment presets, time sync, quota rules, and fallback options if you miss it."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "整点秒杀前要准备什么",
+    "en": "What should I prepare before a flash sale"
+  },
+  "plugin": "lynxce-flash-sale-prep-advisor",
+  "tags": [
+    {
+      "zh": "加购预设",
+      "en": "Cart Preset"
+    },
+    {
+      "zh": "时间校准",
+      "en": "Time Sync"
+    },
+    {
+      "zh": "限量口径",
+      "en": "Quota Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "整点秒杀前要准备什么",
+      "en": "What should I prepare before a flash sale"
+    },
+    {
+      "zh": "限量是按总量还是按人算",
+      "en": "Is the quota total stock or per person"
+    },
+    {
+      "zh": "没抢到还能怎么办",
+      "en": "What can I do if I miss the flash sale"
+    }
+  ],
+  "keywords": [
+    "加购预设",
+    "时间校准",
+    "限量口径",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

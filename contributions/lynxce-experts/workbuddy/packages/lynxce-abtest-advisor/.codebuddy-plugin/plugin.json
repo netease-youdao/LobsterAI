@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-abtest-advisor",
+  "version": "1.0.1",
+  "description": "Build experiment briefs, sample estimates, guardrail reviews and decision reports from supplied data.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-abtest-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ab-test"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-abtest-advisor",
+  "displayName": {
+    "zh": "实验设计解读顾问",
+    "en": "Experimentation"
+  },
+  "profession": {
+    "zh": "A/B 实验设计与结果解读顾问",
+    "en": "A/B Experiment Design and Interpretation Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据业务假设整理实验方案与指标口径，提供样本估算、结果解读和护栏检查，形成可复制决策报告。",
+    "en": "Build experiment briefs, sample estimates, guardrail reviews and decision reports from supplied data."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "根据我的业务假设生成含分流与停止规则的实验方案",
+    "en": "Build an experiment brief with allocation and stopping rules"
+  },
+  "plugin": "lynxce-abtest-advisor",
+  "tags": [
+    {
+      "zh": "实验方案",
+      "en": "Experiment Brief"
+    },
+    {
+      "zh": "样本估算",
+      "en": "Sample Estimate"
+    },
+    {
+      "zh": "决策报告",
+      "en": "Decision Report"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的业务假设生成含分流与停止规则的实验方案",
+      "en": "Build an experiment brief with allocation and stopping rules"
+    },
+    {
+      "zh": "根据基线与目标提升生成样本量和周期估算表",
+      "en": "Estimate sample size and duration from baseline and target lift"
+    },
+    {
+      "zh": "根据两组计数生成差值区间与护栏决策报告",
+      "en": "Draft a difference interval and guardrail decision report"
+    }
+  ],
+  "keywords": [
+    "实验方案",
+    "样本估算",
+    "决策报告",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

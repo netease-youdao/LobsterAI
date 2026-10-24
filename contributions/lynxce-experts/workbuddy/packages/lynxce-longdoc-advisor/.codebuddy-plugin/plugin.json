@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-longdoc-advisor",
+  "version": "1.0.2",
+  "description": "Turn a long draft and its format rules into a style sheet, section and page-number plan, size checks and a final proof list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-longdoc-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-longdoc-format"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-longdoc-advisor",
+  "displayName": {
+    "zh": "长文档排版顾问",
+    "en": "Long Document Formatting Advisor"
+  },
+  "profession": {
+    "zh": "长文档排版与模板顾问",
+    "en": "Long Document Layout and Template Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据文档类型与格式要求整理样式规范和分节页码方案，核算版心与图表尺寸，交模板说明和终稿检查清单。",
+    "en": "Turn a long draft and its format rules into a style sheet, section and page-number plan, size checks and a final proof list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我的报告格式要求生成样式规范和分节页码方案",
+    "en": "Build a style sheet and section numbering plan from my format rules"
+  },
+  "plugin": "lynxce-longdoc-advisor",
+  "tags": [
+    {
+      "zh": "样式规范",
+      "en": "Style Sheet"
+    },
+    {
+      "zh": "分节页码",
+      "en": "Section Numbering"
+    },
+    {
+      "zh": "终稿检查",
+      "en": "Final Proof"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的报告格式要求生成样式规范和分节页码方案",
+      "en": "Build a style sheet and section numbering plan from my format rules"
+    },
+    {
+      "zh": "帮我复核这份长文档的目录页码和格式问题",
+      "en": "Review this long document for contents numbering and format issues"
+    },
+    {
+      "zh": "只知道纸张和装订方式先给一版样式表草稿",
+      "en": "With only paper size and binding draft a style sheet first"
+    }
+  ],
+  "keywords": [
+    "样式规范",
+    "分节页码",
+    "终稿检查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

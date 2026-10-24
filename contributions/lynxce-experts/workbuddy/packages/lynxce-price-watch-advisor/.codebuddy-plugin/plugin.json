@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-price-watch-advisor",
+  "version": "1.0.2",
+  "description": "Plan wishlists: must-buy, can-wait and watch tiers, target prices, checkout checks at launch, no grab bots.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-price-watch-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-price-watch"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-price-watch-advisor",
+  "displayName": {
+    "zh": "收藏加购与降价监控顾问",
+    "en": "Wishlist, Cart and Price Drop Watch Advisor"
+  },
+  "profession": {
+    "zh": "11.11 收藏加购与降价监控顾问",
+    "en": "11.11 Wishlist, Cart and Price Drop Watch Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促加购清单怎么盯：分必买可等观望三档、每件设心理价位、到点核对结算页、不用第三方外挂抢购。",
+    "en": "Plan wishlists: must-buy, can-wait and watch tiers, target prices, checkout checks at launch, no grab bots."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "购物车太多东西怎么排优先级",
+    "en": "How do I prioritize a crowded cart"
+  },
+  "plugin": "lynxce-price-watch-advisor",
+  "tags": [
+    {
+      "zh": "三档清单",
+      "en": "Three-Tier List"
+    },
+    {
+      "zh": "心理价位",
+      "en": "Target Price"
+    },
+    {
+      "zh": "到点核对",
+      "en": "Checkout Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "购物车太多东西怎么排优先级",
+      "en": "How do I prioritize a crowded cart"
+    },
+    {
+      "zh": "心理价位该怎么定",
+      "en": "How should I set a target price"
+    },
+    {
+      "zh": "抢购插件能不能用",
+      "en": "Is it okay to use a grab bot plugin"
+    }
+  ],
+  "keywords": [
+    "三档清单",
+    "心理价位",
+    "到点核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

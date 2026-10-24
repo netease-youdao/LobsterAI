@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-job-retention-rebate-b48",
+  "version": "1.0.0",
+  "description": "Reconcile supplied official requirements and actual records, then prepare complete drafts and correction versions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-job-retention-rebate-b48.md"
+  ],
+  "skills": [
+    "./skills/lynxce-job-retention-rebate-b48-1",
+    "./skills/lynxce-job-retention-rebate-b48-2",
+    "./skills/lynxce-job-retention-rebate-b48-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-job-retention-rebate-b48",
+  "displayName": {
+    "zh": "稳岗顾问",
+    "en": "Job Retention Rebate Advisor"
+  },
+  "profession": {
+    "zh": "稳岗返还顾问",
+    "en": "Job Retention Rebate Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向企业人事和财务，核对本轮稳岗返还条件、参保人数与实缴基数，交付确认说明、测算底稿和差异补正稿",
+    "en": "Reconcile supplied official requirements and actual records, then prepare complete drafts and correction versions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按参保地本轮通知核人数和实缴基数，写完整稳岗返还确认说明。",
+    "en": "Job Retention Rebate Advisor"
+  },
+  "plugin": "lynxce-job-retention-rebate-b48",
+  "tags": [
+    {
+      "zh": "稳岗返还",
+      "en": "稳岗返还"
+    },
+    {
+      "zh": "失业保险",
+      "en": "失业保险"
+    },
+    {
+      "zh": "缴费核对",
+      "en": "缴费核对"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按参保地本轮通知核人数和实缴基数，写完整稳岗返还确认说明。",
+      "en": "Job Retention Rebate Advisor"
+    },
+    {
+      "zh": "缴费汇总含历史欠费和滞纳金，请按当地规则拆基数并复算。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "两版单位缴费相差2000元，请保留人数基线写双口径V2。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "稳岗返还",
+    "失业保险",
+    "缴费核对"
+  ]
+}

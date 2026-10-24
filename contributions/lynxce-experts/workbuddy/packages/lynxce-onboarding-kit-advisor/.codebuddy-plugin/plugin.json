@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-onboarding-kit-advisor",
+  "version": "1.0.0",
+  "description": "Welcome kits: tiers, batch forecasts, reorder points, stock ledger and sign off sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-onboarding-kit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-onboarding-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-onboarding-kit-advisor",
+  "displayName": {
+    "zh": "入职礼包备货助理",
+    "en": "Welcome Kit Stock Assistant"
+  },
+  "profession": {
+    "zh": "新员工入职礼包备货助理",
+    "en": "New Hire Welcome Kit Stock Assistant"
+  },
+  "displayDescription": {
+    "zh": "入职礼包怎么备不缺不压：按岗位分档定清单、按入职批次算备货量与补货点，产出采购单、库存台账与签收表。",
+    "en": "Welcome kits: tiers, batch forecasts, reorder points, stock ledger and sign off sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "3 个月入职 55 人礼包备多少",
+    "en": "How many kits for 55 hires in 3 months"
+  },
+  "plugin": "lynxce-onboarding-kit-advisor",
+  "tags": [
+    {
+      "zh": "礼包分档",
+      "en": "Kit Tiers"
+    },
+    {
+      "zh": "补货点",
+      "en": "Reorder Point"
+    },
+    {
+      "zh": "库存台账",
+      "en": "Stock Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "3 个月入职 55 人礼包备多少",
+      "en": "How many kits for 55 hires in 3 months"
+    },
+    {
+      "zh": "定制 T 恤尺码怎么分配",
+      "en": "How to split custom T shirt sizes"
+    },
+    {
+      "zh": "帮我做入职礼包库存台账和签收表",
+      "en": "Make a welcome kit ledger and sign off sheet"
+    }
+  ],
+  "keywords": [
+    "礼包分档",
+    "补货点",
+    "库存台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

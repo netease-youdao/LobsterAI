@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-annual-calendar-advisor",
+  "version": "1.0.1",
+  "description": "Turn recurring tasks into yearly and monthly plans with lead times, dependencies, capacity checks and change logs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-annual-calendar-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-annual-calendar"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-annual-calendar-advisor",
+  "displayName": {
+    "zh": "年度工作规划顾问",
+    "en": "Annual Calendar Advisor"
+  },
+  "profession": {
+    "zh": "部门年度工作日历规划顾问｜灵策智算",
+    "en": "Department Annual Work Calendar Planner"
+  },
+  "displayDescription": {
+    "zh": "把部门例行事项整理为全年总览月度明细与倒排计划核对周期依赖人员工时和变更记录形成可复用工作日历",
+    "en": "Turn recurring tasks into yearly and monthly plans with lead times, dependencies, capacity checks and change logs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "请把这些周期事项展开成十二个月的部门工作日历",
+    "en": "Expand these recurring tasks into a twelve month calendar"
+  },
+  "plugin": "lynxce-annual-calendar-advisor",
+  "tags": [
+    {
+      "zh": "年度日历",
+      "en": "Year Plan"
+    },
+    {
+      "zh": "节点倒排",
+      "en": "Lead Times"
+    },
+    {
+      "zh": "工时核对",
+      "en": "Capacity Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请把这些周期事项展开成十二个月的部门工作日历",
+      "en": "Expand these recurring tasks into a twelve month calendar"
+    },
+    {
+      "zh": "请根据截止日和准备工时交付倒排节点表",
+      "en": "Build backward milestone plans from deadlines and effort"
+    },
+    {
+      "zh": "请核对这份日历的人员容量并给出错峰方案",
+      "en": "Review calendar capacity and propose rescheduling options"
+    }
+  ],
+  "keywords": [
+    "年度日历",
+    "节点倒排",
+    "工时核对"
+  ],
+  "needEncrypt": true
+}

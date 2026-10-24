@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-profile-design-advisor",
+  "version": "1.0.1",
+  "description": "Audit avatar, name, bio, pinned posts and covers from screenshots; deliver rewrites, cover templates and a before-after log.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-profile-design-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-profile-design"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-profile-design-advisor",
+  "displayName": {
+    "zh": "账号主页优化顾问",
+    "en": "Profile Optimization Advisor"
+  },
+  "profession": {
+    "zh": "账号主页与视觉统一顾问｜灵策智算",
+    "en": "Profile Page and Visual Consistency Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据主页截图与账号定位体检头像昵称简介和置顶，提供改稿、封面模板与安全区参数，并留存改版前后对比。",
+    "en": "Audit avatar, name, bio, pinned posts and covers from screenshots; deliver rewrites, cover templates and a before-after log."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的主页截图和定位做一份体检表和改稿",
+    "en": "Audit my profile screenshot and draft rewrites"
+  },
+  "plugin": "lynxce-profile-design-advisor",
+  "tags": [
+    {
+      "zh": "主页体检",
+      "en": "Profile Audit"
+    },
+    {
+      "zh": "封面模板",
+      "en": "Cover Template"
+    },
+    {
+      "zh": "改版记录",
+      "en": "Revamp Log"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的主页截图和定位做一份体检表和改稿",
+      "en": "Audit my profile screenshot and draft rewrites"
+    },
+    {
+      "zh": "复核我新写的简介和三条置顶是否对上定位",
+      "en": "Check my new bio and pinned posts against my positioning"
+    },
+    {
+      "zh": "只有一句定位先给我简介三行和封面模板",
+      "en": "Draft a three-line bio and cover template from one positioning line"
+    }
+  ],
+  "keywords": [
+    "主页体检",
+    "封面模板",
+    "改版记录",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

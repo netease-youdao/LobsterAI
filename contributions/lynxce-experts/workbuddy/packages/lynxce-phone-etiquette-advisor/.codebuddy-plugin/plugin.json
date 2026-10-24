@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-phone-etiquette-advisor",
+  "version": "1.0.2",
+  "description": "Turn call logs and front desk staffing into call scripts, routing tables, message slips, difficult-call guides and monthly spot checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-phone-etiquette-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-phone-etiquette"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-phone-etiquette-advisor",
+  "displayName": {
+    "zh": "前台电话接听顾问",
+    "en": "Front Desk Phone Advisor"
+  },
+  "profession": {
+    "zh": "前台电话接听与转接规范顾问｜灵策智算",
+    "en": "Front Desk Call Handling and Transfer Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据来电记录与前台人手，交付接听话术卡、来电分流表、转接留言单、特殊来电处置卡和月度抽查评分表。",
+    "en": "Turn call logs and front desk staffing into call scripts, routing tables, message slips, difficult-call guides and monthly spot checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "根据一周来电记录生成来电分流表和前台话术卡",
+    "en": "Build a call routing table and scripts from one week of call records"
+  },
+  "plugin": "lynxce-phone-etiquette-advisor",
+  "tags": [
+    {
+      "zh": "来电分流",
+      "en": "Call Routing"
+    },
+    {
+      "zh": "转接留言",
+      "en": "Transfer and Messages"
+    },
+    {
+      "zh": "抽查评分",
+      "en": "Spot-check Scoring"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据一周来电记录生成来电分流表和前台话术卡",
+      "en": "Build a call routing table and scripts from one week of call records"
+    },
+    {
+      "zh": "复核这份前台留言单和回电记录是否完整及时",
+      "en": "Review these message slips and callbacks for completeness and timing"
+    },
+    {
+      "zh": "没有来电记录时先给话术卡留言单和记录表",
+      "en": "Without call records give scripts message slips and a logging sheet"
+    }
+  ],
+  "keywords": [
+    "来电分流",
+    "转接留言",
+    "抽查评分",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

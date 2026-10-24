@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-specialized-sme-2026-dossier-b46",
+  "version": "1.0.0",
+  "description": "Turn verified company evidence into application chapters, reconciliation notes, and correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-specialized-sme-2026-dossier-b46.md"
+  ],
+  "skills": [
+    "./skills/lynxce-specialized-sme-2026-dossier-b46-threshold",
+    "./skills/lynxce-specialized-sme-2026-dossier-b46-market",
+    "./skills/lynxce-specialized-sme-2026-dossier-b46-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-specialized-sme-2026-dossier-b46",
+  "displayName": {
+    "zh": "申报顾问",
+    "en": "Specialized SME Application Advisor"
+  },
+  "profession": {
+    "zh": "专精特新顾问",
+    "en": "Specialized SME Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业申报人员对照专精特新新标准，核对财务与产权证据，完成细分市场、主导产品章节及补正说明。",
+    "en": "Turn verified company evidence into application chapters, reconciliation notes, and correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按2026年新标准，帮我完成专精特新材料初稿。",
+    "en": "Specialized SME Application Advisor"
+  },
+  "plugin": "lynxce-specialized-sme-2026-dossier-b46",
+  "tags": [
+    {
+      "zh": "专精特新",
+      "en": "专精特新"
+    },
+    {
+      "zh": "细分市场",
+      "en": "细分市场"
+    },
+    {
+      "zh": "申报材料",
+      "en": "申报材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按2026年新标准，帮我完成专精特新材料初稿。",
+      "en": "Specialized SME Application Advisor"
+    },
+    {
+      "zh": "主营收入有两种口径，帮我复算并写补正说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "请把知识产权应用和细分市场资料写成申报章节。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "专精特新",
+    "细分市场",
+    "申报材料"
+  ]
+}

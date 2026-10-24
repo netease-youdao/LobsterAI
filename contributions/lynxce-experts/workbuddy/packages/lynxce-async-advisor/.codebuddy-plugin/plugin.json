@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-async-advisor",
+  "version": "1.0.1",
+  "description": "Fewer meetings: what to make async, writing norms, SLAs and decision records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-async-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-async-collab"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-async-advisor",
+  "displayName": {
+    "zh": "远程协作与异步沟通顾问",
+    "en": "Remote and Async Work Advisor"
+  },
+  "profession": {
+    "zh": "远程协作与异步沟通顾问",
+    "en": "Remote and Async Work Advisor"
+  },
+  "displayDescription": {
+    "zh": "会议太多怎么减下来：哪些能改异步、文档怎么写、响应时效怎么定、决策记录怎么留痕。",
+    "en": "Fewer meetings: what to make async, writing norms, SLAs and decision records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "这个会能不能不开",
+    "en": "Can we replace this meeting"
+  },
+  "plugin": "lynxce-async-advisor",
+  "tags": [
+    {
+      "zh": "异步协作",
+      "en": "Async Work"
+    },
+    {
+      "zh": "会议减负",
+      "en": "Fewer Meetings"
+    },
+    {
+      "zh": "决策留痕",
+      "en": "Decisions"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个会能不能不开",
+      "en": "Can we replace this meeting"
+    },
+    {
+      "zh": "异步文档怎么写别人才看",
+      "en": "How do I write a doc people actually read"
+    },
+    {
+      "zh": "远程团队怎么定响应时效",
+      "en": "How do we set response-time norms"
+    }
+  ],
+  "keywords": [
+    "异步协作",
+    "会议减负",
+    "决策留痕",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

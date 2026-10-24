@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-project-learning-taskpack-b45",
+  "version": "1.0.0",
+  "description": "Builds classroom project briefs, team roles, milestones, sample artifacts and differentiated scaffolds.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-project-learning-taskpack-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-project-learning-taskpack-b45-student-brief",
+    "./skills/lynxce-project-learning-taskpack-b45-contribution",
+    "./skills/lynxce-project-learning-taskpack-b45-milestone"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-project-learning-taskpack-b45",
+  "displayName": {
+    "zh": "项目教研师",
+    "en": "Project Learning Task Pack Designer"
+  },
+  "profession": {
+    "zh": "项目式学习设计师",
+    "en": "Project Learning Task Pack Designer"
+  },
+  "displayDescription": {
+    "zh": "将学习目标设计成小组项目，交付学生任务书、角色分工、里程碑和作品样稿，并提供课堂过程支架。",
+    "en": "Builds classroom project briefs, team roles, milestones, sample artifacts and differentiated scaffolds."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "为四节课的校园节水主题做学生任务书、角色卡和一份示例作品。",
+    "en": "Project Learning Task Pack Designer"
+  },
+  "plugin": "lynxce-project-learning-taskpack-b45",
+  "tags": [
+    {
+      "zh": "项目式学习",
+      "en": "项目式学习"
+    },
+    {
+      "zh": "学生任务书",
+      "en": "学生任务书"
+    },
+    {
+      "zh": "小组协作",
+      "en": "小组协作"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "为四节课的校园节水主题做学生任务书、角色卡和一份示例作品。",
+      "en": "Project Learning Task Pack Designer"
+    },
+    {
+      "zh": "每组四人但总有人搭便车，请重设计个人交付与合并方式。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "项目只剩两节课且不能外出调查，帮我缩小作品范围并重排节点。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "项目式学习",
+    "学生任务书",
+    "小组协作"
+  ]
+}

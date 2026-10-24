@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-data-metric-bridge-reconcile-b43-advisor",
+  "version": "1.0.0",
+  "description": "Reconcile metric definition difference bridge from supplied records and produce reviewable text tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-data-metric-bridge-reconcile-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-data-metric-bridge-reconcile-b43",
+    "./skills/lynxce-data-metric-bridge-reconcile-b43-int-overlap",
+    "./skills/lynxce-data-metric-bridge-reconcile-b43-int-version"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-data-metric-bridge-reconcile-b43-advisor",
+  "displayName": {
+    "zh": "指标口径差额归桥顾问",
+    "en": "Metric Definition Difference Bridge Advisor"
+  },
+  "profession": {
+    "zh": "指标口径差额归桥顾问",
+    "en": "Metric Definition Difference Bridge Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向数据分析人员，依据两份历史报表与定义版本逐项归桥差额，提供残差解释、样本复核及变更记录。",
+    "en": "Reconcile metric definition difference bridge from supplied records and produce reviewable text tables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "根据现有记录生成首份指标口径差额归桥表",
+    "en": "Build the first review table from supplied records"
+  },
+  "plugin": "lynxce-data-metric-bridge-reconcile-b43-advisor",
+  "tags": [
+    {
+      "zh": "数据分析人员",
+      "en": "Target Role"
+    },
+    {
+      "zh": "指标口径差额归桥",
+      "en": "Task Review"
+    },
+    {
+      "zh": "证据复核表",
+      "en": "Evidence Review Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据现有记录生成首份指标口径差额归桥表",
+      "en": "Build the first review table from supplied records"
+    },
+    {
+      "zh": "资料冲突或条件缺失时怎样保留待核项",
+      "en": "Handle conflicting records and missing conditions"
+    },
+    {
+      "zh": "根据后续反馈更新版本并复核影响范围",
+      "en": "Revise the table and check the affected scope"
+    }
+  ],
+  "keywords": [
+    "数据分析人员",
+    "指标口径差额归桥",
+    "证据复核表"
+  ]
+}

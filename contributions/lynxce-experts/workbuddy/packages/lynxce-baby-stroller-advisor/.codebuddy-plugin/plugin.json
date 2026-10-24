@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-baby-stroller-advisor",
+  "version": "1.0.1",
+  "description": "Pick baby strollers: type by age, weight limit, folded size and boarding, suspension, brakes, 3C mark.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-baby-stroller-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-baby-stroller"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-baby-stroller-advisor",
+  "displayName": {
+    "zh": "婴儿车选购与月龄场景匹配顾问",
+    "en": "Baby Stroller Picker by Age and Scene Advisor"
+  },
+  "profession": {
+    "zh": "11.11 婴儿车选购与月龄场景匹配顾问",
+    "en": "11.11 Baby Stroller Picker by Age and Scene Advisor"
+  },
+  "displayDescription": {
+    "zh": "婴儿车怎么挑：按月龄选高景观或伞车、核承重与折叠尺寸、看避震刹车与 3C 认证、比券后价。",
+    "en": "Pick baby strollers: type by age, weight limit, folded size and boarding, suspension, brakes, 3C mark."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "4 个月宝宝买高景观还是伞车",
+    "en": "High-view or umbrella stroller for a 4 month old"
+  },
+  "plugin": "lynxce-baby-stroller-advisor",
+  "tags": [
+    {
+      "zh": "月龄类型",
+      "en": "Type by Age"
+    },
+    {
+      "zh": "折叠登机",
+      "en": "Fold and Boarding"
+    },
+    {
+      "zh": "避震刹车",
+      "en": "Suspension and Brake"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "4 个月宝宝买高景观还是伞车",
+      "en": "High-view or umbrella stroller for a 4 month old"
+    },
+    {
+      "zh": "这款婴儿车折叠后能带上飞机吗",
+      "en": "Can this stroller be carried on a plane after folding"
+    },
+    {
+      "zh": "住 6 楼没电梯婴儿车选多重的",
+      "en": "How heavy a stroller for a sixth floor walk-up"
+    }
+  ],
+  "keywords": [
+    "月龄类型",
+    "折叠登机",
+    "避震刹车",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

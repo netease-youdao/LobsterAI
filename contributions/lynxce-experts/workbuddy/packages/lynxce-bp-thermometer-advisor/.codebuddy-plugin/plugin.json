@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bp-thermometer-advisor",
+  "version": "1.0.1",
+  "description": "Pick BP monitors and thermometers: arm or wrist, cuff size, device registration, forehead vs ear.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bp-thermometer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bp-thermometer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bp-thermometer-advisor",
+  "displayName": {
+    "zh": "家用电子血压计与体温计选购顾问",
+    "en": "Home Blood Pressure Monitor and Thermometer Advisor"
+  },
+  "profession": {
+    "zh": "家用电子血压计与体温计选购顾问",
+    "en": "Home Blood Pressure Monitor and Thermometer Advisor"
+  },
+  "displayDescription": {
+    "zh": "血压计体温计怎么挑：选上臂式或腕式、量臂围配袖带、核医疗器械注册证、分清额温与耳温差异。",
+    "en": "Pick BP monitors and thermometers: arm or wrist, cuff size, device registration, forehead vs ear."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "上臂围 34 厘米该选什么袖带",
+    "en": "Which cuff fits a 34 centimeter upper arm"
+  },
+  "plugin": "lynxce-bp-thermometer-advisor",
+  "tags": [
+    {
+      "zh": "袖带臂围",
+      "en": "Cuff Size"
+    },
+    {
+      "zh": "注册证核对",
+      "en": "Registration Check"
+    },
+    {
+      "zh": "额温耳温",
+      "en": "Forehead vs Ear"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "上臂围 34 厘米该选什么袖带",
+      "en": "Which cuff fits a 34 centimeter upper arm"
+    },
+    {
+      "zh": "怎么核对血压计的医疗器械注册证",
+      "en": "How to verify a BP monitor registration certificate"
+    },
+    {
+      "zh": "额温枪和耳温枪读数为什么不一样",
+      "en": "Why forehead and ear thermometer readings differ"
+    }
+  ],
+  "keywords": [
+    "袖带臂围",
+    "注册证核对",
+    "额温耳温",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

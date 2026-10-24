@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-deferred-income-tax-b50",
+  "version": "1.0.0",
+  "description": "Reconcile book and tax bases, reversal schedules and recoverability evidence into deferred tax schedules and revision notes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-deferred-income-tax-b50.md"
+  ],
+  "skills": [
+    "./skills/lynxce-deferred-tax-bases-b50",
+    "./skills/lynxce-deferred-recovery-evidence-b50",
+    "./skills/lynxce-deferred-tax-expense-bridge-b50"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-deferred-income-tax-b50",
+  "displayName": {
+    "zh": "递税顾问",
+    "en": "Deferred Income Tax Evidence Advisor"
+  },
+  "profession": {
+    "zh": "递延所得税顾问",
+    "en": "Deferred Income Tax Evidence Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务核对账面价值、计税基础和转回证据，区分永久与暂时差异，形成递延税底稿和可回收性修订说明。",
+    "en": "Reconcile book and tax bases, reversal schedules and recoverability evidence into deferred tax schedules and revision notes."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按资产账面和计税基础写递延所得税底稿，不虚构未来利润。",
+    "en": "Deferred Income Tax Evidence Advisor"
+  },
+  "plugin": "lynxce-deferred-income-tax-b50",
+  "tags": [
+    {
+      "zh": "递延所得税",
+      "en": "递延所得税"
+    },
+    {
+      "zh": "计税基础",
+      "en": "计税基础"
+    },
+    {
+      "zh": "可回收性",
+      "en": "可回收性"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按资产账面和计税基础写递延所得税底稿，不虚构未来利润。",
+      "en": "Deferred Income Tax Evidence Advisor"
+    },
+    {
+      "zh": "未来盈利预测两版本冲突，请重列当前税、递延税与未确认部分。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "帮我区分永久差异、暂时差异和已确认递延资产。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "递延所得税",
+    "计税基础",
+    "可回收性"
+  ]
+}

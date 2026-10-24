@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-homescent-advisor",
+  "version": "1.0.4",
+  "description": "Pick home fragrance: product types, room sizing and cost per day.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-homescent-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-homescent-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-homescent-advisor",
+  "displayName": {
+    "zh": "香薰与家居氛围用品顾问",
+    "en": "Home Fragrance and Ambience Advisor"
+  },
+  "profession": {
+    "zh": "香薰与家居氛围用品顾问",
+    "en": "Home Fragrance and Ambience Advisor"
+  },
+  "displayDescription": {
+    "zh": "香薰怎么挑才合适：几种形式怎么比、房间多大用多少、每天成本怎么算出来才有可比性。",
+    "en": "Pick home fragrance: product types, room sizing and cost per day."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "卧室适合用哪种香薰",
+    "en": "Which fragrance type suits a bedroom"
+  },
+  "plugin": "lynxce-homescent-advisor",
+  "tags": [
+    {
+      "zh": "家居香氛",
+      "en": "Home Fragrance"
+    },
+    {
+      "zh": "每天成本",
+      "en": "Cost per Day"
+    },
+    {
+      "zh": "使用安全",
+      "en": "Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "卧室适合用哪种香薰",
+      "en": "Which fragrance type suits a bedroom"
+    },
+    {
+      "zh": "这瓶能用多久划不划算",
+      "en": "How long will this last and is it worth it"
+    },
+    {
+      "zh": "家里有宠物要注意什么",
+      "en": "What should pet owners watch out for"
+    }
+  ],
+  "keywords": [
+    "家居香氛",
+    "每天成本",
+    "使用安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

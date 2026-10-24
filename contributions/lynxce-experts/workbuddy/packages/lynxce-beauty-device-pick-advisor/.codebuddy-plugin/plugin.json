@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-beauty-device-pick-advisor",
+  "version": "1.0.0",
+  "description": "Pick beauty devices: type, registration, temperature control, gel cost and real price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-beauty-device-pick-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-beauty-device-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-beauty-device-pick-advisor",
+  "displayName": {
+    "zh": "美容仪选购核价顾问",
+    "en": "Beauty Device Selection Advisor"
+  },
+  "profession": {
+    "zh": "11.11 美容仪选购与核价顾问",
+    "en": "11.11 Beauty Device Selection and Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "美容仪怎么挑：分清射频微电流导入类型、核注册信息与温控档位、算凝胶耗材年成本与满减分摊。",
+    "en": "Pick beauty devices: type, registration, temperature control, gel cost and real price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "射频美容仪要看哪些注册信息",
+    "en": "What registration info an RF beauty device should show"
+  },
+  "plugin": "lynxce-beauty-device-pick-advisor",
+  "tags": [
+    {
+      "zh": "类型资质",
+      "en": "Type and Registration"
+    },
+    {
+      "zh": "温控档位",
+      "en": "Temperature and Levels"
+    },
+    {
+      "zh": "耗材年费",
+      "en": "Yearly Gel Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "射频美容仪要看哪些注册信息",
+      "en": "What registration info an RF beauty device should show"
+    },
+    {
+      "zh": "满减凑单后美容仪到手价怎么算",
+      "en": "How to compute a beauty device price after spend discounts"
+    },
+    {
+      "zh": "美容仪专用凝胶一年要花多少钱",
+      "en": "How much the device gel costs per year"
+    }
+  ],
+  "keywords": [
+    "类型资质",
+    "温控档位",
+    "耗材年费",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

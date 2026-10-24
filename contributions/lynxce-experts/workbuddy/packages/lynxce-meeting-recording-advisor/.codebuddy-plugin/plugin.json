@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-meeting-recording-advisor",
+  "version": "1.0.1",
+  "description": "Turn meeting types, devices and storage into consent rules, naming indexes, access and retention tables, disposal logs and audits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-meeting-recording-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-meeting-recording"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-meeting-recording-advisor",
+  "displayName": {
+    "zh": "会议录像存档顾问",
+    "en": "Meeting Archive Advisor"
+  },
+  "profession": {
+    "zh": "会议录制与影像资料存档顾问｜灵策智算",
+    "en": "Meeting Recording and Video Archiving Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据会议类型、设备和存储条件，制定录制告知与禁录规则，交付命名索引台账、权限期限表和销毁抽查记录。",
+    "en": "Turn meeting types, devices and storage into consent rules, naming indexes, access and retention tables, disposal logs and audits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据我们的会议类型制定录制告知规则和保存期限表",
+    "en": "Set recording consent rules and retention periods for our meeting types"
+  },
+  "plugin": "lynxce-meeting-recording-advisor",
+  "tags": [
+    {
+      "zh": "录制告知",
+      "en": "Recording Consent"
+    },
+    {
+      "zh": "命名索引",
+      "en": "Naming Index"
+    },
+    {
+      "zh": "保存期限",
+      "en": "Retention"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的会议类型制定录制告知规则和保存期限表",
+      "en": "Set recording consent rules and retention periods for our meeting types"
+    },
+    {
+      "zh": "复核我们的录像台账有没有命名权限和到期问题",
+      "en": "Audit our recording ledger for naming access and expiry issues"
+    },
+    {
+      "zh": "只知道每月会议场次时先给最小录像归档规则",
+      "en": "Give minimal archiving rules from only the monthly meeting count"
+    }
+  ],
+  "keywords": [
+    "录制告知",
+    "命名索引",
+    "保存期限",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

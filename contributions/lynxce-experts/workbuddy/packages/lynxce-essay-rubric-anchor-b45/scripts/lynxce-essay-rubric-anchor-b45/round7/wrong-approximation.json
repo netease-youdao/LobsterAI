@@ -1,0 +1,20 @@
+{
+  "precision": 2,
+  "calculations": [
+    {
+      "id": "非等价",
+      "operation": "difference",
+      "values": [
+        "29.9",
+        "28.97"
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "calculationId": "非等价",
+      "value": ".77",
+      "relation": "≈"
+    }
+  ]
+}

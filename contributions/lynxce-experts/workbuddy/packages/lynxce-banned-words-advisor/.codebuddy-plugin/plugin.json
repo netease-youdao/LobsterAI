@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-banned-words-advisor",
+  "version": "1.0.1",
+  "description": "Grade risky claims across all short-video copy positions, suggest rewrites, list evidence gaps and items for legal review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-banned-words-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-banned-words"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-banned-words-advisor",
+  "displayName": {
+    "zh": "短视频文案自查顾问",
+    "en": "Copy Compliance Advisor"
+  },
+  "profession": {
+    "zh": "短视频文案合规自查顾问｜灵策智算",
+    "en": "Short-Video Copy Compliance Self-Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据标题口播字幕等全部文案逐句标出风险等级，提供改写方向与证据缺口清单，需法务判断事项单列移交。",
+    "en": "Grade risky claims across all short-video copy positions, suggest rewrites, list evidence gaps and items for legal review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把这条视频的标题口播字幕逐句标出风险等级并给改写",
+    "en": "Grade every line of this video copy and suggest rewrites"
+  },
+  "plugin": "lynxce-banned-words-advisor",
+  "tags": [
+    {
+      "zh": "风险分级",
+      "en": "Risk Grading"
+    },
+    {
+      "zh": "改写对照",
+      "en": "Rewrite Table"
+    },
+    {
+      "zh": "法务移交",
+      "en": "Legal Handoff"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这条视频的标题口播字幕逐句标出风险等级并给改写",
+      "en": "Grade every line of this video copy and suggest rewrites"
+    },
+    {
+      "zh": "复核我改过的文案还有哪些表述需要补证据",
+      "en": "Recheck my revised copy for claims that still need evidence"
+    },
+    {
+      "zh": "只有一个标题先帮我做最小范围自查",
+      "en": "Run a minimal self-check on this title only"
+    }
+  ],
+  "keywords": [
+    "风险分级",
+    "改写对照",
+    "法务移交",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-b2b-pilot-requirements-b43-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied records for b2b joint pilot requirement diagnosis.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-b2b-pilot-requirements-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-b2b-pilot-requirements-b43",
+    "./skills/lynxce-b2b-pilot-requirements-b43-int-baseline-card",
+    "./skills/lynxce-b2b-pilot-requirements-b43-int-scope-dispute"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-b2b-pilot-requirements-b43-advisor",
+  "displayName": {
+    "zh": "B2B验证需求顾问",
+    "en": "B2B Joint Pilot Requirement Diagnosis Advisor"
+  },
+  "profession": {
+    "zh": "B2B联合验证需求诊断专家",
+    "en": "B2B Joint Pilot Requirement Diagnosis"
+  },
+  "displayDescription": {
+    "zh": "帮助企业销售将客户试用需求转成可验证条件，核对场景、基线与证据，交付联合验证需求表及争议清单。",
+    "en": "Review supplied records for b2b joint pilot requirement diagnosis."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "首次提供已完成初访的需求纪要，请生成核对成果",
+    "en": "Prepare the first review from my supplied records"
+  },
+  "plugin": "lynxce-b2b-pilot-requirements-b43-advisor",
+  "tags": [
+    {
+      "zh": "企业销售",
+      "en": "Business Domain"
+    },
+    {
+      "zh": "B2B联合验证需求诊断",
+      "en": "Task Review"
+    },
+    {
+      "zh": "可检验需求矩阵",
+      "en": "Evidence Deliverable"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "首次提供已完成初访的需求纪要，请生成核对成果",
+      "en": "Prepare the first review from my supplied records"
+    },
+    {
+      "zh": "资料缺失或版本冲突，哪些判断需要暂缓",
+      "en": "Identify blocked decisions when evidence conflicts"
+    },
+    {
+      "zh": "新一轮资料到了，请更新差异与未闭环项",
+      "en": "Update changes and unresolved items for the next round"
+    }
+  ],
+  "keywords": [
+    "企业销售",
+    "B2B联合验证需求诊断",
+    "可检验需求矩阵"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-nail-gel-kit-advisor",
+  "version": "1.0.0",
+  "description": "Pick nail kits: lamp wavelength, gel uses per bottle, press on size and cost per set.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-nail-gel-kit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-nail-gel-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-nail-gel-kit-advisor",
+  "displayName": {
+    "zh": "美甲灯甲油胶选购顾问",
+    "en": "Home Manicure Kit Advisor"
+  },
+  "profession": {
+    "zh": "11.11 美甲灯、甲油胶与穿戴甲选购顾问",
+    "en": "11.11 Nail Lamp, Gel Polish and Press On Advisor"
+  },
+  "displayDescription": {
+    "zh": "美甲怎么挑：核美甲灯波长功率与定时、算甲油胶可做次数、量穿戴甲尺码、比自做与店做成本。",
+    "en": "Pick nail kits: lamp wavelength, gel uses per bottle, press on size and cost per set."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "美甲灯照完还黏手是什么原因",
+    "en": "Why gel still feels sticky after the lamp"
+  },
+  "plugin": "lynxce-nail-gel-kit-advisor",
+  "tags": [
+    {
+      "zh": "灯胶匹配",
+      "en": "Lamp and Gel Match"
+    },
+    {
+      "zh": "穿戴甲尺码",
+      "en": "Press On Sizing"
+    },
+    {
+      "zh": "每次成本",
+      "en": "Cost per Manicure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "美甲灯照完还黏手是什么原因",
+      "en": "Why gel still feels sticky after the lamp"
+    },
+    {
+      "zh": "一瓶 8 毫升甲油胶能做几次",
+      "en": "How many manicures an 8 ml gel bottle gives"
+    },
+    {
+      "zh": "穿戴甲尺码怎么量才不翘边",
+      "en": "How to size press on nails to avoid lifting"
+    }
+  ],
+  "keywords": [
+    "灯胶匹配",
+    "穿戴甲尺码",
+    "每次成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

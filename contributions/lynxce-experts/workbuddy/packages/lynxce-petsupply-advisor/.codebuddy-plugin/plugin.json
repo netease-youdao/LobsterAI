@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-petsupply-advisor",
+  "version": "1.0.4",
+  "description": "Buy pet supplies in stages: reading food labels, unit-price math and what to skip.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-petsupply-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pet-supply"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-petsupply-advisor",
+  "displayName": {
+    "zh": "宠物用品与口粮选购顾问",
+    "en": "Pet Supplies Buying Advisor"
+  },
+  "profession": {
+    "zh": "宠物用品与口粮选购顾问",
+    "en": "Pet Supplies Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "宠物用品按阶段分批买不浪费：口粮配料表怎么读、每斤单价怎么算、哪些东西其实完全不用买。",
+    "en": "Buy pet supplies in stages: reading food labels, unit-price math and what to skip."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "刚接回家第一周要买什么",
+    "en": "What do I need in the first week"
+  },
+  "plugin": "lynxce-petsupply-advisor",
+  "tags": [
+    {
+      "zh": "宠物用品",
+      "en": "Pet Supplies"
+    },
+    {
+      "zh": "口粮标签",
+      "en": "Labels"
+    },
+    {
+      "zh": "单价换算",
+      "en": "Unit Price"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "刚接回家第一周要买什么",
+      "en": "What do I need in the first week"
+    },
+    {
+      "zh": "帮我看看这袋粮的配料表",
+      "en": "Review this pet food ingredient list"
+    },
+    {
+      "zh": "这两包哪个更划算",
+      "en": "Which pack is the better value"
+    }
+  ],
+  "keywords": [
+    "宠物用品",
+    "口粮标签",
+    "单价换算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

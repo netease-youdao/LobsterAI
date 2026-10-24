@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-trade-inquiry-clarify-b43-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied records for export inquiry clarification and bilingual reply.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-trade-inquiry-clarify-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trade-inquiry-clarify-b43",
+    "./skills/lynxce-trade-inquiry-clarify-b43-int-term-audit",
+    "./skills/lynxce-trade-inquiry-clarify-b43-int-reply-delta"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-trade-inquiry-clarify-b43-advisor",
+  "displayName": {
+    "zh": "外贸询盘澄清顾问",
+    "en": "Export Inquiry Clarification and Bilingual Reply Advisor"
+  },
+  "profession": {
+    "zh": "外贸询盘澄清双语回复专家",
+    "en": "Export Inquiry Clarification and Bilingual Reply"
+  },
+  "displayDescription": {
+    "zh": "帮助外贸业务员从客户原始询盘提取规格与缺项，生成中英澄清回复、条件核对表及下一轮确认清单。",
+    "en": "Review supplied records for export inquiry clarification and bilingual reply."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "首次提供客户询盘原文，请生成核对成果",
+    "en": "Prepare the first review from my supplied records"
+  },
+  "plugin": "lynxce-trade-inquiry-clarify-b43-advisor",
+  "tags": [
+    {
+      "zh": "外贸业务",
+      "en": "Business Domain"
+    },
+    {
+      "zh": "外贸询盘澄清双语回复",
+      "en": "Task Review"
+    },
+    {
+      "zh": "询盘事实表",
+      "en": "Evidence Deliverable"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "首次提供客户询盘原文，请生成核对成果",
+      "en": "Prepare the first review from my supplied records"
+    },
+    {
+      "zh": "资料缺失或版本冲突，哪些判断需要暂缓",
+      "en": "Identify blocked decisions when evidence conflicts"
+    },
+    {
+      "zh": "新一轮资料到了，请更新差异与未闭环项",
+      "en": "Update changes and unresolved items for the next round"
+    }
+  ],
+  "keywords": [
+    "外贸业务",
+    "外贸询盘澄清双语回复",
+    "询盘事实表"
+  ]
+}

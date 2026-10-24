@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-hr-interview-anchor-calibration-b43-advisor",
+  "version": "1.0.0",
+  "description": "Reconcile interview rating anchor calibration from supplied records and produce reviewable text tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hr-interview-anchor-calibration-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hr-interview-anchor-calibration-b43",
+    "./skills/lynxce-hr-interview-anchor-calibration-b43-int-evidence",
+    "./skills/lynxce-hr-interview-anchor-calibration-b43-int-boundary"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hr-interview-anchor-calibration-b43-advisor",
+  "displayName": {
+    "zh": "面试评分锚点校准顾问",
+    "en": "Interview Rating Anchor Calibration Advisor"
+  },
+  "profession": {
+    "zh": "面试评分锚点校准顾问",
+    "en": "Interview Rating Anchor Calibration Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向招聘负责人，依据岗位锚点、匿名面试记录与独立评分校准分歧，提供证据对照和评分修订记录表。",
+    "en": "Reconcile interview rating anchor calibration from supplied records and produce reviewable text tables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据现有记录生成首份面试评分锚点校准表",
+    "en": "Build the first review table from supplied records"
+  },
+  "plugin": "lynxce-hr-interview-anchor-calibration-b43-advisor",
+  "tags": [
+    {
+      "zh": "招聘负责人",
+      "en": "Target Role"
+    },
+    {
+      "zh": "面试评分锚点校准",
+      "en": "Task Review"
+    },
+    {
+      "zh": "证据复核表",
+      "en": "Evidence Review Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据现有记录生成首份面试评分锚点校准表",
+      "en": "Build the first review table from supplied records"
+    },
+    {
+      "zh": "资料冲突或条件缺失时怎样保留待核项",
+      "en": "Handle conflicting records and missing conditions"
+    },
+    {
+      "zh": "根据后续反馈更新版本并复核影响范围",
+      "en": "Revise the table and check the affected scope"
+    }
+  ],
+  "keywords": [
+    "招聘负责人",
+    "面试评分锚点校准",
+    "证据复核表"
+  ]
+}

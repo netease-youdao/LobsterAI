@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-fountain-pen-advisor",
+  "version": "1.0.0",
+  "description": "Pick fountain pens: nib width, filling system, ink compatibility, paper and cost per page.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fountain-pen-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fountain-pen"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fountain-pen-advisor",
+  "displayName": {
+    "zh": "钢笔墨水选购顾问",
+    "en": "Fountain Pen and Ink Advisor"
+  },
+  "profession": {
+    "zh": "11.11 钢笔与墨水选购顾问",
+    "en": "11.11 Fountain Pen and Ink Advisor"
+  },
+  "displayDescription": {
+    "zh": "钢笔墨水怎么挑：按字号选笔尖粗细、比上墨方式、核墨水类型与兼容清洗、算每页墨水成本。",
+    "en": "Pick fountain pens: nib width, filling system, ink compatibility, paper and cost per page."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "小学生写作业钢笔选 EF 还是 F",
+    "en": "EF or F nib for a primary school student"
+  },
+  "plugin": "lynxce-fountain-pen-advisor",
+  "tags": [
+    {
+      "zh": "笔尖粗细",
+      "en": "Nib Width"
+    },
+    {
+      "zh": "上墨方式",
+      "en": "Filling System"
+    },
+    {
+      "zh": "墨水兼容",
+      "en": "Ink Compatibility"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "小学生写作业钢笔选 EF 还是 F",
+      "en": "EF or F nib for a primary school student"
+    },
+    {
+      "zh": "颜料墨水能用在普通钢笔里吗",
+      "en": "Can pigment ink be used in a regular fountain pen"
+    },
+    {
+      "zh": "钢笔写字为什么会透到纸背面",
+      "en": "Why fountain pen ink bleeds through the page"
+    }
+  ],
+  "keywords": [
+    "笔尖粗细",
+    "上墨方式",
+    "墨水兼容",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

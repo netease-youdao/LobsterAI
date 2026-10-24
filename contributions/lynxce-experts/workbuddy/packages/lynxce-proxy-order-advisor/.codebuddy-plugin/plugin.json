@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-proxy-order-advisor",
+  "version": "1.0.2",
+  "description": "Check before ordering for family: address and recipient, proxy-payment scam check, invoice title, after-sales owner, refund path.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-proxy-order-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-proxy-order"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-proxy-order-advisor",
+  "displayName": {
+    "zh": "亲友代付与异地代下单顾问",
+    "en": "Proxy Payment and Remote Order Advisor"
+  },
+  "profession": {
+    "zh": "11.11 亲友代付与异地代下单顾问",
+    "en": "11.11 Proxy Payment and Remote Order Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮父母或异地亲友下单要核对什么：地址收货人、代付链接防骗、发票抬头、售后跟进与退款路径。",
+    "en": "Check before ordering for family: address and recipient, proxy-payment scam check, invoice title, after-sales owner, refund path."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮爸妈下单要注意什么",
+    "en": "What should I be careful of when ordering for my parents"
+  },
+  "plugin": "lynxce-proxy-order-advisor",
+  "tags": [
+    {
+      "zh": "地址核对",
+      "en": "Address Check"
+    },
+    {
+      "zh": "代付防骗",
+      "en": "Payment Scam Check"
+    },
+    {
+      "zh": "售后与退款",
+      "en": "After-sales and Refund"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮爸妈下单要注意什么",
+      "en": "What should I be careful of when ordering for my parents"
+    },
+    {
+      "zh": "这个代付链接安全吗",
+      "en": "Is this proxy payment link safe"
+    },
+    {
+      "zh": "退款会退到谁的账户",
+      "en": "Whose account will the refund go to"
+    }
+  ],
+  "keywords": [
+    "地址核对",
+    "代付防骗",
+    "售后与退款",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

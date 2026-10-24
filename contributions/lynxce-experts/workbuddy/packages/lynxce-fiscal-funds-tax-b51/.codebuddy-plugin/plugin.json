@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-fiscal-funds-tax-b51",
+  "version": "1.0.0",
+  "description": "Fiscal Funds Tax Advisor evidence, calculations and full revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fiscal-funds-tax-b51.md"
+  ],
+  "skills": [
+    "./skills/fiscal-funds-conditions",
+    "./skills/fiscal-funds-expenditure-bridge",
+    "./skills/fiscal-funds-tail-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fiscal-funds-tax-b51",
+  "displayName": {
+    "zh": "财政税顾问",
+    "en": "Fiscal Funds Tax Advisor"
+  },
+  "profession": {
+    "zh": "财政资金税务顾问",
+    "en": "Fiscal Funds Tax Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务核对财政资金性质、专项核算及支出用途，形成不征税条件底稿、扣除台账和完整修订说明。",
+    "en": "Fiscal Funds Tax Advisor evidence, calculations and full revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "收到专项补助但条件资料不全，先出可用事实稿和补证请求。",
+    "en": "Fiscal Funds Tax Advisor"
+  },
+  "plugin": "lynxce-fiscal-funds-tax-b51",
+  "tags": [
+    {
+      "zh": "财政资金",
+      "en": "财政资金"
+    },
+    {
+      "zh": "不征税收入",
+      "en": "不征税收入"
+    },
+    {
+      "zh": "专项核算",
+      "en": "专项核算"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "收到专项补助但条件资料不全，先出可用事实稿和补证请求。",
+      "en": "Fiscal Funds Tax Advisor"
+    },
+    {
+      "zh": "不征税资金买设备后如何跟踪折旧与满期余额？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "拨付文件与奖励邮件冲突，完整重出两种条件说明。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "财政资金",
+    "不征税收入",
+    "专项核算"
+  ]
+}

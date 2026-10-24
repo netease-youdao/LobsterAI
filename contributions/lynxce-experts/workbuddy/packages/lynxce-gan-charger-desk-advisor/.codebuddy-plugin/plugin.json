@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-gan-charger-desk-advisor",
+  "version": "1.0.0",
+  "description": "Configure desk chargers: per port power split, protocols, cables and a station table.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-gan-charger-desk-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-gan-charger-desk"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-gan-charger-desk-advisor",
+  "displayName": {
+    "zh": "工位充电配置助理",
+    "en": "Desk Charging Setup Assistant"
+  },
+  "profession": {
+    "zh": "工位氮化镓多口充电器办公采购顾问",
+    "en": "Desk GaN Multi Port Charger Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "工位充电怎么配：按笔记本手机平板同时充算功率分配，核端口与线材规格，出工位充电配置表。",
+    "en": "Configure desk chargers: per port power split, protocols, cables and a station table."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "100 瓦三口充电器同时充够不够",
+    "en": "Is a 100W three port charger enough for all"
+  },
+  "plugin": "lynxce-gan-charger-desk-advisor",
+  "tags": [
+    {
+      "zh": "功率分配",
+      "en": "Power Split"
+    },
+    {
+      "zh": "协议线材",
+      "en": "Protocol and Cable"
+    },
+    {
+      "zh": "工位配置",
+      "en": "Station Setup"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "100 瓦三口充电器同时充够不够",
+      "en": "Is a 100W three port charger enough for all"
+    },
+    {
+      "zh": "65 瓦笔记本为什么要配 5A 线",
+      "en": "Why a 65W laptop needs a 5A cable"
+    },
+    {
+      "zh": "12 个工位充电器怎么配最省事",
+      "en": "How to equip 12 desks with chargers"
+    }
+  ],
+  "keywords": [
+    "功率分配",
+    "协议线材",
+    "工位配置",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

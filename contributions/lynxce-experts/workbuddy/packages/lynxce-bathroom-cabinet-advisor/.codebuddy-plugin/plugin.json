@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bathroom-cabinet-advisor",
+  "version": "1.0.0",
+  "description": "Pick vanities: wall width, drain position, counter height, moisture proof build, mounting.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bathroom-cabinet-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bathroom-cabinet"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bathroom-cabinet-advisor",
+  "displayName": {
+    "zh": "浴室柜选购顾问",
+    "en": "Bathroom Vanity Advisor"
+  },
+  "profession": {
+    "zh": "11.11 浴室柜与镜柜选购顾问",
+    "en": "11.11 Bathroom Vanity and Mirror Cabinet Advisor"
+  },
+  "displayDescription": {
+    "zh": "浴室柜怎么挑：量墙宽与下水角阀位置、按身高定台面高度、核柜体防潮材质、看挂墙与镜柜安装。",
+    "en": "Pick vanities: wall width, drain position, counter height, moisture proof build, mounting."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "墙排下水的浴室柜抽屉怎么选",
+    "en": "Which drawers work with a wall mounted drain"
+  },
+  "plugin": "lynxce-bathroom-cabinet-advisor",
+  "tags": [
+    {
+      "zh": "墙宽下水",
+      "en": "Wall and Drain"
+    },
+    {
+      "zh": "台面高度",
+      "en": "Counter Height"
+    },
+    {
+      "zh": "防潮材质",
+      "en": "Moisture Resistance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "墙排下水的浴室柜抽屉怎么选",
+      "en": "Which drawers work with a wall mounted drain"
+    },
+    {
+      "zh": "浴室柜台面装多高比较合适",
+      "en": "How high should a bathroom vanity counter be"
+    },
+    {
+      "zh": "轻质隔墙能不能装悬挂浴室柜",
+      "en": "Can a wall hung vanity go on a partition wall"
+    }
+  ],
+  "keywords": [
+    "墙宽下水",
+    "台面高度",
+    "防潮材质",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

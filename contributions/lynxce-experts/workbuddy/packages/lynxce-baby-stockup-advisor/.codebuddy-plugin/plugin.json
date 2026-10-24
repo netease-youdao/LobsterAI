@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-baby-stockup-advisor",
+  "version": "1.0.1",
+  "description": "Plan diaper and formula stock-up by age and size or stage changes, check expiry and batch, compare per-piece prices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-baby-stockup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-baby-stockup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-baby-stockup-advisor",
+  "displayName": {
+    "zh": "纸尿裤奶粉囤货顾问",
+    "en": "Diaper and Formula Promo Stock-up and Expiry Advisor"
+  },
+  "profession": {
+    "zh": "纸尿裤与奶粉大促囤货量与效期顾问",
+    "en": "Diaper and Formula Promo Stock-up and Expiry Advisor"
+  },
+  "displayDescription": {
+    "zh": "纸尿裤奶粉大促囤多少：按月龄用量和换段节点算上限，核对效期批次，折算每片每克单价。",
+    "en": "Plan diaper and formula stock-up by age and size or stage changes, check expiry and batch, compare per-piece prices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "宝宝这个月龄纸尿裤大促囤多少合适",
+    "en": "How many diapers to stock at this age"
+  },
+  "plugin": "lynxce-baby-stockup-advisor",
+  "tags": [
+    {
+      "zh": "囤货上限",
+      "en": "Stock Cap"
+    },
+    {
+      "zh": "换段节点",
+      "en": "Size and Stage Change"
+    },
+    {
+      "zh": "效期批次",
+      "en": "Expiry and Batch"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "宝宝这个月龄纸尿裤大促囤多少合适",
+      "en": "How many diapers to stock at this age"
+    },
+    {
+      "zh": "奶粉囤几罐不会过了换段",
+      "en": "How many cans before the next formula stage"
+    },
+    {
+      "zh": "帮我算每片和每百克单价",
+      "en": "Compare price per diaper and per 100 g"
+    }
+  ],
+  "keywords": [
+    "囤货上限",
+    "换段节点",
+    "效期批次",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

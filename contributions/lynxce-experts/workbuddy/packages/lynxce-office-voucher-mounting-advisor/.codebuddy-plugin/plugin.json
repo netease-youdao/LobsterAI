@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-voucher-mounting-advisor",
+  "version": "1.0.0",
+  "description": "Calculate mounting pages and binding supplies, reconcile receipts and produce a voucher index.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-voucher-mounting-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-voucher-mounting"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-voucher-mounting-advisor",
+  "displayName": {
+    "zh": "凭证粘贴耗材核算助理",
+    "en": "Voucher Mounting Supply Assistant"
+  },
+  "profession": {
+    "zh": "报销凭证粘贴与装订耗材核算助理",
+    "en": "Receipt Mounting and Binding Supply Assistant"
+  },
+  "displayDescription": {
+    "zh": "报销单据怎么粘贴备料：按财务确认版式测算粘贴页与装订耗材，核对单据金额，交付凭证目录与领用台账。",
+    "en": "Calculate mounting pages and binding supplies, reconcile receipts and produce a voucher index."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "不同尺寸票据要用多少粘贴纸",
+    "en": "Calculate mounting sheets for different receipt sizes"
+  },
+  "plugin": "lynxce-office-voucher-mounting-advisor",
+  "tags": [
+    {
+      "zh": "逐笔算页",
+      "en": "Pages Per Claim"
+    },
+    {
+      "zh": "耗材备量",
+      "en": "Supply Quantity"
+    },
+    {
+      "zh": "金额复核",
+      "en": "Amount Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "不同尺寸票据要用多少粘贴纸",
+      "en": "Calculate mounting sheets for different receipt sizes"
+    },
+    {
+      "zh": "胶棒封面和装订夹按包装怎么采购",
+      "en": "Calculate glue, covers and binding purchase packs"
+    },
+    {
+      "zh": "做报销凭证目录与耗材领用表",
+      "en": "Make a voucher index and supply issue sheet"
+    }
+  ],
+  "keywords": [
+    "逐笔算页",
+    "耗材备量",
+    "金额复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

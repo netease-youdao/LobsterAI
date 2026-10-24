@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-battery-return-label-handover-advisor",
+  "version": "1.0.0",
+  "description": "Label battery collection boxes and reconcile handover.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-battery-return-label-handover-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-battery-return-label-handover"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-battery-return-label-handover-advisor",
+  "displayName": {
+    "zh": "电池标签交接顾问",
+    "en": "Battery Handover Advisor"
+  },
+  "profession": {
+    "zh": "办公室废旧电池回收箱标签与交接顾问",
+    "en": "Battery Handover Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公室废旧电池按接收范围分箱贴签，记录来源数量与称量口径，核对交接差异和标签库存，输出补料台账。",
+    "en": "Label battery collection boxes and reconcile handover."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对办公室废旧电池回收箱标签与交接的输入条件",
+    "en": "Check inputs and compatibility"
+  },
+  "plugin": "lynxce-office-battery-return-label-handover-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "台账核算",
+      "en": "Ledger Reconciliation"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对办公室废旧电池回收箱标签与交接的输入条件",
+      "en": "Check inputs and compatibility"
+    },
+    {
+      "zh": "依据确认数据计算净购与余量",
+      "en": "Calculate net purchases and remaining stock"
+    },
+    {
+      "zh": "生成专项台账与异常复核表",
+      "en": "Build records and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "台账核算",
+    "异常复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

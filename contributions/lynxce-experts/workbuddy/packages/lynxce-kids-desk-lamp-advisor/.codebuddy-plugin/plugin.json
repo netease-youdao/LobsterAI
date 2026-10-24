@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kids-desk-lamp-advisor",
+  "version": "1.0.1",
+  "description": "Pick kids desk, chair and lamp: height by stature, desk size, lamp grade, color temperature, flicker, blue light.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kids-desk-lamp-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kids-desk-lamp"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kids-desk-lamp-advisor",
+  "displayName": {
+    "zh": "儿童学习桌椅与台灯选购顾问",
+    "en": "Kids Study Desk, Chair and Lamp Advisor"
+  },
+  "profession": {
+    "zh": "11.11 儿童学习桌椅与台灯选购顾问",
+    "en": "11.11 Kids Study Desk, Chair and Lamp Advisor"
+  },
+  "displayDescription": {
+    "zh": "儿童桌椅台灯怎么选：按身高调桌椅高度、桌面尺寸、台灯照度色温频闪蓝光等级、到手价。",
+    "en": "Pick kids desk, chair and lamp: height by stature, desk size, lamp grade, color temperature, flicker, blue light."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "孩子 125 厘米桌椅该调多高",
+    "en": "How high should the desk be for a 125 cm child"
+  },
+  "plugin": "lynxce-kids-desk-lamp-advisor",
+  "tags": [
+    {
+      "zh": "高度核算",
+      "en": "Height Fit"
+    },
+    {
+      "zh": "台灯参数",
+      "en": "Lamp Specs"
+    },
+    {
+      "zh": "套装对比",
+      "en": "Set Comparison"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "孩子 125 厘米桌椅该调多高",
+      "en": "How high should the desk be for a 125 cm child"
+    },
+    {
+      "zh": "台灯的 AA 级和 RG0 怎么看",
+      "en": "How do I read AA grade and RG0 on a desk lamp"
+    },
+    {
+      "zh": "学习桌椅买套装还是分开买",
+      "en": "Should I buy the desk and chair as a set or separately"
+    }
+  ],
+  "keywords": [
+    "高度核算",
+    "台灯参数",
+    "套装对比",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

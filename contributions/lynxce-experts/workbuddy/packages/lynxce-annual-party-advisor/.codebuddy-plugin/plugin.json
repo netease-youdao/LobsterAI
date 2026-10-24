@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-annual-party-advisor",
+  "version": "1.0.1",
+  "description": "Run a company party: budget, minute-level run sheet, vendors, rehearsal and contingency.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-annual-party-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-annual-party-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-annual-party-advisor",
+  "displayName": {
+    "zh": "年会总控顾问",
+    "en": "Company Event Budget and Run Sheet Advisor"
+  },
+  "profession": {
+    "zh": "年会策划与总控顾问",
+    "en": "Company Event Budget and Run Sheet Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据人数、预算和场地窗口，交付可复算预算、分钟级总控脚本与供应商验收表，附彩排问题和变更方案。",
+    "en": "Review supplied records and deliver traceable tables, worked examples and change plans for human execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "按人数、报价和机动规则生成一份可复算年会预算",
+    "en": "Build a checkable event budget from attendee counts, quotes and reserve rules"
+  },
+  "plugin": "lynxce-annual-party-advisor",
+  "tags": [
+    {
+      "zh": "年会预算",
+      "en": "Event Budget"
+    },
+    {
+      "zh": "总控脚本",
+      "en": "Run Sheet"
+    },
+    {
+      "zh": "彩排验收",
+      "en": "Rehearsal Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按人数、报价和机动规则生成一份可复算年会预算",
+      "en": "Build a checkable event budget from attendee counts, quotes and reserve rules"
+    },
+    {
+      "zh": "根据场地窗口排签到、节目、散场和撤场总控脚本",
+      "en": "Plan check-in, program, departure and equipment teardown within the venue window"
+    },
+    {
+      "zh": "复核迟到或增员后是否超时超支，给待批准替代方案",
+      "en": "Recalculate time and cost after delays or attendee changes and list options awaiting approval"
+    }
+  ],
+  "keywords": [
+    "年会策划",
+    "流程脚本",
+    "现场执行",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

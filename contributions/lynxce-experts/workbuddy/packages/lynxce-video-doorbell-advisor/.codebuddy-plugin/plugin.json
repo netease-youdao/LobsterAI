@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-video-doorbell-advisor",
+  "version": "1.0.1",
+  "description": "Choose a video doorbell: power, door fit, local vs cloud storage fees, night vision, alerts, privacy.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-video-doorbell-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-video-doorbell"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-video-doorbell-advisor",
+  "displayName": {
+    "zh": "可视门铃与智能猫眼选购顾问",
+    "en": "Video Doorbell and Smart Peephole Advisor"
+  },
+  "profession": {
+    "zh": "11.11 可视门铃与智能猫眼选购顾问",
+    "en": "11.11 Video Doorbell and Smart Peephole Advisor"
+  },
+  "displayDescription": {
+    "zh": "可视门铃猫眼怎么选：供电与门体适配、本地存储与云存储年费、夜视与误报、隐私合规不拍他人户内。",
+    "en": "Choose a video doorbell: power, door fit, local vs cloud storage fees, night vision, alerts, privacy."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家门能装智能猫眼吗",
+    "en": "Can a smart peephole camera fit my door"
+  },
+  "plugin": "lynxce-video-doorbell-advisor",
+  "tags": [
+    {
+      "zh": "门体适配",
+      "en": "Door Fit"
+    },
+    {
+      "zh": "存储年费",
+      "en": "Storage Fees"
+    },
+    {
+      "zh": "隐私合规",
+      "en": "Privacy Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家门能装智能猫眼吗",
+      "en": "Can a smart peephole camera fit my door"
+    },
+    {
+      "zh": "云存储和本地存储三年各花多少",
+      "en": "What do cloud and local storage cost over three years"
+    },
+    {
+      "zh": "装可视门铃怎么避免拍到邻居",
+      "en": "How do I avoid filming my neighbors with a video doorbell"
+    }
+  ],
+  "keywords": [
+    "门体适配",
+    "存储年费",
+    "隐私合规",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

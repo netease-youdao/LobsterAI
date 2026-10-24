@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-finance-analyst",
+  "version": "1.0.3",
+  "description": "Offline, user-material-based workflow assistance with traceable drafts and explicit review decisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-finance-analyst.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-finance-analyst",
+  "displayName": {
+    "zh": "财务分析师",
+    "en": "Finance Analyst"
+  },
+  "profession": {
+    "zh": "企业财务与经营分析师",
+    "en": "Corporate Finance & Business Analyst"
+  },
+  "displayDescription": {
+    "zh": "输入经营明细、预算和收付款记录，交付毛利计算底稿、预算偏差桥及现金排期表，逐项注明口径和差异。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按这些经营明细先交一页经营摘要和可复算的收入成本毛利底稿",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-finance-analyst",
+  "tags": [
+    {
+      "zh": "报表解读",
+      "en": "Financial Statements"
+    },
+    {
+      "zh": "预算分析",
+      "en": "Budget Analysis"
+    },
+    {
+      "zh": "现金流",
+      "en": "Cash Flow"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按这些经营明细先交一页经营摘要和可复算的收入成本毛利底稿",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "拆解本期预算偏差，区分业务量、单价和口径变化",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "按已确认收付款编制现金排期，把预计款项单独做情景",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "报表解读",
+    "预算分析",
+    "现金流",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/operating-margin-analysis",
+    "./skills/budget-variance-bridge",
+    "./skills/cash-schedule-review"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-instant-retail-advisor",
+  "version": "1.0.2",
+  "description": "Compare instant retail versus promotion stockpiling: unit price with delivery fee, urgency, near-expiry and spoilage.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-instant-retail-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-instant-retail"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-instant-retail-advisor",
+  "displayName": {
+    "zh": "即时零售小时达与囤货对比顾问",
+    "en": "Instant Retail versus Stockpiling Advisor"
+  },
+  "profession": {
+    "zh": "11.11 即时零售小时达与囤货对比顾问",
+    "en": "11.11 Instant Retail versus Stockpiling Advisor"
+  },
+  "displayDescription": {
+    "zh": "即时零售还是等大促囤货：含配送费起送价会员免运的同品单价对比、急用还是可等、临期损耗判断。",
+    "en": "Compare instant retail versus promotion stockpiling: unit price with delivery fee, urgency, near-expiry and spoilage."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "今天急用该走即时零售还是等大促",
+    "en": "Should I use instant retail or wait for the promotion today"
+  },
+  "plugin": "lynxce-instant-retail-advisor",
+  "tags": [
+    {
+      "zh": "单价换算",
+      "en": "Unit Price"
+    },
+    {
+      "zh": "急用判断",
+      "en": "Urgency Check"
+    },
+    {
+      "zh": "囤货合理量",
+      "en": "Stockpile Limit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "今天急用该走即时零售还是等大促",
+      "en": "Should I use instant retail or wait for the promotion today"
+    },
+    {
+      "zh": "这两个规格哪个单价更划算",
+      "en": "Which size has a better unit price"
+    },
+    {
+      "zh": "这个东西能囤多少合适",
+      "en": "How much of this should I stockpile"
+    }
+  ],
+  "keywords": [
+    "单价换算",
+    "急用判断",
+    "囤货合理量",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

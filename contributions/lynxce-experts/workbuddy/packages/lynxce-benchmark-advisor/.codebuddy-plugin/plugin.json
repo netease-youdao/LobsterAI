@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-benchmark-advisor",
+  "version": "1.0.1",
+  "description": "Turn benchmark accounts and post data into coded teardowns, pattern tests, gap scores, five topics and a two-week test plan.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-benchmark-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-benchmark-analysis"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-benchmark-advisor",
+  "displayName": {
+    "zh": "爆款对标拆解顾问",
+    "en": "Benchmark Analysis Advisor"
+  },
+  "profession": {
+    "zh": "爆款拆解与对标账号分析顾问｜灵策智算",
+    "en": "Viral Teardown and Benchmark Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据对标账号与作品数据，按固定维度拆解并区分共性与个例，交付差距打分、五条选题和两周验证计划。",
+    "en": "Turn benchmark accounts and post data into coded teardowns, pattern tests, gap scores, five topics and a two-week test plan."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "根据对标账号样本数据拆出共性并生成五条选题",
+    "en": "Find patterns in benchmark samples and draft five topics"
+  },
+  "plugin": "lynxce-benchmark-advisor",
+  "tags": [
+    {
+      "zh": "爆款拆解",
+      "en": "Viral Teardown"
+    },
+    {
+      "zh": "对标分析",
+      "en": "Benchmarking"
+    },
+    {
+      "zh": "选题验证",
+      "en": "Topic Testing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据对标账号样本数据拆出共性并生成五条选题",
+      "en": "Find patterns in benchmark samples and draft five topics"
+    },
+    {
+      "zh": "复核我做的爆款拆解表看结论是否站得住",
+      "en": "Check whether my teardown table supports its conclusions"
+    },
+    {
+      "zh": "只有一条爆款时先给拆解示范和取样清单",
+      "en": "Give a teardown demo and sampling list from a single viral post"
+    }
+  ],
+  "keywords": [
+    "爆款拆解",
+    "对标分析",
+    "选题验证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

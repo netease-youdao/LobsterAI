@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-smart-factory-application-b53",
+  "version": "1.0.0",
+  "description": "Prepare evidence-linked industrial policy dossiers, reconcile conflicting facts and deliver complete editable versions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-smart-factory-application-b53.md"
+  ],
+  "skills": [
+    "./skills/lynxce-smart-factory-application-1",
+    "./skills/lynxce-smart-factory-application-2",
+    "./skills/lynxce-smart-factory-application-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-smart-factory-application-b53",
+  "displayName": {
+    "zh": "智造顾问",
+    "en": "Smart Factory Application Advisor"
+  },
+  "profession": {
+    "zh": "智能工厂申报顾问",
+    "en": "Smart Factory Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "为制造企业智造经办核对工厂层级、场景运行与成效证据，交付场景底稿、申报说明及完整补正稿。",
+    "en": "Prepare evidence-linked industrial policy dossiers, reconcile conflicting facts and deliver complete editable versions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按现行层级整理智能工厂材料，别把设备数当场景数。",
+    "en": "Smart Factory Application Advisor"
+  },
+  "plugin": "lynxce-smart-factory-application-b53",
+  "tags": [
+    {
+      "zh": "智能工厂",
+      "en": "智能工厂"
+    },
+    {
+      "zh": "场景证据",
+      "en": "场景证据"
+    },
+    {
+      "zh": "申报材料",
+      "en": "申报材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按现行层级整理智能工厂材料，别把设备数当场景数。",
+      "en": "Smart Factory Application Advisor"
+    },
+    {
+      "zh": "AI场景认定冲突，请保留双比例并写完整补正。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "窗口已过，帮我准备下一轮场景和成效底稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "智能工厂",
+    "场景证据",
+    "申报材料"
+  ]
+}

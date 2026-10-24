@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-teawine-advisor",
+  "version": "1.0.4",
+  "description": "Buy tea and drinks well: label reading, storage and freshness checks and gift budget tiers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-teawine-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-teawine-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-teawine-advisor",
+  "displayName": {
+    "zh": "茶酒饮品选购与送礼顾问",
+    "en": "Tea, Coffee and Drinks Buying Advisor"
+  },
+  "profession": {
+    "zh": "茶酒饮品选购与送礼顾问",
+    "en": "Tea, Coffee and Drinks Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "茶酒怎么挑才不踩坑：标签与日期怎么读、仓储和新鲜度怎么看、送礼档位与数量怎么定。",
+    "en": "Buy tea and drinks well: label reading, storage and freshness checks and gift budget tiers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "送礼这个预算选什么合适",
+    "en": "What fits this gifting budget"
+  },
+  "plugin": "lynxce-teawine-advisor",
+  "tags": [
+    {
+      "zh": "茶酒选购",
+      "en": "Tea and Wine"
+    },
+    {
+      "zh": "标签核对",
+      "en": "Labels"
+    },
+    {
+      "zh": "送礼预算",
+      "en": "Gifting"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "送礼这个预算选什么合适",
+      "en": "What fits this gifting budget"
+    },
+    {
+      "zh": "帮我看看这款的标签信息",
+      "en": "Review this product label"
+    },
+    {
+      "zh": "这两款哪个更划算",
+      "en": "Which of these two is better value"
+    }
+  ],
+  "keywords": [
+    "茶酒选购",
+    "标签核对",
+    "送礼预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

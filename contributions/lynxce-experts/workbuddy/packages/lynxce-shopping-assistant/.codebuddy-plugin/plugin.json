@@ -1,0 +1,75 @@
+{
+  "name": "lynxce-shopping-assistant",
+  "version": "1.0.4",
+  "description": "Search a product and get the post-coupon price plus a ready-to-open deal link, with cross-platform comparison and budget planning.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-shopping-assistant.md"
+  ],
+  "skills": [
+    "./skills/lynxce-price-compare",
+    "./skills/lynxce-shopping-list"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  },
+  "expertType": "agent",
+  "agentName": "lynxce-shopping-assistant",
+  "displayName": {
+    "zh": "购物助手",
+    "en": "Shopping Assistant"
+  },
+  "profession": {
+    "zh": "购物助手",
+    "en": "Shopping Assistant"
+  },
+  "displayDescription": {
+    "zh": "搜商品直接给出券后价与可下单的领券链接，同时做跨平台比价、优惠核算和购物清单排序。",
+    "en": "Search a product and get the post-coupon price plus a ready-to-open deal link, with cross-platform comparison and list planning."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我找降噪耳机，直接给领券链接",
+    "en": "Find me noise-cancelling headphones and send the deal links"
+  },
+  "plugin": "lynxce-shopping-assistant",
+  "tags": [
+    {
+      "zh": "搜商品领券",
+      "en": "Deal Links"
+    },
+    {
+      "zh": "券后价",
+      "en": "Post-coupon"
+    },
+    {
+      "zh": "购物清单",
+      "en": "Shopping List"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我找降噪耳机，直接给领券链接",
+      "en": "Find me noise-cancelling headphones and send the deal links"
+    },
+    {
+      "zh": "这两个链接哪个到手价更低",
+      "en": "Which of these two links has the lower final price"
+    },
+    {
+      "zh": "帮我把这份清单按预算排个优先级",
+      "en": "Prioritize this shopping list within my budget"
+    }
+  ],
+  "keywords": [
+    "搜商品领券",
+    "券后价",
+    "比价",
+    "购物清单",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

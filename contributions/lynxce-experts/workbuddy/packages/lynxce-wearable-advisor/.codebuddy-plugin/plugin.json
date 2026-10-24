@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-wearable-advisor",
+  "version": "1.0.4",
+  "description": "Pick a wearable: ecosystem compatibility, real battery life and health feature limits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-wearable-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-wearable-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-wearable-advisor",
+  "displayName": {
+    "zh": "智能穿戴设备选购顾问",
+    "en": "Smartwatch and Wearable Advisor"
+  },
+  "profession": {
+    "zh": "智能穿戴设备选购顾问",
+    "en": "Smartwatch and Wearable Advisor"
+  },
+  "displayDescription": {
+    "zh": "手表手环怎么挑不踩坑：系统兼容先确认、续航看什么、配件要多少、健康功能边界在哪。",
+    "en": "Pick a wearable: ecosystem compatibility, real battery life and health feature limits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的手机适合买哪款",
+    "en": "Which model suits my phone"
+  },
+  "plugin": "lynxce-wearable-advisor",
+  "tags": [
+    {
+      "zh": "智能穿戴",
+      "en": "Wearables"
+    },
+    {
+      "zh": "系统兼容",
+      "en": "Compatibility"
+    },
+    {
+      "zh": "续航实测",
+      "en": "Battery"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的手机适合买哪款",
+      "en": "Which model suits my phone"
+    },
+    {
+      "zh": "续航能撑几天",
+      "en": "How many days will the battery last"
+    },
+    {
+      "zh": "这些健康数据准吗",
+      "en": "How accurate is this health data"
+    }
+  ],
+  "keywords": [
+    "智能穿戴",
+    "系统兼容",
+    "续航实测",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

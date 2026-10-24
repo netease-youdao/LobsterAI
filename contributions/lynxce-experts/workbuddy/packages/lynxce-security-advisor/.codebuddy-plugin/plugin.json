@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-security-advisor",
+  "version": "1.0.4",
+  "description": "Set up home security right: placement, privacy limits, storage options and offline behavior.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-security-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-security-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-security-advisor",
+  "displayName": {
+    "zh": "家庭安防与监控设备选购顾问",
+    "en": "Home Security Device Advisor"
+  },
+  "profession": {
+    "zh": "家庭安防与监控设备选购顾问",
+    "en": "Home Security Device Advisor"
+  },
+  "displayDescription": {
+    "zh": "家庭安防怎么装才真有用：点位怎么规划、隐私边界划在哪、存储与断网表现怎么先想好。",
+    "en": "Set up home security right: placement, privacy limits, storage options and offline behavior."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家该装几个摄像头",
+    "en": "How many cameras do I need"
+  },
+  "plugin": "lynxce-security-advisor",
+  "tags": [
+    {
+      "zh": "家庭安防",
+      "en": "Home Security"
+    },
+    {
+      "zh": "点位规划",
+      "en": "Placement"
+    },
+    {
+      "zh": "隐私边界",
+      "en": "Privacy"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家该装几个摄像头",
+      "en": "How many cameras do I need"
+    },
+    {
+      "zh": "装在哪里比较合适",
+      "en": "Where should the devices go"
+    },
+    {
+      "zh": "断网了还能录吗",
+      "en": "Will it still record offline"
+    }
+  ],
+  "keywords": [
+    "家庭安防",
+    "点位规划",
+    "隐私边界",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

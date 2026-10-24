@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-environmental-tax-reconciliation-b52",
+  "version": "1.0.0",
+  "description": "Environmental Tax Filing Advisor evidence worksheets and complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-environmental-tax-reconciliation-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-environmental-outlet-equivalent-b52",
+    "./skills/lynxce-environmental-concentration-relief-b52",
+    "./skills/lynxce-environmental-tax-full-revision-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-environmental-tax-reconciliation-b52",
+  "displayName": {
+    "zh": "环保税顾问",
+    "en": "Environmental Tax Filing Advisor"
+  },
+  "profession": {
+    "zh": "环保税申报顾问",
+    "en": "Environmental Tax Filing Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业环保经办与财务核对合法排放数据和属地依据，交付污染当量底稿、减征证据清单及完整修订说明。",
+    "en": "Environmental Tax Filing Advisor evidence worksheets and complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "用合法监测数据按排口核污染当量和前三项。",
+    "en": "Environmental Tax Filing Advisor"
+  },
+  "plugin": "lynxce-environmental-tax-reconciliation-b52",
+  "tags": [
+    {
+      "zh": "环保税",
+      "en": "环保税"
+    },
+    {
+      "zh": "污染当量",
+      "en": "污染当量"
+    },
+    {
+      "zh": "浓度减征",
+      "en": "浓度减征"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "用合法监测数据按排口核污染当量和前三项。",
+      "en": "Environmental Tax Filing Advisor"
+    },
+    {
+      "zh": "月均低但有小时超标，减征条件如何核？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "八月排放两稿不一致，重出完整季度双轨底稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "环保税",
+    "污染当量",
+    "浓度减征"
+  ]
+}

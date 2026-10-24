@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-plants-advisor",
+  "version": "1.0.1",
+  "description": "Turn light, temperature and care time at a spot into a plant shortlist, watering care card, problem triage log and bouquet plan.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-plants-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-plants-advisor",
+  "displayName": {
+    "zh": "绿植花艺顾问",
+    "en": "Plants & Floral"
+  },
+  "profession": {
+    "zh": "绿植养护与花艺搭配顾问",
+    "en": "Plant Care & Floral Design Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据摆放位置的光照温度和可照料时间，交付候选植物对比、浇水判断养护卡、问题排查记录和花束配比保鲜表。",
+    "en": "Turn light, temperature and care time at a spot into a plant shortlist, watering care card, problem triage log and bouquet plan."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据我家这个位置的光照和照料时间推荐植物并做养护卡",
+    "en": "Shortlist plants for this spot and make a care card"
+  },
+  "plugin": "lynxce-plants-advisor",
+  "tags": [
+    {
+      "zh": "环境选株",
+      "en": "Plant Selection"
+    },
+    {
+      "zh": "问题排查",
+      "en": "Troubleshooting"
+    },
+    {
+      "zh": "花束配比",
+      "en": "Bouquet Design"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我家这个位置的光照和照料时间推荐植物并做养护卡",
+      "en": "Shortlist plants for this spot and make a care card"
+    },
+    {
+      "zh": "帮我复核这份养护计划里的浇水和光照安排",
+      "en": "Review the watering and light plan in my care schedule"
+    },
+    {
+      "zh": "只知道叶子发黄时先给排查顺序和要观察的项目",
+      "en": "With only yellowing leaves give the triage order and what to observe"
+    }
+  ],
+  "keywords": [
+    "环境选株",
+    "问题排查",
+    "花束配比",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-illustration-advisor",
+  "version": "1.0.1",
+  "description": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-illustration-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-illustration-brief",
+    "./skills/lynxce-illustration-advisor-planning",
+    "./skills/lynxce-illustration-advisor-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-illustration-advisor",
+  "displayName": {
+    "zh": "灵策插画创作顾问",
+    "en": "Illustration"
+  },
+  "profession": {
+    "zh": "插画风格定义与需求沟通顾问",
+    "en": "Illustration Direction Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料整理插画需求沟通需求与证据，完善方案分支、异常核对和交付模板，支持逐项复核与迭代。",
+    "en": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把插画用途与风格参考拆成可确认需求",
+    "en": "Convert illustration uses and style references into confirmable requirements"
+  },
+  "plugin": "lynxce-illustration-advisor",
+  "tags": [
+    {
+      "zh": "用途拆解",
+      "en": "Use-case breakdown"
+    },
+    {
+      "zh": "阶段需求",
+      "en": "Stage requirements"
+    },
+    {
+      "zh": "改稿验收",
+      "en": "Revision acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把插画用途与风格参考拆成可确认需求",
+      "en": "Convert illustration uses and style references into confirmable requirements"
+    },
+    {
+      "zh": "整理构图配色和分阶段交付需求表",
+      "en": "Prepare composition, color and staged delivery requirements"
+    },
+    {
+      "zh": "归类这些改稿意见并制定交付验收清单",
+      "en": "Classify revision feedback and build a delivery acceptance checklist"
+    }
+  ],
+  "keywords": [
+    "需求单",
+    "风格参考",
+    "改稿控制",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

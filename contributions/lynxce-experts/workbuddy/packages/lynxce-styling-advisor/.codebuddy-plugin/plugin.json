@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-styling-advisor",
+  "version": "1.0.1",
+  "description": "Plan occasion outfits and wardrobe gaps using supplied clothes, comfort preferences and static prices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-styling-advisor.md"
+  ],
+  "skills": [
+    "./skills/styling-occasion",
+    "./skills/styling-capsule",
+    "./skills/styling-budget"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-styling-advisor",
+  "displayName": {
+    "zh": "灵策形象搭配顾问",
+    "en": "Personal Styling"
+  },
+  "profession": {
+    "zh": "服装搭配与个人形象顾问",
+    "en": "Wardrobe & Personal Image Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据衣橱与场合材料规划服装组合及补缺预算，尊重穿着偏好和舒适需求，输出搭配卡与可核算选择清单",
+    "en": "Plan occasion outfits and wardrobe gaps using supplied clothes, comfort preferences and static prices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "面试该穿什么",
+    "en": "What should I wear to an interview"
+  },
+  "plugin": "lynxce-styling-advisor",
+  "tags": [
+    {
+      "zh": "场合着装",
+      "en": "Dress Code"
+    },
+    {
+      "zh": "搭配原则",
+      "en": "Styling"
+    },
+    {
+      "zh": "胶囊衣橱",
+      "en": "Capsule"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "面试该穿什么",
+      "en": "What should I wear to an interview"
+    },
+    {
+      "zh": "帮我规划一套通勤胶囊衣橱",
+      "en": "Plan a commute capsule wardrobe for me"
+    },
+    {
+      "zh": "这几件衣服怎么搭才不土",
+      "en": "How do I combine these pieces well"
+    }
+  ],
+  "keywords": [
+    "场合着装",
+    "搭配原则",
+    "胶囊衣橱",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "buyout",
+    "payMode": 1,
+    "priceFen": 999,
+    "durationDays": 0
+  },
+  "needEncrypt": true
+}

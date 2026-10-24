@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-photo-to-video-advisor",
+  "version": "1.0.1",
+  "description": "Turn supplied photos and articles into a narration script, timed storyboard, image rights check and caption plan.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-photo-to-video-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-photo-to-video"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-photo-to-video-advisor",
+  "displayName": {
+    "zh": "图文转短视频制作顾问",
+    "en": "Photo-to-Video Advisor"
+  },
+  "profession": {
+    "zh": "图文素材转短视频制作顾问｜灵策智算",
+    "en": "Photo and Article to Short Video Production Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据图片与文章生成口播稿和分镜时间轴，附素材授权与清晰度核对、字幕配乐说明，交付可直接剪辑的制作单。",
+    "en": "Turn supplied photos and articles into a narration script, timed storyboard, image rights check and caption plan."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据这些照片和游记生成口播稿与分镜时间轴",
+    "en": "Build a narration script and timed storyboard from these photos and notes"
+  },
+  "plugin": "lynxce-photo-to-video-advisor",
+  "tags": [
+    {
+      "zh": "图文转视频",
+      "en": "Photo to Video"
+    },
+    {
+      "zh": "分镜时间轴",
+      "en": "Timed Storyboard"
+    },
+    {
+      "zh": "素材核对",
+      "en": "Asset Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这些照片和游记生成口播稿与分镜时间轴",
+      "en": "Build a narration script and timed storyboard from these photos and notes"
+    },
+    {
+      "zh": "复核我写好的分镜表时长和图片授权",
+      "en": "Review my storyboard timing and image rights"
+    },
+    {
+      "zh": "只有几张图没有文章先给我最小可剪方案",
+      "en": "Only a few photos and no article so give me a minimal cut plan"
+    }
+  ],
+  "keywords": [
+    "图文转视频",
+    "分镜时间轴",
+    "素材核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

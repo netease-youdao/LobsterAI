@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-tradein-subsidy-advisor",
+  "version": "1.0.2",
+  "description": "Stack trade-in with sale deals: platform and local subsidies, store coupons, deduction order and final price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tradein-subsidy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tradein-subsidy"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tradein-subsidy-advisor",
+  "displayName": {
+    "zh": "以旧换新补贴测算顾问",
+    "en": "Trade-in Subsidy Stacking and Final Price Advisor"
+  },
+  "profession": {
+    "zh": "以旧换新补贴叠加与到手价测算顾问",
+    "en": "Trade-in Subsidy Stacking and Final Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "以旧换新和大促怎么叠：平台补贴、地方消费补贴与店铺券能否同用、扣减顺序与到手价逐项测算。",
+    "en": "Stack trade-in with sale deals: platform and local subsidies, store coupons, deduction order and final price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这几种补贴能不能一起用，到手多少",
+    "en": "Can these subsidies stack and what is the final price"
+  },
+  "plugin": "lynxce-tradein-subsidy-advisor",
+  "tags": [
+    {
+      "zh": "补贴叠加",
+      "en": "Subsidy Stacking"
+    },
+    {
+      "zh": "扣减顺序",
+      "en": "Deduction Order"
+    },
+    {
+      "zh": "到手价测算",
+      "en": "Final Price"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这几种补贴能不能一起用，到手多少",
+      "en": "Can these subsidies stack and what is the final price"
+    },
+    {
+      "zh": "地方补贴按券后价还是标价算",
+      "en": "Is the local subsidy based on post-coupon or list price"
+    },
+    {
+      "zh": "哪种优惠组合更划算",
+      "en": "Which discount combination works better"
+    }
+  ],
+  "keywords": [
+    "补贴叠加",
+    "扣减顺序",
+    "到手价测算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-project-manager",
+  "version": "1.0.2",
+  "description": "Project management expert for plans, milestones, risk tracking, meeting minutes and task follow-up",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-project-manager.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-project-manager",
+  "displayName": {
+    "zh": "项目管理专家",
+    "en": "Project Manager"
+  },
+  "profession": {
+    "zh": "项目计划与交付顾问",
+    "en": "Project Planning & Delivery Advisor"
+  },
+  "displayDescription": {
+    "zh": "输入需求、人员与项目记录，交付依赖排期、风险变更表和验收清单，每次更新保留基线差异与待办责任。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "把需求拆成可验收成果与依赖排期，先交计划初稿",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-project-manager",
+  "tags": [
+    {
+      "zh": "项目计划",
+      "en": "Project Planning"
+    },
+    {
+      "zh": "风险跟踪",
+      "en": "Risk Tracking"
+    },
+    {
+      "zh": "会议纪要",
+      "en": "Meeting Minutes"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把需求拆成可验收成果与依赖排期，先交计划初稿",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "根据本周记录更新风险、变更和阻塞，列需要负责人决定的事项",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "对照交付标准复核验收材料，给未闭环项和交接清单",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "项目计划",
+    "风险跟踪",
+    "会议纪要",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/lynxce-project-plan",
+    "./skills/lynxce-project-change",
+    "./skills/lynxce-project-handoff"
+  ],
+  "needEncrypt": true
+}

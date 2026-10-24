@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-fridge-zone-label-clearance-advisor",
+  "version": "1.0.0",
+  "description": "Plan fridge labels and authorized clearance supplies.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-fridge-zone-label-clearance-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-fridge-zone-label-clearance"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-fridge-zone-label-clearance-advisor",
+  "displayName": {
+    "zh": "冰箱标签清理耗材助理",
+    "en": "Fridge Label and Clearance Supply Assistant"
+  },
+  "profession": {
+    "zh": "办公冰箱分区标签与授权清理耗材助理",
+    "en": "Office Fridge Zone Labels and Clearance Supplies Assistant"
+  },
+  "displayDescription": {
+    "zh": "办公冰箱标签怎么备：按分区与登记批次算标签，按授权清理记录算耗材，交付认领表、补货表与清理台账。",
+    "en": "Plan fridge labels and authorized clearance supplies."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "六个冰箱分区与42件容器要买几卷标签",
+    "en": "Calculate label rolls for six zones and 42 containers"
+  },
+  "plugin": "lynxce-office-fridge-zone-label-clearance-advisor",
+  "tags": [
+    {
+      "zh": "分区标签",
+      "en": "Zone Labels"
+    },
+    {
+      "zh": "授权清理",
+      "en": "Authorized Clearance"
+    },
+    {
+      "zh": "耗材核算",
+      "en": "Supply Calculation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "六个冰箱分区与42件容器要买几卷标签",
+      "en": "Calculate label rolls for six zones and 42 containers"
+    },
+    {
+      "zh": "物品未获清理授权怎样记认领状态",
+      "en": "Record unclaimed items awaiting clearance approval"
+    },
+    {
+      "zh": "做标签补货和授权清理耗材表",
+      "en": "Make a label and clearance supply ledger"
+    }
+  ],
+  "keywords": [
+    "分区标签",
+    "授权清理",
+    "耗材核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

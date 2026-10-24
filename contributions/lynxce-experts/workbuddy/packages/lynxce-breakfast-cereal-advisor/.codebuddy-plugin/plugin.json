@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-breakfast-cereal-advisor",
+  "version": "1.0.1",
+  "description": "Stock oats and cereal: price per 100 g, ingredient order and added sugar, shelf life, monthly usage.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-breakfast-cereal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-breakfast-cereal"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-breakfast-cereal-advisor",
+  "displayName": {
+    "zh": "燕麦与早餐谷物囤货顾问",
+    "en": "Oats and Breakfast Cereal Stock-Up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 燕麦与早餐谷物囤货顾问",
+    "en": "11.11 Oats and Breakfast Cereal Stock-Up Advisor"
+  },
+  "displayDescription": {
+    "zh": "燕麦谷物怎么囤：按克单价、配料表顺序与添加糖、保质期与开封储存、按家庭月消耗定囤货量。",
+    "en": "Stock oats and cereal: price per 100 g, ingredient order and added sugar, shelf life, monthly usage."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两种燕麦每 100 克哪个便宜",
+    "en": "Which oats cost less per 100 grams"
+  },
+  "plugin": "lynxce-breakfast-cereal-advisor",
+  "tags": [
+    {
+      "zh": "按克单价",
+      "en": "Price per 100 g"
+    },
+    {
+      "zh": "配料表",
+      "en": "Ingredient List"
+    },
+    {
+      "zh": "囤货量",
+      "en": "Stock Amount"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两种燕麦每 100 克哪个便宜",
+      "en": "Which oats cost less per 100 grams"
+    },
+    {
+      "zh": "怎么看麦片配料表里的添加糖",
+      "en": "How do I spot added sugar on a cereal label"
+    },
+    {
+      "zh": "一家三口燕麦囤多少不会过期",
+      "en": "How much oats can a family of three stock without waste"
+    }
+  ],
+  "keywords": [
+    "按克单价",
+    "配料表",
+    "囤货量",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

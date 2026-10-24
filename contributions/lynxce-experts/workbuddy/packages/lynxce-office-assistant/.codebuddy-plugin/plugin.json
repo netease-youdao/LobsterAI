@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-office-assistant",
+  "version": "1.0.1",
+  "description": "Turn work notes and threads into conclusion-first reports, business emails, meeting minutes and task-based help articles.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-assistant.md"
+  ],
+  "skills": [
+    "./skills/lynxce-work-report"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-assistant",
+  "displayName": {
+    "zh": "职场文档沟通顾问",
+    "en": "Office Productivity Assistant"
+  },
+  "profession": {
+    "zh": "职场文档与商务沟通顾问",
+    "en": "Workplace Writing and Communication Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据工作记录与往来材料，整理结论先行的周报月报、分场景商务邮件、会议纪要与任务型帮助文档草稿。",
+    "en": "Turn work notes and threads into conclusion-first reports, business emails, meeting minutes and task-based help articles."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "把这些工作记录整理成结论先行的本周周报",
+    "en": "Turn these notes into a conclusion-first weekly report"
+  },
+  "plugin": "lynxce-office-assistant",
+  "tags": [
+    {
+      "zh": "周报月报",
+      "en": "Work Reports"
+    },
+    {
+      "zh": "商务邮件",
+      "en": "Business Email"
+    },
+    {
+      "zh": "会议纪要",
+      "en": "Meeting Minutes"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这些工作记录整理成结论先行的本周周报",
+      "en": "Turn these notes into a conclusion-first weekly report"
+    },
+    {
+      "zh": "复核我这封催款邮件的语气和事实有没有问题",
+      "en": "Review the tone and facts of my payment reminder email"
+    },
+    {
+      "zh": "只有零散聊天记录时先给纪要框架和待补项",
+      "en": "With only scattered chat notes, give a minutes frame and gaps"
+    }
+  ],
+  "keywords": [
+    "周报月报",
+    "商务邮件",
+    "会议纪要",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

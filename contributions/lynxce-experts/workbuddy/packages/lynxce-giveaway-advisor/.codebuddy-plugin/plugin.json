@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-giveaway-advisor",
+  "version": "1.0.1",
+  "description": "Turn prizes and dates into giveaway rules, a winner notice, draw records, a delivery log and data deletion dates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-giveaway-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-giveaway-rules"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-giveaway-advisor",
+  "displayName": {
+    "zh": "粉丝抽奖规则顾问",
+    "en": "Giveaway Rules Advisor"
+  },
+  "profession": {
+    "zh": "粉丝福利抽奖活动规则顾问｜灵策智算",
+    "en": "Fan Giveaway Rules and Records Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据奖品与活动时间输出抽奖规则文本和中奖公示稿，附开奖留痕清单、发奖台账与收件信息删除日期核算。",
+    "en": "Turn prizes and dates into giveaway rules, a winner notice, draw records, a delivery log and data deletion dates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据奖品和活动时间生成抽奖规则文本与中奖公示稿",
+    "en": "Draft giveaway rules and a winner notice from my prizes and dates"
+  },
+  "plugin": "lynxce-giveaway-advisor",
+  "tags": [
+    {
+      "zh": "抽奖规则",
+      "en": "Giveaway Rules"
+    },
+    {
+      "zh": "中奖公示",
+      "en": "Winner Notice"
+    },
+    {
+      "zh": "发奖留痕",
+      "en": "Delivery Records"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据奖品和活动时间生成抽奖规则文本与中奖公示稿",
+      "en": "Draft giveaway rules and a winner notice from my prizes and dates"
+    },
+    {
+      "zh": "复核这份抽奖规则有没有含糊或缺漏的条款",
+      "en": "Review these giveaway rules for vague or missing terms"
+    },
+    {
+      "zh": "只有奖品没有平台信息时先给规则初稿和待确认清单",
+      "en": "Draft rules and an open-items list when the platform is unknown"
+    }
+  ],
+  "keywords": [
+    "抽奖规则",
+    "中奖公示",
+    "发奖留痕",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

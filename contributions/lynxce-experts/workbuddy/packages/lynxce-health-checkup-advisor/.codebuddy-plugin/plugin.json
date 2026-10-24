@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-health-checkup-advisor",
+  "version": "1.0.1",
+  "description": "Turn headcount mix, budget and provider quotes into tiered packages, provider scoring, batch schedules, notices and anonymous reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-health-checkup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-health-checkup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-health-checkup-advisor",
+  "displayName": {
+    "zh": "员工体检组织顾问",
+    "en": "Employee Checkup Advisor"
+  },
+  "profession": {
+    "zh": "员工体检组织与安排顾问｜灵策智算",
+    "en": "Employee Health Checkup Organisation Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据参检人数结构、预算和机构报价，设计分层套餐与比选评分，交付分批排期、预约须知稿和匿名复盘表。",
+    "en": "Turn headcount mix, budget and provider quotes into tiered packages, provider scoring, batch schedules, notices and anonymous reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据人数结构和预算设计分层套餐并排好体检批次",
+    "en": "Design tiered packages and batch schedules from headcount mix and budget"
+  },
+  "plugin": "lynxce-health-checkup-advisor",
+  "tags": [
+    {
+      "zh": "分层套餐",
+      "en": "Tiered Packages"
+    },
+    {
+      "zh": "机构比选",
+      "en": "Provider Scoring"
+    },
+    {
+      "zh": "分批排期",
+      "en": "Batch Scheduling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据人数结构和预算设计分层套餐并排好体检批次",
+      "en": "Design tiered packages and batch schedules from headcount mix and budget"
+    },
+    {
+      "zh": "复核我们的体检机构比选表和排期是否合理",
+      "en": "Review our provider comparison and checkup schedule"
+    },
+    {
+      "zh": "只知道总人数时先给最小可用的体检组织方案",
+      "en": "Give a minimal checkup plan from only the total headcount"
+    }
+  ],
+  "keywords": [
+    "分层套餐",
+    "机构比选",
+    "分批排期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

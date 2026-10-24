@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-longvideo-advisor",
+  "version": "1.0.1",
+  "description": "Sustain long-form video: topic pipeline, structure, retention and cadence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-longvideo-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-longvideo-ops"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-longvideo-advisor",
+  "displayName": {
+    "zh": "长视频内容策划与运营顾问",
+    "en": "Long-form Video Content Advisor"
+  },
+  "profession": {
+    "zh": "长视频内容策划与运营顾问",
+    "en": "Long-form Video Content Advisor"
+  },
+  "displayDescription": {
+    "zh": "长视频怎么做才不断更：选题库怎么攒、结构怎么搭、留存怎么设计、更新节奏怎么排稳。",
+    "en": "Sustain long-form video: topic pipeline, structure, retention and cadence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "长视频怎么搭结构",
+    "en": "How do I structure a long video"
+  },
+  "plugin": "lynxce-longvideo-advisor",
+  "tags": [
+    {
+      "zh": "长视频",
+      "en": "Long-form"
+    },
+    {
+      "zh": "选题库",
+      "en": "Topic Pipeline"
+    },
+    {
+      "zh": "留存设计",
+      "en": "Retention"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "长视频怎么搭结构",
+      "en": "How do I structure a long video"
+    },
+    {
+      "zh": "选题总是没灵感怎么办",
+      "en": "I keep running out of topics"
+    },
+    {
+      "zh": "开头怎么写留得住人",
+      "en": "How do I write an opening that holds viewers"
+    }
+  ],
+  "keywords": [
+    "长视频",
+    "选题库",
+    "留存设计",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-grant-advisor",
+  "version": "1.0.1",
+  "description": "Organize supplied grant criteria, evidence, arithmetic and schedules without certification or approval claims.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-grant-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-gov-grant",
+    "./skills/lynxce-grant-evidence",
+    "./skills/lynxce-grant-schedule"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-grant-advisor",
+  "displayName": {
+    "zh": "企业申报顾问",
+    "en": "Grant Application Advisor"
+  },
+  "profession": {
+    "zh": "资质认定与项目申报顾问",
+    "en": "Certification & Grant Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户当年当地指南整理申报条件和证据材料核对跨表数字编排材料倒排与反馈复盘不作资质认定",
+    "en": "Organize supplied grant criteria, evidence, arithmetic and schedules without certification or approval claims."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "11-SecurityCompliance",
+  "defaultInitPrompt": {
+    "zh": "我们今年能报高新技术企业吗",
+    "en": "Can we apply for high-tech enterprise status this year"
+  },
+  "plugin": "lynxce-grant-advisor",
+  "tags": [
+    {
+      "zh": "资质认定",
+      "en": "Certification"
+    },
+    {
+      "zh": "条件比对",
+      "en": "Gap Analysis"
+    },
+    {
+      "zh": "材料规划",
+      "en": "Documentation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我们今年能报高新技术企业吗",
+      "en": "Can we apply for high-tech enterprise status this year"
+    },
+    {
+      "zh": "帮我列一份专精特新的材料清单",
+      "en": "List the documents needed for specialized SME recognition"
+    },
+    {
+      "zh": "去年被驳回了，帮我分析原因",
+      "en": "We were rejected last year, help me analyze why"
+    }
+  ],
+  "keywords": [
+    "资质认定",
+    "条件比对",
+    "材料规划",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "needEncrypt": true
+}

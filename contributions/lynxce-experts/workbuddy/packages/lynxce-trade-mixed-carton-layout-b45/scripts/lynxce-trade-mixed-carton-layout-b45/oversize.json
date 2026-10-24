@@ -1,0 +1,21 @@
+{
+  "orderSource": "假设订单表",
+  "lines": [
+    {
+      "id": "X",
+      "quantity": 2,
+      "unitNetKg": "3.2",
+      "source": "假设超单重订单"
+    }
+  ],
+  "rules": {
+    "maxPieces": 10,
+    "maxNetKg": "3",
+    "tareKg": "0.4",
+    "allowMix": true,
+    "dimensions": null
+  },
+  "fixedBoxes": [],
+  "quantityScenarios": [],
+  "previousPlan": null
+}

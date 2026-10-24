@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-sales-dealer-trial-assortment-b45",
+  "version": "1.0.0",
+  "description": "Create a ready-to-review plan and transparent calculations from supplied inputs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sales-dealer-trial-assortment-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sales-dealer-trial-assortment-budget-b45",
+    "./skills/lynxce-sales-dealer-trial-assortment-display-b45",
+    "./skills/lynxce-sales-dealer-trial-assortment-observe-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sales-dealer-trial-assortment-b45",
+  "displayName": {
+    "zh": "试销顾问",
+    "en": "Dealer Trial Assortment Planner"
+  },
+  "profession": {
+    "zh": "经销商试销顾问",
+    "en": "Dealer Trial Assortment Planner"
+  },
+  "displayDescription": {
+    "zh": "按经销商预算、起订量与可供数量设计首单组合，交付产品配比、陈列分配和周度观察表，支持试销调整。",
+    "en": "Create a ready-to-review plan and transparent calculations from supplied inputs."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "预算1000元，三款产品各有起订量，请设计首单试销组合并留机动预算。",
+    "en": "Dealer Trial Assortment Planner"
+  },
+  "plugin": "lynxce-sales-dealer-trial-assortment-b45",
+  "tags": [
+    {
+      "zh": "经销商试销",
+      "en": "经销商试销"
+    },
+    {
+      "zh": "首单组合",
+      "en": "首单组合"
+    },
+    {
+      "zh": "陈列分配",
+      "en": "陈列分配"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "预算1000元，三款产品各有起订量，请设计首单试销组合并留机动预算。",
+      "en": "Dealer Trial Assortment Planner"
+    },
+    {
+      "zh": "经销商希望多试高价款，帮我比较稳妥覆盖和高价集中两套首单。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "首周三款卖出3、1、0件，按原试销目标给下一周动作，不虚构销量预测。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "经销商试销",
+    "首单组合",
+    "陈列分配"
+  ]
+}

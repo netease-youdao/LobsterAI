@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-food-container-advisor",
+  "version": "1.0.2",
+  "description": "Choose containers and tableware: PP, glass or steel, heat and microwave labels, real unit price of sets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-food-container-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-food-container"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-food-container-advisor",
+  "displayName": {
+    "zh": "保鲜盒与餐具选购顾问",
+    "en": "Food Container and Tableware Advisor"
+  },
+  "profession": {
+    "zh": "11.11 保鲜盒与餐具选购顾问",
+    "en": "11.11 Food Container and Tableware Advisor"
+  },
+  "displayDescription": {
+    "zh": "保鲜盒餐具怎么选：PP玻璃不锈钢区别、耐温与微波洗碗机标识、套装件数拆算单盒价与容量价。",
+    "en": "Choose containers and tableware: PP, glass or steel, heat and microwave labels, real unit price of sets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "带饭微波加热该选哪种保鲜盒",
+    "en": "Which container is best for microwaving lunch"
+  },
+  "plugin": "lynxce-food-container-advisor",
+  "tags": [
+    {
+      "zh": "材质耐温",
+      "en": "Heat Rating"
+    },
+    {
+      "zh": "适用标识",
+      "en": "Usage Labels"
+    },
+    {
+      "zh": "件数拆算",
+      "en": "Real Unit Price"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "带饭微波加热该选哪种保鲜盒",
+      "en": "Which container is best for microwaving lunch"
+    },
+    {
+      "zh": "18 件套保鲜盒实际有几个盒子",
+      "en": "How many boxes are in an 18 piece set"
+    },
+    {
+      "zh": "玻璃保鲜盒盖子能进烤箱吗",
+      "en": "Can a glass container lid go in the oven"
+    }
+  ],
+  "keywords": [
+    "材质耐温",
+    "适用标识",
+    "件数拆算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

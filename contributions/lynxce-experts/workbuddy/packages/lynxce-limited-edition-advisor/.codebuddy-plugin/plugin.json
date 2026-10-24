@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-limited-edition-advisor",
+  "version": "1.0.1",
+  "description": "Judge limited editions: gap versus base model, use or collect, no value-retention claims, scalper and fake risks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-limited-edition-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-limited-edition"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-limited-edition-advisor",
+  "displayName": {
+    "zh": "联名限定款溢价判断顾问",
+    "en": "Limited Edition and Collab Premium Advisor"
+  },
+  "profession": {
+    "zh": "11.11 联名限定款溢价判断顾问",
+    "en": "11.11 Limited Edition and Collab Premium Advisor"
+  },
+  "displayDescription": {
+    "zh": "联名限定款值不值：对比同款基础款拆差价、分清自用还是收藏、不谈投资保值、警惕加价转卖与仿冒。",
+    "en": "Judge limited editions: gap versus base model, use or collect, no value-retention claims, scalper and fake risks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "联名款比普通款贵这么多值吗",
+    "en": "Is the collab version worth the extra cost"
+  },
+  "plugin": "lynxce-limited-edition-advisor",
+  "tags": [
+    {
+      "zh": "差价拆解",
+      "en": "Price Gap Breakdown"
+    },
+    {
+      "zh": "自用或收藏",
+      "en": "Use or Collect"
+    },
+    {
+      "zh": "防仿冒",
+      "en": "Counterfeit Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "联名款比普通款贵这么多值吗",
+      "en": "Is the collab version worth the extra cost"
+    },
+    {
+      "zh": "二手平台加价买限定款划算吗",
+      "en": "Should I pay a markup for a limited edition resale"
+    },
+    {
+      "zh": "怎么判断限定款是不是仿冒",
+      "en": "How can I tell if a limited edition is fake"
+    }
+  ],
+  "keywords": [
+    "差价拆解",
+    "自用或收藏",
+    "防仿冒",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-groupbuy-advisor",
+  "version": "1.0.4",
+  "description": "See past group-buy totals: unit price math, spoilage, split rules and refund handling.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-groupbuy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-groupbuy-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-groupbuy-advisor",
+  "displayName": {
+    "zh": "社区团购与拼团核算顾问",
+    "en": "Community Group Buying Advisor"
+  },
+  "profession": {
+    "zh": "社区团购与拼团核算顾问",
+    "en": "Community Group Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "团购别被总价迷惑：单价怎么折算、生鲜损耗怎么扣、多人分摊与售后规则怎么提前说清。",
+    "en": "See past group-buy totals: unit price math, spoilage, split rules and refund handling."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个团划不划算",
+    "en": "Is this group buy worth joining"
+  },
+  "plugin": "lynxce-groupbuy-advisor",
+  "tags": [
+    {
+      "zh": "社区团购",
+      "en": "Group Buy"
+    },
+    {
+      "zh": "单价折算",
+      "en": "Unit Price"
+    },
+    {
+      "zh": "分摊规则",
+      "en": "Splitting"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个团划不划算",
+      "en": "Is this group buy worth joining"
+    },
+    {
+      "zh": "帮我把单价折算一下",
+      "en": "Convert this to a unit price"
+    },
+    {
+      "zh": "多人分摊怎么写清楚",
+      "en": "How do I write a clear split sheet"
+    }
+  ],
+  "keywords": [
+    "社区团购",
+    "单价折算",
+    "分摊规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

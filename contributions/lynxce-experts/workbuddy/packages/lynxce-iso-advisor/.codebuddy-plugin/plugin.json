@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-iso-advisor",
+  "version": "1.0.1",
+  "description": "Drafts procedures, audit checklists and corrective-action evidence from supplied records; no certification decisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-iso-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-procedure-mapping",
+    "./skills/lynxce-internal-audit-evidence",
+    "./skills/lynxce-corrective-action-log"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-iso-advisor",
+  "displayName": {
+    "zh": "体系文件与内审顾问",
+    "en": "Management System & Internal Audit Advisor"
+  },
+  "profession": {
+    "zh": "管理体系文件编写与内审顾问",
+    "en": "Management System Documentation and Internal Audit Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户提供的制度与记录整理体系文件内审检查及整改证据明确材料缺口供责任人员复核不替代认证结论",
+    "en": "Drafts procedures, audit checklists and corrective-action evidence from supplied records; no certification decisions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "帮我写一份采购控制程序文件",
+    "en": "Draft a purchasing control procedure"
+  },
+  "plugin": "lynxce-iso-advisor",
+  "tags": [
+    {
+      "zh": "程序文件",
+      "en": "Procedures"
+    },
+    {
+      "zh": "内审检查表",
+      "en": "Audit Checklist"
+    },
+    {
+      "zh": "整改闭环",
+      "en": "Corrective Action"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一份采购控制程序文件",
+      "en": "Draft a purchasing control procedure"
+    },
+    {
+      "zh": "给这个过程做一份内审检查表",
+      "en": "Build an internal audit checklist for this process"
+    },
+    {
+      "zh": "这条不符合项该怎么整改",
+      "en": "How to close out this nonconformity"
+    }
+  ],
+  "keywords": [
+    "程序文件",
+    "内审检查表",
+    "整改闭环",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

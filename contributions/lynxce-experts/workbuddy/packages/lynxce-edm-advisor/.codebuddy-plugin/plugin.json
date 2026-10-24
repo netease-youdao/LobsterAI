@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-edm-advisor",
+  "version": "1.0.1",
+  "description": "Turn list sources and send data into a deliverability audit, ramp-up plan, journey design, email review and unsubscribe checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-edm-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-edm-advisor",
+  "displayName": {
+    "zh": "邮件营销触达顾问",
+    "en": "Email Marketing"
+  },
+  "profession": {
+    "zh": "邮件营销与自动化触达顾问",
+    "en": "Email Marketing Deliverability and Journey Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据名单来源与发送数据输出送达体检表，提供分批放量计划、触发旅程设计和单封邮件复核，附退订合规清单。",
+    "en": "Turn list sources and send data into a deliverability audit, ramp-up plan, journey design, email review and unsubscribe checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的名单来源和最近一次发送数据生成送达体检表",
+    "en": "Build a deliverability audit from my list sources and latest send data"
+  },
+  "plugin": "lynxce-edm-advisor",
+  "tags": [
+    {
+      "zh": "送达体检",
+      "en": "Deliverability Audit"
+    },
+    {
+      "zh": "触达旅程",
+      "en": "Journey Design"
+    },
+    {
+      "zh": "退订合规",
+      "en": "Unsubscribe Compliance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的名单来源和最近一次发送数据生成送达体检表",
+      "en": "Build a deliverability audit from my list sources and latest send data"
+    },
+    {
+      "zh": "复核这封营销邮件的主题正文按钮和退订说明",
+      "en": "Review the subject, body, button and unsubscribe text of this email"
+    },
+    {
+      "zh": "资料不全时先给新用户培育旅程初稿并标出待确认项",
+      "en": "Draft an onboarding journey now and flag the items still to confirm"
+    }
+  ],
+  "keywords": [
+    "送达体检",
+    "触达旅程",
+    "退订合规",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

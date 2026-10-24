@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-award-advisor",
+  "version": "1.0.1",
+  "description": "Turn headcount and award goals into categories, scoring rules, recusal-aware score tallies, notices and appeal replies.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-award-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-award-selection"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-award-advisor",
+  "displayName": {
+    "zh": "评优评选顾问",
+    "en": "Awards Program Advisor"
+  },
+  "profession": {
+    "zh": "评优评选与表彰方案顾问｜灵策智算",
+    "en": "Employee Awards and Recognition Program Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据参评人数与评优目标设计奖项名额和评分细则，汇总回避后的评委得分，形成公示稿和异议答复底稿。",
+    "en": "Turn headcount and award goals into categories, scoring rules, recusal-aware score tallies, notices and appeal replies."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据参评人数和预算生成奖项名额与评分细则",
+    "en": "Build award categories quotas and scoring rules from headcount and budget"
+  },
+  "plugin": "lynxce-award-advisor",
+  "tags": [
+    {
+      "zh": "评优方案",
+      "en": "Award Plan"
+    },
+    {
+      "zh": "评分汇总",
+      "en": "Score Tally"
+    },
+    {
+      "zh": "公示异议",
+      "en": "Notice and Appeals"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据参评人数和预算生成奖项名额与评分细则",
+      "en": "Build award categories quotas and scoring rules from headcount and budget"
+    },
+    {
+      "zh": "复核这份评优评分表的分值回避和汇总规则",
+      "en": "Review this award scoresheet for weights recusal and tally rules"
+    },
+    {
+      "zh": "只有奖项名称时先给评优方案框架和待补清单",
+      "en": "Draft an award plan outline and missing-info list from award names only"
+    }
+  ],
+  "keywords": [
+    "评优方案",
+    "评分汇总",
+    "公示异议",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

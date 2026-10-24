@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-furniture-floor-pads-advisor",
+  "version": "1.0.0",
+  "description": "Match foot pads and rolling chair mats to office floors.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-furniture-floor-pads-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-furniture-floor-pads"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-furniture-floor-pads-advisor",
+  "displayName": {
+    "zh": "家具地板保护垫顾问",
+    "en": "Furniture Floor Pads Advisor"
+  },
+  "profession": {
+    "zh": "办公家具脚垫与地板保护垫核算顾问",
+    "en": "Furniture Floor Pads Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公家具按脚型与地板材质核对保护垫，区分固定脚垫和滚轮垫的数量尺寸，扣除库存，输出采购试用表。",
+    "en": "Match foot pads and rolling chair mats to office floors."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对办公家具脚垫与地板保护垫核算的适配条件",
+    "en": "Check compatibility and required inputs"
+  },
+  "plugin": "lynxce-office-furniture-floor-pads-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "净购核算",
+      "en": "Net Purchase Calculation"
+    },
+    {
+      "zh": "异常复查",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对办公家具脚垫与地板保护垫核算的适配条件",
+      "en": "Check compatibility and required inputs"
+    },
+    {
+      "zh": "按实测记录与库存计算补货数量",
+      "en": "Calculate purchases from measurements and stock"
+    },
+    {
+      "zh": "生成采购与异常复查记录表",
+      "en": "Build purchase and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "净购核算",
+    "异常复查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

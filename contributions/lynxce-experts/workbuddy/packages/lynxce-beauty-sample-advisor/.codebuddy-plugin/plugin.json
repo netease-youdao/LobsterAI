@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-beauty-sample-advisor",
+  "version": "1.0.2",
+  "description": "Convert beauty gift sets to price per ml or gram, decide if samples count, and check expiry and after-opening shelf life.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-beauty-sample-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-beauty-sample-calc"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-beauty-sample-advisor",
+  "displayName": {
+    "zh": "美妆赠品小样折算顾问",
+    "en": "Beauty Promo Sample Value and Unit Price Advisor"
+  },
+  "profession": {
+    "zh": "美妆大促赠品小样折算与正装单价顾问",
+    "en": "Beauty Promo Sample Value and Unit Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "美妆大促礼盒怎么算：按毫升或克折正装单价，小样算不算钱，效期与开封后保质期够不够用。",
+    "en": "Convert beauty gift sets to price per ml or gram, decide if samples count, and check expiry and after-opening shelf life."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这套精华礼盒折下来每毫升多少钱",
+    "en": "What does this serum set cost per ml"
+  },
+  "plugin": "lynxce-beauty-sample-advisor",
+  "tags": [
+    {
+      "zh": "毫升单价",
+      "en": "Price per ml"
+    },
+    {
+      "zh": "小样计价",
+      "en": "Sample Valuation"
+    },
+    {
+      "zh": "开封效期",
+      "en": "After-opening Life"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这套精华礼盒折下来每毫升多少钱",
+      "en": "What does this serum set cost per ml"
+    },
+    {
+      "zh": "送的小样到底算不算钱",
+      "en": "Should the free samples count in the price"
+    },
+    {
+      "zh": "大促囤几瓶才不会过期",
+      "en": "How many bottles can I stock without expiry"
+    }
+  ],
+  "keywords": [
+    "毫升单价",
+    "小样计价",
+    "开封效期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

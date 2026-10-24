@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-store-membership-advisor",
+  "version": "1.0.2",
+  "description": "Weigh store membership: join-gift threshold, member price stacking, points redemption, SMS and privacy trade-offs, how to quit.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-store-membership-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-store-membership"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-store-membership-advisor",
+  "displayName": {
+    "zh": "店铺会员入会礼与复购券顾问",
+    "en": "Store Membership and Coupon Advisor"
+  },
+  "profession": {
+    "zh": "11.11 店铺会员入会礼与复购券顾问",
+    "en": "11.11 Store Membership and Coupon Advisor"
+  },
+  "displayDescription": {
+    "zh": "入会值不值：入会礼门槛有效期、会员价与大促券叠加、积分兑换、短信隐私取舍与退会方法。",
+    "en": "Weigh store membership: join-gift threshold, member price stacking, points redemption, SMS and privacy trade-offs, how to quit."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "入会送的券值不值得入会",
+    "en": "Is the join-gift coupon worth joining for"
+  },
+  "plugin": "lynxce-store-membership-advisor",
+  "tags": [
+    {
+      "zh": "入会礼核对",
+      "en": "Join Gift"
+    },
+    {
+      "zh": "叠加规则",
+      "en": "Stacking Rules"
+    },
+    {
+      "zh": "退会方法",
+      "en": "How to Quit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "入会送的券值不值得入会",
+      "en": "Is the join-gift coupon worth joining for"
+    },
+    {
+      "zh": "会员价能不能再叠大促券",
+      "en": "Can the member price stack with promotion coupons"
+    },
+    {
+      "zh": "退会了入会券还能用吗",
+      "en": "Can I still use the join-gift coupon after quitting"
+    }
+  ],
+  "keywords": [
+    "入会礼核对",
+    "叠加规则",
+    "退会方法",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

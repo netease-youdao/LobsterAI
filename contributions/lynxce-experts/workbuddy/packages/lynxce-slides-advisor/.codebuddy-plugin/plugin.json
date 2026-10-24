@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-slides-advisor",
+  "version": "1.0.2",
+  "description": "Turn a deck goal and draft slides into a headline outline, grid spec, contrast checks, chart fixes and a pre-send checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-slides-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-slides-layout"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-slides-advisor",
+  "displayName": {
+    "zh": "幻灯片排版顾问",
+    "en": "Slide Layout and Design Advisor"
+  },
+  "profession": {
+    "zh": "幻灯片排版与美化顾问",
+    "en": "Slide Structure and Visual Design Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据汇报目的与现有页面整理标题句大纲和版式栅格，核对配色对比度与图表数字，交逐页改稿与交付前自检表。",
+    "en": "Turn a deck goal and draft slides into a headline outline, grid spec, contrast checks, chart fixes and a pre-send checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据汇报目的和材料生成标题句大纲与版式规范",
+    "en": "Build a headline outline and layout spec from my goal and materials"
+  },
+  "plugin": "lynxce-slides-advisor",
+  "tags": [
+    {
+      "zh": "标题句大纲",
+      "en": "Headline Outline"
+    },
+    {
+      "zh": "版式配色",
+      "en": "Layout and Color"
+    },
+    {
+      "zh": "图表核对",
+      "en": "Chart Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据汇报目的和材料生成标题句大纲与版式规范",
+      "en": "Build a headline outline and layout spec from my goal and materials"
+    },
+    {
+      "zh": "帮我复核这几页PPT的结构配色和图表数字",
+      "en": "Review these slides for structure color and chart numbers"
+    },
+    {
+      "zh": "只有汇报主题和时长先给一版页面结构草稿",
+      "en": "With only topic and duration draft a slide structure first"
+    }
+  ],
+  "keywords": [
+    "标题句大纲",
+    "版式配色",
+    "图表核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

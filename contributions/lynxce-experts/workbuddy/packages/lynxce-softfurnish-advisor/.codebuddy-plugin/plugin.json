@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-softfurnish-advisor",
+  "version": "1.0.4",
+  "description": "Measure before buying: curtain sizing, blackout and color temperature, plus install costs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-softfurnish-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-softfurnish-list"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-softfurnish-advisor",
+  "displayName": {
+    "zh": "窗帘灯具与软装选购顾问",
+    "en": "Curtain and Lighting Buying Advisor"
+  },
+  "profession": {
+    "zh": "窗帘灯具与软装选购顾问",
+    "en": "Curtain and Lighting Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "窗帘灯具先量后买不踩坑：尺寸分段怎么量、遮光率与色温怎么选、加工与安装费怎么核清。",
+    "en": "Measure before buying: curtain sizing, blackout and color temperature, plus install costs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家这个窗户怎么量尺寸",
+    "en": "How do I measure this window"
+  },
+  "plugin": "lynxce-softfurnish-advisor",
+  "tags": [
+    {
+      "zh": "窗帘定制",
+      "en": "Curtains"
+    },
+    {
+      "zh": "灯具选型",
+      "en": "Lighting"
+    },
+    {
+      "zh": "报价核对",
+      "en": "Quotes"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家这个窗户怎么量尺寸",
+      "en": "How do I measure this window"
+    },
+    {
+      "zh": "卧室灯该选什么色温",
+      "en": "Which color temperature for a bedroom"
+    },
+    {
+      "zh": "帮我核一下这份窗帘报价",
+      "en": "Review this curtain quote"
+    }
+  ],
+  "keywords": [
+    "窗帘定制",
+    "灯具选型",
+    "报价核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

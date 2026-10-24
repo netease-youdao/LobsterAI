@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-student-advisor",
+  "version": "1.0.3",
+  "description": "Stage your back-to-school buying: essentials first, fit-based items after arrival, plus budget split.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-student-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-student-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-student-advisor",
+  "displayName": {
+    "zh": "开学采购与住宿准备顾问",
+    "en": "Back-to-School Purchasing Advisor"
+  },
+  "profession": {
+    "zh": "开学采购与住宿准备顾问",
+    "en": "Back-to-School Purchasing Advisor"
+  },
+  "displayDescription": {
+    "zh": "开学采购分批做：到校前只买必需品、到校后按实际尺寸补，数码怎么选与预算怎么分配。",
+    "en": "Stage your back-to-school buying: essentials first, fit-based items after arrival, plus budget split."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "大一新生要准备什么",
+    "en": "What does a first-year student need"
+  },
+  "plugin": "lynxce-student-advisor",
+  "tags": [
+    {
+      "zh": "开学采购",
+      "en": "Back to School"
+    },
+    {
+      "zh": "分批购买",
+      "en": "Staged"
+    },
+    {
+      "zh": "预算分配",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "大一新生要准备什么",
+      "en": "What does a first-year student need"
+    },
+    {
+      "zh": "这台笔记本适合我的专业吗",
+      "en": "Is this laptop right for my major"
+    },
+    {
+      "zh": "有没有开学季的优惠",
+      "en": "Any back-to-school deals available"
+    }
+  ],
+  "keywords": [
+    "开学采购",
+    "分批购买",
+    "预算分配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

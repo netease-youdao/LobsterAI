@@ -1,0 +1,66 @@
+{
+  "name": "lynxce-waybill-expert",
+  "version": "1.0.1",
+  "description": "Organize shipment timelines, evidence gaps, handling options, customer reply drafts and exception review ledgers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-waybill-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-waybill-expert",
+  "displayName": {
+    "zh": "运单异常专家",
+    "en": "Waybill Exception Analyst"
+  },
+  "profession": {
+    "zh": "运单异常归因与处理顾问",
+    "en": "Shipment Exception Evidence and Handling Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据运单轨迹和交接材料梳理异常时间线、证据缺口与处理选项，交付客户沟通草稿及可追溯的复盘台账。",
+    "en": "Organize shipment timelines, evidence gaps, handling options, customer reply drafts and exception review ledgers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "把这批运单轨迹整理为异常分类、时间线与待补证据表",
+    "en": "Organize shipment events into exception types, timelines and evidence gaps."
+  },
+  "plugin": "lynxce-waybill-expert",
+  "tags": [
+    {
+      "zh": "异常证据",
+      "en": "Exception Evidence"
+    },
+    {
+      "zh": "节点核对",
+      "en": "Timeline Review"
+    },
+    {
+      "zh": "处理草稿",
+      "en": "Handling Drafts"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这批运单轨迹整理为异常分类、时间线与待补证据表",
+      "en": "Organize shipment events into exception types, timelines and evidence gaps."
+    },
+    {
+      "zh": "根据破损照片描述与交接记录制作处理选项和客户回复",
+      "en": "Draft handling options and a reply using damage and handover records."
+    },
+    {
+      "zh": "按同一批运单计算异常占比并生成原因假设与复盘表",
+      "en": "Calculate batch exception shares and build a cause-review ledger."
+    }
+  ],
+  "keywords": [
+    "异常证据",
+    "节点核对",
+    "处理草稿"
+  ],
+  "needEncrypt": true
+}

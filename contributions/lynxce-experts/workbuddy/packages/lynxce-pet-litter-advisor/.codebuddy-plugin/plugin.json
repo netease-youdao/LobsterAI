@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-pet-litter-advisor",
+  "version": "1.0.1",
+  "description": "Stock up pet litter and pads: monthly use by pet count, price per kg, damp-proof storage, gradual switching, stock-up limit.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pet-litter-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pet-litter"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pet-litter-advisor",
+  "displayName": {
+    "zh": "猫砂与宠物耗材囤货顾问",
+    "en": "Pet Litter and Supplies Stock-up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 猫砂与宠物耗材囤货顾问",
+    "en": "11.11 Pet Litter and Supplies Stock-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "猫砂尿垫怎么囤：按只数算月用量、单公斤价换算、储存防潮防结块、换品过渡与囤货上限。",
+    "en": "Stock up pet litter and pads: monthly use by pet count, price per kg, damp-proof storage, gradual switching, stock-up limit."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两只猫一个月要用多少猫砂",
+    "en": "How much litter do two cats use per month"
+  },
+  "plugin": "lynxce-pet-litter-advisor",
+  "tags": [
+    {
+      "zh": "月用量核算",
+      "en": "Monthly Usage"
+    },
+    {
+      "zh": "单公斤价",
+      "en": "Price per kg"
+    },
+    {
+      "zh": "换品过渡",
+      "en": "Gradual Switching"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两只猫一个月要用多少猫砂",
+      "en": "How much litter do two cats use per month"
+    },
+    {
+      "zh": "这几款猫砂按公斤算哪个划算",
+      "en": "Which litter is cheaper per kilogram"
+    },
+    {
+      "zh": "想换豆腐砂该怎么过渡",
+      "en": "How do I switch to tofu litter gradually"
+    }
+  ],
+  "keywords": [
+    "月用量核算",
+    "单公斤价",
+    "换品过渡",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-homenet-advisor",
+  "version": "1.0.4",
+  "description": "Slow network triage: broadband, router or coverage, plans and mesh choices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-homenet-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-homenet-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-homenet-advisor",
+  "displayName": {
+    "zh": "家庭组网与无线覆盖顾问",
+    "en": "Home Network and Wi-Fi Coverage Advisor"
+  },
+  "profession": {
+    "zh": "家庭组网与无线覆盖顾问",
+    "en": "Home Network and Wi-Fi Coverage Advisor"
+  },
+  "displayDescription": {
+    "zh": "家里网慢先分清原因：是线路还是路由还是覆盖、死角怎么补、组网设备怎么配才值得买。",
+    "en": "Slow network triage: broadband, router or coverage, plans and mesh choices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "家里网速慢怎么查原因",
+    "en": "How do I find why my network is slow"
+  },
+  "plugin": "lynxce-homenet-advisor",
+  "tags": [
+    {
+      "zh": "家庭组网",
+      "en": "Home Network"
+    },
+    {
+      "zh": "宽带套餐",
+      "en": "Broadband"
+    },
+    {
+      "zh": "覆盖优化",
+      "en": "Coverage"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里网速慢怎么查原因",
+      "en": "How do I find why my network is slow"
+    },
+    {
+      "zh": "这个宽带套餐划算吗",
+      "en": "Is this broadband plan worth it"
+    },
+    {
+      "zh": "要不要上分布式路由",
+      "en": "Do I need a mesh system"
+    }
+  ],
+  "keywords": [
+    "家庭组网",
+    "宽带套餐",
+    "覆盖优化",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

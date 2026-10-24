@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-housekeeping-advisor",
+  "version": "1.0.4",
+  "description": "Hire cleaning help well: pricing models, scope definition and acceptance standards.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-housekeeping-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-housekeeping-compare"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-housekeeping-advisor",
+  "displayName": {
+    "zh": "家政保洁服务比价顾问",
+    "en": "Home Cleaning Service Advisor"
+  },
+  "profession": {
+    "zh": "家政保洁服务比价顾问",
+    "en": "Home Cleaning Service Advisor"
+  },
+  "displayDescription": {
+    "zh": "请保洁怎么谈：服务范围先写清、按小时还是按套算、资质怎么核、验收标准怎么定才好。",
+    "en": "Hire cleaning help well: pricing models, scope definition and acceptance standards."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个价格合理吗",
+    "en": "Is this price reasonable"
+  },
+  "plugin": "lynxce-housekeeping-advisor",
+  "tags": [
+    {
+      "zh": "家政保洁",
+      "en": "Cleaning"
+    },
+    {
+      "zh": "服务范围",
+      "en": "Scope"
+    },
+    {
+      "zh": "验收标准",
+      "en": "Acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个价格合理吗",
+      "en": "Is this price reasonable"
+    },
+    {
+      "zh": "深度保洁包含什么",
+      "en": "What does deep cleaning include"
+    },
+    {
+      "zh": "验收该看哪些地方",
+      "en": "What should I check afterwards"
+    }
+  ],
+  "keywords": [
+    "家政保洁",
+    "服务范围",
+    "验收标准",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

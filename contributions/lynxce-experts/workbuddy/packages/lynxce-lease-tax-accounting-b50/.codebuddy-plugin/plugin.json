@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-lease-tax-accounting-b50",
+  "version": "1.0.0",
+  "description": "Reconcile lessee lease schedules, right-of-use assets, payments and tax differences into complete close and revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-lease-tax-accounting-b50.md"
+  ],
+  "skills": [
+    "./skills/lynxce-lessee-scope-measure-b50",
+    "./skills/lynxce-lessee-rollforward-b50",
+    "./skills/lynxce-lessee-tax-cash-bridge-b50"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-lease-tax-accounting-b50",
+  "displayName": {
+    "zh": "租赁顾问",
+    "en": "Lessee Tax Accounting Reconciliation Advisor"
+  },
+  "profession": {
+    "zh": "租赁税会顾问",
+    "en": "Lessee Tax Accounting Reconciliation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为新租赁准则承租企业核对租期、付款与折现底稿，勾稽使用权资产和税会差异，形成结账说明及冲突修订稿。",
+    "en": "Reconcile lessee lease schedules, right-of-use assets, payments and tax differences into complete close and revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按新准则承租方资料核现值、利息和折旧，交完整结账稿。",
+    "en": "Lessee Tax Accounting Reconciliation Advisor"
+  },
+  "plugin": "lynxce-lease-tax-accounting-b50",
+  "tags": [
+    {
+      "zh": "承租方",
+      "en": "承租方"
+    },
+    {
+      "zh": "使用权资产",
+      "en": "使用权资产"
+    },
+    {
+      "zh": "租赁税会",
+      "en": "租赁税会"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按新准则承租方资料核现值、利息和折旧，交完整结账稿。",
+      "en": "Lessee Tax Accounting Reconciliation Advisor"
+    },
+    {
+      "zh": "银行付款与合同租金不一致，保留原计划重写现金及税会说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "会计折旧利息与税法租金怎样衔接，哪些数仍待确认？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "承租方",
+    "使用权资产",
+    "租赁税会"
+  ]
+}

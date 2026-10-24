@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-rd-statistics-report-b50",
+  "version": "1.0.0",
+  "description": "Prepare traceable enterprise reporting materials, reconcile source records and produce complete correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-rd-statistics-report-b50.md"
+  ],
+  "skills": [
+    "./skills/lynxce-rd-statistics-report-b50-1",
+    "./skills/lynxce-rd-statistics-report-b50-2",
+    "./skills/lynxce-rd-statistics-report-b50-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-rd-statistics-report-b50",
+  "displayName": {
+    "zh": "统计顾问",
+    "en": "R&D Statistics Reporting Advisor"
+  },
+  "profession": {
+    "zh": "研发统计顾问",
+    "en": "R&D Statistics Reporting Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业统计与研发人员核对调查口径，勾稽项目人数、人月和经费，形成研发统计底稿及完整更正说明。",
+    "en": "Prepare traceable enterprise reporting materials, reconcile source records and produce complete correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按调查通知整理项目与企业研发统计核心底稿。",
+    "en": "R&D Statistics Reporting Advisor"
+  },
+  "plugin": "lynxce-rd-statistics-report-b50",
+  "tags": [
+    {
+      "zh": "研发统计",
+      "en": "研发统计"
+    },
+    {
+      "zh": "人员人月",
+      "en": "人员人月"
+    },
+    {
+      "zh": "经费勾稽",
+      "en": "经费勾稽"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按调查通知整理项目与企业研发统计核心底稿。",
+      "en": "R&D Statistics Reporting Advisor"
+    },
+    {
+      "zh": "核对跨项目人员重复和全年人月是否冲突。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "一份工时摘要不同，请完整重出各表和说明。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "研发统计",
+    "人员人月",
+    "经费勾稽"
+  ]
+}

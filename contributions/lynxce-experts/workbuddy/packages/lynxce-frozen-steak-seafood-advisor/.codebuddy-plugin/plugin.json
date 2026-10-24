@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-frozen-steak-seafood-advisor",
+  "version": "1.0.1",
+  "description": "Stock up on steak and seafood: ingredient list, price per 100g, cold chain and thaw loss, freezer capacity.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-frozen-steak-seafood-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-frozen-steak-seafood"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-frozen-steak-seafood-advisor",
+  "displayName": {
+    "zh": "牛排与冷冻海鲜囤货核算顾问",
+    "en": "Frozen Steak and Seafood Stock-up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 牛排与冷冻海鲜囤货核算顾问",
+    "en": "11.11 Frozen Steak and Seafood Stock-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "牛排海鲜怎么囤：看配料表分原切调理、算每 100 克单价、核冷链与解冻损耗、按冷冻室容量定量。",
+    "en": "Stock up on steak and seafood: ingredient list, price per 100g, cold chain and thaw loss, freezer capacity."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "十几块一片的牛排是原切还是调理",
+    "en": "Is a cheap steak whole-cut or marinated"
+  },
+  "plugin": "lynxce-frozen-steak-seafood-advisor",
+  "tags": [
+    {
+      "zh": "配料表分类",
+      "en": "Ingredient Check"
+    },
+    {
+      "zh": "每 100 克单价",
+      "en": "Price per 100g"
+    },
+    {
+      "zh": "冷冻室容量",
+      "en": "Freezer Space"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "十几块一片的牛排是原切还是调理",
+      "en": "Is a cheap steak whole-cut or marinated"
+    },
+    {
+      "zh": "2 公斤冻虾去掉冰衣每 100 克多少钱",
+      "en": "Price per 100g of 2kg frozen shrimp after ice glaze"
+    },
+    {
+      "zh": "80 升冷冻室能囤多少肉和海鲜",
+      "en": "How much meat and seafood fits an 80 liter freezer"
+    }
+  ],
+  "keywords": [
+    "配料表分类",
+    "每 100 克单价",
+    "冷冻室容量",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "date": null,
+  "cutoff": "18:00",
+  "allowSplitting": false,
+  "allowSharing": false,
+  "groups": [
+    {
+      "id": "A",
+      "people": 2,
+      "arrival": "17:50",
+      "actualFeedback": null,
+      "allowedTables": [
+        "T2"
+      ]
+    },
+    {
+      "id": "B",
+      "people": 3,
+      "arrival": "17:55",
+      "actualFeedback": null,
+      "forbiddenTables": [
+        "T2"
+      ]
+    },
+    {
+      "id": "C",
+      "people": 2,
+      "arrival": "17:58",
+      "actualFeedback": null
+    }
+  ],
+  "scenarios": [
+    {
+      "label": "迎宾表18:20",
+      "source": "本轮用户假设资料",
+      "tables": [
+        {
+          "id": "T1",
+          "seats": 2,
+          "release": "18:00",
+          "releaseKind": "已确认空",
+          "blocked": false
+        },
+        {
+          "id": "T2",
+          "seats": 4,
+          "release": "18:00",
+          "releaseKind": "已确认空",
+          "blocked": false
+        },
+        {
+          "id": "T3",
+          "seats": 4,
+          "release": "18:20",
+          "releaseKind": "预计",
+          "blocked": true
+        }
+      ]
+    }
+  ]
+}

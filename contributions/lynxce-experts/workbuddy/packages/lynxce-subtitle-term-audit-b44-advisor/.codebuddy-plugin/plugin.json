@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-subtitle-term-audit-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare reviewable records, exception checks and conditional decisions from supplied materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-subtitle-term-audit-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-subtitle-term-audit-b44",
+    "./skills/lynxce-subtitle-alias-collision-b44",
+    "./skills/lynxce-subtitle-replacement-diff-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-subtitle-term-audit-b44-advisor",
+  "displayName": {
+    "zh": "字幕术语核对顾问",
+    "en": "Subtitle Terminology Audit Advisor"
+  },
+  "profession": {
+    "zh": "字幕术语核对顾问",
+    "en": "Subtitle Terminology Audit Advisor"
+  },
+  "displayDescription": {
+    "zh": "为短视频字幕校对员核对行号文本与确认术语表，识别异写及语境豁免，生成逐行替换候选草稿。",
+    "en": "Prepare reviewable records, exception checks and conditional decisions from supplied materials."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我提供的资料完成字幕术语逐行一致性核对",
+    "en": "Prepare the focused record review"
+  },
+  "plugin": "lynxce-subtitle-term-audit-b44-advisor",
+  "tags": [
+    {
+      "zh": "短视频后期",
+      "en": "Domain Records"
+    },
+    {
+      "zh": "字幕术语逐行一致",
+      "en": "Focused Review"
+    },
+    {
+      "zh": "人工待决资料",
+      "en": "Decision Evidence"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我提供的资料完成字幕术语逐行一致性核对",
+      "en": "Prepare the focused record review"
+    },
+    {
+      "zh": "请单独完成字幕术语别名冲突表",
+      "en": "Review the specific evidence task"
+    },
+    {
+      "zh": "请按补充记录执行字幕替换前后差异复核",
+      "en": "Review the follow-up records"
+    }
+  ],
+  "keywords": [
+    "短视频后期",
+    "字幕术语逐行一致",
+    "人工待决资料"
+  ]
+}

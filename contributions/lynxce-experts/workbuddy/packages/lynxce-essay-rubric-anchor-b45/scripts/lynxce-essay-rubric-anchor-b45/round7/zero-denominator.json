@@ -1,0 +1,17 @@
+{
+  "calculations": [
+    {
+      "id": "零份",
+      "operation": "percent",
+      "values": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "空均值",
+      "operation": "mean",
+      "values": []
+    }
+  ]
+}

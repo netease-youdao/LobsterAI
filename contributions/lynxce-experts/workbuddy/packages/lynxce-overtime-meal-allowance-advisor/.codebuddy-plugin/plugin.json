@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-overtime-meal-allowance-advisor",
+  "version": "1.0.0",
+  "description": "Overtime meals: eligibility, per person cap, coupon packs and a reimbursement sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-overtime-meal-allowance-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-overtime-meal-allowance"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-overtime-meal-allowance-advisor",
+  "displayName": {
+    "zh": "加班餐补核算助理",
+    "en": "Overtime Meal Allowance Assistant"
+  },
+  "profession": {
+    "zh": "加班餐补核算与报销助理",
+    "en": "Overtime Meal Allowance and Reimbursement Assistant"
+  },
+  "displayDescription": {
+    "zh": "加班餐怎么点不超标：按餐补标准判资格、反算可点菜价、外卖券包分摊，产出加班餐报销明细表。",
+    "en": "Overtime meals: eligibility, per person cap, coupon packs and a reimbursement sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "加班 10 人每人 30 元能点多少菜",
+    "en": "How much food 10 people at 30 yuan each can order"
+  },
+  "plugin": "lynxce-overtime-meal-allowance-advisor",
+  "tags": [
+    {
+      "zh": "餐补资格",
+      "en": "Meal Eligibility"
+    },
+    {
+      "zh": "额度反算",
+      "en": "Budget Back Calculation"
+    },
+    {
+      "zh": "报销明细",
+      "en": "Reimbursement Sheet"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "加班 10 人每人 30 元能点多少菜",
+      "en": "How much food 10 people at 30 yuan each can order"
+    },
+    {
+      "zh": "外卖券包的钱怎么分摊到报销里",
+      "en": "How to split a coupon pack cost into the claim"
+    },
+    {
+      "zh": "帮我做一张加班餐报销明细表",
+      "en": "Make an overtime meal reimbursement sheet"
+    }
+  ],
+  "keywords": [
+    "餐补资格",
+    "额度反算",
+    "报销明细",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

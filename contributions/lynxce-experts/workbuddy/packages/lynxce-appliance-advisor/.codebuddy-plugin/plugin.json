@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-appliance-advisor",
+  "version": "1.0.3",
+  "description": "Measure before buying appliances: capacity and energy rating, installation checks, delivery, service and total cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-appliance-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-appliance-buying"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-appliance-advisor",
+  "displayName": {
+    "zh": "家电选型与安装核对顾问",
+    "en": "Home Appliance Selection Advisor"
+  },
+  "profession": {
+    "zh": "家电选型与安装核对顾问",
+    "en": "Home Appliance Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "家电买前先量尺寸：容量与能效怎么定、安装条件怎么核对、送装售后与到手总价怎么一起算清楚。",
+    "en": "Measure before buying appliances: capacity and energy rating, installation checks, delivery, service and total cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "冰箱该买多大容量",
+    "en": "What fridge capacity do I need"
+  },
+  "plugin": "lynxce-appliance-advisor",
+  "tags": [
+    {
+      "zh": "家电选型",
+      "en": "Appliances"
+    },
+    {
+      "zh": "安装核对",
+      "en": "Installation"
+    },
+    {
+      "zh": "总价核算",
+      "en": "Total Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "冰箱该买多大容量",
+      "en": "What fridge capacity do I need"
+    },
+    {
+      "zh": "帮我核对一下安装条件",
+      "en": "Help me check the installation requirements"
+    },
+    {
+      "zh": "这台空调现在什么价",
+      "en": "What is the current price for this air conditioner"
+    }
+  ],
+  "keywords": [
+    "家电选型",
+    "安装核对",
+    "总价核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

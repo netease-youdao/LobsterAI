@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-policy-advisor",
+  "version": "1.0.3",
+  "description": "Offline, user-material-based workflow assistance with traceable drafts and explicit review decisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-policy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sop-writer",
+    "./skills/policy-role-exceptions",
+    "./skills/policy-version-rollout"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-policy-advisor",
+  "displayName": {
+    "zh": "企业制度顾问",
+    "en": "Policy & SOP Advisor"
+  },
+  "profession": {
+    "zh": "制度与流程规范化顾问",
+    "en": "Policy & Process Standardization Advisor"
+  },
+  "displayDescription": {
+    "zh": "提供现有制度与实际工作记录，生成可执行SOP、职责时限表和例外流程，修订时保留差异与试行复核清单。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据现有工作记录先交一版可执行SOP，补齐责任、时限和异常出口",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-policy-advisor",
+  "tags": [
+    {
+      "zh": "制度撰写",
+      "en": "Policy Writing"
+    },
+    {
+      "zh": "SOP流程",
+      "en": "SOP"
+    },
+    {
+      "zh": "职责分工",
+      "en": "RACI"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据现有工作记录先交一版可执行SOP，补齐责任、时限和异常出口",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "核对这份制度与旧版的冲突，交修订对照表和过渡安排",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "把退回、超时和越权情景加入流程，给试行检查表",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "制度撰写",
+    "SOP流程",
+    "职责分工",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

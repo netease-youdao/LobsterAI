@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-energy-saving-advisor",
+  "version": "1.0.2",
+  "description": "Turn power bills and equipment lists into usage trends, reconciled estimates, AC and lighting rules, closing checks and normalised reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-energy-saving-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-energy-saving"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-energy-saving-advisor",
+  "displayName": {
+    "zh": "办公节能管理顾问",
+    "en": "Office Energy Saving Advisor"
+  },
+  "profession": {
+    "zh": "办公能耗与节约管理顾问｜灵策智算",
+    "en": "Office Energy Use and Savings Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据电费账单与设备清单，交付用电趋势表、分项估算对账、空调照明运行规则、下班巡查表和月度归一化对比。",
+    "en": "Turn power bills and equipment lists into usage trends, reconciled estimates, AC and lighting rules, closing checks and normalised reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据近十二个月电费账单和设备清单生成分项估算与节能规则",
+    "en": "Build a reconciled usage breakdown and saving rules from twelve months of bills"
+  },
+  "plugin": "lynxce-energy-saving-advisor",
+  "tags": [
+    {
+      "zh": "分项估算",
+      "en": "Usage Breakdown"
+    },
+    {
+      "zh": "运行规则",
+      "en": "AC and Lighting Rules"
+    },
+    {
+      "zh": "月度对比",
+      "en": "Monthly Comparison"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据近十二个月电费账单和设备清单生成分项估算与节能规则",
+      "en": "Build a reconciled usage breakdown and saving rules from twelve months of bills"
+    },
+    {
+      "zh": "复核这份月度用电对比是否按计费天数人数和面积归一",
+      "en": "Check whether this monthly comparison is normalised by billing days headcount and area"
+    },
+    {
+      "zh": "只有电费金额没有电量时先给巡查清单和待确认数据表",
+      "en": "With only bill amounts give a closing checklist and data request"
+    }
+  ],
+  "keywords": [
+    "分项估算",
+    "运行规则",
+    "月度对比",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

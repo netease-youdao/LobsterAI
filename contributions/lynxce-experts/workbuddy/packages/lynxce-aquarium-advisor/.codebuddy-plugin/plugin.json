@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-aquarium-advisor",
+  "version": "1.0.1",
+  "description": "Start an aquarium: tank size and load, filter, heater and light, first-year consumables and power, beginner pitfalls.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-aquarium-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-aquarium"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-aquarium-advisor",
+  "displayName": {
+    "zh": "鱼缸水族入门配置顾问",
+    "en": "Beginner Aquarium Setup and Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 鱼缸水族入门配置顾问",
+    "en": "11.11 Beginner Aquarium Setup and Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "鱼缸入门怎么选：缸体尺寸与承重、过滤加热照明配置、首年耗材与电费、新手避坑与价格。",
+    "en": "Start an aquarium: tank size and load, filter, heater and light, first-year consumables and power, beginner pitfalls."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "60 厘米鱼缸要配什么设备",
+    "en": "What equipment does a 60 cm tank need"
+  },
+  "plugin": "lynxce-aquarium-advisor",
+  "tags": [
+    {
+      "zh": "承重核算",
+      "en": "Load Check"
+    },
+    {
+      "zh": "设备匹配",
+      "en": "Equipment Match"
+    },
+    {
+      "zh": "首年成本",
+      "en": "First Year Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "60 厘米鱼缸要配什么设备",
+      "en": "What equipment does a 60 cm tank need"
+    },
+    {
+      "zh": "我家柜子放得下这个鱼缸吗",
+      "en": "Can my cabinet hold this aquarium"
+    },
+    {
+      "zh": "养一缸鱼一年要花多少钱",
+      "en": "How much does an aquarium cost in the first year"
+    }
+  ],
+  "keywords": [
+    "承重核算",
+    "设备匹配",
+    "首年成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

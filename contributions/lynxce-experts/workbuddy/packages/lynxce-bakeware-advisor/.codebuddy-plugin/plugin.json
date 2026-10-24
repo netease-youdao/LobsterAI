@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bakeware-advisor",
+  "version": "1.0.4",
+  "description": "Start baking sensibly: minimal tools, oven choice, ingredient shelf life and storage.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bakeware-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bakeware-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bakeware-advisor",
+  "displayName": {
+    "zh": "烘焙工具与原料采买顾问",
+    "en": "Baking Tools and Ingredients Advisor"
+  },
+  "profession": {
+    "zh": "烘焙工具与原料采买顾问",
+    "en": "Baking Tools and Ingredients Advisor"
+  },
+  "displayDescription": {
+    "zh": "烘焙入门该先买什么：工具只要那几样、烤箱温差怎么测、原料保质与储存条件怎么管好。",
+    "en": "Start baking sensibly: minimal tools, oven choice, ingredient shelf life and storage."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "入门先买哪几样工具",
+    "en": "Which tools do I need first"
+  },
+  "plugin": "lynxce-bakeware-advisor",
+  "tags": [
+    {
+      "zh": "烘焙工具",
+      "en": "Baking Tools"
+    },
+    {
+      "zh": "烤箱选型",
+      "en": "Ovens"
+    },
+    {
+      "zh": "原料储存",
+      "en": "Ingredients"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "入门先买哪几样工具",
+      "en": "Which tools do I need first"
+    },
+    {
+      "zh": "这台烤箱够用吗",
+      "en": "Is this oven good enough"
+    },
+    {
+      "zh": "原料该怎么存",
+      "en": "How should I store ingredients"
+    }
+  ],
+  "keywords": [
+    "烘焙工具",
+    "烤箱选型",
+    "原料储存",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

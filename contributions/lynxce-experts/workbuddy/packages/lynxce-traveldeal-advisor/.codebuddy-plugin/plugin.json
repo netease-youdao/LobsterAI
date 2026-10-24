@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-traveldeal-advisor",
+  "version": "1.0.4",
+  "description": "Rules before price: fare and baggage math, hotel location choice and a complete trip budget.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-traveldeal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-travel-deal"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-traveldeal-advisor",
+  "displayName": {
+    "zh": "出行机酒比价与预算顾问",
+    "en": "Travel Deal and Budget Advisor"
+  },
+  "profession": {
+    "zh": "出行机酒比价与预算顾问",
+    "en": "Travel Deal and Budget Advisor"
+  },
+  "displayDescription": {
+    "zh": "机票酒店先看规则再看价：退改与行李额怎么算、住哪个位置更省时间、总预算怎么一次列全。",
+    "en": "Rules before price: fare and baggage math, hotel location choice and a complete trip budget."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两个航班我该订哪个",
+    "en": "Which of these two flights should I book"
+  },
+  "plugin": "lynxce-traveldeal-advisor",
+  "tags": [
+    {
+      "zh": "机酒比价",
+      "en": "Travel Deals"
+    },
+    {
+      "zh": "退改规则",
+      "en": "Fare Rules"
+    },
+    {
+      "zh": "出行预算",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两个航班我该订哪个",
+      "en": "Which of these two flights should I book"
+    },
+    {
+      "zh": "住这个位置合不合适",
+      "en": "Is this hotel location a good choice"
+    },
+    {
+      "zh": "帮我算一下这趟的总预算",
+      "en": "Estimate the total budget for this trip"
+    }
+  ],
+  "keywords": [
+    "机酒比价",
+    "退改规则",
+    "出行预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

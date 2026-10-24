@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-welfare-advisor",
+  "version": "1.0.4",
+  "description": "Run welfare purchasing well: per-head budget, supplier comparison and distribution logistics.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-welfare-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-welfare-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-welfare-advisor",
+  "displayName": {
+    "zh": "员工福利与团建采购顾问",
+    "en": "Employee Welfare Procurement Advisor"
+  },
+  "profession": {
+    "zh": "员工福利与团建采购顾问",
+    "en": "Employee Welfare Procurement Advisor"
+  },
+  "displayDescription": {
+    "zh": "福利采购怎么落地：人均预算怎么定、供应商报价怎么比、发放签收与开票怎么一次理顺。",
+    "en": "Run welfare purchasing well: per-head budget, supplier comparison and distribution logistics."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "人均这个预算能买什么",
+    "en": "What fits this per-head budget"
+  },
+  "plugin": "lynxce-welfare-advisor",
+  "tags": [
+    {
+      "zh": "员工福利",
+      "en": "Welfare"
+    },
+    {
+      "zh": "供应商比价",
+      "en": "Sourcing"
+    },
+    {
+      "zh": "发放流程",
+      "en": "Distribution"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "人均这个预算能买什么",
+      "en": "What fits this per-head budget"
+    },
+    {
+      "zh": "帮我比一下这几家报价",
+      "en": "Compare these supplier quotes"
+    },
+    {
+      "zh": "发放和开票该怎么安排",
+      "en": "How should we handle delivery and invoices"
+    }
+  ],
+  "keywords": [
+    "员工福利",
+    "供应商比价",
+    "发放流程",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

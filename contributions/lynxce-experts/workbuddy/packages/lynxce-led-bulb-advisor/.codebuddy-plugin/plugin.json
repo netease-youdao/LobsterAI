@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-led-bulb-advisor",
+  "version": "1.0.0",
+  "description": "Pick LED bulbs: base type, size, lumens per room, CCT, CRI, efficacy and power cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-led-bulb-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-led-bulb"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-led-bulb-advisor",
+  "displayName": {
+    "zh": "LED灯泡灯管选购顾问",
+    "en": "LED Bulb and Tube Advisor"
+  },
+  "profession": {
+    "zh": "11.11 LED 灯泡与灯管选购顾问",
+    "en": "11.11 LED Bulb and Tube Advisor"
+  },
+  "displayDescription": {
+    "zh": "LED灯泡灯管怎么挑：核灯头接口与尺寸、按面积算流明、选色温与显色指数、比光效与电费。",
+    "en": "Pick LED bulbs: base type, size, lumens per room, CCT, CRI, efficacy and power cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "10 平方米书房需要多少流明",
+    "en": "How many lumens a 10 square meter study needs"
+  },
+  "plugin": "lynxce-led-bulb-advisor",
+  "tags": [
+    {
+      "zh": "灯头尺寸",
+      "en": "Base and Size"
+    },
+    {
+      "zh": "流明色温",
+      "en": "Lumens and CCT"
+    },
+    {
+      "zh": "光效电费",
+      "en": "Efficacy and Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "10 平方米书房需要多少流明",
+      "en": "How many lumens a 10 square meter study needs"
+    },
+    {
+      "zh": "E27 和 E14 灯头怎么区分",
+      "en": "How to tell E27 from E14 bulb bases"
+    },
+    {
+      "zh": "普通 LED 灯泡能接调光开关吗",
+      "en": "Can a regular LED bulb work with a dimmer switch"
+    }
+  ],
+  "keywords": [
+    "灯头尺寸",
+    "流明色温",
+    "光效电费",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

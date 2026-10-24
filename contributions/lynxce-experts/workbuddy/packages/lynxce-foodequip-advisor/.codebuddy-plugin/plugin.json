@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-foodequip-advisor",
+  "version": "1.0.4",
+  "description": "Equip from the menu: capacity sizing, utilities and an investment budget.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-foodequip-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-foodequip-list"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-foodequip-advisor",
+  "displayName": {
+    "zh": "餐饮门店设备采购顾问",
+    "en": "Food Service Equipment Advisor"
+  },
+  "profession": {
+    "zh": "餐饮门店设备采购顾问",
+    "en": "Food Service Equipment Advisor"
+  },
+  "displayDescription": {
+    "zh": "开店设备从菜单倒推：产能按高峰怎么估、水电气排烟怎么核、一次性投资预算怎么排开更稳妥。",
+    "en": "Equip from the menu: capacity sizing, utilities and an investment budget."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "开一家小店要买哪些设备",
+    "en": "What equipment does a small store need"
+  },
+  "plugin": "lynxce-foodequip-advisor",
+  "tags": [
+    {
+      "zh": "门店设备",
+      "en": "Kitchen Equipment"
+    },
+    {
+      "zh": "产能测算",
+      "en": "Capacity"
+    },
+    {
+      "zh": "投资预算",
+      "en": "Capex"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "开一家小店要买哪些设备",
+      "en": "What equipment does a small store need"
+    },
+    {
+      "zh": "这个菜单配多大产能",
+      "en": "What capacity does this menu need"
+    },
+    {
+      "zh": "帮我排一版设备预算",
+      "en": "Draft an equipment budget"
+    }
+  ],
+  "keywords": [
+    "门店设备",
+    "产能测算",
+    "投资预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

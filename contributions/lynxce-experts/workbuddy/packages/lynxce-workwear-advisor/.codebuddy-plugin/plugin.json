@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-workwear-advisor",
+  "version": "1.0.4",
+  "description": "Buy protective gear right: hazard-based selection, certifications and replacement cycles.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-workwear-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-workwear-list"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-workwear-advisor",
+  "displayName": {
+    "zh": "工装与劳保用品采购顾问",
+    "en": "Workwear and PPE Procurement Advisor"
+  },
+  "profession": {
+    "zh": "工装与劳保用品采购顾问",
+    "en": "Workwear and PPE Procurement Advisor"
+  },
+  "displayDescription": {
+    "zh": "劳保用品怎么采购才对：按危害选型、认证怎么核验、尺码怎么收、更换周期怎么管起来。",
+    "en": "Buy protective gear right: hazard-based selection, certifications and replacement cycles."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "这个岗位该配什么",
+    "en": "What PPE does this role need"
+  },
+  "plugin": "lynxce-workwear-advisor",
+  "tags": [
+    {
+      "zh": "劳保用品",
+      "en": "PPE"
+    },
+    {
+      "zh": "认证核验",
+      "en": "Certification"
+    },
+    {
+      "zh": "更换周期",
+      "en": "Replacement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个岗位该配什么",
+      "en": "What PPE does this role need"
+    },
+    {
+      "zh": "怎么看认证合不合规",
+      "en": "How do I verify certification"
+    },
+    {
+      "zh": "多久该换一次",
+      "en": "How often should we replace it"
+    }
+  ],
+  "keywords": [
+    "劳保用品",
+    "认证核验",
+    "更换周期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-construction-actual-weekly-b43-advisor",
+  "version": "1.0.1",
+  "description": "Help construction staff turn supplied records into evidence-based tables, conditional plans and review questions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-construction-actual-weekly-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-construction-actual-weekly-b43",
+    "./skills/lynxce-construction-actual-weekly-b43-int-quantity-lineage",
+    "./skills/lynxce-construction-actual-weekly-b43-int-blocker-release"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-construction-actual-weekly-b43-advisor",
+  "displayName": {
+    "zh": "施工记录周报整理专家",
+    "en": "Construction Actual Weekly Report Advisor"
+  },
+  "profession": {
+    "zh": "施工现场日记录实绩周报与阻塞跟踪专家",
+    "en": "Construction Actual Weekly Report Advisor"
+  },
+  "displayDescription": {
+    "zh": "贴入施工日记录与周计划，核对累计量和返工口径，生成分区实绩周报、阻塞表及有前置条件的下周计划。",
+    "en": "Turn supplied records into usable drafts, evidence tables and clear next steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "用这周施工日记录生成实绩周报，分开新增、返工和待确认工程量",
+    "en": "Build the primary deliverables from my supplied records"
+  },
+  "plugin": "lynxce-construction-actual-weekly-b43-advisor",
+  "tags": [
+    {
+      "zh": "建筑装修",
+      "en": "Construction"
+    },
+    {
+      "zh": "施工记录转实绩进",
+      "en": "Record Review"
+    },
+    {
+      "zh": "证据与闭环成果",
+      "en": "Evidence and Closure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "用这周施工日记录生成实绩周报，分开新增、返工和待确认工程量",
+      "en": "Build the primary deliverables from my supplied records"
+    },
+    {
+      "zh": "这些日报数量有重复或累计口径，请逐行去重并保留来源",
+      "en": "Review this draft and list evidence gaps"
+    },
+    {
+      "zh": "按现有阻塞与可用资源，生成附释放条件的下周任务表",
+      "en": "Update affected deliverables and review conditions"
+    }
+  ],
+  "keywords": [
+    "建筑装修",
+    "施工记录转实绩进",
+    "证据与闭环成果"
+  ],
+  "needEncrypt": true
+}

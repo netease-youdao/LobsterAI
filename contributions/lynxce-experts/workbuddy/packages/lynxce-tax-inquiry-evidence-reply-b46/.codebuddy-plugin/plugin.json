@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-tax-inquiry-evidence-reply-b46",
+  "version": "1.0.0",
+  "description": "Turn actual tax notices and evidence into itemized factual replies, reconciliation bridges and revision records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tax-inquiry-evidence-reply-b46.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tax-inquiry-evidence-reply-notice-question-index",
+    "./skills/lynxce-tax-inquiry-evidence-reply-inquiry-evidence-bridge",
+    "./skills/lynxce-tax-inquiry-evidence-reply-inquiry-reply-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tax-inquiry-evidence-reply-b46",
+  "displayName": {
+    "zh": "问询顾问",
+    "en": "Tax Inquiry Evidence Reply Advisor"
+  },
+  "profession": {
+    "zh": "涉税问询顾问",
+    "en": "Tax Inquiry Evidence Reply Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助企业财务拆解税务通知，逐项勾稽事实与证据、说明金额差异，形成可核对的回复稿、附件目录及补正版本。",
+    "en": "Turn actual tax notices and evidence into itemized factual replies, reconciliation bridges and revision records."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按这份税务通知逐问写回复，区分已有证据和仍未解释的差额。",
+    "en": "Tax Inquiry Evidence Reply Advisor"
+  },
+  "plugin": "lynxce-tax-inquiry-evidence-reply-b46",
+  "tags": [
+    {
+      "zh": "税务问询",
+      "en": "税务问询"
+    },
+    {
+      "zh": "证据勾稽",
+      "en": "证据勾稽"
+    },
+    {
+      "zh": "情况说明",
+      "en": "情况说明"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按这份税务通知逐问写回复，区分已有证据和仍未解释的差额。",
+      "en": "Tax Inquiry Evidence Reply Advisor"
+    },
+    {
+      "zh": "这笔流入与账上收入不一致，按真实材料形成差异桥与说明稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "补来一张部分匹配的新发票，请保留其他问题，重出完整V2回复。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "税务问询",
+    "证据勾稽",
+    "情况说明"
+  ]
+}

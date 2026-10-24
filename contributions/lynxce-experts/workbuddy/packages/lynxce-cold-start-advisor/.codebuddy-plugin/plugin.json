@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-cold-start-advisor",
+  "version": "1.0.1",
+  "description": "Plan the first 30 posts of a new account with direction rotation, metric rules and mid-point and end-point adjustments.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cold-start-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cold-start-30"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cold-start-advisor",
+  "displayName": {
+    "zh": "新号冷启动排期顾问",
+    "en": "Cold Start Advisor"
+  },
+  "profession": {
+    "zh": "新号冷启动内容排期顾问｜灵策智算",
+    "en": "New Account Cold Start Content Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据账号定位与每周产能排出前三十条测试计划，提供方向轮换、数据记录口径和中期终期调整规则。",
+    "en": "Plan the first 30 posts of a new account with direction rotation, metric rules and mid-point and end-point adjustments."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的定位和每周产能排出前三十条测试计划",
+    "en": "Plan my first 30 test posts from positioning and weekly capacity"
+  },
+  "plugin": "lynxce-cold-start-advisor",
+  "tags": [
+    {
+      "zh": "新号起号",
+      "en": "New Account"
+    },
+    {
+      "zh": "内容测试",
+      "en": "Content Testing"
+    },
+    {
+      "zh": "数据判读",
+      "en": "Metrics Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的定位和每周产能排出前三十条测试计划",
+      "en": "Plan my first 30 test posts from positioning and weekly capacity"
+    },
+    {
+      "zh": "复核我已发十五条的数据并给出中期调整",
+      "en": "Review my first 15 posts and suggest mid-point adjustments"
+    },
+    {
+      "zh": "只知道账号方向时先给排期骨架和待补项",
+      "en": "Draft a schedule skeleton and missing items from a niche only"
+    }
+  ],
+  "keywords": [
+    "新号起号",
+    "内容测试",
+    "数据判读",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

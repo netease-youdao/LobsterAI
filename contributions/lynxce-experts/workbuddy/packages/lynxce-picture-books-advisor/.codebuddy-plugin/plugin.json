@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-picture-books-advisor",
+  "version": "1.0.1",
+  "description": "Pick picture book sets: age level, per-book price, board or tear-proof pages, genuine copy, duplicates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-picture-books-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-picture-books"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-picture-books-advisor",
+  "displayName": {
+    "zh": "绘本套装选购与拆册单价核算顾问",
+    "en": "Picture Book Set Picker and Per-Book Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 绘本套装选购与拆册单价核算顾问",
+    "en": "11.11 Picture Book Set Picker and Per-Book Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "绘本套装怎么挑：按年龄段分级选书、算拆册单价、看纸板书与撕不烂材质、核正版与重复册。",
+    "en": "Pick picture book sets: age level, per-book price, board or tear-proof pages, genuine copy, duplicates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "2 岁孩子买纸板书还是故事绘本套装",
+    "en": "Board books or story book set for a 2 year old"
+  },
+  "plugin": "lynxce-picture-books-advisor",
+  "tags": [
+    {
+      "zh": "年龄分级",
+      "en": "Age Level"
+    },
+    {
+      "zh": "拆册单价",
+      "en": "Per-Book Price"
+    },
+    {
+      "zh": "正版核对",
+      "en": "Genuine Edition Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "2 岁孩子买纸板书还是故事绘本套装",
+      "en": "Board books or story book set for a 2 year old"
+    },
+    {
+      "zh": "这套绘本拆开每本多少钱值不值",
+      "en": "What does each book in this set really cost"
+    },
+    {
+      "zh": "绘本套装里有几本家里已经有了怎么算",
+      "en": "How to count a set when some books are already owned"
+    }
+  ],
+  "keywords": [
+    "年龄分级",
+    "拆册单价",
+    "正版核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

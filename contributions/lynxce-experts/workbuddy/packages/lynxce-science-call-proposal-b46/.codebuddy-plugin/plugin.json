@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-science-call-proposal-b46",
+  "version": "1.0.0",
+  "description": "Prepare evidence-linked project documents and reconcile supplied requirements, outcomes and budgets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-science-call-proposal-b46.md"
+  ],
+  "skills": [
+    "./skills/lynxce-science-call-proposal-b46-call-clause-trace",
+    "./skills/lynxce-science-call-proposal-b46-task-outcome-matrix",
+    "./skills/lynxce-science-call-proposal-b46-task-budget-reconcile"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-science-call-proposal-b46",
+  "displayName": {
+    "zh": "立项顾问",
+    "en": "Science Project Proposal Advisor"
+  },
+  "profession": {
+    "zh": "科技立项顾问",
+    "en": "Science Project Proposal Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向企业项目与研发负责人，拆解科技申报通知，核对任务预算和绩效，交付可编辑立项章节与补正说明",
+    "en": "Prepare evidence-linked project documents and reconcile supplied requirements, outcomes and budgets."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按这份本轮通知核资格，把技术方案写成六段立项稿，并复核资金比例。",
+    "en": "Science Project Proposal Advisor"
+  },
+  "plugin": "lynxce-science-call-proposal-b46",
+  "tags": [
+    {
+      "zh": "科技申报",
+      "en": "科技申报"
+    },
+    {
+      "zh": "立项材料",
+      "en": "立项材料"
+    },
+    {
+      "zh": "绩效预算",
+      "en": "绩效预算"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按这份本轮通知核资格，把技术方案写成六段立项稿，并复核资金比例。",
+      "en": "Science Project Proposal Advisor"
+    },
+    {
+      "zh": "申请40万元、自筹60万元，帮我把100万元预算对应到任务与指标。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "财务版与评审版自筹金额冲突，请保留两版条件并写完整补正说明。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "科技申报",
+    "立项材料",
+    "绩效预算"
+  ]
+}

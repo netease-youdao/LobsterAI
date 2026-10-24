@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-price-protect-advisor",
+  "version": "1.0.3",
+  "description": "Claim price protection: check window and scope, capture evidence, draft claim wording and spot ineligible cases.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-price-protect-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-price-protect"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-price-protect-advisor",
+  "displayName": {
+    "zh": "大促价保规则与保价申请顾问",
+    "en": "Price Protection and Claim Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促价保规则与保价申请顾问",
+    "en": "11.11 Price Protection and Claim Advisor"
+  },
+  "displayDescription": {
+    "zh": "买完降价能不能保价：价保期与适用范围核对、截图留证要点、申请话术与常见不适用情形。",
+    "en": "Claim price protection: check window and scope, capture evidence, draft claim wording and spot ineligible cases."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "买完降价了能申请价保吗",
+    "en": "The price dropped after I bought, can I claim"
+  },
+  "plugin": "lynxce-price-protect-advisor",
+  "tags": [
+    {
+      "zh": "价保核对",
+      "en": "Eligibility Check"
+    },
+    {
+      "zh": "截图留证",
+      "en": "Evidence Capture"
+    },
+    {
+      "zh": "申请话术",
+      "en": "Claim Wording"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "买完降价了能申请价保吗",
+      "en": "The price dropped after I bought, can I claim"
+    },
+    {
+      "zh": "价保截图要截哪些内容",
+      "en": "What should my price protection screenshots show"
+    },
+    {
+      "zh": "帮我写一段价保申请话术",
+      "en": "Draft a price protection claim message"
+    }
+  ],
+  "keywords": [
+    "价保核对",
+    "截图留证",
+    "申请话术",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

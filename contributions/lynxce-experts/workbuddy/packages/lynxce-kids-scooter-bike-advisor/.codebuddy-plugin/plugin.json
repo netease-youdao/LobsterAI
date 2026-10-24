@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kids-scooter-bike-advisor",
+  "version": "1.0.1",
+  "description": "Pick kids scooters, balance bikes and bicycles: wheel size by height, weight limit, adjustable years, resale.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kids-scooter-bike-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kids-scooter-bike"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kids-scooter-bike-advisor",
+  "displayName": {
+    "zh": "儿童滑板车平衡车自行车选购顾问",
+    "en": "Kids Scooter, Balance Bike and Bicycle Advisor"
+  },
+  "profession": {
+    "zh": "11.11 儿童滑板车平衡车自行车选购顾问",
+    "en": "11.11 Kids Scooter, Balance Bike and Bicycle Advisor"
+  },
+  "displayDescription": {
+    "zh": "儿童车怎么挑：按身高选轮径与车型、看护具承重与可调年限、核刹车与折叠、估二手转卖价。",
+    "en": "Pick kids scooters, balance bikes and bicycles: wheel size by height, weight limit, adjustable years, resale."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "孩子 105 厘米该买几寸自行车",
+    "en": "What wheel size bike for a 105 centimeter child"
+  },
+  "plugin": "lynxce-kids-scooter-bike-advisor",
+  "tags": [
+    {
+      "zh": "身高轮径",
+      "en": "Wheel Size by Height"
+    },
+    {
+      "zh": "可调年限",
+      "en": "Adjustable Years"
+    },
+    {
+      "zh": "二手转卖",
+      "en": "Resale Value"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "孩子 105 厘米该买几寸自行车",
+      "en": "What wheel size bike for a 105 centimeter child"
+    },
+    {
+      "zh": "4 岁先买平衡车还是带辅助轮自行车",
+      "en": "Balance bike or training wheels for a 4 year old"
+    },
+    {
+      "zh": "儿童滑板车选三轮还是两轮",
+      "en": "Three wheel or two wheel scooter for a child"
+    }
+  ],
+  "keywords": [
+    "身高轮径",
+    "可调年限",
+    "二手转卖",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

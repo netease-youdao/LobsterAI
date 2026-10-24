@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-org-directory-advisor",
+  "version": "1.0.1",
+  "description": "Turn HR rosters and change notices into field rules, sync checklists, reporting-line checks, audit samples and a text org chart.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-org-directory-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-org-directory"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-org-directory-advisor",
+  "displayName": {
+    "zh": "组织架构维护顾问",
+    "en": "Org Chart Advisor"
+  },
+  "profession": {
+    "zh": "组织架构图与通讯录维护顾问｜灵策智算",
+    "en": "Org Chart and Staff Directory Maintenance Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据人事花名册和人员变动单整理字段口径与同步清单，校验汇报线并计算月度抽查，输出文字版组织架构图。",
+    "en": "Turn HR rosters and change notices into field rules, sync checklists, reporting-line checks, audit samples and a text org chart."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据这份花名册校验汇报线并生成文字版架构图",
+    "en": "Check reporting lines in this roster and draw a text org chart"
+  },
+  "plugin": "lynxce-org-directory-advisor",
+  "tags": [
+    {
+      "zh": "汇报线校验",
+      "en": "Reporting Lines"
+    },
+    {
+      "zh": "人员变动同步",
+      "en": "Change Sync"
+    },
+    {
+      "zh": "月度抽查",
+      "en": "Monthly Audit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这份花名册校验汇报线并生成文字版架构图",
+      "en": "Check reporting lines in this roster and draw a text org chart"
+    },
+    {
+      "zh": "复核这张调岗同步单还漏了哪些下游项",
+      "en": "Review this transfer sync sheet for missing downstream updates"
+    },
+    {
+      "zh": "只有姓名部门名单时先给字段字典和待补项",
+      "en": "Draft a field dictionary and gaps from a names-and-departments list"
+    }
+  ],
+  "keywords": [
+    "汇报线校验",
+    "人员变动同步",
+    "月度抽查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

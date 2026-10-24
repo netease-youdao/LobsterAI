@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-founder-ip-advisor",
+  "version": "1.0.1",
+  "description": "Turn a founder's real experience and available hours into a positioning card, topic bank, shoot plan, red lines and lead review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-founder-ip-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-founder-ip"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-founder-ip-advisor",
+  "displayName": {
+    "zh": "老板个人IP规划顾问",
+    "en": "Founder Brand Advisor"
+  },
+  "profession": {
+    "zh": "老板个人 IP 内容规划顾问｜灵策智算",
+    "en": "Founder Personal Brand Content Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据老板经历与可投入时间生成人设卡和选题库，提供集中拍摄排期、说话红线与线索复盘表，便于持续拍摄。",
+    "en": "Turn a founder's real experience and available hours into a positioning card, topic bank, shoot plan, red lines and lead review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据老板经历和每周可用时间生成人设卡与选题库",
+    "en": "Build a positioning card and topic bank from the founder's experience and hours"
+  },
+  "plugin": "lynxce-founder-ip-advisor",
+  "tags": [
+    {
+      "zh": "老板个人IP",
+      "en": "Founder Brand"
+    },
+    {
+      "zh": "选题库",
+      "en": "Topic Bank"
+    },
+    {
+      "zh": "说话红线",
+      "en": "Speaking Red Lines"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据老板经历和每周可用时间生成人设卡与选题库",
+      "en": "Build a positioning card and topic bank from the founder's experience and hours"
+    },
+    {
+      "zh": "复核我们已写的老板人设和选题有没有风险",
+      "en": "Review our founder positioning and topics for risks"
+    },
+    {
+      "zh": "只知道行业先给我一版最小可拍的选题清单",
+      "en": "Only the industry is known so give me a minimal shootable topic list"
+    }
+  ],
+  "keywords": [
+    "老板个人IP",
+    "选题库",
+    "说话红线",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

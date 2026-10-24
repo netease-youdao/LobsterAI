@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-school-bag-advisor",
+  "version": "1.0.1",
+  "description": "Pick kids school bags: size by height and grade, empty weight share, back support, reflective, fabric.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-school-bag-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-school-bag"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-school-bag-advisor",
+  "displayName": {
+    "zh": "儿童书包选购与尺寸重量核对顾问",
+    "en": "Kids School Bag Size and Weight Check Advisor"
+  },
+  "profession": {
+    "zh": "11.11 儿童书包选购与尺寸重量核对顾问",
+    "en": "11.11 Kids School Bag Size and Weight Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "书包怎么挑：按身高年级选尺寸、算空包重量占比、核护脊背板结构、看反光条与耐磨面料。",
+    "en": "Pick kids school bags: size by height and grade, empty weight share, back support, reflective, fabric."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一年级孩子书包多大合适",
+    "en": "What size school bag fits a first grader"
+  },
+  "plugin": "lynxce-school-bag-advisor",
+  "tags": [
+    {
+      "zh": "身高尺寸",
+      "en": "Size by Height"
+    },
+    {
+      "zh": "负重占比",
+      "en": "Load Share"
+    },
+    {
+      "zh": "护脊反光",
+      "en": "Back Support and Reflective"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一年级孩子书包多大合适",
+      "en": "What size school bag fits a first grader"
+    },
+    {
+      "zh": "书包空包多重才不算太重",
+      "en": "How heavy can an empty school bag be"
+    },
+    {
+      "zh": "写着护脊的书包要看哪些结构",
+      "en": "What structure to check on a back support school bag"
+    }
+  ],
+  "keywords": [
+    "身高尺寸",
+    "负重占比",
+    "护脊反光",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

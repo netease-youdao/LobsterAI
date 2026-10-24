@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-itops-advisor",
+  "version": "1.0.1",
+  "description": "Turn alert and change evidence into triage notes, response drafts, recovery checks and reusable shift handovers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-itops-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-itops-advisor",
+  "displayName": {
+    "zh": "运维值班响应顾问",
+    "en": "IT Operations & On-Call Advisor"
+  },
+  "profession": {
+    "zh": "IT 运维值班与应急响应顾问",
+    "en": "IT Operations and Incident Response Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据告警与变更材料梳理影响范围，提供分级响应、处置评审和恢复核对，附交班复盘底稿供持续更新。",
+    "en": "Turn alert and change evidence into triage notes, response drafts, recovery checks and reusable shift handovers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据告警与业务影响生成分级响应和证据表",
+    "en": "Triage alerts and business impact into response and evidence tables"
+  },
+  "plugin": "lynxce-itops-advisor",
+  "tags": [
+    {
+      "zh": "告警分级",
+      "en": "Alert Triage"
+    },
+    {
+      "zh": "恢复核对",
+      "en": "Recovery Checks"
+    },
+    {
+      "zh": "交班复盘",
+      "en": "Shift Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据告警与业务影响生成分级响应和证据表",
+      "en": "Triage alerts and business impact into response and evidence tables"
+    },
+    {
+      "zh": "把现有处置预案整理成含中止和恢复条件的评审稿",
+      "en": "Review a runbook with stop and recovery conditions"
+    },
+    {
+      "zh": "根据本周值班记录生成交班摘要与复盘行动表",
+      "en": "Draft shift handovers and improvement actions from on-call records"
+    }
+  ],
+  "keywords": [
+    "告警分级",
+    "恢复核对",
+    "交班复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}
