@@ -29,6 +29,8 @@ type BridgeHarness = {
   clientCalls: () => ClientCall[];
   close: () => Promise<void>;
   home: string;
+  /** Bridge secret header sent with each process id lookup. */
+  hostInfoSecrets: Array<string | undefined>;
   listTools: () => Promise<Array<{ name: string; description?: string }>>;
 };
 
@@ -144,10 +146,10 @@ function createBridgeFixture(options: { askUserUrl: string; locale?: string }): 
       LOBSTER_COMPUTER_USE_CLIENT_MODULE: clientPath,
       LOBSTER_COMPUTER_USE_EXE: '/nonexistent/helper',
       LOBSTER_COMPUTER_USE_HOME: home,
+      LOBSTER_COMPUTER_USE_HOST_INFO_URL: new URL('/host/info', options.askUserUrl).href,
       LOBSTER_COMPUTER_USE_LOCALE: options.locale ?? 'zh',
       LOBSTER_COMPUTER_USE_PLATFORM: 'darwin',
       LOBSTER_COMPUTER_USE_SELF_APP: 'LobsterAI',
-      LOBSTER_COMPUTER_USE_SELF_PID: String(SELF_PID),
       LOBSTER_COMPUTER_USE_MCP_SDK_ROOT: resolvePackageRoot('@modelcontextprotocol/sdk')!,
       LOBSTER_COMPUTER_USE_ZOD_ROOT: resolvePackageRoot('zod')!,
     },
@@ -159,9 +161,25 @@ function readClientCalls(logPath: string): ClientCall[] {
     .map(line => JSON.parse(line) as ClientCall);
 }
 
-async function startBridge(options: { answer: 'allow' | 'deny'; locale?: string }): Promise<BridgeHarness> {
+async function startBridge(options: {
+  answer: 'allow' | 'deny';
+  hostInfoAvailable?: boolean;
+  locale?: string;
+}): Promise<BridgeHarness> {
   const askRequests: BridgeHarness['askRequests'] = [];
+  const hostInfoSecrets: BridgeHarness['hostInfoSecrets'] = [];
   const askServer = http.createServer((req, res) => {
+    if (req.url === '/host/info') {
+      hostInfoSecrets.push(req.headers['x-mcp-bridge-secret'] as string | undefined);
+      if (options.hostInfoAvailable === false) {
+        res.writeHead(503);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ pid: SELF_PID }));
+      return;
+    }
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -195,6 +213,7 @@ async function startBridge(options: { answer: 'allow' | 'deny'; locale?: string 
   const harness: BridgeHarness = {
     askRequests,
     home: fixture.home,
+    hostInfoSecrets,
     async call(name, args = {}) {
       return await client.callTool({ name, arguments: args }) as ToolResult;
     },
@@ -298,6 +317,20 @@ describe('Computer Use MCP bridge (macOS behavior)', () => {
     expect(textOf(self)).toContain('cannot operate LobsterAI itself');
     expect(bridge.askRequests).toHaveLength(0);
     expect(bridge.clientCalls().some(call => call.method === 'launch_app')).toBe(false);
+    // The process id behind the "Electron" match came from one authenticated bridge lookup.
+    expect(bridge.hostInfoSecrets).toEqual(['test-secret']);
+  });
+
+  test('still hides LobsterAI by name when its process id is unavailable', async () => {
+    const bridge = await startBridge({ answer: 'allow', hostInfoAvailable: false });
+
+    const listed = JSON.parse(textOf(await bridge.call('list_windows'))) as Array<{ id: number }>;
+    const self = await bridge.call('click', { window: { app: 'LobsterAI', id: 12 }, element_index: 0 });
+
+    expect(bridge.hostInfoSecrets).toHaveLength(1);
+    expect(listed.map(window => window.id)).toEqual([11, 13]);
+    expect(self.isError).toBe(true);
+    expect(textOf(self)).toContain('cannot operate LobsterAI itself');
   });
 
   test('resolves launch targets before asking, and unknown apps fail without a prompt', async () => {

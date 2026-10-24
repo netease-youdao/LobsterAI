@@ -235,6 +235,32 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
   });
 
+  test('renders a byte-identical config on the next app launch', async () => {
+    // OpenClaw keys its startup migration checkpoint on the whole config; any
+    // per-launch value (process id, timestamp) reruns those migrations on every start.
+    mockRuntimeState.proxyPort = 4121;
+    const getResolvedMcpServers = () => [{
+      name: 'local-tools',
+      transportType: 'stdio' as const,
+      command: 'node',
+      args: ['server.mjs'],
+      env: { LOCAL_TOOLS_MODE: 'desktop' },
+    }];
+    const firstLaunch = await createSync({ getResolvedMcpServers });
+    expect(firstLaunch.sync('startup')).toMatchObject({ ok: true, changed: true });
+    const written = fs.readFileSync(configPath, 'utf8');
+
+    const originalPid = process.pid;
+    Object.defineProperty(process, 'pid', { configurable: true, value: originalPid + 1 });
+    try {
+      const nextLaunch = await createSync({ getResolvedMcpServers });
+      expect(nextLaunch.sync('startup')).toMatchObject({ ok: true, changed: false });
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(written);
+    } finally {
+      Object.defineProperty(process, 'pid', { configurable: true, value: originalPid });
+    }
+  });
+
   test('merges openclaw.user.json overrides into every render and removes them again', async () => {
     const values = new Map<string, unknown>();
     const userConfigOverlay = new OpenClawUserConfigOverlay({

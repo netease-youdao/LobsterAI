@@ -59,6 +59,7 @@ import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLega
 import { scheduleOpenClawStartupDiskCleanup } from './openclawStartupDiskCleanup';
 import { configRequiresStartupCompatibility, OPENCLAW_STARTUP_PREP_MARKER_FILE, OpenClawStartupPrepMarker, resolveStartupPrepIdentity } from './openclawStartupPrep';
 import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './openclawStartupStateMigration';
+import { prewarmOpenClawStateDatabases } from './openclawStateDbPrewarm';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 
@@ -1053,6 +1054,13 @@ export class OpenClawEngineManager extends EventEmitter {
       if (this.shutdownRequested) return this.getStatus();
       if (this.gatewayProcess === existingChild) this.gatewayProcess = null;
     }
+
+    // The new gateway integrity-checks every state database it opens; reading them
+    // while it loads its modules turns those checks' random reads into cache hits.
+    void prewarmOpenClawStateDatabases(this.stateDir).then(
+      result => console.log(`[OpenClaw] prewarmed ${result.files} state database file(s), ${Math.round(result.bytes / 1048576)} MB in ${result.elapsedMs}ms (skipped ${result.skippedFiles})`),
+      error => console.warn('[OpenClaw] state database prewarm failed (non-fatal):', error),
+    );
 
     await this.awaitStartupPrerequisite();
     if (this.shutdownRequested) return this.getStatus();

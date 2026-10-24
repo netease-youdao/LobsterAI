@@ -47,6 +47,7 @@ import {
   removeStaleComputerUseRuntimes,
 } from './computerUseRuntime';
 
+const HOST_INFO_URL = 'http://127.0.0.1:1234/host/info';
 const WINDOWS_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.WindowsX64];
 const MAC_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.MacArm64];
 const MAC_X64_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.MacX64];
@@ -294,6 +295,7 @@ describe('resolveComputerUseRuntimePaths', () => {
     const server = resolveComputerUseMcpServer({
       askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
       electronNodePath: process.execPath,
+      hostInfoUrl: HOST_INFO_URL,
     });
     const helperStateHome = getComputerUseHelperStateHome();
     const config = JSON.parse(fs.readFileSync(
@@ -315,7 +317,7 @@ describe('resolveComputerUseRuntimePaths', () => {
     expect(server?.env?.[ComputerUseMcpEnv.LogRetentionDays]).toBe('7');
     expect(server?.env?.[ComputerUseMcpEnv.Locale]).toBe('zh');
     expect(server?.env?.[ComputerUseMcpEnv.SelfAppName]).toBe('LobsterAI');
-    expect(server?.env?.[ComputerUseMcpEnv.SelfPid]).toBe(String(process.pid));
+    expect(server?.env?.[ComputerUseMcpEnv.HostInfoUrl]).toBe(HOST_INFO_URL);
     expect(config.strings?.usingComputer).toBe('LobsterAI正在使用你的电脑');
     expect(config.strings?.escToCancel).toBe('按 Esc 取消');
   });
@@ -369,10 +371,36 @@ describe('resolveComputerUseRuntimePaths', () => {
     const server = resolveComputerUseMcpServer({
       askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
       electronNodePath: process.execPath,
+      hostInfoUrl: HOST_INFO_URL,
     });
 
     expect(server?.env?.[ComputerUseMcpEnv.BridgeSecret]).toBe(COMPUTER_USE_BRIDGE_SECRET_PLACEHOLDER);
     expect(COMPUTER_USE_BRIDGE_SECRET_PLACEHOLDER).toBe('${LOBSTER_MCP_BRIDGE_SECRET}');
+  });
+
+  test('renders the same launch spec on every app launch', () => {
+    writeWindowsRuntimeFixture();
+    const originalPid = process.pid;
+    const resolveInLaunch = (pid: number) => {
+      Object.defineProperty(process, 'pid', { configurable: true, value: pid });
+      return resolveComputerUseMcpServer({
+        askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
+        electronNodePath: process.execPath,
+        hostInfoUrl: HOST_INFO_URL,
+      });
+    };
+
+    try {
+      const firstLaunch = resolveInLaunch(41001);
+      const nextLaunch = resolveInLaunch(41002);
+
+      // OpenClaw keys its startup migration checkpoint on the whole config, so a
+      // value that differs per launch reruns those migrations on every gateway start.
+      expect(nextLaunch).toEqual(firstLaunch);
+      expect(JSON.stringify(firstLaunch)).not.toContain('41001');
+    } finally {
+      Object.defineProperty(process, 'pid', { configurable: true, value: originalPid });
+    }
   });
 
   test('resolves the macOS Computer Use helper runtime', () => {
@@ -383,6 +411,7 @@ describe('resolveComputerUseRuntimePaths', () => {
     const server = resolveComputerUseMcpServer({
       askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
       electronNodePath: process.execPath,
+      hostInfoUrl: HOST_INFO_URL,
     });
 
     expect(inspection.missing).toEqual([]);
@@ -587,6 +616,7 @@ describe('resolveComputerUseRuntimePaths', () => {
       const server = resolveComputerUseMcpServer({
         askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
         electronNodePath: process.execPath,
+        hostInfoUrl: HOST_INFO_URL,
       });
       expect(server?.env?.[ComputerUseMcpEnv.ClientModulePath]).toBe(paths?.clientModulePath);
       expect(server?.env?.[ComputerUseMcpEnv.ExePath]).toBe(paths?.helperExePath);
@@ -632,6 +662,8 @@ describe('resolveComputerUseRuntimePaths', () => {
       const server = resolveComputerUseMcpServer({
         askUserCallbackUrl: `http://127.0.0.1:${askPort}/ask-user`,
         electronNodePath: process.execPath,
+        // The ask server answers every POST as a prompt; skip the process id lookup.
+        hostInfoUrl: null,
       });
       expect(server?.command).toBeTruthy();
       expect(server?.args?.length).toBeGreaterThan(0);

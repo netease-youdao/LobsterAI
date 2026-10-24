@@ -105,6 +105,29 @@ describe('McpBridgeServer browser bridge', () => {
   });
 });
 
+describe('McpBridgeServer host info', () => {
+  test('serves the app process id to authenticated callers only', async () => {
+    const secret = 'host-info-test-secret';
+    const server = new McpBridgeServer(secret);
+
+    try {
+      await server.start();
+
+      const unauthorized = await fetch(server.hostInfoUrl!, { method: 'POST' });
+      expect(unauthorized.status).toBe(401);
+
+      const response = await fetch(server.hostInfoUrl!, {
+        method: 'POST',
+        headers: { 'x-mcp-bridge-secret': secret },
+      });
+      expect(response.ok).toBe(true);
+      await expect(response.json()).resolves.toEqual({ pid: process.pid });
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe('McpBridgeServer decision tool', () => {
   const secret = 'decision-test-secret';
   const post = (url: string, body: unknown, options: { secret?: string; signal?: AbortSignal } = {}) => fetch(url, {
