@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
-import { RemoteCapability, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../shared/remote/constants';
+import { RemoteCapability, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteQuestion } from '../../shared/remote/questions';
 import { RemoteReply } from '../../shared/remote/reply';
@@ -11,6 +11,7 @@ import { payloadHash } from './canonical';
 import { RemoteAgentError } from './remoteAgentCatalog';
 import { RemoteApprovalError } from './remoteApproval';
 import { type InboxEntry, RemoteApiError,RemoteBridge } from './remoteBridge';
+import { RemoteDisplayHealthFailure, type RemoteDisplayHealthResult, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { RemoteQuestionError } from './remoteQuestionService';
 import { RemoteStore } from './remoteStore';
 
@@ -18,6 +19,12 @@ vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (level: 'debug' | 'warn' |
 
 const owner = { userId: '10001', scopeKey: 'personal' };
 const databases: Database.Database[] = [];
+type KnownDisplay = Extract<RemoteDisplayHealthResult, { status: typeof RemoteDisplayHealthStatus.Known }>;
+function knownDisplay(overrides: Partial<KnownDisplay> = {}): KnownDisplay {
+  return { status: RemoteDisplayHealthStatus.Known, observedAt: Date.now(), settings: null,
+    pendingSettings: false, pendingName: false, catalogFailed: false,
+    legacy: { pendingSessions: 0, oldest: null, lastSuccess: null }, availability: null, ...overrides };
+}
 function fixture() {
   const db = new Database(':memory:'); databases.push(db);
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
@@ -66,7 +73,12 @@ function fixture() {
   });
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' }; bridge.generation = '1'; bridge.sameAccountAccess = true;
   store.put('settings:10001:personal', { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [{ workspaceId: 'workspace', name: 'Folder', path: '/work', available: true }] });
-  return { store, bridge, envelope, calls, execute, requestApi, disconnect: () => { disconnectOnReceipt = true; }, terminalReceipt: () => { receiptStatus = 'applied'; } };
+  // In-memory fixtures cannot be opened by a worker; install an explicit display snapshot seam.
+  let displayed: RemoteDisplayHealthResult | null = knownDisplay({ settings: bridge.settings() });
+  const display = vi.spyOn(bridge.displaySnapshot, 'read').mockImplementation((key: unknown) => key ? displayed : null);
+  const setDisplay = (value: RemoteDisplayHealthResult | null): void => { displayed = value; };
+  return { store, bridge, envelope, calls, execute, requestApi, display, setDisplay,
+    disconnect: () => { disconnectOnReceipt = true; }, terminalReceipt: () => { receiptStatus = 'applied'; } };
 }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
@@ -141,21 +153,118 @@ describe('remote command task admission', () => {
 });
 
 describe('device synchronization health', () => {
-  it('does not convert an unrelated sync-health read failure into a transport disconnection', () => {
-    const { bridge, store } = fixture(); bridge.lastPong = Date.now();
-    expect(bridge.state().connected).toBe(true);
+  it('reads only cached memory when SQLite throws and never converts unknown health into a disconnection', () => {
+    const { bridge, store, setDisplay } = fixture(); bridge.lastPong = Date.now();
     const read = vi.spyOn(store.db, 'prepare').mockImplementation(() => { throw new Error('projection unavailable'); });
-    expect(bridge.state()).toMatchObject({ connected: true, connectionStatus: 'online', syncHealth: { status: RemoteSyncHealthStatus.Degraded, reason: RemoteSyncHealthReason.StorageDependency } });
-    read.mockRestore(); bridge.stop();
+    const get = vi.spyOn(store, 'get').mockImplementation(() => { throw new Error('state unavailable'); });
+    try {
+      expect(bridge.state()).toMatchObject({ connected: true, syncHealth: { status: RemoteSyncHealthStatus.Idle } });
+      setDisplay({ status: RemoteDisplayHealthStatus.Unknown, observedAt: Date.now(), reason: RemoteDisplayHealthFailure.Unavailable });
+      expect(bridge.state()).toMatchObject({ connected: true, connectionStatus: 'online', sessionSyncStatus: RemoteSyncStatus.Pending,
+        syncHealth: { status: RemoteSyncHealthStatus.Degraded, reason: RemoteSyncHealthReason.StorageDependency, pendingSessions: null } });
+      expect(read).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); get.mockRestore(); bridge.stop(); }
+  });
+  it('uses the display owner cache for state while business mutations retain authoritative owner checks', async () => {
+    const { bridge } = fixture(); bridge.lastPong = Date.now();
+    bridge.deps.getDisplayOwner = () => owner;
+    const getOwner = vi.spyOn(bridge.deps, 'getOwner').mockImplementation(() => { throw new Error('authoritative owner unavailable'); });
+    try {
+      expect(bridge.state()).toMatchObject({ owner, connected: true, syncHealth: { status: RemoteSyncHealthStatus.Idle } });
+      expect(getOwner).not.toHaveBeenCalled();
+      await expect(bridge.configure({ name: 'Requires authority' })).rejects.toThrow('authoritative owner unavailable');
+      expect(getOwner).toHaveBeenCalledTimes(1);
+    } finally { getOwner.mockRestore(); bridge.stop(); }
+  });
+  it.each(['pending', 'unknown'])('does not label %s statistics as synced while transport stays online', kind => {
+    const { bridge, setDisplay } = fixture(); bridge.lastPong = Date.now();
+    setDisplay(kind === 'pending' ? null : { status: RemoteDisplayHealthStatus.Unknown,
+      observedAt: Date.now(), reason: RemoteDisplayHealthFailure.Unavailable });
+    expect(bridge.state()).toMatchObject({ connected: true, settingsSyncStatus: RemoteSyncStatus.Pending,
+      nameSyncStatus: RemoteSyncStatus.Pending, agentCatalogSyncStatus: RemoteSyncStatus.Pending, sessionSyncStatus: RemoteSyncStatus.Pending,
+      syncHealth: { status: RemoteSyncHealthStatus.Degraded, statisticsUnavailable: true, pendingSessions: null, lastSuccessfulSyncAt: null } });
+    bridge.stop();
+  });
+  it.each(['account', 'route', 'signout', 'owner-error', 'route-error'])('invalidates cached display data immediately after %s context changes', async change => {
+    vi.useFakeTimers();
+    const { bridge, display } = fixture(); bridge.lastPong = Date.now(); display.mockRestore();
+    const produce = vi.spyOn(bridge.displaySnapshot.options, 'produce').mockResolvedValue(knownDisplay({
+      legacy: { pendingSessions: 9, oldest: 1, lastSuccess: '2026-10-01T00:00:00.000Z' } }));
+    try {
+      expect(bridge.state().syncHealth.statisticsUnavailable).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(bridge.state()).toMatchObject({ name: 'Desktop', deviceId: 'desktop', syncHealth: { pendingSessions: 9 } });
+      const nextOwner = { userId: 'another-owner', scopeKey: 'personal' };
+      if (change === 'account') vi.spyOn(bridge.deps, 'getOwner').mockReturnValue(nextOwner);
+      if (change === 'signout') vi.spyOn(bridge.deps, 'getOwner').mockReturnValue(null);
+      if (change === 'route') vi.spyOn(bridge.deps, 'getApiBaseUrl').mockReturnValue('https://another.example');
+      if (change === 'owner-error') vi.spyOn(bridge.deps, 'getOwner').mockImplementation(() => { throw new Error('owner unavailable'); });
+      if (change === 'route-error') vi.spyOn(bridge.deps, 'getApiBaseUrl').mockImplementation(() => { throw new Error('route unavailable'); });
+      expect(bridge.state()).toMatchObject({ connected: false, name: 'host', deviceId: undefined, workspaces: [], accessRequests: [],
+        error: undefined, sessionSyncStatus: RemoteSyncStatus.Pending,
+        syncHealth: { statisticsUnavailable: true, pendingSessions: null, lastSuccessfulSyncAt: null } });
+      expect(produce).toHaveBeenCalledTimes(1);
+    } finally { bridge.stop(); await vi.advanceTimersByTimeAsync(0); vi.useRealTimers(); vi.restoreAllMocks(); }
+  });
+  it('returns saved local settings immediately while the display sample is unavailable', async () => {
+    const { bridge, store, setDisplay, requestApi } = fixture(); setDisplay(null);
+    vi.spyOn(bridge, 'schedule').mockImplementation(() => undefined);
+    const saved = await bridge.configure({ enabled: false, name: 'Renamed desktop' });
+    expect(saved).toMatchObject({ enabled: false, name: 'Renamed desktop', nameSyncStatus: RemoteSyncStatus.Pending,
+      syncHealth: { status: RemoteSyncHealthStatus.Paused, statisticsUnavailable: true } });
+    expect(store.get<any>('settings:10001:personal')).toMatchObject({ enabled: false, name: 'Renamed desktop' });
+    expect(requestApi).not.toHaveBeenCalled();
+    const read = vi.spyOn(store.db, 'prepare').mockImplementation(() => { throw new Error('unavailable'); });
+    try {
+      expect(bridge.state()).toMatchObject({ enabled: false, name: 'Renamed desktop' });
+      expect(read).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); bridge.stop(); }
   });
   it('uses v3 publication health independently of its fenced legacy outbox and historical failure', () => {
-    const { bridge, store } = fixture(); store.setEnabledOwner(owner); bridge.lastPong = Date.now();
+    const { bridge, store, setDisplay } = fixture(); store.setEnabledOwner(owner); bridge.lastPong = Date.now();
     store.transaction(() => { store.db.exec("INSERT INTO cowork_sessions VALUES('v3-task','Task',1,1,'idle')"); store.assignNew('v3-task', owner, 'local_create'); });
     expect(store.sync('v3-task')!.needs_snapshot).toBeTruthy(); bridge.sessionSyncFailed = true;
-    vi.spyOn(bridge.availability, 'ownsHistory').mockReturnValue(true);
-    vi.spyOn(bridge.availability, 'health').mockReturnValue({ sessions: 1, pendingSessions: 0, degraded: false });
+    setDisplay(knownDisplay({ availability: { sessions: 1, pendingSessions: 0, degraded: false, oldest: null, lastSuccess: null, lanes: {}, countsTruncated: false } }));
     expect(bridge.state()).toMatchObject({ connected: true, sessionSyncStatus: RemoteSyncStatus.Synced, syncHealth: { status: RemoteSyncHealthStatus.Idle, pendingSessions: 0 } });
     bridge.stop();
+  });
+  it('merges current-scope in-flight and backoff state without synchronous storage reads or false idle', () => {
+    const { bridge, store, setDisplay } = fixture(); bridge.lastPong = Date.now(); bridge.targetId = 'current-target';
+    const scope = `current-target:${owner.userId}:${owner.scopeKey}:desktop`;
+    bridge.availability.controlDeadlines.set(`${scope}:control:task`, Date.now() + 1000);
+    const read = vi.spyOn(store.db, 'prepare').mockImplementation(() => { throw new Error('database unavailable'); });
+    const get = vi.spyOn(store, 'get').mockImplementation(() => { throw new Error('state unavailable'); });
+    const scan = vi.spyOn(bridge.availability, 'health').mockImplementation(() => { throw new Error('unexpected synchronous scan'); });
+    try {
+      expect(bridge.displayInput()).toMatchObject({ database: ':memory:', availabilityScope: scope });
+      expect(bridge.state()).toMatchObject({ connected: true, syncHealth: { status: RemoteSyncHealthStatus.Syncing,
+        pendingSessions: 1, lanes: { control: RemoteSyncLaneStatus.InFlight } } });
+      bridge.availability.failures.set(`${scope}:live:task`, { count: 1, retryAt: Date.now() + 5000 });
+      expect(bridge.state()).toMatchObject({ connected: true, sessionSyncStatus: RemoteSyncStatus.Error,
+        syncHealth: { status: RemoteSyncHealthStatus.Degraded, pendingSessions: 1,
+          lanes: { control: RemoteSyncLaneStatus.InFlight, recovery: RemoteSyncLaneStatus.Backoff } } });
+      setDisplay(knownDisplay({ availability: { sessions: 1, pendingSessions: 0, degraded: false, oldest: null, lastSuccess: null,
+        countsTruncated: false, lanes: { control: RemoteSyncLaneStatus.Unknown, recovery: RemoteSyncLaneStatus.Degraded } } }));
+      expect(bridge.state().syncHealth.lanes).toEqual({ control: RemoteSyncLaneStatus.Unknown, recovery: RemoteSyncLaneStatus.Degraded });
+      setDisplay(null);
+      expect(bridge.state().syncHealth).toMatchObject({ status: RemoteSyncHealthStatus.Degraded, statisticsUnavailable: true, pendingSessions: null });
+      expect(read).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled(); expect(scan).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); get.mockRestore(); scan.mockRestore(); bridge.stop(); }
+  });
+  it('does not let another environment, account or device transient failure contaminate current display health', () => {
+    const { bridge, store } = fixture(); bridge.lastPong = Date.now(); bridge.targetId = 'current-target';
+    for (const scope of [`other-target:${owner.userId}:${owner.scopeKey}:desktop`,
+      `current-target:other-owner:${owner.scopeKey}:desktop`, `current-target:${owner.userId}:${owner.scopeKey}:other-device`]) {
+      bridge.availability.controlDeadlines.set(`${scope}:control:task`, Date.now() + 1000);
+      bridge.availability.failures.set(`${scope}:live:task`, { count: 1, retryAt: Date.now() + 5000 });
+    }
+    const read = vi.spyOn(store.db, 'prepare').mockImplementation(() => { throw new Error('database unavailable'); });
+    const get = vi.spyOn(store, 'get').mockImplementation(() => { throw new Error('state unavailable'); });
+    try {
+      expect(bridge.state()).toMatchObject({ connected: true, sessionSyncStatus: RemoteSyncStatus.Synced,
+        syncHealth: { status: RemoteSyncHealthStatus.Idle, pendingSessions: 0, lanes: {} } });
+      expect(read).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); get.mockRestore(); bridge.stop(); }
   });
   it('keeps an online idle device idle during and after an empty history scan', async () => {
     const { bridge, store, requestApi } = fixture();
@@ -175,8 +284,8 @@ describe('device synchronization health', () => {
       release?.(); await bridge.historyWork; scan.mockRestore(); bridge.stop();
     }
   });
-  it('reports real pending content until its ACK even with no history scan in progress', () => {
-    const { bridge, store } = fixture(); store.setEnabledOwner(owner); bridge.lastPong = Date.now();
+  it('reflects pending content and its ACK on the next display snapshot without a synchronous scan', () => {
+    const { bridge, store, setDisplay } = fixture(); store.setEnabledOwner(owner); bridge.lastPong = Date.now();
     bridge.stopped = false;
     bridge.targetId = bridge.targets.activateLegacy({ owner, deviceId: 'desktop' }).targetId;
     try {
@@ -185,11 +294,14 @@ describe('device synchronization health', () => {
         store.assignNew('pending-task', owner, 'local_create');
       });
       expect(bridge.historyWork).toBeNull();
+      setDisplay(knownDisplay({ legacy: { pendingSessions: 1, oldest: 1, lastSuccess: null } }));
       expect(bridge.state()).toMatchObject({ connected: true, syncHealth: { status: RemoteSyncHealthStatus.Syncing, pendingSessions: 1 } });
       const snapshot = store.snapshot('pending-task');
       const row = store.sync('pending-task')!;
       store.bindRemote('pending-task', row.session_id, 'desktop');
       store.acknowledge('pending-task', 'desktop', row.session_id, snapshot.baseSourceSeq, '1', true, snapshot.snapshotEpoch);
+      expect(bridge.state().syncHealth).toMatchObject({ status: RemoteSyncHealthStatus.Syncing, pendingSessions: 1 });
+      setDisplay(knownDisplay());
       expect(bridge.state().syncHealth).toMatchObject({ status: RemoteSyncHealthStatus.Idle, pendingSessions: 0 });
     } finally { bridge.stop(); }
   });
@@ -306,7 +418,7 @@ describe('session synchronization recovery', () => {
   }
 
   it('clears a failed import after a later commit and logs no sensitive error content', async () => {
-    const { bridge, store, requestApi, warning } = syncing();
+    const { bridge, store, requestApi, warning, setDisplay } = syncing();
     const secret = 'private conversation and device credential';
     requestApi.mockRejectedValueOnce(new RemoteApiError(503, secret, { reason: 'TEMPORARILY_UNAVAILABLE', accessToken: secret }, 503));
     await bridge.syncSessions();
@@ -314,6 +426,7 @@ describe('session synchronization recovery', () => {
     expect(failure.code).toBe(503);
     expect(store.get('import:sync-task')).not.toBeNull();
     expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'sync-task' })).toBe(OwnershipSyncState.Failed);
+    setDisplay(knownDisplay({ taskHealth: { failedSessions: 1, retryingSessions: 1, isolatedSessions: 0, taskIssues: [], taskIssuesTruncated: false } }));
     expect(bridge.state()).toMatchObject({ error: undefined, errorCode: undefined, sessionSyncStatus: RemoteSyncStatus.Error });
     expect(warning.mock.calls.filter(([message]) => message === '[RemoteSync] Session synchronization failed')).toHaveLength(1);
     expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
@@ -325,6 +438,7 @@ describe('session synchronization recovery', () => {
     expect(store.get('import:sync-task')).toBeNull();
     expect(store.pending('sync-task')).toEqual([]);
     expect(bridge.associationSyncState({ kind: OwnershipTargetKind.Task, id: 'sync-task' })).toBe(OwnershipSyncState.Synced);
+    setDisplay(knownDisplay());
     expect(bridge.state()).toMatchObject({ error: undefined, errorCode: undefined, sessionSyncStatus: RemoteSyncStatus.Synced });
   });
 
@@ -505,7 +619,7 @@ describe('session synchronization recovery', () => {
   });
 
   it('does not restore the previous account synchronization warning after a pending retention fence finishes', async () => {
-    const { bridge, store } = syncing();
+    const { bridge, store, setDisplay } = syncing();
     const failure = { code: 47019, blocked: true };
     store.put('syncFailure:sync-task', failure);
     bridge.sessionSyncFailed = true;
@@ -517,17 +631,17 @@ describe('session synchronization recovery', () => {
     const fence = vi.spyOn(bridge, 'ensureRetentionFence').mockReturnValue(pendingFence);
     const sync = bridge.syncSessions();
     await vi.waitFor(() => expect(fence).toHaveBeenCalledTimes(1));
-    currentOwner = { userId: '20002', scopeKey: 'personal' };
+    currentOwner = { userId: '20002', scopeKey: 'personal' }; setDisplay(null);
     bridge.accountChanged();
-    expect(bridge.state().sessionSyncStatus).toBe(RemoteSyncStatus.Synced);
+    expect(bridge.state().sessionSyncStatus).toBe(RemoteSyncStatus.Pending);
     releaseFence();
     await sync;
-    expect(bridge.state()).toMatchObject({ owner: currentOwner, sessionSyncStatus: RemoteSyncStatus.Synced });
+    expect(bridge.state()).toMatchObject({ owner: currentOwner, sessionSyncStatus: RemoteSyncStatus.Pending });
     expect(store.get('syncFailure:sync-task')).toEqual(failure);
   });
 
   it('retains the synchronization summary while another owned task still has a failure', async () => {
-    const { bridge, store, requestApi } = syncing();
+    const { bridge, store, requestApi, setDisplay } = syncing();
     acknowledgeSnapshot(store);
     store.transaction(() => {
       store.db.prepare("INSERT INTO cowork_sessions VALUES ('other-task','Other',1,1,'idle')").run();
@@ -542,6 +656,7 @@ describe('session synchronization recovery', () => {
     expect(requestApi).not.toHaveBeenCalled();
     expect(store.get('syncFailure:sync-task')).toBeNull();
     expect(store.get('syncFailure:other-task')).toEqual(failure);
+    setDisplay(knownDisplay({ taskHealth: { failedSessions: 1, retryingSessions: 1, isolatedSessions: 0, taskIssues: [], taskIssuesTruncated: false } }));
     expect(bridge.state()).toMatchObject({ error: undefined, errorCode: undefined, sessionSyncStatus: RemoteSyncStatus.Error });
   });
 
@@ -874,11 +989,12 @@ describe('history and command lane isolation', () => {
     release(); await bridge.historyWork; bridge.stop();
   });
   it('preserves same-account switch intent and reports unknown when status storage reads fail', () => {
-    const { bridge, store } = fixture();
+    const { bridge, store, setDisplay } = fixture();
     expect(bridge.state().enabled).toBe(true);
+    setDisplay(null);
     const read = vi.spyOn(store, 'get').mockImplementation(() => { throw new Error('cache unavailable'); });
     expect(bridge.state()).toMatchObject({ enabled: true, connected: false, syncHealth: { status: 'degraded', reason: 'storage_dependency', pendingSessions: null } });
-    read.mockRestore(); bridge.stop();
+    expect(read).not.toHaveBeenCalled(); read.mockRestore(); bridge.stop();
   });
 });
 

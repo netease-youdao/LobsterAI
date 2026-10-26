@@ -5,6 +5,7 @@ export const RemoteWorkerFile = {
   Projection: 'remoteProjectionWorker.js',
   LiveProjection: 'remoteLiveProjectionWorker.js',
   Network: 'remoteNetworkWorker.js',
+  DisplayHealth: 'remoteDisplayHealthWorker.js',
   SecurityJournal: 'remoteSecurityJournalWorker.js',
   ImportSnapshot: 'remoteImportSnapshotWorker.js',
   HistoryGuard: 'remoteHistoryGuardWorker.cjs',

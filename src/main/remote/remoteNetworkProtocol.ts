@@ -7,9 +7,16 @@ export const RemoteNetworkLimit = { Requests: 6, BodyBytes: 2 * 1024 * 1024, Hea
   ArtifactPartBytes: 4 * 1024 * 1024, InputPartBytes: 8 * 1024 * 1024,
   QueueBytes: 8 * 1024 * 1024, BackgroundQueueBytes: 16 * 1024 * 1024, BackgroundQueueRequests: 16,
   BinaryBytes: 100 * 1024 * 1024, BinaryChunkBytes: 64 * 1024, BinaryTimeoutMs: 120000,
+  WatchdogIntervalMs: 1000, WatchdogTimeoutMs: 8000, WatchdogRecoveryMs: 8000,
   JsonDepth: 32, JsonNodes: 20000, FrameBytes: 64 * 1024, FramesPending: 16, FramesPerSecond: 60, SocketBufferedBytes: 64 * 1024, WorkerMemoryMb: 128 } as const;
 export const RemoteNetworkBodyEncoding = { Base64: 'base64' } as const;
 export interface RemoteNetworkRequestBody { body?: string; bodyEncoding?: typeof RemoteNetworkBodyEncoding.Base64 }
+/** Preserve existing APIs; v4 only adds the negotiated, read-only command recovery page. */
+export function remoteNetworkRequestAllowed(url: URL, method: unknown): boolean {
+  return url.protocol === 'https:' && typeof method === 'string' && ['GET','POST','PUT','PATCH','DELETE'].includes(method)
+    && (/^\/api\/remote\/v[1-3]\//u.test(url.pathname)
+      || method === 'GET' && /^\/api\/remote\/v4\/devices\/[A-Za-z0-9_-]{1,64}\/commands\/unresolved$/u.test(url.pathname));
+}
 /** Existing bounded PUT part APIs are the only binary request-body routes. */
 export function remoteNetworkUploadBytes(url: string, method = 'GET'): number {
   const parsed = new URL(url);

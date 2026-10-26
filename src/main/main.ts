@@ -687,11 +687,13 @@ import { RemoteLocalGc } from './remote/remoteLocalGc';
 import { RemoteModelCatalog } from './remote/remoteModelCatalog';
 import { remoteNetworkBinaryDownload } from './remote/remoteNetworkProtocol';
 import { remoteNetworkTransport } from './remote/remoteNetworkTransport';
+import { remotePerformance, RemotePerformanceStage } from './remote/remotePerformanceLog';
 import { showQuarantineRecovery, stopOwnedSessionWithRecovery } from './remote/remoteQuarantineRecovery';
 import { RemoteRegistrationIdentityStore } from './remote/remoteRegistrationIdentity';
 import { RemoteSecurityCoordinator } from './remote/remoteSecurityCoordinator';
 import { RemoteSecurityJournal, RemoteSecurityJournalWorkerIo } from './remote/remoteSecurityJournal';
 import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
+import { logSettingsOpenFromRenderer } from './remote/remoteSettingsOpenLog';
 import { remoteLogMessage } from './remote/remoteSyncLog';
 import { captureRemoteTelemetry } from './remote/remoteTelemetry';
 import { initializeRemoteTelemetry } from './remote/remoteTelemetryRuntime';
@@ -4346,11 +4348,13 @@ let coworkTempJanitor: CoworkTempJanitor | null = null;
 const getCoworkTempJanitor = (): CoworkTempJanitor => {
   if (!coworkTempJanitor) {
     coworkTempJanitor = createCoworkTempJanitor({
-      listAllCwds: () => getCoworkStore().listRecentSessionCwds(0),
+      listAllCwds: () => remotePerformance.sync(RemotePerformanceStage.SettingsTempCandidates, () => getCoworkStore().listRecentSessionCwds(0)),
       listActiveCwds: () => {
         try {
-          const activeSessionIds = getCoworkEngineRouter().getActiveSessionIds();
-          return getCoworkStore().listSessionCwds(activeSessionIds);
+          return remotePerformance.sync(RemotePerformanceStage.SettingsTempCandidates, () => {
+            const activeSessionIds = getCoworkEngineRouter().getActiveSessionIds();
+            return getCoworkStore().listSessionCwds(activeSessionIds);
+          });
         } catch (error) {
           console.warn('[CoworkTempJanitor] failed to resolve active session cwds:', error);
           return [];
@@ -5519,6 +5523,7 @@ if (!gotTheLock) {
   };
 
   ipcMain.on('log:fromRenderer', (_event, level: string, tag: string, message: string) => {
+    if (logSettingsOpenFromRenderer(tag, message)) return;
     const fn = level === 'error' ? console.error
       : level === 'warn' ? console.warn
         : level === 'debug' ? console.debug
@@ -5819,10 +5824,10 @@ if (!gotTheLock) {
   });
 
   // Auto-launch IPC handlers
-  ipcMain.handle(AppSettingsIpc.GetAutoLaunch, () => {
-    const stored = getStore().get<boolean>('auto_launch_enabled');
+  ipcMain.handle(AppSettingsIpc.GetAutoLaunch, () => remotePerformance.sync(RemotePerformanceStage.AutoLaunch, () => {
+    const stored = remotePerformance.sync(RemotePerformanceStage.SettingsPreferenceRead, () => getStore().get<boolean>('auto_launch_enabled'));
     try {
-      const status = getAutoLaunchStatus();
+      const status = remotePerformance.sync(RemotePerformanceStage.AutoLaunchNative, () => getAutoLaunchStatus());
       if (stored !== undefined && stored !== status.enabled) {
         console.warn(
           `[AutoLaunch] stored state (${stored}) differs from OS state (${status.enabled}); ${formatAutoLaunchStatusForLog(status)}`,
@@ -5834,7 +5839,7 @@ if (!gotTheLock) {
       console.error('[AutoLaunch] failed to read OS state; falling back to stored state:', error);
       return { enabled: stored ?? false };
     }
-  });
+  }));
 
   ipcMain.handle(AppSettingsIpc.SetAutoLaunch, (_event, enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
@@ -6369,6 +6374,11 @@ if (!gotTheLock) {
     return sessionDeletionService;
   };
 
+  // Read persisted initialization intent only while initializing, never from a settings/diagnostic read.
+  let remoteInitializationIntent: { key: string; enabled: boolean } | null = null;
+  let remoteDisplayOwner: RemoteOwner | null = null;
+  let remoteDisplayKeepAwake: boolean | undefined;
+  const remoteIntentKey = (): string => JSON.stringify([remoteDisplayOwner, getServerApiBaseUrl()]);
   const remoteInitializationCleanup: Array<() => void> = [];
   const buildRemoteBridge = (): RemoteBridge => {
     if (remoteBridge) return remoteBridge;
@@ -6425,7 +6435,7 @@ if (!gotTheLock) {
       },
       agentOwnership: getCoworkStore().agentOwnership,
       registrationIdentities: new RemoteRegistrationIdentityStore(app.getPath('appData'), app.getPath('userData'), safeStorage, identity),
-      store: getCoworkStore().remote, identity, getOwner: getCurrentRemoteOwner, getApiBaseUrl: getServerApiBaseUrl,
+      store: getCoworkStore().remote, identity, getOwner: getCurrentRemoteOwner, getDisplayOwner: () => remoteDisplayOwner, getApiBaseUrl: getServerApiBaseUrl,
       metadata: { name: os.hostname(), hostName: os.hostname(), instanceLabel: path.basename(app.getPath('userData')),
         platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', appVersion: app.getVersion() },
       request: async (owner, pathname, init) => {
@@ -6469,7 +6479,14 @@ if (!gotTheLock) {
     return remoteBridge;
   };
   const initializeRemoteBridgeOnce = (): RemoteBridge => {
-    try { return buildRemoteBridge(); }
+    const owner = getCurrentRemoteOwner();
+    remoteInitializationIntent = { key: remoteIntentKey(), enabled: false };
+    try {
+      const saved = owner ? getCoworkStore().remote.get<unknown>(`settings:${owner.userId}:${owner.scopeKey}`) : null;
+      remoteInitializationIntent.enabled = Boolean(owner) && (saved === null || typeof saved === 'object' && !Array.isArray(saved)
+        && ((saved as { enabled?: unknown }).enabled === undefined || (saved as { enabled?: unknown }).enabled === true));
+    } catch { /* Unknown persisted intent remains disabled; initialization reports the original storage failure. */ }
+    try { return remotePerformance.sync(RemotePerformanceStage.RemoteInitialize, () => buildRemoteBridge()); }
     catch (error) {
       for (const cleanup of remoteInitializationCleanup.reverse()) {
         try { cleanup(); } catch { /* Preserve the original failure after retiring partial initialization. */ }
@@ -6496,19 +6513,14 @@ if (!gotTheLock) {
   };
   const getRemoteAccountEpoch = (): string => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`;
   const readRemoteState = (): RemoteSettingsState => {
-    const owner = getCurrentRemoteOwner();
+    const owner = remoteDisplayOwner;
     try {
       if (remoteBridge && owner) {
         const state = remoteBridge.state();
         if (sameOwner(owner, state.owner)) return { ...state, accountEpoch: getRemoteAccountEpoch() };
       }
     } catch { /* A failed optional bridge must still expose a stable settings response. */ }
-    let enabled = false;
-    try {
-      const saved = owner ? getCoworkStore().remote.get<unknown>(`settings:${owner.userId}:${owner.scopeKey}`) : null;
-      enabled = Boolean(owner) && (saved === null || typeof saved === 'object' && !Array.isArray(saved)
-        && ((saved as { enabled?: unknown }).enabled === undefined || (saved as { enabled?: unknown }).enabled === true));
-    } catch { /* Unknown persisted intent remains disabled; preserve the original bytes. */ }
+    const enabled = Boolean(owner) && remoteInitializationIntent?.key === remoteIntentKey() && remoteInitializationIntent.enabled;
     const failure = owner ? remoteInitialization.failure : undefined;
     const failureMessages = {
       [RemoteInitializationFailure.SecureStorageUnavailable]: 'remoteSecureStorageUnavailable',
@@ -6530,13 +6542,13 @@ if (!gotTheLock) {
   });
   const connectionAccount = { getAccountEpoch: getRemoteAccountEpoch, getOwner: getCurrentRemoteOwner };
   ipcMain.handle(RemoteIpc.Connections, (_event, input: RemoteConnectionsRequest) => withRemoteConnectionAccount(input, connectionAccount,
-    () => initializeRemoteBridge().queryConnections()));
+    () => remotePerformance.async(RemotePerformanceStage.RemoteConnections, () => initializeRemoteBridge().queryConnections())));
   ipcMain.handle(RemoteIpc.RemoveConnection, (_event, input: RemoteConnectionRemoveRequest) => withRemoteConnectionAccount(input, connectionAccount,
-    () => initializeRemoteBridge().removeConnection(input)));
+    () => remotePerformance.async(RemotePerformanceStage.RemoteConnections, () => initializeRemoteBridge().removeConnection(input))));
   ipcMain.handle(RemoteIpc.ResumeConnection, (_event, input: RemoteConnectionResumeRequest) => withRemoteConnectionAccount(input, connectionAccount,
-    () => initializeRemoteBridge().resumeCurrentConnection(input)));
+    () => remotePerformance.async(RemotePerformanceStage.RemoteConnections, () => initializeRemoteBridge().resumeCurrentConnection(input))));
   ipcMain.handle(RemoteIpc.ConnectionOperation, (_event, input: RemoteConnectionOperationRequest) => withRemoteConnectionAccount(input, connectionAccount,
-    () => initializeRemoteBridge().queryConnectionOperation(input.requestId)));
+    () => remotePerformance.async(RemotePerformanceStage.RemoteConnections, () => initializeRemoteBridge().queryConnectionOperation(input.requestId))));
 
   ipcMain.handle(RemoteIpc.Configure, (_event, input: RemoteConfigureRequest) => configureRemoteSettings(input, {
     getAccountEpoch: getRemoteAccountEpoch,
@@ -6548,8 +6560,10 @@ if (!gotTheLock) {
         ? { name: path.basename(selection.filePaths[0]), path: fs.realpathSync(selection.filePaths[0]) } : undefined;
     },
     configureRemote: changes => {
-      try { return initializeRemoteBridge(changes.retry === true).configure(changes); }
-      catch (error) {
+      try {
+        const bridge = remotePerformance.sync(RemotePerformanceStage.RemoteInitialize, () => initializeRemoteBridge(changes.retry === true));
+        return remotePerformance.async(RemotePerformanceStage.RemoteConfigure, () => bridge.configure(changes));
+      } catch (error) {
         // A failed pure recheck returns the precise offline state, never a successful reconnect.
         if (error instanceof RemoteInitializationError && changes.retry && changes.enabled === undefined
           && changes.name === undefined && !changes.workspace && !changes.removeWorkspaceId
@@ -6708,6 +6722,7 @@ if (!gotTheLock) {
       });
     };
     let previousRemoteOwner = getCurrentRemoteOwner();
+    remoteDisplayOwner = previousRemoteOwner;
     let previousRecoveryIdentity = recoveryIdentity();
     try {
       const saved = getStore().get<{ version: number; phase: string; ownerHash: string }>(accountFenceKey);
@@ -6715,7 +6730,9 @@ if (!gotTheLock) {
     } catch { queueAccountFence(previousRemoteOwner); }
     for (const key of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context']) {
       getStore().onCriticalChange(key, () => {
+        remoteDisplayOwner = null;
         const next = getCurrentRemoteOwner();
+        remoteDisplayOwner = next;
         if (!(previousRemoteOwner === null && next === null) && !sameOwner(previousRemoteOwner, next)) {
           ownershipAccountEpoch++;
           desktopCompanionManager?.resetForAccountChange();
@@ -6738,6 +6755,7 @@ if (!gotTheLock) {
   };
 
   const initializeRemoteControl = (): void => {
+    remotePerformance.start();
     try {
       remoteTelemetryRuntime = initializeRemoteTelemetry({
         store: getStore(), reporter: getMainLogReporter(), appVersion: app.getVersion(),
@@ -6759,11 +6777,13 @@ if (!gotTheLock) {
       remoteLocalGc.start();
     } catch { console.warn('[RemoteGc] Background cache maintenance unavailable'); }
     try {
+      remoteDisplayKeepAwake = getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY);
+      getStore().onDidChange<boolean>(PREVENT_SLEEP_STORE_KEY, value => { remoteDisplayKeepAwake = value; });
       remoteSettingsController = new RemoteSettingsController({
         getRemoteState: readRemoteState,
         getOwner: getCurrentRemoteOwner,
         getAccountEpoch: getRemoteAccountEpoch,
-        getKeepAwakePreference: () => getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY),
+        getKeepAwakePreference: () => remoteDisplayKeepAwake,
         saveKeepAwakePreference: enabled => getStore().set(PREVENT_SLEEP_STORE_KEY, enabled),
         applyKeepAwake: setPreventSleepBlockerEnabled,
         isKeepAwakeActive: () => preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId),
@@ -12729,7 +12749,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.TempStorageUsage, async () => {
     try {
-      const preview = await getCoworkTempJanitor().preview();
+      const preview = await remotePerformance.async(RemotePerformanceStage.SettingsTempPreview, () => getCoworkTempJanitor().preview());
       return { success: true, ...preview };
     } catch (error) {
       return {
@@ -16386,6 +16406,7 @@ if (!gotTheLock) {
     void remoteTelemetryRuntime?.dispose();
     remoteNetworkTransport.dispose();
     remoteSettingsController?.dispose();
+    remotePerformance.stop();
     // Tear down companion windows, shortcut and monitors before the first await
     // so nothing re-shows a window that hideAppWindowsForQuit() just hid.
     desktopCompanionManager?.dispose();

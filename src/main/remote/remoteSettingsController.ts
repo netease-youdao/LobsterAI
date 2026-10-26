@@ -1,4 +1,5 @@
 import type { RemoteSettingsState } from '../../shared/remote/constants';
+import { remotePerformance, RemotePerformanceStage } from './remotePerformanceLog';
 
 export const PREVENT_SLEEP_STORE_KEY = 'prevent_sleep_enabled';
 
@@ -22,18 +23,20 @@ export class RemoteSettingsController {
   constructor(private readonly deps: SettingsDependencies) {}
 
   state(): RemoteSettingsState {
-    const remote = this.deps.getRemoteState();
-    let active = false;
-    try { active = this.deps.isKeepAwakeActive(); } catch { /* OS power API may be unavailable. */ }
-    return {
-      ...remote,
-      ...(this.deps.getAccountEpoch ? { accountEpoch: this.deps.getAccountEpoch() } : {}),
-      stateRevision: this.revision,
-      keepAwakeEnabled: Boolean(remote.owner) && (this.deps.getKeepAwakePreference() ?? true),
-      keepAwakeActive: active,
-      keepAwakeError: this.powerError,
-      screenLocked: this.screenLocked,
-    };
+    return remotePerformance.sync(RemotePerformanceStage.SettingsState, () => {
+      const remote = this.deps.getRemoteState();
+      let active = false;
+      try { active = this.deps.isKeepAwakeActive(); } catch { /* OS power API may be unavailable. */ }
+      return {
+        ...remote,
+        ...(this.deps.getAccountEpoch ? { accountEpoch: this.deps.getAccountEpoch() } : {}),
+        stateRevision: this.revision,
+        keepAwakeEnabled: Boolean(remote.owner) && (this.deps.getKeepAwakePreference() ?? true),
+        keepAwakeActive: active,
+        keepAwakeError: this.powerError,
+        screenLocked: this.screenLocked,
+      };
+    });
   }
 
   notify(): void {

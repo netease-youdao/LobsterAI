@@ -1,4 +1,4 @@
-import { remoteNetworkBinaryDownload,RemoteNetworkBodyEncoding, remoteNetworkCapacities, RemoteNetworkFailure as Failure, type RemoteNetworkLane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestLane,remoteNetworkUploadBytes } from './remoteNetworkProtocol';
+import { remoteNetworkBinaryDownload,RemoteNetworkBodyEncoding, remoteNetworkCapacities, RemoteNetworkFailure as Failure, type RemoteNetworkLane, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message, remoteNetworkRequestAllowed, remoteNetworkRequestLane,remoteNetworkUploadBytes } from './remoteNetworkProtocol';
 
 interface Request {
   controller: AbortController; lane: RemoteNetworkLane;
@@ -68,10 +68,17 @@ async function binaryResponse(id: string, request: Request, response: Response, 
 async function fetchRequest(message: any): Promise<void> {
   const { id } = message;
   if (!validId(id) || requests.has(id)) return;
+  let transportStartedAt: number | undefined;
+  const reply = (value: Record<string, unknown>): void => {
+    // Zero means admission failed before fetch. These internal scalars never enter HTTP data.
+    // Streaming includes consumer credit waits; this is worker elapsed time, not pure wire latency.
+    const transportMs = transportStartedAt === undefined ? 0 : Math.max(0, performance.now() - transportStartedAt);
+    emit({ ...value, transportMs, sentAtEpochMs: Date.now() });
+  };
   let lane: RemoteNetworkLane;
   try { lane = remoteNetworkRequestLane(message.url, message.method); }
-  catch { emit({ type: Message.Result, id, error: Failure.RequestInvalid }); return; }
-  if (requests.size >= Limit.Requests || [...requests.values()].filter(request => request.lane === lane).length >= remoteNetworkCapacities[lane]) { emit({ type: Message.Result, id, error: Failure.Busy }); return; }
+  catch { reply({ type: Message.Result, id, error: Failure.RequestInvalid }); return; }
+  if (requests.size >= Limit.Requests || [...requests.values()].filter(request => request.lane === lane).length >= remoteNetworkCapacities[lane]) { reply({ type: Message.Result, id, error: Failure.Busy }); return; }
   const controller = new AbortController(), request: Request = { controller, lane };
   requests.set(id, request);
   const binary = remoteNetworkBinaryDownload(message.url, message.method);
@@ -89,18 +96,18 @@ async function fetchRequest(message: any): Promise<void> {
       requestBody = decoded;
     } else if (message.body !== undefined && typeof message.body !== 'string') throw new Error(Failure.RequestInvalid);
     else if (Buffer.byteLength(message.body || '') > Limit.BodyBytes) throw new Error(Failure.RequestBudget);
-    if (url.protocol !== 'https:' || !/^\/api\/remote\/v[1-3]\//u.test(url.pathname)
-      || typeof message.method !== 'string' || !['GET','POST','PUT','PATCH','DELETE'].includes(message.method)
+    if (!remoteNetworkRequestAllowed(url, message.method)
       || Buffer.byteLength(JSON.stringify(message.headers)) > Limit.HeaderBytes) throw new Error(Failure.RequestInvalid);
     // This notification carries no URL/body/auth data and must not change the HTTP outcome.
     try { process.send?.({ type: Message.FetchStarted, id }, () => {}); } catch { /* Best-effort telemetry only. */ }
+    transportStartedAt = performance.now();
     const response = await fetch(url, { method: message.method, headers: message.headers, body: requestBody,
       signal: controller.signal, redirect: 'error' });
     const headers = Object.fromEntries(response.headers);
     if (Buffer.byteLength(JSON.stringify(headers)) > Limit.HeaderBytes) throw new Error(Failure.ResponseBudget);
     if (binary && response.status === 200) {
       const bytes = await binaryResponse(id, request, response, headers);
-      requests.delete(id); emit({ type: Message.StreamEnd, id, bytes }); return;
+      requests.delete(id); reply({ type: Message.StreamEnd, id, bytes }); return;
     }
     const chunks: Buffer[] = []; let bytes = 0;
     if (response.body) {
@@ -118,10 +125,10 @@ async function fetchRequest(message: any): Promise<void> {
     let json: unknown = null, jsonValid = false;
     try { json = JSON.parse(body); jsonValid = true; } catch { /* Parent preserves the existing invalid-response error. */ }
     if (jsonValid && !boundedJson(json)) throw new Error(Failure.ResponseBudget);
-    emit({ type: Message.Result, id, status: response.status, headers, body, json, jsonValid });
+    reply({ type: Message.Result, id, status: response.status, headers, body, json, jsonValid });
   } catch (error) {
     const allowed = new Set<string>([Failure.RequestInvalid,Failure.RequestBudget,Failure.ResponseBudget]);
-    emit({ type: Message.Result, id, error: controller.signal.aborted ? Failure.Cancelled
+    reply({ type: Message.Result, id, error: controller.signal.aborted ? Failure.Cancelled
       : error instanceof Error && allowed.has(error.message) ? error.message : Failure.Failed });
   } finally { clearTimeout(timer); requests.delete(id); }
 }

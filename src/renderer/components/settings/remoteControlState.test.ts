@@ -203,6 +203,7 @@ describe('connection and content health remain independent', () => {
     expect(remoteAttention(state)).toEqual({ key: 'remoteTasksSyncFailed', immediate: false });
     expect(remoteSyncDescription({ ...state, connected: false })).toBe('remoteSyncPaused');
     expect(remoteSyncDescription({ ...state, syncHealth: { ...state.syncHealth, reason: RemoteSyncHealthReason.StorageDependency } })).toBe('remoteSyncPaused');
+    expect(remoteSyncDescription({ ...state, syncHealth: { ...state.syncHealth, reason: RemoteSyncHealthReason.StorageDependency, statisticsUnavailable: true } })).toBe('remoteSyncStatisticsUnavailable');
   });
 
   test('new clients distinguish backlog and cache recovery; old clients do not claim full sync', () => {

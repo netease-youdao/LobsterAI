@@ -101,7 +101,7 @@ export function toggleRemoteSettingsSwitch(state: RemoteSettingsState | null, se
 /** A live socket does not prove that all content or files have been acknowledged. */
 export function remoteSyncDescription(state: RemoteSettingsState | null): string | null {
   if (state?.initializationFailure) return null;
-  if (state?.syncHealth?.reason === RemoteSyncHealthReason.StorageDependency) return 'remoteSyncPaused';
+  if (state?.syncHealth?.reason === RemoteSyncHealthReason.StorageDependency) return state.syncHealth.statisticsUnavailable ? 'remoteSyncStatisticsUnavailable' : 'remoteSyncPaused';
   if (!state?.owner || !state.enabled || needsRemoteSignIn(state)) return null;
   const health = state.syncHealth;
   if (health?.admissionDeferred) return 'remoteSyncPaused';

@@ -10,6 +10,7 @@ import { ensureDesktopInputJobs } from './remoteDesktopInputJobs';
 import { type HistoryContext, type HistoryOperation,HistoryPreparation } from './remoteHistoryStore';
 import { recentLiveCandidates } from './remoteLiveCandidates';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
+import { remotePerformance, RemotePerformanceStage } from './remotePerformanceLog';
 import { recoveryEvents, recoveryRequired, recoverySourceManifest } from './remoteRecoveryProof';
 import { replyModelPresetNames } from './remoteReplyModel';
 import type { CoreRemoteBinding, RemoteStore } from './remoteStore';
@@ -76,6 +77,16 @@ export class RemoteAvailabilityPublisher {
     const context = this.deps.context();
     try { return !!context && !this.deps.store.get(`${AvailabilityDeletion.Prefix}${localId}`) && this.ledger.session(context.scope, localId)?.phase === 'active'; }
     catch { return false; /* Unknown control evidence never permits execution or a legacy writer. */ }
+  }
+  /** In-flight and retry state is already bounded in memory; never consult the context/store from display reads. */
+  displayTransientHealth(scope: string | null): { pending: boolean; degraded: boolean; controlInFlight: boolean } {
+    if (!scope) return { pending: false, degraded: false, controlInFlight: false };
+    let degraded = false, controlInFlight = false;
+    for (const key of this.failures.keys()) {
+      if (key.startsWith(`${scope}:control:`) || key.startsWith(`${scope}:live:`)) { degraded = true; break; }
+    }
+    for (const key of this.controlDeadlines.keys()) if (key.startsWith(`${scope}:control:`)) { controlInFlight = true; break; }
+    return { pending: degraded || controlInFlight, degraded, controlInFlight };
   }
   health(): { sessions: number; pendingSessions: number; degraded: boolean; oldest: number | null; lastSuccess: number | null; lanes: RemoteSyncLanes; countsTruncated: boolean } | null {
     const context = this.deps.context();
@@ -149,28 +160,30 @@ export class RemoteAvailabilityPublisher {
     return !this.stopped && next?.scope === context.scope && next.deviceId === context.deviceId && next.generation === context.generation;
   }
   private tick(): void {
-    let context: AvailabilityContext | null;
-    try { context = this.deps.context(); } catch (error) { this.fail('context', error); this.wake(); return; }
-    if (this.stopped || !context || !context.generation) return;
-    if (!this.controlWork) {
-      const work = this.controls(context).catch(error => this.fail(`${context.scope}:control`, error)).finally(() => {
-        if (this.controlWork === work) this.controlWork = null;
-      });
-      this.controlWork = work;
-    }
-    if (!this.liveWork) {
-      const work = this.live(context).catch(error => this.fail(`${context.scope}:live`, error)).finally(() => {
-        if (this.liveWork === work) this.liveWork = null;
-      });
-      this.liveWork = work;
-    }
-    if (!this.historyWork) {
-      const work = this.history(context).catch(error => this.fail(`${context.scope}:history`, error)).finally(() => {
-        if (this.historyWork === work) this.historyWork = null;
-      }); this.historyWork = work;
-    }
-    // Local scheduling only. Idle sessions generate no periodic HTTP traffic.
-    this.timer = setTimeout(() => { this.timer = null; this.tick(); }, 1000); this.timer.unref?.();
+    return remotePerformance.sync(RemotePerformanceStage.Availability, () => {
+      let context: AvailabilityContext | null;
+      try { context = this.deps.context(); } catch (error) { this.fail('context', error); this.wake(); return; }
+      if (this.stopped || !context || !context.generation) return;
+      if (!this.controlWork) {
+        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityControl, () => this.controls(context)).catch(error => this.fail(`${context.scope}:control`, error)).finally(() => {
+          if (this.controlWork === work) this.controlWork = null;
+        });
+        this.controlWork = work;
+      }
+      if (!this.liveWork) {
+        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityLive, () => this.live(context)).catch(error => this.fail(`${context.scope}:live`, error)).finally(() => {
+          if (this.liveWork === work) this.liveWork = null;
+        });
+        this.liveWork = work;
+      }
+      if (!this.historyWork) {
+        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityHistory, () => this.history(context)).catch(error => this.fail(`${context.scope}:history`, error)).finally(() => {
+          if (this.historyWork === work) this.historyWork = null;
+        }); this.historyWork = work;
+      }
+      // Local scheduling only. Idle sessions generate no periodic HTTP traffic.
+      this.timer = setTimeout(() => { this.timer = null; this.tick(); }, 1000); this.timer.unref?.();
+    });
   }
   private eligible(key: string): boolean { return (this.failures.get(key)?.retryAt || 0) <= Date.now(); }
   private fail(key: string, error: unknown): void {

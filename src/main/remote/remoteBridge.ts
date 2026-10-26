@@ -7,7 +7,7 @@ import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import type { OwnershipTarget } from '../../shared/ownership/types';
 import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReasonCode, type RemoteConnectionRemoveRequest, type RemoteConnectionResumeRequest, RemoteDeviceAdmissionState, type RemoteDeviceConnection, RemoteDeviceConnectionState } from '../../shared/remote/connections';
-import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
+import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
 import type { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteFileCapability } from '../../shared/remote/files';
@@ -27,12 +27,16 @@ import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
 import { RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { RemoteConnectionClient } from './remoteConnectionClient';
 import { remoteDiagnostics } from './remoteDiagnostics';
+import type { RemoteDisplayHealthInput, RemoteDisplayHealthResult } from './remoteDisplayHealth';
+import { RemoteDisplaySnapshot } from './remoteDisplaySnapshot';
 import { RemoteFileSync, type RemoteFileSyncDependencies } from './remoteFileSync';
+import { RemoteHistoryJob } from './remoteHistoryJob';
 import { RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
 import type { ImportPartIndex } from './remoteImportSnapshotWorker';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import type { RemoteSocket } from './remoteNetworkProtocol';
 import { remoteResponseJson } from './remoteNetworkTransport';
+import { remotePerformance, RemotePerformanceEvent, RemotePerformanceOutcome, RemotePerformanceReason, RemotePerformanceStage } from './remotePerformanceLog';
 import { isTransientProjectionFailure } from './remoteProjectionCoordinator';
 import { RemoteQuestionError } from './remoteQuestionService';
 import type { RegistrationIdentities, RemoteRegistrationIdentity } from './remoteRegistrationIdentity';
@@ -49,6 +53,7 @@ import { RemoteTaskDataError, RemoteTaskSyncState, type TaskSyncContext } from '
 import { captureRemoteTelemetry } from './remoteTelemetry';
 import { RemoteBridgeTelemetry, remoteRequestTelemetryFailureStage, remoteRequestTelemetryFields, remoteRequestTelemetryOutcome } from './remoteTelemetryBridge';
 import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
+import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 export interface RemoteCommand {
   commandId: string; type: string; sessionId?: string; runId?: string; status: string; statusVersion: string;
@@ -91,6 +96,8 @@ export interface BridgeDependencies {
   getDefaultWorkspace?(): { path: string; name: string; available?: boolean } | Promise<{ path: string; name: string; available?: boolean }>;
   onStateChange?(): void;
   getOwner(): RemoteOwner | null;
+  /** Memory-only account projection for display; operational admission always uses getOwner. */
+  getDisplayOwner?(): RemoteOwner | null;
   /** Legacy compatibility only; client mode never decides synchronization admission. */
   getEnvironment?(): RemoteEnvironment;
   getApiBaseUrl(): string;
@@ -151,7 +158,9 @@ export class RemoteBridge {
   private errorCode: number | undefined;
   private errorRequestKey: string | undefined;
   private readonly requestErrorKeys = new WeakMap<object, string>();
-  private lastGoodState: RemoteSettingsState | null = null;
+  private readonly displayJob = new RemoteHistoryJob();
+  private readonly displaySnapshot: RemoteDisplaySnapshot<RemoteDisplayHealthResult>;
+  private displaySettings: { key: string; value: LocalSettings } | null = null;
   private sessionSyncFailed = false;
   private historyWork: Promise<void> | null = null;
   private historyRetryAt = 0;
@@ -231,6 +240,23 @@ export class RemoteBridge {
   private fileTimer: ReturnType<typeof setInterval> | null = null;
   constructor(private readonly deps: BridgeDependencies) {
     this.accountRoute = deps.getApiBaseUrl();
+    this.displaySnapshot = new RemoteDisplaySnapshot({
+      produce: async (key, signal) => {
+        const input = this.displayInput();
+        if (!input || key !== this.displayKey() || signal.aborted || input.database === ':memory:') return null;
+        const cancel = (): void => this.displayJob.cancel();
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          const result = await this.displayJob.run<RemoteDisplayHealthResult>(remoteWorkerPath(RemoteWorkerFile.DisplayHealth), input, {
+            timeoutMs: 5000, memoryMb: 96, resultLimitBytes: 64 * 1024, prefix: 'REMOTE_DISPLAY_HEALTH',
+            current: () => !signal.aborted && key === this.displayKey(),
+          });
+          if (result.status === 'unknown') remotePerformance.event(RemotePerformanceStage.DisplaySnapshot, RemotePerformanceEvent.Instant, { outcome: RemotePerformanceOutcome.Unknown, reason: RemotePerformanceReason.Unavailable });
+          return result;
+        } finally { signal.removeEventListener('abort', cancel); }
+      },
+      onChanged: () => this.changed(),
+    });
     this.targets = new RemoteSyncTargetStore(deps.store);
     this.taskSync = new RemoteTaskSyncState(deps.store.db, undefined, undefined, observer => deps.store.afterCommit(observer));
     this.availability = new RemoteAvailabilityPublisher({
@@ -311,6 +337,7 @@ export class RemoteBridge {
     return { ready: this.capabilitiesKnown || Boolean(this.targetId), connectionAttemptId: this.telemetryConnectionAttemptId, targetId: this.targetId, dataSpaceId: target?.dataSpaceId, dataGeneration: target?.dataGeneration };
   }
   start(): void {
+    this.displaySnapshot.start();
     remoteDiagnostics.start(() => {
       const observed = this.state();
       const health = observed.syncHealth;
@@ -335,10 +362,10 @@ export class RemoteBridge {
   }
   canCaptureRemoteFiles(): boolean { return !this.deps.store.needsSecurityRecovery() && this.files?.canCaptureInput() === true && this.settings().enabled; }
   getInputAgentCatalog(): RemoteAgentCatalog | null { return this.agentCatalog; }
-  stop(): void { this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
+  stop(): void { this.displaySnapshot.stop(); this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.fileTimer) clearInterval(this.fileTimer); this.fileTimer = null; this.files?.pause(); this.disconnect(); }
   accountChanged(): void { this.ensureAccount(); this.schedule(0); }
-  private changed(): void { try { this.deps.onStateChange?.(); } catch { remoteLogMessage('warn', '[RemoteSync] State notification deferred', {}); } }
+  private changed(): void { try { remotePerformance.sync(RemotePerformanceStage.StateNotify, () => this.deps.onStateChange?.()); } catch { remoteLogMessage('warn', '[RemoteSync] State notification deferred', {}); } }
   private targetKey(prefix: string): string { return `${prefix}:${this.targetId ? `${this.targetId}:` : ''}${this.owner?.userId}:${this.owner?.scopeKey}`; }
   private settingsKey(): string { return this.targetKey('settings'); }
   private controlKey(): string { return this.targetKey('controlQueue'); }
@@ -346,102 +373,120 @@ export class RemoteBridge {
   private pendingConfigurationKey(): string { return `pendingConfiguration:${this.owner?.userId}:${this.owner?.scopeKey}`; }
   private catalogFailureKey(): string { return `${this.targetKey('agentCatalogFailure')}:${this.registration?.deviceId}`; }
   private settings(): LocalSettings {
-    const saved = this.owner ? this.deps.store.get<LocalSettings>(this.settingsKey()) : null;
-    return { enabled: Boolean(this.owner), name: this.deps.metadata.hostName, workspaces: [], settingsVersion: '0', ...saved };
+    const saved = remotePerformance.sync(RemotePerformanceStage.SettingsPreferenceRead, () => this.owner ? this.deps.store.get<LocalSettings>(this.settingsKey()) : null);
+    const value: LocalSettings = { enabled: Boolean(this.owner), name: this.deps.metadata.hostName, workspaces: [], settingsVersion: '0', ...saved };
+    this.displaySettings = { key: this.displaySettingsKey(), value: { ...value, workspaces: value.workspaces.map(workspace => ({ ...workspace })) } };
+    return value;
   }
   private controls(): ControlIntent[] { return this.deps.store.get<ControlIntent[]>(this.controlKey()) || []; }
-  state(): RemoteSettingsState {
-    try { const state = this.readState(); this.lastGoodState = state; return state; }
-    catch {
-      // Read-only settings failures must not break the shell or turn unknown health into a successful sync.
-      let owner: RemoteOwner | null = null;
-      try { owner = this.deps.getOwner(); } catch { /* The current account is unknown; never reuse another account's summary. */ }
-      const saved = this.lastGoodState && (owner ? sameOwner(owner, this.lastGoodState.owner) : this.lastGoodState.owner === null) ? this.lastGoodState : null;
-      const connected = !!owner && sameOwner(owner, this.owner) && saved?.enabled === true && this.generation !== null && Date.now() - this.lastPong < this.heartbeatTimeout;
-      return { ...saved, enabled: saved?.enabled ?? false, connected, connectionStatus: connected ? RemoteConnectionStatus.Online : RemoteConnectionStatus.Offline, name: saved?.name || this.deps.metadata.hostName, hostName: this.deps.metadata.hostName,
-        owner, workspaces: saved?.workspaces || [], accessRequests: [], error: 'REMOTE_SETTINGS_UNAVAILABLE', syncHealth: { status: RemoteSyncHealthStatus.Degraded,
-          reason: RemoteSyncHealthReason.StorageDependency, pendingSessions: null, oldestPendingAt: null,
-          lastSuccessfulSyncAt: null, observedAt: new Date().toISOString() } };
-    }
+  private displayOwner(): RemoteOwner | null { return this.deps.getDisplayOwner ? this.deps.getDisplayOwner() : this.deps.getOwner(); }
+  private displaySettingsKey(): string { return JSON.stringify([this.accountGeneration, this.accountRoute, this.settingsKey()]); }
+  private displayKey(): string | null {
+    try {
+      if (this.stopped || !this.owner || !sameOwner(this.owner, this.displayOwner()) || this.accountRoute !== this.deps.getApiBaseUrl()) return null;
+    } catch { return null; }
+    if (this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled) return null;
+    return JSON.stringify([this.accountGeneration, this.accountRoute, this.owner, this.targetId, this.registration?.deviceId,
+      this.remoteEnvironment(), this.syncPaused(), this.deps.store.needsSecurityRecovery(),
+      this.displaySettings?.key === this.displaySettingsKey() ? this.displaySettings.value.enabled : null,
+      this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true]);
   }
-  private readState(): RemoteSettingsState {
-    const settings = this.settings();
-    const connected = sameOwner(this.owner, this.deps.getOwner()) && settings.enabled && this.generation !== null && Date.now() - this.lastPong < this.heartbeatTimeout;
-    const pendingSettings = this.controls().length > 0;
-    const pendingName = !!this.deps.store.get(this.nameKey());
-    const pendingRows = this.owner ? this.deps.store.db.prepare(`SELECT s.local_id,r.dirty_at AS oldest FROM remote_sync s
-      LEFT JOIN remote_session_revisions r ON r.session_id=s.local_id
-      JOIN cowork_session_ownership o ON o.session_id=s.local_id
-      WHERE o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=?
-        AND NOT EXISTS(SELECT 1 FROM remote_state closed WHERE closed.key='deletionClosed:'||s.local_id)
-        AND (s.needs_snapshot=1 OR s.source_seq>s.ack_seq OR EXISTS(SELECT 1 FROM remote_dirty d WHERE d.session_id=s.local_id))`)
-      .all(this.owner.userId, this.owner.scopeKey) as Array<{ local_id: string; oldest: number | null }> : [];
-    const legacyPending = pendingRows.filter(row => this.availability.legacyHistoryAllowed(row.local_id));
-    const availabilityHealth = this.availability.health();
-    const oldest = legacyPending.reduce<number | null>((value, row) => row.oldest && (value === null || row.oldest < value) ? row.oldest : value, null);
-    const oldestTimes = [oldest, availabilityHealth?.oldest].filter((value): value is number => typeof value === 'number');
-    const pending = { count: legacyPending.length + (availabilityHealth?.pendingSessions || 0), oldest: oldestTimes.length ? Math.min(...oldestTimes) : null };
-    const recoveryRequired = this.deps.store.needsSecurityRecovery();
-    const filesHealth = this.files?.health();
-    const filesDegraded = filesHealth?.degraded === true;
-    const taskHealth = this.taskContext() ? this.taskSync.health(this.taskContext()!, id => this.sessionAdmitted(id), id => this.availability.legacyHistoryAllowed(id)) : undefined;
-    const storagePending = [...this.taskMemoryBlocks.values()].some(item => sameOwner(item.context.owner, this.owner)
-      && item.context.target === this.remoteEnvironment() && item.context.deviceId === this.registration?.deviceId);
-    const syncFailed = Boolean(storagePending || taskHealth?.failedSessions || taskHealth?.countsTruncated || availabilityHealth?.degraded || !availabilityHealth?.sessions && this.sessionSyncFailed);
-    const reason = recoveryRequired ? RemoteSyncHealthReason.LocalRecovery : this.connectionRemoved ? RemoteSyncHealthReason.Removed : this.quotaBlocked ? RemoteSyncHealthReason.Quota
-      : storagePending ? RemoteSyncHealthReason.StorageDependency : syncFailed ? RemoteSyncHealthReason.Projection : filesDegraded ? RemoteSyncHealthReason.Files : settings.enabled && !connected ? RemoteSyncHealthReason.Connection : undefined;
-    // History scans also run when idle; only outstanding content should change the device's visible sync status.
-    const syncHealth: RemoteSyncHealth = {
-      ...taskHealth, lanes: availabilityHealth?.lanes, countsTruncated: taskHealth?.countsTruncated || availabilityHealth?.countsTruncated, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: this.admissionDeferred,
-      status: recoveryRequired ? RemoteSyncHealthStatus.Paused : !this.owner || !settings.enabled || this.connectionRemoved || this.quotaBlocked ? RemoteSyncHealthStatus.Paused
-        : syncFailed || filesDegraded ? RemoteSyncHealthStatus.Degraded : (pending?.count || 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
-      ...(reason ? { reason } : {}), pendingSessions: pending?.count ?? null, oldestPendingAt: pending?.oldest ? new Date(pending.oldest).toISOString() : null,
-      lastSuccessfulSyncAt: availabilityHealth?.sessions ? (availabilityHealth.lastSuccess ? new Date(availabilityHealth.lastSuccess).toISOString() : null) : this.owner ? this.deps.store.get<string>(`lastSuccessfulSync:${this.owner.userId}:${this.owner.scopeKey}`) : null,
-      observedAt: new Date().toISOString(),
-    };
-    return { syncHealth, enabled: settings.enabled, connected, deviceConnectionManagementSupported: this.capabilitiesKnown || this.connectionManagementKnown ? this.connectionManagement || this.connectionManagementKnown : undefined, deviceConnectionManagementEnabled: this.connectionManagementEnabled, deviceConnectionManagementClusterReady: this.connectionManagementClusterReady, deviceId: this.registration?.deviceId,
-      name: settings.name, hostName: this.deps.metadata.hostName, owner: this.owner,
-      connectionStatus: connected ? RemoteConnectionStatus.Online : RemoteConnectionStatus.Offline,
-      connectionReason: !this.owner ? RemoteConnectionReason.SignedOut : !settings.enabled ? RemoteConnectionReason.Disabled : this.connectionRemoved ? RemoteConnectionReason.Removed : this.quotaBlocked ? RemoteConnectionReason.QuotaBlocked : this.workspaceUnavailable && !this.error ? RemoteConnectionReason.WorkspaceUnavailable : this.connectionReason,
-      settingsSyncStatus: pendingSettings ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
-      nameSyncStatus: pendingName ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
-      agentCatalogSyncStatus: this.owner && this.deps.store.get(this.catalogFailureKey()) ? RemoteSyncStatus.Error : RemoteSyncStatus.Synced,
-      sessionSyncStatus: syncFailed ? RemoteSyncStatus.Error : RemoteSyncStatus.Synced,
-      workspaces: settings.workspaces.map(({ path: _path, ...w }) => w), error: this.error, errorCode: this.errorCode, accessRequests: this.accesses };
+  private displayInput(): RemoteDisplayHealthInput | null {
+    if (!this.displayKey() || !this.owner) return null;
+    const enabled = this.displaySettings?.key === this.displaySettingsKey() ? this.displaySettings.value.enabled : true;
+    return { database: this.deps.store.db.name, owner: this.owner, target: this.remoteEnvironment(), targetId: this.targetId,
+      deviceId: this.registration?.deviceId ?? null,
+      availabilityScope: this.targetId && this.registration && enabled && !this.syncPaused() && !this.deps.store.needsSecurityRecovery()
+        ? `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}` : null,
+      historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
+      settingsKey: this.settingsKey(), controlsKey: this.controlKey(), nameKey: this.nameKey(), catalogFailureKey: this.catalogFailureKey() };
+  }
+  state(): RemoteSettingsState {
+    return remotePerformance.sync(RemotePerformanceStage.RemoteState, () => {
+      // Display and diagnostic reads are memory-only. No SQLite, payload hashing or worker startup on the caller's stack.
+      let currentOwner: RemoteOwner | null = null, current = false;
+      try { currentOwner = this.displayOwner(); current = sameOwner(this.owner, currentOwner) && this.accountRoute === this.deps.getApiBaseUrl(); }
+      catch { /* Unknown account context cannot expose an earlier account's display data. */ }
+      const snapshot = this.displaySnapshot.read(this.displayKey());
+      const health = snapshot?.status === 'known' ? snapshot : null;
+      const saved = current && this.displaySettings?.key === this.displaySettingsKey() ? this.displaySettings.value : health?.settings;
+      const settings: LocalSettings = { enabled: Boolean(currentOwner), name: this.deps.metadata.hostName, workspaces: [], settingsVersion: '0', ...saved };
+      const connected = current && settings.enabled && this.generation !== null && Date.now() - this.lastPong < this.heartbeatTimeout;
+      const availabilityHealth = health?.availability;
+      const taskHealth = health?.taskHealth;
+      const transient = this.availability.displayTransientHealth(current ? this.displayInput()?.availabilityScope ?? null : null);
+      const lanes = { ...availabilityHealth?.lanes };
+      if (transient.controlInFlight && (!lanes.control || lanes.control === RemoteSyncLaneStatus.Idle || lanes.control === RemoteSyncLaneStatus.Pending)) lanes.control = RemoteSyncLaneStatus.InFlight;
+      if (transient.degraded && lanes.recovery !== RemoteSyncLaneStatus.Degraded && lanes.recovery !== RemoteSyncLaneStatus.Unknown) lanes.recovery = RemoteSyncLaneStatus.Backoff;
+      const oldestTimes = [health?.legacy.oldest, availabilityHealth?.oldest].filter((value): value is number => typeof value === 'number');
+      const pending = health ? Math.max(health.legacy.pendingSessions + (availabilityHealth?.pendingSessions ?? 0), transient.pending ? 1 : 0) : null;
+      const recoveryRequired = this.deps.store.needsSecurityRecovery();
+      const filesHealth = current ? this.files?.health() : undefined;
+      const filesDegraded = filesHealth?.degraded === true;
+      const storagePending = current && [...this.taskMemoryBlocks.values()].some(item => sameOwner(item.context.owner, this.owner)
+        && item.context.target === this.remoteEnvironment() && item.context.deviceId === this.registration?.deviceId);
+      const syncFailed = Boolean(storagePending || transient.degraded || taskHealth?.failedSessions || taskHealth?.countsTruncated || availabilityHealth?.degraded || current && !availabilityHealth?.sessions && this.sessionSyncFailed);
+      const reason = recoveryRequired ? RemoteSyncHealthReason.LocalRecovery : current && this.connectionRemoved ? RemoteSyncHealthReason.Removed : current && this.quotaBlocked ? RemoteSyncHealthReason.Quota
+        : storagePending ? RemoteSyncHealthReason.StorageDependency : syncFailed ? RemoteSyncHealthReason.Projection : filesDegraded ? RemoteSyncHealthReason.Files
+          : !health && currentOwner && settings.enabled ? RemoteSyncHealthReason.StorageDependency : settings.enabled && !connected ? RemoteSyncHealthReason.Connection : undefined;
+      const syncHealth: RemoteSyncHealth = {
+        ...taskHealth, lanes, countsTruncated: taskHealth?.countsTruncated || availabilityHealth?.countsTruncated,
+        statisticsUnavailable: !health, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: current && this.admissionDeferred,
+        status: recoveryRequired || !currentOwner || !settings.enabled || current && (this.connectionRemoved || this.quotaBlocked) ? RemoteSyncHealthStatus.Paused
+          : syncFailed || filesDegraded || !health ? RemoteSyncHealthStatus.Degraded : (pending ?? 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
+        ...(reason ? { reason } : {}), pendingSessions: pending, oldestPendingAt: oldestTimes.length ? new Date(Math.min(...oldestTimes)).toISOString() : null,
+        lastSuccessfulSyncAt: availabilityHealth?.sessions ? (availabilityHealth.lastSuccess ? new Date(availabilityHealth.lastSuccess).toISOString() : null) : health?.legacy.lastSuccess ?? null,
+        observedAt: new Date(snapshot?.observedAt ?? Date.now()).toISOString(),
+      };
+      return { syncHealth, enabled: settings.enabled, connected,
+        deviceConnectionManagementSupported: current && (this.capabilitiesKnown || this.connectionManagementKnown) ? this.connectionManagement || this.connectionManagementKnown : undefined,
+        deviceConnectionManagementEnabled: current && this.connectionManagementEnabled, deviceConnectionManagementClusterReady: current && this.connectionManagementClusterReady,
+        deviceId: current ? this.registration?.deviceId : undefined, name: settings.name, hostName: this.deps.metadata.hostName, owner: currentOwner,
+        connectionStatus: connected ? RemoteConnectionStatus.Online : RemoteConnectionStatus.Offline,
+        connectionReason: !currentOwner ? RemoteConnectionReason.SignedOut : !settings.enabled ? RemoteConnectionReason.Disabled : !current ? RemoteConnectionReason.Connecting : this.connectionRemoved ? RemoteConnectionReason.Removed : this.quotaBlocked ? RemoteConnectionReason.QuotaBlocked : this.workspaceUnavailable && !this.error ? RemoteConnectionReason.WorkspaceUnavailable : this.connectionReason,
+        settingsSyncStatus: !health || health.pendingSettings ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
+        nameSyncStatus: !health || health.pendingName ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
+        agentCatalogSyncStatus: !health ? RemoteSyncStatus.Pending : health.catalogFailed ? RemoteSyncStatus.Error : RemoteSyncStatus.Synced,
+        sessionSyncStatus: syncFailed ? RemoteSyncStatus.Error : !health ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
+        workspaces: settings.workspaces.map(({ path: _path, ...w }) => w), error: current ? this.error : undefined, errorCode: current ? this.errorCode : undefined,
+        accessRequests: current ? this.accesses : [] };
+    });
   }
   associationSyncState(target: OwnershipTarget): OwnershipSyncState {
-    const currentOwner = this.deps.getOwner();
-    if (!currentOwner) return OwnershipSyncState.Local;
-    if (target.kind === OwnershipTargetKind.Task) {
-      if (!sameOwner(this.deps.store.owner(target.id), currentOwner)) return OwnershipSyncState.Local;
-    } else {
-      const identity = this.deps.agentOwnership?.get(target.id);
-      if (identity?.ownerKind !== AgentOwnerKind.Owned || !sameOwner(identity.owner, currentOwner)) return OwnershipSyncState.Local;
-    }
-    if (!this.owner || !sameOwner(this.owner, currentOwner)) return OwnershipSyncState.Pending;
-    // A route switch invalidates the old admission even before the next bridge tick.
-    if (this.accountRoute !== this.deps.getApiBaseUrl()) return OwnershipSyncState.Pending;
-    const pending = this.settings().enabled && (this.connectionReason === RemoteConnectionReason.ServerUnavailable
-      || this.connectionReason === RemoteConnectionReason.ServerUpgradeRequired) ? OwnershipSyncState.WaitingService : OwnershipSyncState.Pending;
-    if (!this.registration || !this.targetId) return pending;
-    // Reading UI state must not grant an operation its first durable remote admission.
-    const blocked = this.ownershipClaimBlocks(false);
-    const waiting = target.kind === OwnershipTargetKind.Agent ? blocked.blockedAgentIds.has(target.id) : this.ownershipSyncBlocked(target.id, blocked);
-    if (waiting) return !this.settings().enabled || this.canAdmitOwnershipClaim() ? OwnershipSyncState.Pending : OwnershipSyncState.WaitingService;
-    if (target.kind === OwnershipTargetKind.Agent) {
-      if (this.deps.store.get(this.catalogFailureKey())) return OwnershipSyncState.Failed;
-      return this.agentCatalog?.isSynced(this.owner, this.registration.deviceId, target.id) ? OwnershipSyncState.Synced : pending;
-    }
-    const row = this.deps.store.sync(target.id);
-    // Old-target ACKs/failures do not describe an unverified current target.
-    if (row?.sync_environment && !this.targets.matchesEnvironment(this.remoteEnvironment(), row.sync_environment)) return pending;
-    const independent = this.availability.sessionHealth(target.id);
-    if (independent) return independent.degraded ? OwnershipSyncState.Failed : independent.ready && !independent.pending ? OwnershipSyncState.Synced : pending;
-    if (this.deps.store.get(`syncFailure:${target.id}`)
-      || this.deps.store.db.prepare('SELECT 1 FROM remote_projection_failures WHERE session_id=?').get(target.id)) return OwnershipSyncState.Failed;
-    const dirty = this.deps.store.db.prepare('SELECT session_id FROM remote_dirty WHERE session_id=?').get(target.id);
-    return row && row.device_id === this.registration.deviceId && !row.needs_snapshot && row.source_seq === row.ack_seq
-      && !dirty && !this.deps.store.get(`import:${target.id}`) ? OwnershipSyncState.Synced : pending;
+    return remotePerformance.sync(RemotePerformanceStage.RemoteState, () => {
+      const currentOwner = this.deps.getOwner();
+      if (!currentOwner) return OwnershipSyncState.Local;
+      if (target.kind === OwnershipTargetKind.Task) {
+        if (!sameOwner(this.deps.store.owner(target.id), currentOwner)) return OwnershipSyncState.Local;
+      } else {
+        const identity = this.deps.agentOwnership?.get(target.id);
+        if (identity?.ownerKind !== AgentOwnerKind.Owned || !sameOwner(identity.owner, currentOwner)) return OwnershipSyncState.Local;
+      }
+      if (!this.owner || !sameOwner(this.owner, currentOwner)) return OwnershipSyncState.Pending;
+      // A route switch invalidates the old admission even before the next bridge tick.
+      if (this.accountRoute !== this.deps.getApiBaseUrl()) return OwnershipSyncState.Pending;
+      const pending = this.settings().enabled && (this.connectionReason === RemoteConnectionReason.ServerUnavailable
+        || this.connectionReason === RemoteConnectionReason.ServerUpgradeRequired) ? OwnershipSyncState.WaitingService : OwnershipSyncState.Pending;
+      if (!this.registration || !this.targetId) return pending;
+      // Reading UI state must not grant an operation its first durable remote admission.
+      const blocked = this.ownershipClaimBlocks(false);
+      const waiting = target.kind === OwnershipTargetKind.Agent ? blocked.blockedAgentIds.has(target.id) : this.ownershipSyncBlocked(target.id, blocked);
+      if (waiting) return !this.settings().enabled || this.canAdmitOwnershipClaim() ? OwnershipSyncState.Pending : OwnershipSyncState.WaitingService;
+      if (target.kind === OwnershipTargetKind.Agent) {
+        if (this.deps.store.get(this.catalogFailureKey())) return OwnershipSyncState.Failed;
+        return this.agentCatalog?.isSynced(this.owner, this.registration.deviceId, target.id) ? OwnershipSyncState.Synced : pending;
+      }
+      const row = this.deps.store.sync(target.id);
+      // Old-target ACKs/failures do not describe an unverified current target.
+      if (row?.sync_environment && !this.targets.matchesEnvironment(this.remoteEnvironment(), row.sync_environment)) return pending;
+      const independent = this.availability.sessionHealth(target.id);
+      if (independent) return independent.degraded ? OwnershipSyncState.Failed : independent.ready && !independent.pending ? OwnershipSyncState.Synced : pending;
+      if (this.deps.store.get(`syncFailure:${target.id}`)
+        || this.deps.store.db.prepare('SELECT 1 FROM remote_projection_failures WHERE session_id=?').get(target.id)) return OwnershipSyncState.Failed;
+      const dirty = this.deps.store.db.prepare('SELECT session_id FROM remote_dirty WHERE session_id=?').get(target.id);
+      return row && row.device_id === this.registration.deviceId && !row.needs_snapshot && row.source_seq === row.ack_seq
+        && !dirty && !this.deps.store.get(`import:${target.id}`) ? OwnershipSyncState.Synced : pending;
+    });
   }
   async configure(changes: SettingsChanges): Promise<RemoteSettingsState> {
     this.ensureAccount();
@@ -500,6 +545,7 @@ export class RemoteBridge {
           changes: [...(previous?.route === this.accountRoute ? previous.changes : []), deferred] });
       }
     });
+    this.displaySettings = { key: this.displaySettingsKey(), value: settings }; this.displaySnapshot.invalidate();
     this.retryAfter = 0;
     if (changes.retry || changes.enabled === true && !wasEnabled) {
       this.retryGeneration++;
@@ -538,34 +584,36 @@ export class RemoteBridge {
     return this.owner ? this.deps.registrationIdentities?.get(this.owner, this.registrationIdentityScope()) ?? this.deps.identity : this.deps.identity;
   }
   private ensureAccount(): void {
-    const current = this.deps.getOwner();
-    const route = this.deps.getApiBaseUrl();
-    if (route === this.accountRoute && ((current === null && this.owner === null) || sameOwner(current, this.owner))) return;
-    const previous = this.owner;
-    this.accountGeneration++; this.commandTaskRetryAt.clear(); this.reconcileRetryAt = 0; this.runEvidenceScans.clear(); this.unresolvedCursor = null; this.receiptCursor = undefined; this.activityCursor = undefined; this.activityOffset = 0; this.importSnapshots.cancel(); this.verifiedImports.clear(); this.sessionChecks.clear(); this.taskMemoryBlocks.clear();
-    this.admissionDeferred = false;
-    this.historyTransportFailures = []; this.historyCircuitProbe = false; this.historyCircuitDelay = 30000; this.historyRetryAt = 0;
-    this.accountRoute = route; this.targetId = null; this.discoveredTarget = null;
-    this.agentCatalog?.reset(); this.deps.input?.preparations.reset?.();
-    this.connections.reset(); this.lastGoodState = null; this.lastInputPublish = 0;
-    this.owner = current; this.registration = null; this.registrationPending = null;
-    this.retryAfter = 0; this.suspended = false; this.accesses = []; this.sessionSyncFailed = false;
-    this.agentCapabilities = []; this.declaredAgentCapabilities = []; this.lastCatalogConnection = null; this.publishedCatalogRevision = -1; this.lastCapabilityCheck = 0; this.deps.store.setAgentSummaryResolver(null);
-    this.inputCapabilities = [];
-    this.ownershipClaimCapability = null;
-    this.connectionManagementEnabled = false; this.connectionManagementClusterReady = false;
-    this.connectionManagement = false; this.connectionManagementKnown = current ? this.savedConnectionState<boolean>(':supported') === true : false; this.connectionRemoved = false; this.quotaBlocked = false; this.connectionVersion = '0'; this.connectionPolicyCheckAt = 0;
-    const connection = current ? this.savedConnectionState<{ state: string; version: string }>() : null;
-    if (connection) { this.connectionRemoved = connection.state === RemoteDeviceConnectionState.Removed; this.connectionVersion = connection.version; }
-    this.sameAccountAccess = false; this.workspaceUnavailable = false; this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
-    this.connectionReason = RemoteConnectionReason.Connecting;
-    this.deps.store.setEnabledOwner(null); this.disconnect();
-    this.declaredDualApproval = false; this.deps.store.setApprovalProjectionSupported(false);
-    this.deletionSupported = false; this.deletionAvailable = false; this.deps.store.setDeletionProjectionSupported(false);
-    this.fileCapabilities = []; this.declaredQuestions = false; this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false); this.replySupported = false; this.replies.clear(); this.projectionVersion = 1; this.files?.configure(false);
-    this.retentionSupported = false; this.receiptsSupported = false; this.capabilitiesKnown = false; this.fenceCheckedAt = 0; this.retentionVerifiedAt.clear();
-    this.deps.configureDualApproval?.({ enabled: false, projectionSupported: false });
-    this.deps.onAccountChange(previous, current); this.changed();
+    return remotePerformance.sync(RemotePerformanceStage.BridgeAccount, () => {
+      const current = this.deps.getOwner();
+      const route = this.deps.getApiBaseUrl();
+      if (route === this.accountRoute && ((current === null && this.owner === null) || sameOwner(current, this.owner))) return;
+      const previous = this.owner;
+      this.accountGeneration++; this.commandTaskRetryAt.clear(); this.reconcileRetryAt = 0; this.runEvidenceScans.clear(); this.unresolvedCursor = null; this.receiptCursor = undefined; this.activityCursor = undefined; this.activityOffset = 0; this.importSnapshots.cancel(); this.verifiedImports.clear(); this.sessionChecks.clear(); this.taskMemoryBlocks.clear();
+      this.admissionDeferred = false;
+      this.historyTransportFailures = []; this.historyCircuitProbe = false; this.historyCircuitDelay = 30000; this.historyRetryAt = 0;
+      this.accountRoute = route; this.targetId = null; this.discoveredTarget = null;
+      this.agentCatalog?.reset(); this.deps.input?.preparations.reset?.();
+      this.connections.reset(); this.displaySettings = null; this.lastInputPublish = 0;
+      this.owner = current; this.registration = null; this.registrationPending = null;
+      this.retryAfter = 0; this.suspended = false; this.accesses = []; this.sessionSyncFailed = false;
+      this.agentCapabilities = []; this.declaredAgentCapabilities = []; this.lastCatalogConnection = null; this.publishedCatalogRevision = -1; this.lastCapabilityCheck = 0; this.deps.store.setAgentSummaryResolver(null);
+      this.inputCapabilities = [];
+      this.ownershipClaimCapability = null;
+      this.connectionManagementEnabled = false; this.connectionManagementClusterReady = false;
+      this.connectionManagement = false; this.connectionManagementKnown = current ? this.savedConnectionState<boolean>(':supported') === true : false; this.connectionRemoved = false; this.quotaBlocked = false; this.connectionVersion = '0'; this.connectionPolicyCheckAt = 0;
+      const connection = current ? this.savedConnectionState<{ state: string; version: string }>() : null;
+      if (connection) { this.connectionRemoved = connection.state === RemoteDeviceConnectionState.Removed; this.connectionVersion = connection.version; }
+      this.sameAccountAccess = false; this.workspaceUnavailable = false; this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
+      this.connectionReason = RemoteConnectionReason.Connecting;
+      this.deps.store.setEnabledOwner(null); this.disconnect();
+      this.declaredDualApproval = false; this.deps.store.setApprovalProjectionSupported(false);
+      this.deletionSupported = false; this.deletionAvailable = false; this.deps.store.setDeletionProjectionSupported(false);
+      this.fileCapabilities = []; this.declaredQuestions = false; this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false); this.replySupported = false; this.replies.clear(); this.projectionVersion = 1; this.files?.configure(false);
+      this.retentionSupported = false; this.receiptsSupported = false; this.capabilitiesKnown = false; this.fenceCheckedAt = 0; this.retentionVerifiedAt.clear();
+      this.deps.configureDualApproval?.({ enabled: false, projectionSupported: false });
+      this.deps.onAccountChange(previous, current); this.changed();
+    });
   }
   private connectionStateKey(): string { return `deviceConnection:${this.remoteEnvironment()}:${this.owner?.userId}:${this.owner?.scopeKey}`; }
   private savedConnectionState<T>(suffix = ''): T | null {
@@ -660,6 +708,8 @@ export class RemoteBridge {
   private async tick(): Promise<void> {
     if (this.running || this.stopped) return;
     this.running = true;
+    const finishTick = remotePerformance.begin(RemotePerformanceStage.RemoteLoop);
+    let tickOutcome: typeof RemotePerformanceOutcome[keyof typeof RemotePerformanceOutcome] = RemotePerformanceOutcome.Succeeded;
     let owner = this.owner;
     let accountGeneration = this.accountGeneration;
     let retryGeneration = this.retryGeneration;
@@ -673,17 +723,17 @@ export class RemoteBridge {
       if (!owner || this.suspended && !this.connectionRemoved) { this.backoff = 5000; return; }
       if (Date.now() < this.retryAfter) { if (this.syncPaused()) await this.reconcilePaused(); this.backoff = this.retryAfter - Date.now(); return; }
       if (this.targetId && !this.settings().enabled && !this.controls().length && !this.deps.store.get(this.nameKey())) { this.backoff = 30000; return; }
-      await this.ensureRegistration();
+      await remotePerformance.async(RemotePerformanceStage.Registration, () => this.ensureRegistration());
       if (this.settings().enabled) {
-        try { await this.ensureDefaultWorkspace(); }
+        try { await remotePerformance.async(RemotePerformanceStage.WriteSettings, () => this.ensureDefaultWorkspace()); }
         catch { this.workspaceUnavailable = true; }
       }
-      if (Date.now() - this.lastCapabilityCheck > 45000) await this.refreshCapabilities();
-      await this.writeSettings();
+      if (Date.now() - this.lastCapabilityCheck > 45000) await remotePerformance.async(RemotePerformanceStage.Capabilities, () => this.refreshCapabilities());
+      await remotePerformance.async(RemotePerformanceStage.WriteSettings, () => this.writeSettings());
       this.startDeletionSync();
       if (this.connectionManagementKnown && !this.connectionRemoved && !this.generation && Date.now() >= this.connectionPolicyCheckAt) {
         this.connectionPolicyCheckAt = Date.now() + 30000;
-        await this.connections.query();
+        await remotePerformance.async(RemotePerformanceStage.RemoteConnections, () => this.connections.query());
       }
       if (this.connectionRemoved) { await this.reconcilePaused(); this.backoff = 30000; return; }
       if (!sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
@@ -695,7 +745,7 @@ export class RemoteBridge {
       catch (error) { remoteDiagnosticLog('remote.record.quarantined', { lane: 'control', reason: 'RECORD_INVALID', error }, 'warn'); }
       // Housekeeping does not own the command lane; command execution still validates core evidence.
       if (!this.socket) {
-        try { await this.connect(); }
+        try { await remotePerformance.async(RemotePerformanceStage.Connect, () => this.connect()); }
         catch (error) {
           if (error instanceof RemoteApiError && ![47022, 47011].includes(error.code)) throw error;
           this.recordConnectionFailure(error);
@@ -714,13 +764,13 @@ export class RemoteBridge {
         this.commandPollAt = Date.now() + (this.hasActiveWork() ? ACTIVE_POLL_MS : COMMAND_IDLE_POLL_MS);
         // Shared execution evidence remains mandatory. Network recovery is independent
         // of claiming unrelated tasks and never supplies permission to the claim path.
-        await this.deps.store.waitRunRecovery();
-        if (!await this.deps.store.verifyExecutionDatabaseHealth()) throw new Error('REMOTE_EXECUTION_DATABASE_UNHEALTHY');
+        await remotePerformance.async(RemotePerformanceStage.CommandRecovery, () => this.deps.store.waitRunRecovery());
+        if (!await remotePerformance.async(RemotePerformanceStage.CommandRecovery, () => this.deps.store.verifyExecutionDatabaseHealth())) throw new Error('REMOTE_EXECUTION_DATABASE_UNHEALTHY');
         this.startCommandReconciliation();
       }
       if (pollCommands && this.generation) {
         const generation = this.generation;
-        try { if (await this.claim()) this.commandPollAt = 0; }
+        try { if (await remotePerformance.async(RemotePerformanceStage.CommandClaim, () => this.claim())) this.commandPollAt = 0; }
         catch (error) {
           if (accountGeneration === this.accountGeneration && generation === this.generation) this.commandRetryAt = Date.now() + IDLE_POLL_MS;
           throw error;
@@ -729,8 +779,7 @@ export class RemoteBridge {
       this.startInputRecovery();
       this.startOptionalPublications(owner, accountGeneration);
       this.startDeletionSync();
-      this.startHistorySync();
-      this.syncFiles();
+      remotePerformance.sync(RemotePerformanceStage.BridgeDispatch, () => { this.startHistorySync(); this.syncFiles(); });
       if (this.generation && this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input) {
         if (!this.inputWork && Date.now() >= Math.max(this.inputPollAt, this.inputRetryAt)) {
           this.inputPollAt = Date.now() + IDLE_POLL_MS;
@@ -754,6 +803,7 @@ export class RemoteBridge {
       if (this.generation && !this.inputWork && this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input)
         nextPollDelay = Math.min(nextPollDelay, Math.max(0, Math.max(this.inputPollAt, this.inputRetryAt) - Date.now()));
     } catch (error) {
+      tickOutcome = RemotePerformanceOutcome.Failed;
       if (accountGeneration !== this.accountGeneration || retryGeneration !== this.retryGeneration
         || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) return;
       remoteLogMessage('warn', '[RemoteSync] Bridge cycle deferred', { deviceId: this.registration?.deviceId ?? null,
@@ -768,6 +818,7 @@ export class RemoteBridge {
         if (!this.registration) this.retryAfter = Date.now() + this.backoff;
       }
     } finally {
+      finishTick(tickOutcome);
       this.running = false; this.changed();
       const accountChanged = accountGeneration !== this.accountGeneration || (owner === null ? this.owner !== null : !sameOwner(owner, this.owner));
       const immediate = accountChanged || retryGeneration !== this.retryGeneration || this.tickRequested; this.tickRequested = false;
@@ -1384,7 +1435,7 @@ export class RemoteBridge {
   private startHistorySync(): void {
     if (this.historyWork || Date.now() < this.historyRetryAt || !this.syncContext()()) return;
     const current = this.syncContext();
-    const work = this.syncSessions(true).catch(error => {
+    const work = remotePerformance.async(RemotePerformanceStage.HistorySync, () => this.syncSessions(true)).catch(error => {
       if (!current()) return;
       this.sessionSyncFailed = true;
       this.historyRetryAt = Date.now() + IDLE_POLL_MS;
@@ -1448,13 +1499,13 @@ export class RemoteBridge {
       }
       break; // One persistence probe per turn, before any task resumes.
     }
-    this.taskSync.reconcileProjectionFailures(context, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id));
+    remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => this.taskSync.reconcileProjectionFailures(context, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id)));
     // Older clients classified wrapped transport errors as permanent task failures.
     // A one-time probe reuses the original mapping/receipt checks; it grants no ACK or execution permission.
-    const recovered = this.taskSync.reconcileLegacyFailures(context, (row, reason) => this.availability.legacyHistoryAllowed(row.local_id)
+    const recovered = remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => this.taskSync.reconcileLegacyFailures(context, (row, reason) => this.availability.legacyHistoryAllowed(row.local_id)
       && !this.deps.store.isSyncClosed(row.local_id)
       && (!row.sync_environment || this.targets.matchesEnvironment(context.target, row.sync_environment))
-      && (reason !== RemoteImportValidation.Reason || this.emptyInitialImport(row, this.deps.store.get<SavedImport>(`import:${row.local_id}`))));
+      && (reason !== RemoteImportValidation.Reason || this.emptyInitialImport(row, this.deps.store.get<SavedImport>(`import:${row.local_id}`)))));
     if (recovered.promotedIds.length) remoteDiagnosticLog('remote.sync.task_deferred', {
       lane: 'history', result: 'deferred', reason: 'STATE_CHANGED', count: recovered.promotedIds.length,
     });
@@ -1468,7 +1519,7 @@ export class RemoteBridge {
       });
       this.projectionWork = work;
     }
-    const rows = stepwise ? this.prioritizeExpiringImports(this.taskSync.candidates(context)) : this.deps.store.sessions(context.owner);
+    const rows = remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => stepwise ? this.prioritizeExpiringImports(this.taskSync.candidates(context)) : this.deps.store.sessions(context.owner));
     let cursor = 0, sharedFailure = false;
     const worker = async (): Promise<void> => {
       while (cursor < rows.length && current() && !sharedFailure && (!stepwise || Date.now() >= this.historyRetryAt)) {
@@ -1504,7 +1555,8 @@ export class RemoteBridge {
     if (!current()) return;
     await this.ensureRetentionFence();
     if (!current()) return;
-    this.sessionSyncFailed = this.taskMemoryBlocks.size > 0 || this.taskSync.health(context, id => this.availability.legacyHistoryAllowed(id)).failedSessions > 0;
+    // Durable failure totals are collected by the display worker; completing a history turn must not rescan them on main.
+    this.sessionSyncFailed = this.taskMemoryBlocks.size > 0;
   }
   private async syncSession(row: SyncRow, current: () => boolean, context: TaskSyncContext, stepwise: boolean): Promise<void> {
     const id = row.local_id;

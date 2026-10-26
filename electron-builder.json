@@ -300,6 +300,7 @@
     "dist-electron/remoteProjectionWorker.js",
     "dist-electron/remoteLiveProjectionWorker.js",
     "dist-electron/remoteNetworkWorker.js",
+    "dist-electron/remoteDisplayHealthWorker.js",
     "dist-electron/remoteSecurityJournalWorker.js",
     "dist-electron/remoteImportSnapshotWorker.js",
     "dist-electron/remoteHistoryGuardWorker.cjs",

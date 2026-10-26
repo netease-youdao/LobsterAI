@@ -92,6 +92,7 @@ import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboa
 import { resolveOpenWithAttachments } from './services/openWith';
 import { remoteSettingsService } from './services/remoteSettings';
 import { scheduledTaskService } from './services/scheduledTask';
+import { type SettingsOpenDiagnostic, settingsOpenDiagnostics } from './services/settingsOpenDiagnostics';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
 import { RootState, store } from './store';
@@ -234,6 +235,7 @@ const logAppUpdateRendererLifecycle = (
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
+  const settingsOpenDiagnosticRef = useRef<SettingsOpenDiagnostic | null>(null);
   const [settingsOptions, setSettingsOptions] = useState<Omit<SettingsOpenOptions, 'initialTab'> & { initialTab?: Exclude<SettingsOpenOptions['initialTab'], 'remoteControl'>; requestId: number }>({ requestId: 0 });
   const [remoteControlGeneration, setRemoteControlGeneration] = useState<number | null>(null);
   const [pendingRemoteControlGeneration, setPendingRemoteControlGeneration] = useState<number | null>(null);
@@ -746,6 +748,7 @@ const App: React.FC = () => {
       setPendingRemoteControlGeneration(accountGeneration);
       return;
     }
+    settingsOpenDiagnosticRef.current = settingsOpenDiagnostics.requested();
     setRemoteControlGeneration(null);
     setPendingRemoteControlGeneration(null);
     setSettingsOptions((current) => ({
@@ -757,6 +760,11 @@ const App: React.FC = () => {
     }));
     setShowSettings(true);
   }, [accountGeneration]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    return settingsOpenDiagnostics.afterCommit(settingsOpenDiagnosticRef.current);
+  }, [showSettings, settingsOptions.requestId]);
 
   const handleShowSkills = useCallback(() => {
     setMainView(MainView.Skills);

@@ -49,6 +49,8 @@ export interface RemoteSyncTaskIssue {
 export const RemoteSyncLaneStatus = { Idle: 'idle', Pending: 'pending', InFlight: 'in_flight', Backoff: 'backoff', Degraded: 'degraded', Unknown: 'unknown' } as const;
 export type RemoteSyncLanes = Partial<Record<'control' | 'live' | 'history' | 'deletion' | 'recovery', typeof RemoteSyncLaneStatus[keyof typeof RemoteSyncLaneStatus]>>;
 export interface RemoteSyncHealth {
+  /** Optional display statistics failed, expired or have not completed; never an execution gate. */
+  statisticsUnavailable?: boolean;
   lanes?: RemoteSyncLanes;
   admissionDeferred?: boolean;
   /** Counts are lower bounds when the bounded health scan is incomplete. */

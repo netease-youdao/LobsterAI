@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Worker } from 'worker_threads';
 
 import { remoteWorkerBuilds } from '../../../remote-workers.config';
+import { type RemoteDisplayHealthInput, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { RemoteNetworkBodyEncoding, RemoteNetworkFailure, RemoteNetworkLimit as NetworkLimit,RemoteNetworkMessage } from './remoteNetworkProtocol';
@@ -32,8 +33,10 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 async function invoke(filename: typeof RemoteWorkerFile[keyof typeof RemoteWorkerFile], workerData?: unknown, message?: unknown): Promise<any> {
-  if (filename === RemoteWorkerFile.Projection || filename === RemoteWorkerFile.ImportSnapshot) {
-    const result = await new RemoteHistoryJob(remoteWorkerPath(RemoteWorkerFile.HistoryGuard, archived)).run(remoteWorkerPath(filename, archived), workerData, { timeoutMs: 10000, memoryMb: 256, current: () => true, prefix: 'REMOTE_PROJECTION' });
+  if (filename === RemoteWorkerFile.Projection || filename === RemoteWorkerFile.ImportSnapshot || filename === RemoteWorkerFile.DisplayHealth) {
+    const display = filename === RemoteWorkerFile.DisplayHealth;
+    const result = await new RemoteHistoryJob(remoteWorkerPath(RemoteWorkerFile.HistoryGuard, archived)).run(remoteWorkerPath(filename, archived), workerData,
+      { timeoutMs: display ? 5000 : 10000, memoryMb: display ? 96 : 256, resultLimitBytes: display ? 64 * 1024 : undefined, current: () => true, prefix: 'REMOTE_PROJECTION' });
     return { result };
   }
   const worker = new Worker(remoteWorkerPath(filename, archived), { workerData });
@@ -51,15 +54,42 @@ async function invoke(filename: typeof RemoteWorkerFile[keyof typeof RemoteWorke
 describe('independent packaged remote workers', () => {
   it('emits all unpacked files and keeps native SQLite external', () => {
     const config = require(path.resolve(__dirname, '../../../electron-builder.json'));
+    const developmentWait = require(path.resolve(__dirname, '../../../package.json')).scripts['wait:electron:dev'].split(/\s+/u);
     for (const filename of Object.values(RemoteWorkerFile)) {
       expect(remoteWorkerPath(filename, archived)).toBe(path.join(output, filename));
       expect(config.asarUnpack).toContain(`dist-electron/${filename}`);
+      expect(developmentWait).toContain(`dist-electron/${filename}`);
       expect(fs.statSync(path.join(output, filename)).size).toBeLessThan(2 * 1024 * 1024);
     }
-    for (const filename of [RemoteWorkerFile.Projection, RemoteWorkerFile.ImportSnapshot, RemoteWorkerFile.LiveProjection])
+    for (const filename of [RemoteWorkerFile.Projection, RemoteWorkerFile.ImportSnapshot, RemoteWorkerFile.LiveProjection, RemoteWorkerFile.DisplayHealth])
       expect(fs.readFileSync(path.join(output, filename), 'utf8')).toMatch(/require\(["']better-sqlite3["']\)/u);
     const compiledDirectory = path.join(root, 'dist-electron', 'main', 'remote');
     expect(remoteWorkerPath(RemoteWorkerFile.Projection, compiledDirectory)).toBe(path.join(compiledDirectory, RemoteWorkerFile.Projection));
+  });
+  it('reads display health through the real Vite-built child at the unpacked path without creating or changing databases', async () => {
+    const database = path.join(root, 'display-core.sqlite'), db = new Database(database);
+    const input: RemoteDisplayHealthInput = { database, owner, target: 'test', targetId: null, deviceId: null,
+      availabilityScope: null, historySupported: false, settingsKey: 'settings:packaged', controlsKey: 'controls:packaged',
+      nameKey: 'name:packaged', catalogFailureKey: 'catalog:packaged' };
+    try {
+      db.exec('CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT); CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER)');
+      const store = new RemoteStore(db, { deferredProjection: true, restoreRuns: false });
+      store.put(input.settingsKey, { enabled: true, name: 'Packaged desktop', settingsVersion: '4', workspaces: [] });
+      const before = fs.readFileSync(database);
+      const schema = db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all();
+      const known = await invoke(RemoteWorkerFile.DisplayHealth, input);
+      expect(known.result).toMatchObject({ status: RemoteDisplayHealthStatus.Known,
+        settings: { enabled: true, name: 'Packaged desktop', settingsVersion: '4', workspaces: [] },
+        legacy: { pendingSessions: 0 }, availability: null, pendingSettings: false, pendingName: false });
+      expect(fs.readFileSync(database)).toEqual(before);
+      expect(db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all()).toEqual(schema);
+      const missing = path.join(root, 'missing-display.sqlite');
+      const unknown = await invoke(RemoteWorkerFile.DisplayHealth, { ...input, database: missing });
+      expect(unknown.result.status).toBe(RemoteDisplayHealthStatus.Unknown);
+      expect(Object.keys(unknown.result).sort()).toEqual(['observedAt', 'reason', 'status']);
+      expect(JSON.stringify(unknown.result)).not.toContain(missing);
+      expect(fs.existsSync(missing)).toBe(false);
+    } finally { db.close(); }
   });
   it('runs bounded HTTP parsing and WS admission in the packaged child without core access', async () => {
     const fixture = path.join(root, 'network-fixture.cjs');

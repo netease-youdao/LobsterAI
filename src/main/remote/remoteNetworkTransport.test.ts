@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthSessionManager, AuthSessionRequestError } from '../libs/authSessionManager';
 import { RemoteNetworkBodyEncoding, RemoteNetworkFailure, RemoteNetworkLimit as Limit, RemoteNetworkMessage as Message } from './remoteNetworkProtocol';
 import { RemoteNetworkTransport, remoteResponseJson } from './remoteNetworkTransport';
+import { remotePerformance, RemotePerformanceEvent as PerformanceEvent, RemotePerformanceOutcome as PerformanceOutcome, RemotePerformanceReason as PerformanceReason, RemotePerformanceStage as PerformanceStage } from './remotePerformanceLog';
 import { remoteSyncErrorMetadata } from './remoteSyncLog';
 import { classifyTaskSyncFailure } from './remoteTaskSyncPolicy';
 import * as telemetryApi from './remoteTelemetry';
@@ -45,6 +46,7 @@ describe('supervised remote network transport', () => {
   it.each([
     ['/v3/sync/state', 'GET'], ['/v3/sync/recoveries/original', 'GET'], ['/v3/sync/recoveries/original/abort', 'POST'],
     ['/v1/sync/imports/original', 'GET'], ['/v1/sync/imports/original/abort', 'POST'], ['/v3/sync/live-projections/original', 'GET'],
+    ['/v4/devices/desktop/commands/unresolved?limit=20', 'GET'],
   ])('reserves a control slot for original receipt %s', async (path, method) => {
     const { transport, children } = fixture();
     const background = transport.fetch(base + '/sync/batches', { method: 'POST' });
@@ -279,6 +281,64 @@ describe('supervised remote network transport', () => {
     expect(oldMessage).not.toHaveBeenCalled(); expect(message).toHaveBeenCalledWith({ data: '', parsedFrame: { type: 'pong' } });
     expect(child.messages.filter(value => value.type === Message.FrameAck)).toEqual([{ type: Message.FrameAck, id, seq: 2 }]);
   });
+  it('lets queued heartbeats arrive after the supervisor resumes from a long pause', async () => {
+    vi.useFakeTimers(); let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const { transport, children, spawn } = fixture(), pending = request(transport); await settle();
+    const child = children[0]; child.reply({ type: Message.Alive, rss: 1024 });
+    // Time passes without timer or IPC processing; the overdue timer runs before the queued heartbeat.
+    now = 40000; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    expect(child.kill).not.toHaveBeenCalled(); expect(spawn).toHaveBeenCalledTimes(1);
+    child.reply({ type: Message.Alive, rss: 1024 });
+    now += Limit.WatchdogTimeoutMs; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    expect(child.kill).not.toHaveBeenCalled();
+    // An observed heartbeat permits a new recovery window after a separate supervisor pause.
+    now += 40000; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    expect(child.kill).not.toHaveBeenCalled();
+    child.reply({ type: Message.Alive, rss: 1024 }); success(child); await pending;
+  });
+  it('does not extend a fixed recovery deadline when delayed checks continue without a heartbeat', async () => {
+    vi.useFakeTimers(); let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const { transport, children } = fixture(), pending = request(transport); await settle();
+    now = 40000; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    expect(children[0].kill).not.toHaveBeenCalled();
+    now += Limit.WatchdogRecoveryMs - 1; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    expect(children[0].kill).not.toHaveBeenCalled();
+    now++; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    await expect(pending).rejects.toThrow(RemoteNetworkFailure.WorkerExit);
+    expect(children[0].kill).toHaveBeenCalledTimes(1);
+  });
+  it('cancels recovery on disposal and fences old heartbeats from the replacement watchdog', async () => {
+    vi.useFakeTimers(); let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const { transport, children, spawn } = fixture(), pending = request(transport); await settle();
+    now = 40000; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    transport.dispose(); await expect(pending).rejects.toThrow(RemoteNetworkFailure.WorkerExit); await settle();
+    const replacement = request(transport); await settle();
+    expect(spawn).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 8; i++) {
+      now += Limit.WatchdogIntervalMs; children[0].reply({ type: Message.Alive, rss: 1024 });
+      await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+      expect(children[1].kill).not.toHaveBeenCalled();
+    }
+    now += Limit.WatchdogIntervalMs; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    await expect(replacement).rejects.toThrow(RemoteNetworkFailure.WorkerExit);
+    expect(children[0].kill).toHaveBeenCalledTimes(1); expect(children[1].kill).toHaveBeenCalledTimes(1);
+  });
+  it('uses monotonic time for heartbeats and restart budgets despite wall-clock changes', async () => {
+    vi.useFakeTimers(); let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const { transport, children, spawn } = fixture(), pending = request(transport); await settle();
+    vi.setSystemTime(new Date('2100-01-01')); now = 1000; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    expect(children[0].kill).not.toHaveBeenCalled();
+    children[0].exit(); await expect(pending).rejects.toThrow(RemoteNetworkFailure.WorkerExit);
+    for (let i = 0; i < 4; i++) {
+      const next = request(transport); await settle(); children.at(-1)!.exit(); await expect(next).rejects.toThrow(RemoteNetworkFailure.WorkerExit);
+    }
+    vi.setSystemTime(new Date('2000-01-01'));
+    await expect(request(transport)).rejects.toThrow(RemoteNetworkFailure.RestartBudget);
+    vi.setSystemTime(new Date('2200-01-01'));
+    await expect(request(transport)).rejects.toThrow(RemoteNetworkFailure.RestartBudget);
+    now = 60001; const restarted = request(transport); await settle();
+    expect(spawn).toHaveBeenCalledTimes(6); success(children[5]); await restarted;
+  });
   it('kills an unresponsive child and enforces the restart budget', async () => {
     vi.useFakeTimers(); const { transport, children, spawn } = fixture(); const hung = request(transport); await settle();
     await vi.advanceTimersByTimeAsync(9000); await expect(hung).rejects.toThrow('WORKER_EXIT'); expect(children[0].kill).toHaveBeenCalledWith('SIGKILL');
@@ -459,4 +519,103 @@ it('does not encode a large part after cancellation or direct admission failure'
   await expect(transport.queuedFetch(url, { method: 'PUT', body, signal: abort.signal })).rejects.toThrow('CANCELLED');
   expect(encoding.mock.calls.filter(([format]) => format === 'base64')).toHaveLength(0);
   success(children[0]); await active;
+});
+
+function capturePerformanceDiagnostics() {
+  const events: Array<{ stage: string; event: string; outcome?: string; fields: Record<string, unknown> }> = [];
+  vi.spyOn(remotePerformance, 'event').mockImplementation((stage, event, fields = {}) => { events.push({ stage, event, fields }); });
+  vi.spyOn(remotePerformance, 'begin').mockImplementation(stage => (outcome = PerformanceOutcome.Succeeded, fields = {}) => {
+    events.push({ stage, event: PerformanceEvent.Span, outcome, fields });
+  });
+  return events;
+}
+describe('content-free network performance diagnostics', () => {
+  it('separates parent watchdog delay and recovered grace from actual child exit', async () => {
+    vi.useFakeTimers(); let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const events = capturePerformanceDiagnostics(), { transport, children } = fixture();
+    const pending = request(transport); await settle();
+    now = 20000; await vi.advanceTimersByTimeAsync(Limit.WatchdogIntervalMs);
+    expect(children[0].kill).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({ event: PerformanceEvent.RecoveryStarted,
+      fields: expect.objectContaining({ reason: PerformanceReason.ParentDelay, checkIntervalMs: 20000, lastAliveAgeMs: 20000, workerPid: 100 }) }));
+    expect(events).toContainEqual(expect.objectContaining({ event: PerformanceEvent.RecoveryStarted,
+      fields: expect.objectContaining({ reason: PerformanceReason.ParentDelay, recoveryRemainingMs: Limit.WatchdogRecoveryMs }) }));
+    now++; children[0].reply({ type: Message.Alive, rss: 1024 });
+    expect(events).toContainEqual(expect.objectContaining({ fields: expect.objectContaining({ reason: PerformanceReason.ParentRecovered }) }));
+    expect(events.filter(event => event.event === PerformanceEvent.Exit)).toHaveLength(0);
+    success(children[0]); await pending; transport.dispose(); await settle();
+    expect(events).toContainEqual(expect.objectContaining({ event: PerformanceEvent.Exit, fields: expect.objectContaining({ workerPid: 100, killToExitMs: 0 }) }));
+    expect(events).toContainEqual(expect.objectContaining({ event: PerformanceEvent.Instant, fields: expect.objectContaining({ reason: PerformanceReason.Dispose, outcome: PerformanceOutcome.Cancelled }) }));
+  });
+  it('reports queue wait, worker dispatch wait and physical request time separately without request content', async () => {
+    let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const events = capturePerformanceDiagnostics(), { transport, children } = fixture();
+    const first = transport.queuedFetch(base + '/sync/batches'); await settle();
+    now = 10;
+    const second = transport.queuedFetch(base + '/sync/state?credential=private-query', { headers: { Authorization: 'private-token' } });
+    now = 2010; success(children[0]); await first; await settle();
+    const id = children[0].messages.filter(message => message.type === Message.Fetch).at(-1).id;
+    now = 2310; children[0].reply({ type: Message.FetchStarted, id });
+    now = 4310; success(children[0], id, { body: 'private-response-body', json: { private: 'private-json' } }); await second;
+    expect(events.filter(event => event.stage === PerformanceStage.NetworkRequest).at(-1)).toMatchObject({ outcome: PerformanceOutcome.Succeeded,
+      fields: { workerPid: 100, queueWaitMs: 2000, workerWaitMs: 300, requestMs: 2000, activeCount: 0, queuedCount: 0 } });
+    expect(events.some(event => event.event === PerformanceEvent.Queued || event.event === PerformanceEvent.Dispatched)).toBe(false);
+    expect(JSON.stringify(events)).not.toContain('private-'); expect(JSON.stringify(events)).not.toContain('https:');
+  });
+  it('distinguishes spawn errors and observed memory limits without error messages', async () => {
+    const events = capturePerformanceDiagnostics();
+    const spawning = new RemoteNetworkTransport((() => { throw new Error('private-spawn-error'); }) as unknown as typeof fork, '/private-worker-path');
+    transports.push(spawning);
+    await expect(request(spawning)).rejects.toThrow(RemoteNetworkFailure.WorkerUnavailable);
+    expect(events).toContainEqual(expect.objectContaining({ outcome: PerformanceOutcome.Failed, fields: { reason: PerformanceReason.Spawn } }));
+    const { transport, children } = fixture(), pending = request(transport); await settle();
+    children[0].reply({ type: Message.Alive, rss: 193 * 1024 * 1024 }); await expect(pending).rejects.toThrow(RemoteNetworkFailure.WorkerExit); await settle();
+    expect(events).toContainEqual(expect.objectContaining({ fields: expect.objectContaining({ reason: PerformanceReason.MemoryLimit, workerPid: 100, rssBytes: 193 * 1024 * 1024 }) }));
+    expect(JSON.stringify(events)).not.toContain('private-');
+  });
+});
+
+describe('worker-owned timing diagnostic compatibility', () => {
+  it('separates a short child request from a reply delayed while the parent was stalled', async () => {
+    let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now); vi.spyOn(Date, 'now').mockReturnValue(129000);
+    const events = capturePerformanceDiagnostics(), { transport, children } = fixture();
+    const pending = request(transport); await settle();
+    // Both queued IPC messages are consumed after the same simulated parent stall.
+    now = 29000; const child = children[0], id = child.request().id;
+    child.reply({ type: Message.FetchStarted, id }); success(child, id, { transportMs: 12, sentAtEpochMs: 100000 }); await pending;
+    expect(events.filter(event => event.stage === PerformanceStage.NetworkRequest).at(-1)).toMatchObject({
+      fields: { workerWaitMs: 29000, requestMs: 0, transportMs: 12, replyDeliveryMs: 29000 } });
+  });
+  it.each([
+    [-1, -1], [NaN, NaN], [Infinity, Infinity], ['private-invalid-duration', 'private-invalid-time'],
+    [86400001, 1], [0, 300001], [null, null], [undefined, undefined],
+  ])('ignores invalid or missing diagnostic timing without rejecting the response (%s, %s)', async (transportMs, sentAtEpochMs) => {
+    vi.spyOn(Date, 'now').mockReturnValue(300000);
+    const events = capturePerformanceDiagnostics(), { transport, children } = fixture();
+    const pending = request(transport); await settle(); success(children[0], undefined, { transportMs, sentAtEpochMs });
+    expect(await (await pending).json()).toEqual({ code: 0 });
+    const fields = events.filter(event => event.stage === PerformanceStage.NetworkRequest).at(-1)!.fields;
+    if (transportMs === 0) expect(fields.transportMs).toBe(0); else expect(fields).not.toHaveProperty('transportMs');
+    if (sentAtEpochMs === 1) expect(fields.replyDeliveryMs).toBe(299999); else expect(fields).not.toHaveProperty('replyDeliveryMs');
+    expect(JSON.stringify(events)).not.toContain('private-invalid');
+  });
+  it('drops excessive delivery delay and logs valid child timings on an error response', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(86400002);
+    const events = capturePerformanceDiagnostics(), { transport, children } = fixture();
+    const pending = request(transport); await settle();
+    children[0].reply({ type: Message.Result, id: children[0].request().id, error: RemoteNetworkFailure.Failed, transportMs: 4, sentAtEpochMs: 1 });
+    await expect(pending).rejects.toThrow(RemoteNetworkFailure.Failed);
+    const fields = events.filter(event => event.stage === PerformanceStage.NetworkRequest).at(-1)!.fields;
+    expect(fields.transportMs).toBe(4); expect(fields).not.toHaveProperty('replyDeliveryMs');
+  });
+  it('records final child timing for streamed downloads', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(2000);
+    const events = capturePerformanceDiagnostics(), { transport, children } = fixture();
+    const pending = request(transport, '/input-assets/asset/content'); await settle();
+    const child = children[0], id = child.request().id;
+    child.reply({ type: Message.StreamStart, id, status: 200, headers: {} });
+    const reader = (await pending).body!.getReader(), read = reader.read(); await settle();
+    child.reply({ type: Message.StreamEnd, id, bytes: 0, transportMs: 5, sentAtEpochMs: 1900 }); expect((await read).done).toBe(true);
+    expect(events.filter(event => event.stage === PerformanceStage.NetworkRequest).at(-1)).toMatchObject({ fields: { transportMs: 5, replyDeliveryMs: 100 } });
+  });
 });

@@ -20,6 +20,7 @@ import { ensureRecentDesktopInputJobs } from './remoteDesktopInputJobs';
 import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { RemoteHistoryStore } from './remoteHistoryStore';
 import { acknowledgeRemoteSessionDeletion } from './remoteLocalGc';
+import { remotePerformance, RemotePerformanceStage } from './remotePerformanceLog';
 import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
 import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
@@ -857,37 +858,39 @@ export class RemoteStore {
       if (!this.db.inTransaction) throw new Error('Core transaction is no longer active');
       return operation();
     }
-    const beforeChange = this.changeVersion;
-    this.urgentReplyChange = false;
-    let result: T;
-    try { result = this.db.transaction(() => {
-      const previousDepth = this.depth;
-      this.depth++;
-      try {
-        this.db.prepare('UPDATE remote_write_context SET trusted=1 WHERE id=1').run();
+    return remotePerformance.sync(RemotePerformanceStage.CoreWrite, () => {
+      const beforeChange = this.changeVersion;
+      this.urgentReplyChange = false;
+      let result: T;
+      try { result = this.db.transaction(() => {
+        const previousDepth = this.depth;
+        this.depth++;
         try {
-          const value = operation();
-          if (!this.db.inTransaction) throw new Error('Core transaction is no longer active');
-          if (!this.publishing && !this.options.deferredProjection && this.synchronizationReady) { this.refreshProjectionHints(); this.captureDirty(); }
-          if (this.advanceCheckpoint) this.put('databaseCheckpoint', this.advanceCheckpoint());
-          return value;
+          this.db.prepare('UPDATE remote_write_context SET trusted=1 WHERE id=1').run();
+          try {
+            const value = operation();
+            if (!this.db.inTransaction) throw new Error('Core transaction is no longer active');
+            if (!this.publishing && !this.options.deferredProjection && this.synchronizationReady) { this.refreshProjectionHints(); this.captureDirty(); }
+            if (this.advanceCheckpoint) this.put('databaseCheckpoint', this.advanceCheckpoint());
+            return value;
+          } finally {
+            // SQLite may already have rolled back after a storage/trigger failure.
+            if (this.db.inTransaction) this.db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
+          }
         } finally {
-          // SQLite may already have rolled back after a storage/trigger failure.
-          if (this.db.inTransaction) this.db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
+          // Neither trusted-marker SQL nor a failed rollback may poison the next transaction.
+          this.depth = previousDepth;
         }
-      } finally {
-        // Neither trusted-marker SQL nor a failed rollback may poison the next transaction.
-        this.depth = previousDepth;
+      })(); } catch (error) { this.commitObservers.length = 0; throw error; }
+      const observers = this.commitObservers.splice(0);
+      // An external SQLite transaction has not committed: never announce a savepoint as durable.
+      if (!this.db.inTransaction) for (const observer of observers) { try { observer(); } catch { /* Isolated observer. */ } }
+      if (this.options.deferredProjection || this.changeVersion !== beforeChange) {
+        try { this.wake(this.urgentReplyChange); }
+        catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'history', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
       }
-    })(); } catch (error) { this.commitObservers.length = 0; throw error; }
-    const observers = this.commitObservers.splice(0);
-    // An external SQLite transaction has not committed: never announce a savepoint as durable.
-    if (!this.db.inTransaction) for (const observer of observers) { try { observer(); } catch { /* Isolated observer. */ } }
-    if (this.options.deferredProjection || this.changeVersion !== beforeChange) {
-      try { this.wake(this.urgentReplyChange); }
-      catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'history', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
-    }
-    return result;
+      return result;
+    });
   }
   owner(sessionId: string): RemoteOwner | null {
     const row = this.db.prepare("SELECT owner_user_id,owner_scope_key FROM cowork_session_ownership WHERE session_id=? AND ownership_status='confirmed'").get(sessionId) as any;
