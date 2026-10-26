@@ -1,4 +1,5 @@
 export { default as AnthropicIcon } from './AnthropicIcon';
+export { default as AtlasCloudIcon } from './AtlasCloudIcon';
 export { default as BananaIcon } from './BananaIcon';
 export { default as CustomProviderIcon } from './CustomProviderIcon';
 export { default as DeepSeekIcon } from './DeepSeekIcon';
