@@ -87,7 +87,8 @@ export class RemoteDeviceConnectionsService {
     const state = this.settings.getSnapshot().state;
     const identity = state?.owner && state.accountEpoch
       ? JSON.stringify([state.accountEpoch, state.owner.userId, state.owner.scopeKey]) : '';
-    const enabled = Boolean(identity && state?.deviceConnectionManagementSupported !== false);
+    const enabled = Boolean(identity && !state?.initializationFailure && state?.errorCode !== 401 && state?.errorCode !== 40100
+      && state?.deviceConnectionManagementSupported !== false);
     const localConnection = JSON.stringify([state?.deviceId, state?.connected, state?.connectionReason, state?.enabled]);
     const connectionChanged = this.localConnection !== localConnection;
     this.localConnection = localConnection;

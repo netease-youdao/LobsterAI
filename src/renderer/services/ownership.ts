@@ -2,6 +2,7 @@ import { AgentId } from '@shared/agent';
 import { OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipCommitResult, OwnershipDetail, OwnershipPreview, OwnershipResponse,OwnershipTarget } from '@shared/ownership/types';
 
+import { remoteConnectionFailure } from '../components/settings/remoteControlState';
 import type { ToastEventDetail } from '../components/Toast';
 import { store } from '../store';
 import { i18nService } from './i18n';
@@ -143,10 +144,15 @@ export const ownershipService = {
         notify();
         return;
       }
-      await window.electron.remote.configure(issue
+      const updated = await window.electron.remote.configure(issue
         ? { retrySessionId: panel.target.id, expectedAccountEpoch: remote.accountEpoch! }
         : { retry: true, ...(remote.accountEpoch ? { expectedAccountEpoch: remote.accountEpoch } : {}) });
       if (requestSequence !== sequence || generation !== identity() || !panel) return;
+      if (updated.initializationFailure) {
+        panel = { ...panel, notice: remoteConnectionFailure(updated) ?? 'remoteLocalInitializationFailed' };
+        notify();
+        return;
+      }
       panel = { ...panel, notice: 'ownershipRetryScheduled' };
       notify();
       await this.refreshDetail();

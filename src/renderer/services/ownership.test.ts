@@ -1,5 +1,6 @@
 import { OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipCommitResult, OwnershipDetail, OwnershipPreview } from '@shared/ownership/types';
+import { RemoteInitializationFailure } from '@shared/remote/constants';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({ generation: 1, loggedIn: true, subscribers: new Set<() => void>() }));
@@ -188,6 +189,37 @@ describe('ownership confirmation and recovery', () => {
     remote.configure.mockRejectedValueOnce(new Error('Task synchronization retry is unavailable'));
     await ownershipService.retrySync(target);
     expect(ownershipService.getSnapshot()?.notice).toBe('remoteUnavailable');
+  });
+  test.each([
+    [RemoteInitializationFailure.SecureStorageUnavailable, 'remoteLocalSecureStorageUnavailable'],
+    [RemoteInitializationFailure.IdentityUnreadable, 'remoteLocalIdentityUnreadable'],
+    [RemoteInitializationFailure.IdentityInvalid, 'remoteLocalIdentityInvalid'],
+    [RemoteInitializationFailure.LocalStorageUnavailable, 'remoteLocalStorageUnavailable'],
+    [RemoteInitializationFailure.DependencyUnavailable, 'remoteLocalInitializationFailed'],
+  ] as const)('reports %s after a failed local recheck without claiming sync was scheduled', async (initializationFailure, notice) => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    remote.configure.mockResolvedValueOnce({ owner: { userId: 'A' }, enabled: true, initializationFailure, error: 'private cipher error' });
+    await ownershipService.retrySync(target);
+    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retry: true });
+    expect(ownershipService.getSnapshot()?.notice).toBe(notice);
+    expect(JSON.stringify(ownershipService.getSnapshot())).not.toContain('private cipher error');
+    expect(api.getDetail).toHaveBeenCalledTimes(1);
+    await ownershipService.retrySync();
+    expect(ownershipService.getSnapshot()?.notice).toBe('ownershipRetryScheduled');
+  });
+  test('drops a local initialization failure returned after the account changes', async () => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    let resolve!: (value: unknown) => void;
+    remote.configure.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const retrying = ownershipService.retrySync(target);
+    await settle();
+    switchAccount(2);
+    const another = { ...target, id: 'task-b' };
+    await ownershipService.open(another);
+    resolve({ owner: { userId: 'A' }, enabled: true, initializationFailure: RemoteInitializationFailure.IdentityUnreadable });
+    await retrying;
+    expect(ownershipService.getSnapshot()?.target).toEqual(another);
+    expect(ownershipService.getSnapshot()?.notice).toBeUndefined();
   });
   test('a stale failure toast cannot retry after switching accounts', async () => {
     api.commit.mockResolvedValue({ success: true, data: { ...result, syncState: OwnershipSyncState.Failed } });

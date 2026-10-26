@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import { RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
+import { RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
 import { isNewRemoteState, isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteAttention, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteSettingsSwitchChecked, remoteSyncDescription, toggleRemoteSettingsSwitch } from './remoteControlState';
 
 const connected: RemoteSettingsState = {
@@ -123,6 +123,27 @@ describe('device display names', () => {
 
 describe('connection failure feedback', () => {
   test.each([
+    [RemoteInitializationFailure.SecureStorageUnavailable, 'remoteLocalSecureStorageUnavailable'],
+    [RemoteInitializationFailure.IdentityUnreadable, 'remoteLocalIdentityUnreadable'],
+    [RemoteInitializationFailure.IdentityInvalid, 'remoteLocalIdentityInvalid'],
+    [RemoteInitializationFailure.LocalStorageUnavailable, 'remoteLocalStorageUnavailable'],
+    [RemoteInitializationFailure.DependencyUnavailable, 'remoteLocalInitializationFailed'],
+  ] as const)('distinguishes local initialization failure %s from server errors and stale online state', (initializationFailure, message) => {
+    const failed = { ...connected, initializationFailure, error: 'private local path', errorCode: 47023,
+      connectionReason: RemoteConnectionReason.ServerUnavailable, sessionSyncStatus: RemoteSyncStatus.Pending };
+    expect(isRemoteOnline(failed)).toBe(false);
+    expect(remoteConnectionFailure(failed)).toBe(message);
+    expect(remoteConnectionDescription(failed)).toBe(message);
+    expect(remoteSyncDescription(failed)).toBeNull();
+    expect(remoteAttention({ ...failed, errorCode: 47022 })).toEqual({ key: message, immediate: true });
+    expect(remoteConnectionDescription({ ...failed, enabled: false })).toBe(message);
+    expect(remoteConnectionDescription({ ...failed, owner: null })).toBe('remoteSignedOut');
+    expect(remoteConnectionDescription({ ...failed, errorCode: 40100 })).toBe('remoteLoginExpired');
+    expect(remoteConnectionFailure({ ...failed, owner: null })).toBeNull();
+    expect(isRemoteOnline({ ...connected, initializationFailure: undefined })).toBe(true);
+  });
+
+  test.each([
     ['agentCatalogSyncStatus', 'remoteAgentCatalogSyncFailed'],
     ['sessionSyncStatus', 'remoteSessionSyncFailed'],
   ] as const)('distinguishes %s failures from an unavailable connection', (field, message) => {
@@ -158,6 +179,7 @@ describe('connection failure feedback', () => {
     expect(remoteConnectionDescription({ ...offline, errorCode: 1006 })).toBe('remoteUnavailable');
     expect(remoteConnectionFailure(connected)).toBeNull();
     expect(remoteConnectionFailure({ ...offline, enabled: false, errorCode: 47013 })).toBeNull();
+    expect(remoteConnectionFailure({ ...offline, enabled: false, errorCode: 40100 })).toBeNull();
     expect(remoteConnectionDescription({ ...offline, connectionReason: undefined })).toBe('remoteOffline');
   });
 });

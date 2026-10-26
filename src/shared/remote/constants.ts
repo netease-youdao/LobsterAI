@@ -28,6 +28,11 @@ export const RemoteConnectionReason = {
   DeviceUnavailable: 'device_unavailable', WorkspaceUnavailable: 'workspace_unavailable',
 } as const;
 export type RemoteConnectionReasonValue = typeof RemoteConnectionReason[keyof typeof RemoteConnectionReason];
+export const RemoteInitializationFailure = {
+  SecureStorageUnavailable: 'secure_storage_unavailable', IdentityUnreadable: 'identity_unreadable',
+  IdentityInvalid: 'identity_invalid', LocalStorageUnavailable: 'local_storage_unavailable', DependencyUnavailable: 'dependency_unavailable',
+} as const;
+export type RemoteInitializationFailureValue = typeof RemoteInitializationFailure[keyof typeof RemoteInitializationFailure];
 export const RemoteSyncStatus = { Synced: 'synced', Pending: 'pending', Error: 'error' } as const;
 export const RemoteSyncHealthStatus = { Idle: 'idle', Syncing: 'syncing', Paused: 'paused', Degraded: 'degraded', Recovering: 'recovering' } as const;
 export const RemoteSyncHealthReason = { Connection: 'connection', Quota: 'quota', Removed: 'removed', Projection: 'projection', Files: 'files', LocalRecovery: 'local_recovery', StorageDependency: 'storage_dependency' } as const;
@@ -68,6 +73,7 @@ export interface RemoteSettingsState {
   screenLocked?: boolean; hostName?: string; stateRevision?: number; accountEpoch?: string;
   connectionStatus?: typeof RemoteConnectionStatus[keyof typeof RemoteConnectionStatus];
   connectionReason?: RemoteConnectionReasonValue; errorCode?: number;
+  initializationFailure?: RemoteInitializationFailureValue;
   settingsSyncStatus?: typeof RemoteSyncStatus[keyof typeof RemoteSyncStatus];
   nameSyncStatus?: typeof RemoteSyncStatus[keyof typeof RemoteSyncStatus];
   agentCatalogSyncStatus?: typeof RemoteSyncStatus[keyof typeof RemoteSyncStatus];

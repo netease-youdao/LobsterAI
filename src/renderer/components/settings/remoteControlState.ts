@@ -1,4 +1,4 @@
-import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
+import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
 
 export function remoteOwnerKey(state: RemoteSettingsState | null): string {
   return state?.owner ? JSON.stringify([state.owner.userId, state.owner.scopeKey]) : '';
@@ -9,7 +9,7 @@ export function isNewRemoteState(current: RemoteSettingsState | null, incoming: 
 }
 
 export function isRemoteOnline(state: RemoteSettingsState | null): boolean {
-  return Boolean(state?.owner && state.enabled && state.connected
+  return Boolean(state?.owner && state.enabled && state.connected && !state.initializationFailure
     && state.connectionReason !== RemoteConnectionReason.QuotaBlocked && state.connectionReason !== RemoteConnectionReason.Removed
     && state.errorCode !== 47022 && state.errorCode !== 47121
     && state.connectionStatus !== RemoteConnectionStatus.Offline);
@@ -22,6 +22,7 @@ export function needsRemoteSignIn(state: RemoteSettingsState | null): boolean {
 export function remoteConnectionDescription(state: RemoteSettingsState | null): string {
   if (!state) return 'remoteLoading';
   if (!state.owner) return 'remoteSignedOut';
+  if (state.initializationFailure) return remoteConnectionFailure(state)!;
   if (state.errorCode === REMOTE_DEVICE_RETIRED_CODE) return 'remoteDeviceRetired';
   if (!state.enabled) return 'remoteDisabled';
   if (state.connectionReason === RemoteConnectionReason.Removed || state.errorCode === 47121) return 'remoteConnectionRemoved';
@@ -54,8 +55,18 @@ export function normalizeRemoteDeviceName(value: string): string | null {
 
 /** A failure remains visible while the bridge waits or retries; raw server errors stay out of UI. */
 export function remoteConnectionFailure(state: RemoteSettingsState | null): string | null {
-  if (!state?.owner || !state.enabled) return null;
+  if (!state?.owner || !state.enabled && !state.initializationFailure) return null;
   if (needsRemoteSignIn(state)) return 'remoteLoginExpired';
+  if (state.initializationFailure) {
+    const messages: Record<typeof state.initializationFailure, string> = {
+      [RemoteInitializationFailure.SecureStorageUnavailable]: 'remoteLocalSecureStorageUnavailable',
+      [RemoteInitializationFailure.IdentityUnreadable]: 'remoteLocalIdentityUnreadable',
+      [RemoteInitializationFailure.IdentityInvalid]: 'remoteLocalIdentityInvalid',
+      [RemoteInitializationFailure.LocalStorageUnavailable]: 'remoteLocalStorageUnavailable',
+      [RemoteInitializationFailure.DependencyUnavailable]: 'remoteLocalInitializationFailed',
+    };
+    return messages[state.initializationFailure];
+  }
   if (state.errorCode === 47013) return 'remoteCredentialInvalid';
   if (state.errorCode === REMOTE_DEVICE_RETIRED_CODE) return 'remoteDeviceRetired';
   if (state.errorCode === 47022 || state.errorCode === 47121
@@ -89,6 +100,7 @@ export function toggleRemoteSettingsSwitch(state: RemoteSettingsState | null, se
 
 /** A live socket does not prove that all content or files have been acknowledged. */
 export function remoteSyncDescription(state: RemoteSettingsState | null): string | null {
+  if (state?.initializationFailure) return null;
   if (state?.syncHealth?.reason === RemoteSyncHealthReason.StorageDependency) return 'remoteSyncPaused';
   if (!state?.owner || !state.enabled || needsRemoteSignIn(state)) return null;
   const health = state.syncHealth;
@@ -110,6 +122,7 @@ export function remoteSyncDescription(state: RemoteSettingsState | null): string
 
 export function remoteAttention(state: RemoteSettingsState | null): { key: string; immediate: boolean } | null {
   if (!state?.owner || !state.enabled) return null;
+  if (state.initializationFailure) return { key: remoteConnectionFailure(state)!, immediate: true };
   if (state.connectionReason === RemoteConnectionReason.QuotaBlocked || state.errorCode === 47022) return { key: 'remoteQuotaAttention', immediate: true };
   if (state.connectionReason === RemoteConnectionReason.Removed || state.errorCode === 47121) return { key: 'remoteRemovedAttention', immediate: true };
   if (!isRemoteOnline(state)) return { key: 'remoteConnectionAttention', immediate: false };

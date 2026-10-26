@@ -212,7 +212,7 @@ import {
   ProviderName,
 } from '../shared/providers';
 import type { RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest } from '../shared/remote/connections';
-import { type RemoteConfigureRequest, RemoteIpc, type RemoteOwner, type RemoteSettingsState } from '../shared/remote/constants';
+import { type RemoteConfigureRequest, RemoteInitializationFailure, RemoteIpc, type RemoteOwner, type RemoteSettingsState } from '../shared/remote/constants';
 import { RemoteTelemetryEvent, RemoteTelemetryIpc } from '../shared/remote/telemetry';
 import { validRemoteTelemetryUi } from '../shared/remote/telemetryUi';
 import {
@@ -681,6 +681,7 @@ import { RemoteAccountTransition } from './remote/remoteAccountTransition';
 import { RemoteBridge } from './remote/remoteBridge';
 import { withRemoteConnectionAccount } from './remote/remoteConnectionIpc';
 import { RemoteImageDecoder } from './remote/remoteImageDecoder';
+import { RemoteInitializationError, RemoteInitializationRecovery } from './remote/remoteInitialization';
 import { listRemoteInputModels } from './remote/remoteInputModels';
 import { RemoteLocalGc } from './remote/remoteLocalGc';
 import { RemoteModelCatalog } from './remote/remoteModelCatalog';
@@ -691,7 +692,7 @@ import { RemoteRegistrationIdentityStore } from './remote/remoteRegistrationIden
 import { RemoteSecurityCoordinator } from './remote/remoteSecurityCoordinator';
 import { RemoteSecurityJournal, RemoteSecurityJournalWorkerIo } from './remote/remoteSecurityJournal';
 import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
-import { remoteDiagnosticLog } from './remote/remoteSyncLog';
+import { remoteLogMessage } from './remote/remoteSyncLog';
 import { captureRemoteTelemetry } from './remote/remoteTelemetry';
 import { initializeRemoteTelemetry } from './remote/remoteTelemetryRuntime';
 import { assertRemoteExecutionPermit,currentRemoteExecution, markRemoteExecutionDispatched, SessionCommandService } from './remote/sessionCommandService';
@@ -6368,14 +6369,22 @@ if (!gotTheLock) {
     return sessionDeletionService;
   };
 
-  const initializeRemoteBridge = (): RemoteBridge => {
+  const remoteInitializationCleanup: Array<() => void> = [];
+  const buildRemoteBridge = (): RemoteBridge => {
     if (remoteBridge) return remoteBridge;
     getCoworkStore().remote.initializeSynchronization();
-    const identity = loadRemoteIdentity(app.getPath('appData'), app.getPath('userData'), safeStorage);
+    // Missing ciphertext is not a fresh installation when the database already has security evidence.
+    const remoteStore = getCoworkStore().remote;
+    const hasIdentityEvidence = Boolean(remoteStore.db.prepare(`SELECT 1 FROM remote_state WHERE key IN
+      ('databaseInstance','databaseCheckpoint','securityJournalMigrated','securityJournalHead','securityJournalConflict')
+      OR key LIKE 'ownershipProof:%' LIMIT 1`).get());
+    const identity = loadRemoteIdentity(app.getPath('appData'), app.getPath('userData'), safeStorage, !hasIdentityEvidence);
     const fence = createRemoteDatabaseFence(app.getPath('appData'), app.getPath('userData'), safeStorage, identity);
     const profile = crypto.createHash('sha256').update(fs.realpathSync(app.getPath('userData'))).digest('hex');
     const journal = new RemoteSecurityJournal(identity, new RemoteSecurityJournalWorkerIo(path.join(app.getPath('appData'), 'LobsterAI-remote-identity', profile, 'security-v1')), gotTheLock);
+    remoteInitializationCleanup.push(() => journal.close());
     const security = new RemoteSecurityCoordinator(getCoworkStore().remote, journal, identity, fence.checkpoint);
+    remoteInitializationCleanup.push(() => security.close());
     const models = new RemoteModelCatalog(getCoworkStore().remote, () => listRemoteInputModels({
       token: getAuthTokens()?.accessToken || null, baseURL: getServerApiBaseUrl(),
     }), () => remoteBridge?.getSyncTargetId() ?? null);
@@ -6455,8 +6464,35 @@ if (!gotTheLock) {
       reconcileApproval: entry => remoteSessionCommands!.reconcileApproval(entry),
       onAccountChange: (previous, current) => remoteSessionCommands!.accountChanged(previous, current),
     });
+    remoteInitializationCleanup.push(() => remoteBridge?.stop());
     remoteBridge.start();
     return remoteBridge;
+  };
+  const initializeRemoteBridgeOnce = (): RemoteBridge => {
+    try { return buildRemoteBridge(); }
+    catch (error) {
+      for (const cleanup of remoteInitializationCleanup.reverse()) {
+        try { cleanup(); } catch { /* Preserve the original failure after retiring partial initialization. */ }
+      }
+      remoteBridge = null;
+      throw error;
+    } finally { remoteInitializationCleanup.length = 0; }
+  };
+  const remoteInitialization = new RemoteInitializationRecovery({
+    initialize: initializeRemoteBridgeOnce,
+    canRetry: () => Boolean(getCurrentRemoteOwner()) && readRemoteState().enabled,
+    changed: () => remoteSettingsController?.notify(),
+    report: (failure, attempt) => {
+      const fields = { event: 'desktop.remote_initialization', result: failure ? 'failed' : 'success',
+        failure: failure ?? undefined, retryAttempt: attempt };
+      remoteLogMessage(failure ? 'warn' : 'info', '[RemoteInitialization]', fields);
+      if (failure) console.warn('[RemoteInitialization] Local initialization failed', fields);
+      else console.info('[RemoteInitialization] Original credentials readable; bridge initialized', fields);
+    },
+  });
+  const initializeRemoteBridge = (manual = false): RemoteBridge => {
+    remoteInitialization.ensure(manual);
+    return remoteBridge!;
   };
   const getRemoteAccountEpoch = (): string => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`;
   const readRemoteState = (): RemoteSettingsState => {
@@ -6473,8 +6509,17 @@ if (!gotTheLock) {
       enabled = Boolean(owner) && (saved === null || typeof saved === 'object' && !Array.isArray(saved)
         && ((saved as { enabled?: unknown }).enabled === undefined || (saved as { enabled?: unknown }).enabled === true));
     } catch { /* Unknown persisted intent remains disabled; preserve the original bytes. */ }
+    const failure = owner ? remoteInitialization.failure : undefined;
+    const failureMessages = {
+      [RemoteInitializationFailure.SecureStorageUnavailable]: 'remoteSecureStorageUnavailable',
+      [RemoteInitializationFailure.IdentityUnreadable]: 'remoteIdentityUnreadable',
+      [RemoteInitializationFailure.IdentityInvalid]: 'remoteIdentityInvalid',
+      [RemoteInitializationFailure.LocalStorageUnavailable]: 'remoteLocalStorageUnavailable',
+      [RemoteInitializationFailure.DependencyUnavailable]: 'remoteInitializationUnavailable',
+    };
     return { accountEpoch: getRemoteAccountEpoch(), enabled, connected: false, name: os.hostname(), hostName: os.hostname(),
-      owner, workspaces: [], accessRequests: [], error: owner ? t('remoteSecureStorageUnavailable') : undefined };
+      owner, workspaces: [], accessRequests: [], initializationFailure: failure,
+      ...(failure ? { deviceConnectionManagementSupported: false, error: t(failureMessages[failure]) } : {}) };
   };
   ipcMain.handle(RemoteIpc.State, () => remoteSettingsController?.state() ?? readRemoteState());
   ipcMain.on(RemoteTelemetryIpc.Ui, (event, input: unknown) => {
@@ -6502,7 +6547,16 @@ if (!gotTheLock) {
       return !selection.canceled && selection.filePaths[0]
         ? { name: path.basename(selection.filePaths[0]), path: fs.realpathSync(selection.filePaths[0]) } : undefined;
     },
-    configureRemote: changes => initializeRemoteBridge().configure(changes),
+    configureRemote: changes => {
+      try { return initializeRemoteBridge(changes.retry === true).configure(changes); }
+      catch (error) {
+        // A failed pure recheck returns the precise offline state, never a successful reconnect.
+        if (error instanceof RemoteInitializationError && changes.retry && changes.enabled === undefined
+          && changes.name === undefined && !changes.workspace && !changes.removeWorkspaceId
+          && !changes.reregister && !changes.retrySessionId) return Promise.resolve();
+        throw error;
+      }
+    },
   }));
   ipcMain.handle(RemoteIpc.Decide, (_event, requestId: string, decision: 'approve' | 'deny') => {
     if (typeof requestId !== 'string' || !['approve', 'deny'].includes(decision)) throw new Error('Invalid access decision');
@@ -6722,7 +6776,7 @@ if (!gotTheLock) {
       });
       remoteSettingsController.restoreKeepAwake();
     } catch (error) { console.warn('[RemoteSettings] Optional settings initialization failed', error); }
-    try { initializeRemoteBridge(); } catch { remoteDiagnosticLog('remote.record.quarantined', { lane: 'transport', reason: 'DEPENDENCY_UNAVAILABLE' }, 'warn'); }
+    try { initializeRemoteBridge(); } catch { /* Classified state and bounded recovery are owned by remoteInitialization. */ }
   };
 
   registerOwnershipHandlers(() => ownershipAssociations);
@@ -16327,6 +16381,7 @@ if (!gotTheLock) {
     console.log(`[Main] App cleanup started for ${reason}`);
     currentAppCleanupStep = 'sync-teardown';
     remoteLocalGc?.stop();
+    remoteInitialization.dispose();
     remoteBridge?.stop();
     void remoteTelemetryRuntime?.dispose();
     remoteNetworkTransport.dispose();

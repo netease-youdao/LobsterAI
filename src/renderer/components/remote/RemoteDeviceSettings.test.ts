@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { type RemoteConnectionsSnapshot, RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../../shared/remote/connections';
-import { RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
+import { RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
 import { i18nService } from '../../services/i18n';
 import RemoteDeviceSettings from './RemoteDeviceSettings';
 
@@ -78,6 +78,78 @@ describe('current remote device settings', () => {
     expect(html).not.toContain(i18nService.t('remoteAllowConnection'));
     expect(html).not.toContain('<h2');
     expect(button('remoteRenameDevice')?.disabled).toBe(false);
+  });
+
+  test.each([
+    [RemoteInitializationFailure.SecureStorageUnavailable, 'remoteLocalSecureStorageUnavailable'],
+    [RemoteInitializationFailure.IdentityUnreadable, 'remoteLocalIdentityUnreadable'],
+    [RemoteInitializationFailure.IdentityInvalid, 'remoteLocalIdentityInvalid'],
+    [RemoteInitializationFailure.LocalStorageUnavailable, 'remoteLocalStorageUnavailable'],
+    [RemoteInitializationFailure.DependencyUnavailable, 'remoteLocalInitializationFailed'],
+  ] as const)('keeps the current device visible for %s and only rechecks the existing identity', (initializationFailure, message) => {
+    harness.snapshot.state = { ...connected, initializationFailure, error: 'private credential details', errorCode: 47023 };
+    const { html, button } = render();
+    expect(html).toContain('Private alias');
+    expect(html).toContain(i18nService.t('remoteCurrentDevice'));
+    expect(html).toContain(i18nService.t(message));
+    expect(html).not.toContain(i18nService.t('remoteOnline'));
+    expect(html).not.toContain(i18nService.t('remoteUnavailable'));
+    expect(html).not.toContain('private credential details');
+    expect(html.includes(i18nService.t('remoteLocalIdentityRecoveryHelp'))).toBe(
+      initializationFailure === RemoteInitializationFailure.IdentityUnreadable || initializationFailure === RemoteInitializationFailure.IdentityInvalid,
+    );
+    expect(button('remoteRenameDevice')?.disabled).toBe(true);
+    expect(button('remoteReconnect')).toBeUndefined();
+    expect(button('remoteReregister')).toBeUndefined();
+    click(button('remoteLocalRecheck'));
+    expect(harness.submit.mock.calls).toEqual([[{ retry: true }]]);
+    expect(html).not.toContain(i18nService.t('remoteResumeRequested'));
+    harness.snapshot.state = { ...connected };
+    const recovered = render();
+    expect(recovered.html).toContain(i18nService.t('remoteOnline'));
+    expect(recovered.button('remoteLocalRecheck')).toBeUndefined();
+    expect(recovered.html).not.toContain(i18nService.t('remoteLocalIdentityRecoveryHelp'));
+  });
+
+  test('local failure hides stale connection management and does not use its quota or remove state', () => {
+    harness.snapshot.state = { ...connected, initializationFailure: RemoteInitializationFailure.IdentityUnreadable,
+      deviceConnectionManagementSupported: true, connectionReason: RemoteConnectionReason.QuotaBlocked };
+    harness.management = { ...harness.management, accountEpoch: connected.accountEpoch!, data: {
+      supported: true, presenceAvailable: true, observedAt: '2026-10-26T00:00:00Z',
+      quota: { maxOnlineDesktops: 5, onlineSlotsUsed: 5, scope: 'account_scope' },
+      currentDevice: { deviceId: 'current', name: 'Current', connectionVersion: '1', connectionState: RemoteDeviceConnectionState.Removed,
+        admissionState: RemoteDeviceAdmissionState.QuotaBlocked, slotOccupied: false }, connections: [],
+    } };
+    const { html, button } = render();
+    expect(html).toContain(i18nService.t('remoteLocalIdentityUnreadable'));
+    expect(html).not.toContain(i18nService.t('remoteWaitingForConnection'));
+    expect(html).not.toContain(i18nService.t('remoteConnectionRemoved'));
+    expect(button('remoteManageConnections')).toBeUndefined();
+    expect(button('remoteReconnect')).toBeUndefined();
+  });
+
+  test('local recheck keeps a disabled preference and respects busy, logout and account boundaries', () => {
+    harness.snapshot.state = { ...connected, enabled: false, initializationFailure: RemoteInitializationFailure.IdentityUnreadable };
+    const recheck = render().button('remoteLocalRecheck');
+    click(recheck);
+    expect(harness.submit.mock.calls).toEqual([[{ retry: true }]]);
+    harness.submit.mockClear();
+    harness.snapshot.busy = true;
+    const busy = render().button('remoteLocalRecheck');
+    expect(busy?.disabled).toBe(true);
+    click(busy);
+    expect(harness.submit).not.toHaveBeenCalled();
+    harness.snapshot = { state: { ...connected, owner: null, initializationFailure: RemoteInitializationFailure.IdentityUnreadable }, busy: false, error: null };
+    const signedOut = render();
+    expect(signedOut.button('remoteLocalRecheck')).toBeUndefined();
+    expect(signedOut.html).not.toContain(i18nService.t('remoteLocalIdentityRecoveryHelp'));
+    expect(signedOut.html).not.toContain(i18nService.t('remoteLocalIdentityUnreadable'));
+    expect(signedOut.html).not.toContain('Private alias');
+    click(recheck);
+    expect(harness.submit).not.toHaveBeenCalled();
+    harness.snapshot.state = { ...connected, accountEpoch: 'epoch-b', owner: { userId: 'user-b', scopeKey: 'personal' } };
+    click(recheck);
+    expect(harness.submit).not.toHaveBeenCalled();
   });
 
   test('partial task errors keep online status and retry only the affected task', () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { RemoteConnectionReleaseState, type RemoteConnectionsSnapshot, RemoteDeviceAdmissionState, type RemoteDeviceConnection,RemoteDeviceConnectionState } from '../../shared/remote/connections';
-import type { RemoteSettingsState } from '../../shared/remote/constants';
+import { RemoteInitializationFailure, type RemoteSettingsState } from '../../shared/remote/constants';
 import { RemoteDeviceConnectionsService } from './remoteDeviceConnections';
 
 const current: RemoteDeviceConnection = { deviceId: 'current', name: 'Current', connectionVersion: '1', connectionState: RemoteDeviceConnectionState.Allowed, admissionState: RemoteDeviceAdmissionState.QuotaBlocked, slotOccupied: false };
@@ -40,6 +40,56 @@ describe('device management store', () => {
       expect(h.api.queryConnections).not.toHaveBeenCalled();
       stop();
     }
+  });
+  test.each(Object.values(RemoteInitializationFailure))('does not poll or mutate while initialization is blocked by %s', async initializationFailure => {
+    vi.useFakeTimers();
+    const h = create({ ...state, initializationFailure });
+    const stop = h.service.subscribe(() => undefined);
+    await h.service.refresh();
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(h.api.queryConnections).not.toHaveBeenCalled();
+    expect(await h.service.remove(other)).toBe(false);
+    expect(await h.service.resume(current)).toBe(false);
+    expect(h.api.removeConnection).not.toHaveBeenCalled();
+    expect(h.api.resumeCurrentConnection).not.toHaveBeenCalled();
+    stop();
+  });
+  test('invalidates an in-flight list when local initialization fails and resumes polling after recovery', async () => {
+    vi.useFakeTimers(); vi.spyOn(Math, 'random').mockReturnValue(0);
+    const h = create(); const pending = deferred<RemoteConnectionsSnapshot>();
+    h.api.queryConnections.mockReturnValueOnce(pending.promise);
+    const stop = h.service.subscribe(() => undefined);
+    const read = h.service.refresh();
+    h.change({ ...state, initializationFailure: RemoteInitializationFailure.SecureStorageUnavailable });
+    pending.resolve(data); await read;
+    expect(h.service.getSnapshot().data).toBeNull();
+    expect(h.service.getSnapshot().loading).toBe(false);
+    h.change({ ...state, initializationFailure: RemoteInitializationFailure.IdentityUnreadable });
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(1);
+    h.change(state); await h.service.refresh();
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(2);
+    expect(h.service.getSnapshot().data).toEqual(data);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(3);
+    stop();
+  });
+  test('local failure and login transitions never retain old account devices', async () => {
+    const h = create(); const stop = h.service.subscribe(() => undefined); await h.service.refresh();
+    h.change({ ...state, initializationFailure: RemoteInitializationFailure.IdentityUnreadable });
+    expect(h.service.getSnapshot().data).toBeNull();
+    h.change({ ...state, owner: null, accountEpoch: 'signed-out' }); await h.service.refresh();
+    h.change({ ...state, accountEpoch: 'b', owner: { userId: 'b', scopeKey: 'personal' }, initializationFailure: RemoteInitializationFailure.IdentityInvalid });
+    await h.service.refresh();
+    expect(h.service.getSnapshot().data).toBeNull();
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(1);
+    h.change({ ...state, accountEpoch: 'b', owner: { userId: 'b', scopeKey: 'personal' } });
+    await h.service.refresh();
+    expect(h.api.queryConnections).toHaveBeenLastCalledWith({ expectedAccountEpoch: 'b' });
+    h.change({ ...state, errorCode: 40100 }); await h.service.refresh();
+    expect(h.service.getSnapshot().data).toBeNull();
+    expect(h.api.queryConnections).toHaveBeenCalledTimes(2);
+    stop();
   });
   test('coalesces reads and does not request one list per device', async () => {
     const h = create(); const pending = deferred<RemoteConnectionsSnapshot>();

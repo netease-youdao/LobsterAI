@@ -4,7 +4,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExte
 import { useSelector } from 'react-redux';
 
 import { RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../../shared/remote/connections';
-import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
+import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteInitializationFailure, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
 import { RemoteTelemetryUiAction, RemoteTelemetryUiStage, RemoteTelemetryUiSurface } from '../../../shared/remote/telemetryUi';
 import { getMobileAppEntry, MobileAppEntryKind } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
@@ -64,33 +64,34 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const identity = JSON.stringify([accountGeneration, state?.accountEpoch, state?.owner?.userId, state?.owner?.scopeKey]);
   const online = isRemoteOnline(state);
   const signInRequired = needsRemoteSignIn(state);
-  const admissionDeferred = Boolean(state?.owner && state.enabled && !signInRequired && state.syncHealth?.admissionDeferred);
+  const initializationFailed = Boolean(state?.initializationFailure);
+  const admissionDeferred = Boolean(!initializationFailed && state?.owner && state.enabled && !signInRequired && state.syncHealth?.admissionDeferred);
   const connectionFailure = remoteConnectionFailure(state);
   const contentStatus = remoteSyncDescription(state);
   const contentLabel = contentStatus === 'remoteTasksSyncFailed'
     ? t('remoteTasksSyncFailedCount').replace('{count}', `${state?.syncHealth?.countsTruncated ? '≥' : ''}${state?.syncHealth?.failedSessions ?? 0}`)
     : t(contentStatus ?? 'remoteCurrentDevice');
-  const taskIssues = state?.owner && state.enabled && !signInRequired
+  const taskIssues = !initializationFailed && state?.owner && state.enabled && !signInRequired
     ? (state.syncHealth?.taskIssues ?? []).filter(issue => issue.status !== RemoteSyncTaskIssueStatus.Closed).slice(0, 20) : [];
   const displayName = state?.owner ? state.name || state.hostName : state?.hostName;
-  const connections = state?.accountEpoch === management.accountEpoch ? management.data : null;
-  const showConnections = Boolean(state?.owner && !signInRequired && (state.deviceConnectionManagementSupported || connections?.supported) && management.accountEpoch === state.accountEpoch);
+  const connections = !initializationFailed && state?.accountEpoch === management.accountEpoch ? management.data : null;
+  const showConnections = Boolean(!initializationFailed && state?.owner && !signInRequired && (state.deviceConnectionManagementSupported || connections?.supported) && management.accountEpoch === state.accountEpoch);
   const currentConnection = connections?.currentDevice;
   const observedSlots = connections?.presenceAvailable && !management.error ? connections.quota.onlineSlotsUsed : null;
   const slotAvailable = observedSlots !== null && observedSlots !== undefined && observedSlots < (connections?.quota.maxOnlineDesktops ?? 0);
-  const retired = state?.errorCode === REMOTE_DEVICE_RETIRED_CODE;
-  const removed = Boolean(!retired && state?.owner && state.enabled && (state.connectionReason === RemoteConnectionReason.Removed
+  const retired = !initializationFailed && state?.errorCode === REMOTE_DEVICE_RETIRED_CODE;
+  const removed = Boolean(!initializationFailed && !retired && state?.owner && state.enabled && (state.connectionReason === RemoteConnectionReason.Removed
     || state.errorCode === 47121 || currentConnection?.connectionState === RemoteDeviceConnectionState.Removed));
-  const quotaBlocked = Boolean(!retired && !online && !removed && state?.owner && state.enabled && (state.errorCode === 47022
+  const quotaBlocked = Boolean(!initializationFailed && !retired && !online && !removed && state?.owner && state.enabled && (state.errorCode === 47022
     || state.connectionReason === RemoteConnectionReason.QuotaBlocked || currentConnection?.admissionState === RemoteDeviceAdmissionState.QuotaBlocked));
   const statusKey = state?.owner && signInRequired ? 'remoteLoginExpired' : removed ? 'remoteConnectionRemoved'
     : quotaBlocked ? 'remoteWaitingForConnection' : online ? 'remoteOnline' : remoteConnectionDescription(state);
   const [retryCooldown, setRetryCooldown] = useState(false);
   const retryTimer = useRef<ReturnType<typeof setTimeout>>();
-  const namePending = state?.nameSyncStatus === RemoteSyncStatus.Pending || state?.nameSyncStatus === RemoteSyncStatus.Error;
-  const settingsPending = state?.settingsSyncStatus === RemoteSyncStatus.Pending || state?.settingsSyncStatus === RemoteSyncStatus.Error;
+  const namePending = !initializationFailed && (state?.nameSyncStatus === RemoteSyncStatus.Pending || state?.nameSyncStatus === RemoteSyncStatus.Error);
+  const settingsPending = !initializationFailed && (state?.settingsSyncStatus === RemoteSyncStatus.Pending || state?.settingsSyncStatus === RemoteSyncStatus.Error);
   const displayedError = error || actionError;
-  const canRename = Boolean(state?.owner && state.accountEpoch && !busy && !signInRequired && !displayedError);
+  const canRename = Boolean(!initializationFailed && state?.owner && state.accountEpoch && !busy && !signInRequired && !displayedError);
 
   useLayoutEffect(() => {
     requestGeneration.current++;
@@ -137,8 +138,9 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const submit = async (changes: RemoteConfigureRequest, action: DeviceAction): Promise<boolean> => {
     const snapshot = remoteSettingsService.getSnapshot();
     if ((action === DeviceAction.Retry && retryCooldown) || busy || snapshot.busy || !state?.owner || !state.accountEpoch || signInRequired
-      || state.accountEpoch !== snapshot.state?.accountEpoch) return false;
-    if (displayedError) { refresh(); return false; }
+      || !snapshot.state?.owner || needsRemoteSignIn(snapshot.state) || state.accountEpoch !== snapshot.state.accountEpoch) return false;
+    if (snapshot.state?.initializationFailure && action !== DeviceAction.Retry) return false;
+    if (displayedError && !initializationFailed) { refresh(); return false; }
     const generation = requestGeneration.current;
     const epoch = state.accountEpoch;
     setActiveAction(action); setFeedback(''); setActionError('');
@@ -214,7 +216,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         <div className="flex shrink-0 items-center gap-2 text-xs">
           {quotaBlocked && showConnections && <button type="button" className={`${ACTION_CLASS} min-h-7`} onClick={() => { connectionsSection.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); connectionsSection.current?.focus(); }}>{t('remoteManageConnections')}</button>}
           {state && signInRequired && loginAllowed && <button type="button" disabled={busy} className={`${ACTION_CLASS} min-h-7`} onClick={() => { if (!busy) onLogin(); }}>{t('login')}</button>}
-          {state?.owner && !retired && !state.enabled && !signInRequired && <button type="button" disabled={busy} className={`${ACTION_CLASS} min-h-7`} onClick={() => { void submit({ enabled: true }, DeviceAction.Enable); }}>{t('remoteEnableConnection')}</button>}
+          {!initializationFailed && state?.owner && !retired && !state.enabled && !signInRequired && <button type="button" disabled={busy} className={`${ACTION_CLASS} min-h-7`} onClick={() => { void submit({ enabled: true }, DeviceAction.Enable); }}>{t('remoteEnableConnection')}</button>}
           {removed && !signInRequired && currentConnection && <button type="button" disabled={state?.deviceConnectionManagementClusterReady === false || currentConnection.canResume === false || Boolean(management.operations[currentConnection.deviceId]?.busy)} className={`${ACTION_CLASS} min-h-7`} onClick={() => { void resume(); }}>{t('remoteReconnect')}</button>}
           <button ref={renameButton} type="button" title={t('remoteRenameDevice')} aria-label={t('remoteRenameDevice')} disabled={!canRename}
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary hover:bg-surface-raised disabled:opacity-40"
@@ -245,7 +247,14 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         {feedback && <p role="status" className="text-secondary">{t(feedback)}</p>}
         {state && signInRequired && !loginAllowed && <p className="text-secondary">{t('remoteLoginUnavailable')}</p>}
         {removed && management.error && !showConnections && <p role="alert" className="text-amber-700 dark:text-amber-400">{t(management.error)}</p>}
-        {state?.owner && state.enabled && !signInRequired && !removed && !retired
+        {state?.owner && !signInRequired && (state.initializationFailure === RemoteInitializationFailure.IdentityUnreadable
+          || state.initializationFailure === RemoteInitializationFailure.IdentityInvalid)
+          && <p className="text-secondary">{t('remoteLocalIdentityRecoveryHelp')}</p>}
+        {initializationFailed && state?.owner && !signInRequired
+          && <button type="button" disabled={busy} className={ACTION_CLASS} onClick={() => { void submit({ retry: true }, DeviceAction.Retry); }}>
+            {t(busy && activeAction === DeviceAction.Retry ? 'remoteLocalRechecking' : 'remoteLocalRecheck')}
+          </button>}
+        {!initializationFailed && state?.owner && state.enabled && !signInRequired && !removed && !retired
           && (online ? Boolean(connectionFailure) || admissionDeferred : state.connectionReason !== RemoteConnectionReason.Connecting)
           && <button type="button" disabled={busy || retryCooldown} className={ACTION_CLASS} onClick={() => { void submit({ retry: true }, DeviceAction.Retry); }}>
             {t(busy && activeAction === DeviceAction.Retry ? 'remoteReconnecting' : online && !admissionDeferred ? 'retry' : 'remoteReconnect')}
