@@ -248,19 +248,40 @@ export class RemoteStore {
         }
       }
       this.artifactTracking = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='library_local_artifacts'").get();
+      let artifactTriggersChanged = false;
       if (this.artifactTracking) for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
         db.exec(`DROP TRIGGER IF EXISTS remote_content_library_relation_${operation.toLowerCase()};
           DROP TRIGGER IF EXISTS remote_content_library_artifact_${operation.toLowerCase()};
           `);
-        replaceCoreTrigger(db, `CREATE TRIGGER remote_library_relation_${operation.toLowerCase()} AFTER ${operation} ON library_artifact_sessions BEGIN
+        const messageRefs = operation === 'UPDATE' ? ['OLD', 'NEW'] : [ref];
+        // Verification timestamps change on ordinary index reads; only visible card changes dirty live messages.
+        const relationGuard = operation === 'UPDATE'
+          ? ' AND (OLD.artifact_id IS NOT NEW.artifact_id OR OLD.session_id IS NOT NEW.session_id OR OLD.last_message_id IS NOT NEW.last_message_id)' : '';
+        const artifactGuard = operation === 'UPDATE'
+          ? ' AND (OLD.file_name IS NOT NEW.file_name OR OLD.size_bytes IS NOT NEW.size_bytes OR OLD.availability IS NOT NEW.availability)' : '';
+        const relationChanged = replaceCoreTrigger(db, `CREATE TRIGGER remote_library_relation_${operation.toLowerCase()} AFTER ${operation} ON library_artifact_sessions BEGIN
           INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (${ref}.session_id,1,CAST(strftime('%s','now') AS INTEGER)*1000)
-          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
-        replaceCoreTrigger(db, `CREATE TRIGGER remote_library_artifact_${operation.toLowerCase()} AFTER ${operation} ON library_local_artifacts BEGIN
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
+          INSERT INTO remote_live_revisions(session_id,object_id,revision,deleted)
+          SELECT session_id,id,1,0 FROM cowork_messages WHERE (${messageRefs.map(value => `(session_id=${value}.session_id AND id=${value}.last_message_id)`).join(' OR ')})${relationGuard}
+          ON CONFLICT(session_id,object_id) DO UPDATE SET revision=revision+1; END;`);
+        const artifactChanged = replaceCoreTrigger(db, `CREATE TRIGGER remote_library_artifact_${operation.toLowerCase()} AFTER ${operation} ON library_local_artifacts BEGIN
           INSERT INTO remote_session_revisions(session_id,revision,dirty_at)
           SELECT session_id,1,CAST(strftime('%s','now') AS INTEGER)*1000 FROM library_artifact_sessions WHERE artifact_id=${ref}.id
-          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
+          INSERT INTO remote_live_revisions(session_id,object_id,revision,deleted)
+          SELECT m.session_id,m.id,1,0 FROM library_artifact_sessions r
+          JOIN cowork_messages m ON m.session_id=r.session_id AND m.id=r.last_message_id WHERE r.artifact_id=${ref}.id${artifactGuard}
+          ON CONFLICT(session_id,object_id) DO UPDATE SET revision=revision+1; END;`);
+        artifactTriggersChanged ||= relationChanged || artifactChanged;
       }
+      // Repair cards missed before this trigger upgrade, once. Read identity metadata only;
+      // this neither discovers/uploads historical files nor re-executes a run.
+      if (artifactTriggersChanged) db.exec(`INSERT INTO remote_live_revisions(session_id,object_id,revision,deleted)
+        SELECT DISTINCT m.session_id,m.id,1,0 FROM library_artifact_sessions r
+        JOIN cowork_messages m ON m.session_id=r.session_id AND m.id=r.last_message_id WHERE r.last_message_id IS NOT NULL
+        ON CONFLICT(session_id,object_id) DO UPDATE SET revision=revision+1;`);
     })();
     db.prepare('UPDATE remote_write_context SET trusted=0 WHERE id=1').run();
     })();

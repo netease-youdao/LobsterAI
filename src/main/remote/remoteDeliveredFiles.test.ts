@@ -43,6 +43,7 @@ describe('remote delivered file evidence', () => {
     expect(await changedDeliveredFile(baseline, old, finishedAt, current)).toBeNull();
     expect(await changedDeliveredFile(baseline, created, finishedAt, current)).toEqual({
       filePath: created, identity: identity(created), sizeBytes: '12',
+      directories: [{ path: root, identity: `${fs.statSync(root).dev}:${fs.statSync(root).ino}` }],
     });
     expect(await changedDeliveredFile(baseline, changed, finishedAt, current)).toMatchObject({ identity: identity(changed) });
   });

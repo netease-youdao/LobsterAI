@@ -5,6 +5,7 @@ import { RemoteFileReason } from '../../shared/remote/files';
 import { RemoteInputReason } from '../../shared/remote/input';
 import { RemoteTelemetryEvent as E, remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
+import { RemoteFileContextRequired, RemoteFileRequestError } from './remoteFileRetry';
 import { captureRemoteFileTelemetry, remoteFileRequestBytes, remoteFileRequestFailure, remoteFileRequestFailureFields, remoteFileRequestOperation, RemoteFileTelemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
 import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
@@ -22,6 +23,11 @@ describe('remote file telemetry metadata', () => {
     expect(remoteFileTelemetryReason(new Error(RemoteFileReason.Source))).toBe(RemoteFileReason.Source);
     expect(remoteFileTelemetryReason(Object.assign(new Error('/private/file'), { code: 'ENOSPC' }))).toBe(RemoteFileTelemetry.LocalIo);
     expect(remoteFileRequestFailure({ reason: RemoteInputReason.Account })).toBe('context_changed');
+  });
+  it('retains the explicit missing-context reason through telemetry sanitization', () => {
+    const reason = remoteFileTelemetryReason(new RemoteFileRequestError(RemoteFileContextRequired, 403, null, RemoteFileContextRequired));
+    expect(sanitizeRemoteTelemetryFields({ reason, retry_phase: 'backoff', from_state: 'isolated' }))
+      .toEqual({ reason: RemoteFileContextRequired, retry_phase: 'backoff', from_state: 'isolated' });
   });
   it('uses fixed route names without retaining object IDs or query strings', () => {
     expect(remoteFileRequestOperation('/api/remote/v1/input-assets/private-id/parts/123?token=secret')).toBe('file_part');

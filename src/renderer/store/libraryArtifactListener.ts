@@ -40,11 +40,25 @@ const recordCandidates = async (
   );
   if (validCandidates.length === 0 || !window.electron?.library) return;
   for (let index = 0; index < validCandidates.length; index += 100) {
-    const result = await window.electron.library.recordCandidates(
-      validCandidates.slice(index, index + 100),
-    );
-    if (!result.success) {
-      console.debug('[Library] Artifact indexing request was not accepted.');
+    const batch = validCandidates.slice(index, index + 100);
+    const startedAt = performance.now();
+    const details = { batchIndex: index / 100, candidateCount: batch.length };
+    console.debug('[Library] Artifact indexing request started.', details);
+    try {
+      const result = await window.electron.library.recordCandidates(batch);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (!result.success) {
+        console.warn('[Library] Artifact indexing request was not accepted.', { ...details, elapsedMs });
+        break;
+      }
+      console.debug('[Library] Artifact indexing request completed.', {
+        ...details, elapsedMs, recorded: result.data.recorded, ignored: result.data.ignored,
+      });
+    } catch {
+      // IPC may disappear during shutdown/reload. Do not log raw errors containing paths or conversation content.
+      console.warn('[Library] Artifact indexing request failed.', {
+        ...details, elapsedMs: Math.round(performance.now() - startedAt),
+      });
       break;
     }
   }

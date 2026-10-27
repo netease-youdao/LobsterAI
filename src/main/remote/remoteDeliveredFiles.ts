@@ -7,6 +7,7 @@ import { remoteFileLocalLimit } from '../../shared/remote/files';
 
 const MAX_DIRECTORY_ENTRIES = 256;
 const MAX_ROOTS = 2;
+const MAX_DELIVERY_DEPTH = 32;
 const BASELINE_BUDGET_MS = 80;
 const MAX_DELIVERED_FILES = 20;
 const IMAGE_DELIVERY_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
@@ -73,28 +74,48 @@ export async function captureDeliveryBaseline(roots: string[], current: () => bo
 
 /** A receipt proves current stable bytes, never historical terminal bytes. Only an explicit MEDIA declaration may retain an unchanged baseline file. */
 export async function changedDeliveredFile(baseline: DeliveryBaseline, filePath: string, finishedAt: number,
-  current: () => boolean, allowUnchanged = false): Promise<{ filePath: string; identity: string; sizeBytes: string } | null> {
+  current: () => boolean, allowUnchanged = false): Promise<{
+    filePath: string; identity: string; sizeBytes: string; directories: Array<{ path: string; identity: string }>;
+  } | null> {
   const active = (): boolean => permitted(baseline.current) && permitted(current);
   if (!active() || !path.isAbsolute(filePath) || !Number.isFinite(finishedAt) || finishedAt <= 0) return null;
   const resolved = path.resolve(filePath), root = path.dirname(resolved), name = path.basename(resolved);
-  const directory = baseline.directories.find(item => item.path === root);
+  const directory = baseline.directories.find(item => item.path === root)
+    ?? (allowUnchanged ? baseline.directories.find(item => {
+      const relative = path.relative(item.path, root);
+      return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    }) : undefined);
   const limit = remoteFileLocalLimit(name, true);
   if (!directory || !limit) return null;
   try {
-    const before = await fs.promises.lstat(root);
-    if (!active() || !before.isDirectory() || before.isSymbolicLink() || directoryIdentity(before) !== directory.identity
-      || await fs.promises.realpath(root) !== root || !active()) return null;
+    // Explicit MEDIA names one file; inspect only its ancestor chain, never scan a subtree.
+    // Ordinary links still need the original direct-file baseline as producer evidence.
+    const relative = path.relative(directory.path, root);
+    const parts = relative ? relative.split(path.sep) : [];
+    if (parts.length > MAX_DELIVERY_DEPTH) return null;
+    const directories: Array<{ path: string; identity: string }> = [];
+    let parent = directory.path;
+    for (let index = 0; index <= parts.length; index++) {
+      if (index) parent = path.join(parent, parts[index - 1]);
+      const stat = await fs.promises.lstat(parent);
+      if (!active() || !stat.isDirectory() || stat.isSymbolicLink()
+        || index === 0 && directoryIdentity(stat) !== directory.identity
+        || await fs.promises.realpath(parent) !== parent || !active()) return null;
+      directories.push({ path: parent, identity: directoryIdentity(stat) });
+    }
     const stat = await fs.promises.lstat(resolved);
     if (!active() || !stat.isFile() || stat.isSymbolicLink() || !Number.isSafeInteger(stat.size)
       || stat.size < 1 || stat.size > limit || stat.mtimeMs > finishedAt || stat.ctimeMs > finishedAt) return null;
     const identity = fileIdentity(stat);
-    if (Object.prototype.hasOwnProperty.call(directory.files, name)
+    if (directory.path === root && Object.prototype.hasOwnProperty.call(directory.files, name)
       && (directory.files[name] === null || !allowUnchanged && directory.files[name] === identity)) return null;
-    const after = await fs.promises.lstat(root);
-    if (!active() || !after.isDirectory() || after.isSymbolicLink() || directoryIdentity(after) !== directory.identity
-      || await fs.promises.realpath(resolved) !== resolved || !active()
+    for (const parent of directories) {
+      const after = await fs.promises.lstat(parent.path);
+      if (!active() || !after.isDirectory() || after.isSymbolicLink() || directoryIdentity(after) !== parent.identity) return null;
+    }
+    if (await fs.promises.realpath(resolved) !== resolved || !active()
       || fileIdentity(await fs.promises.lstat(resolved)) !== identity || !active()) return null;
-    return { filePath: resolved, identity, sizeBytes: String(stat.size) };
+    return { filePath: resolved, identity, sizeBytes: String(stat.size), directories };
   } catch { return null; }
 }
 

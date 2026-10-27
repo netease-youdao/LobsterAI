@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import { RemoteFileReason } from '../../shared/remote/files';
-import { fileRetryAllowed, nextFileRetry, RemoteFileRequestError, RemoteFileRetryPhase } from './remoteFileRetry';
+import { fileRetryAllowed, nextFileRetry, RemoteFileContextRequired, RemoteFileRequestError, RemoteFileRetryPhase } from './remoteFileRetry';
 
 describe('persistent resource retry policy', () => {
+  it('backs off for an explicit missing server context without relaxing other permission failures', () => {
+    const state = nextFileRetry(undefined, new RemoteFileRequestError(RemoteFileContextRequired, 403, '60', RemoteFileContextRequired), 1000, '1', () => 0);
+    expect(state.phase).toBe(RemoteFileRetryPhase.Backoff);
+    expect(state.nextRetryAt).toBe(61000);
+    expect(fileRetryAllowed(state, 60999, '1')).toBe(false);
+    expect(fileRetryAllowed(state, 61000, '1')).toBe(true);
+    for (const error of [new Error(RemoteFileContextRequired), new RemoteFileRequestError(RemoteFileContextRequired, 403),
+      new RemoteFileRequestError('denied', 403, null, 'FILE_ACCESS_DENIED')]) {
+      expect(nextFileRetry(undefined, error, 0, '1').phase).toBe(RemoteFileRetryPhase.Isolated);
+    }
+  });
   it('backs off without allowing jitter to shorten cooldown or Retry-After', () => {
     let now = 1_000, state;
     for (let attempt = 1; attempt <= 5; attempt++) {
