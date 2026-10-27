@@ -1,13 +1,17 @@
 import { createHash } from 'crypto';
+import { EventEmitter } from 'events';
 import { existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { buildCoworkImageAttachmentPreviews } from '../../shared/cowork/imageAttachments';
+import { ModelPresetId, modelPresetModelId } from '../../shared/modelPresets/constants';
+import { OpenClawProviderId } from '../../shared/providers/constants';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, type RemotePreparationClaim } from '../../shared/remote/input';
 import type { CoworkStore } from '../coworkStore';
+import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { payloadHash } from './canonical';
 import { InputPreparationService, type LocalPreparedInput,RemoteAttachmentError } from './inputPreparationService';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
@@ -15,6 +19,7 @@ import { RemoteFileTelemetry as Telemetry } from './remoteFileTelemetry';
 import { RemoteModelCatalog } from './remoteModelCatalog';
 import * as syncLog from './remoteSyncLog';
 import * as telemetryApi from './remoteTelemetry';
+import { SessionCommandService } from './sessionCommandService';
 
 const emitted: Array<{ event: string; fields: Record<string, unknown> }> = [];
 const diagnostics: Array<Record<string, unknown>> = [];
@@ -37,7 +42,7 @@ const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' }
 const owner = { userId: 'A', scopeKey: 'personal' };
 const folders: string[] = [];
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
-function fixture(getTargetId?: () => string | null) {
+function fixture(getTargetId?: () => string | null, presetId?: ModelPresetId) {
   const folder = mkdtempSync(path.join(tmpdir(), 'remote-input-')); folders.push(folder);
   const cwd = path.join(folder, 'cwd'); mkdirSync(cwd);
   const values = new Map<string, unknown>();
@@ -48,12 +53,17 @@ function fixture(getTargetId?: () => string | null) {
     remove: (key: string) => values.delete(key),
     countKeys: (prefix: string, limit: number) => Math.min(limit, [...values.keys()].filter(key => key.startsWith(prefix)).length),
     entries: (prefix: string, after = '', limit = 50) => [...values.entries()].filter(([key]) => key.startsWith(prefix) && key > after).sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([key, value]) => ({ key, value })),
+    setApprovalLifecycle: vi.fn(),
+    setInputModel: (id: string, model: unknown) => { values.set(`inputModel:${id}`, model); return '0'; },
     owner: () => owner, localSessionId: () => session?.id, inputVersion: () => '0', controlVersion: () => '4' };
   const store = { remote, assertAgentAccess: vi.fn(), getAgent: () => ({ model: 'provider/model', thinkingLevel: 'high', enabled }),
     getSession: () => session, agentOwnership: { get: () => ({ version }), canPublish: () => !session } } as unknown as CoworkStore;
   const catalog = { refresh: vi.fn(async () => [{ agentId: 'main', version, defaultWorkspaceId: 'ws', workspaceAvailable: true }]), resolve: () => cwd } as unknown as RemoteAgentCatalog;
   const models = new RemoteModelCatalog(store.remote, () => [{ identity: 'configured-model', runtimeRef: 'provider/model', source: 'custom', displayName: 'Chat', providerLabel: 'Custom',
-    available: true, image: true, toolCalling: true, thinking: { options: ['low', 'high'], default: 'low' }, configuration: {} }], getTargetId);
+    available: true, image: true, toolCalling: true, thinking: { options: ['low', 'high'], default: 'low' }, configuration: {} },
+    ...(presetId ? [{ identity: presetId, runtimeRef: `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`,
+      source: 'subscription' as const, displayName: presetId, providerLabel: 'LobsterAI', available: true,
+      image: true, toolCalling: true, thinking: { options: [] }, configuration: {} }] : [])], getTargetId);
   const deps = { store, models, cacheRoot: path.join(folder, 'cache'), getOwner: () => actor, getTargetId, getDefaultModel: () => 'provider/model', getAgentCatalog: () => catalog };
   const service = new InputPreparationService(deps);
   const claim: RemotePreparationClaim = { preparationId: 'prep', claimId: 'claim', claimToken: 'token', claimUntil: new Date(Date.now() + 60_000).toISOString(), statusVersion: '1',
@@ -66,7 +76,7 @@ function fixture(getTargetId?: () => string | null) {
   };
   return { service, deps, claim, attach, cwd, values, catalog,
     setActor: (next: RemoteOwner | null) => { actor = next; }, changeVersion: () => { version = '2'; }, disable: () => { enabled = false; },
-    continueAnonymous: () => { session = { id: 'local', agentId: 'anon', cwd, modelOverride: 'provider/model', thinkingLevel: 'low' };
+    continueAnonymous: () => { session = { id: 'local', agentId: 'anon', cwd, modelOverride: 'provider/model', thinkingLevel: 'low', modelPresetId: presetId };
       claim.request = { ...claim.request, purpose: 'send_message', sessionId: 'remote', expectedInputVersion: '0', expectedControlVersion: '4',
         input: { text: 'continue', model: { mode: RemoteInputMode.Session } } }; } };
 }
@@ -471,3 +481,24 @@ it('records successful download, validation, image decode and local commit as se
     ['download', 'success'], ['validate', 'success'], ['decode', 'success'], ['local_commit', 'success'],
   ]);
 });
+
+
+it.each([undefined, ModelPresetId.Balanced, ModelPresetId.Ultimate])(
+  'keeps the published session model consistent with continuation preparation (%s)', async presetId => {
+    const f = fixture(undefined, presetId);
+    f.continueAnonymous();
+    const commands = new SessionCommandService(f.deps.store, new EventEmitter() as CoworkRuntime, () => owner);
+    commands.configureInput({ preparations: f.service, models: f.deps.models, getDeviceId: () => 'pc' });
+    const summary = commands.recordCurrentInputModel('local');
+    expect(summary).not.toBeNull();
+    const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+    // The server freezes this published identity for keep_session and rejects a different model.
+    expect(prepared.resolvedInput.model).toEqual({ modelRef: summary!.modelRef, version: summary!.version });
+    expect(prepared.resolvedInput.options.thinkingLevel).toBe(summary!.thinkingLevel);
+    const published = f.deps.models.resolve(owner, 'pc', summary!.modelRef as string, summary!.version as string);
+    expect(published.item.thinking.options).toContain(summary!.thinkingLevel);
+    const options = await f.service.executionOptions(prepared, () => undefined);
+    expect(options).toMatchObject({ modelOverride: 'provider/model', thinkingLevel: 'low' });
+    expect(f.deps.store.getSession('local', 0)?.modelPresetId).toBe(presetId);
+  },
+);

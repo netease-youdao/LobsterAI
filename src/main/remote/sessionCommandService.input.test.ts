@@ -221,3 +221,13 @@ it.each([true, false])('reconciles the preset with the confirmed gateway model a
   expect(f.onRecovered).toHaveBeenCalledExactlyOnceWith('local');
   expect(f.remote.get('inputFence:local')).toBeNull();
 });
+
+it('publishes the confirmed explicit model while the caller clears the previous preset', async () => {
+  const f = fixture(false, null, 'provider/old', ModelPresetId.Balanced);
+  f.remote.updateRun('local', 'succeeded');
+  await f.service.patchConfiguration('local', { model: 'provider/new', thinkingLevel: 'high' });
+  // The desktop IPC caller clears the old preset after patchConfiguration returns.
+  f.store.updateSession('local', { modelPresetId: null });
+  expect(f.resolveRuntimeModel).toHaveBeenLastCalledWith(owner, 'pc', 'provider/new');
+  expect(f.remote.get('inputModel:local')).toMatchObject({ modelRef: 'new-model', thinkingLevel: 'high' });
+});
