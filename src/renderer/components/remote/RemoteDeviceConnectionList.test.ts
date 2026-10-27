@@ -23,35 +23,35 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('connected computer list', () => {
-  test('keeps server count and excludes the current computer from other rows', () => {
+  test('keeps refresh without a count and excludes the current computer from other rows', () => {
     const html = render();
-    expect(html).toContain('1 / 5');
+    expect(html).not.toContain('1 / 5');
     expect(html).not.toContain(i18nService.t('remoteConnectionsIncludeCurrent'));
     expect(html).not.toContain(i18nService.t('remoteNoOtherConnections'));
     expect(renderList()).toBe('');
     expect(html).toContain(`aria-label="${i18nService.t('remoteRefreshConnections')}"`);
     expect(html).not.toContain('title="Current"');
   });
-  test('shows every occupied slot, including reconnecting and capacity reductions', () => {
+  test('shows every other computer during reconnection and capacity reductions without displaying quota', () => {
     const html = render({ ...snapshot, data: { ...data, quota: { ...data.quota, onlineSlotsUsed: 6 }, currentDevice: { ...current, slotOccupied: false },
       connections: Array.from({ length: 6 }, (_, index) => ({ ...current, deviceId: `other-${index}`, name: `Computer-${index}`, admissionState: RemoteDeviceAdmissionState.Reconnecting })) } });
-    expect(html).toContain('6 / 5');
+    expect(html).not.toContain('6 / 5');
     expect(html).toContain(i18nService.t('remoteOtherConnectedComputers'));
     expect(renderList({ ...snapshot, data })).not.toContain('1 / 5');
     expect(html.match(/Computer-/g)).toHaveLength(18);
     expect(html).toContain(i18nService.t('remoteConnectionReconnecting'));
     expect(html).not.toContain(i18nService.t('remoteConnectionsIncludeCurrent'));
   });
-  test('pending slot release stays in the count and has no actionable remove button', () => {
+  test('pending slot release stays visible without a count or actionable remove button', () => {
     const html = render({ ...snapshot, data: { ...data, connections: [{ ...current, deviceId: 'other', name: 'Releasing', canRemove: true, connectionState: RemoteDeviceConnectionState.Removed, releaseState: RemoteConnectionReleaseState.Pending }] } });
-    expect(html).toContain('1 / 5');
+    expect(html).not.toContain('1 / 5');
     expect(html).toContain(i18nService.t('remoteRemovingConnection'));
     expect(html).toMatch(/disabled="" aria-label=/);
   });
-  test('unavailable presence never looks like zero connected devices', () => {
+  test('unavailable presence shows an error without a misleading connection count', () => {
     for (const value of [{ ...snapshot, data: { ...data, presenceAvailable: false, quota: { ...data.quota, onlineSlotsUsed: null } } }, { ...snapshot, error: 'remoteConnectionsUnavailable' }]) {
       const html = render(value);
-      expect(html).toContain('— / 5');
+      expect(html).not.toContain('— / 5');
       expect(html).not.toContain('0 / 5');
       expect(html).toContain(i18nService.t('remoteConnectionsUnavailable'));
     }
@@ -59,7 +59,7 @@ describe('connected computer list', () => {
   test('loading refresh remains accessible while the empty devices list stays hidden', () => {
     const loading = { ...snapshot, loading: true, data: null };
     const html = renderSummary(loading);
-    expect(html).toContain('— / —');
+    expect(html).not.toContain('— / —');
     expect(html).toContain('disabled=""');
     expect(html).toContain('animate-spin');
     expect(renderList(loading)).toBe('');

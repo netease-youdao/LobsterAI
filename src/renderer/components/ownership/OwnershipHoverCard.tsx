@@ -1,5 +1,6 @@
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipTarget } from '@shared/ownership/types';
-import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 
 import { ownershipService } from '../../services/ownership';
@@ -11,6 +12,9 @@ export function useOwnershipHover(target: OwnershipTarget, disabled: boolean) {
   const id = useId();
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  const cardRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<HTMLElement | null>(null);
+  const [cardHeight, setCardHeight] = useState<number>();
   const panel = useSyncExternalStore(ownershipService.subscribe, ownershipService.getSnapshot, ownershipService.getSnapshot);
   const revision = useSyncExternalStore(ownershipService.subscribeChange, ownershipService.getRevision, ownershipService.getRevision);
   const detail = useOwnershipDetail(target, !!anchor && !disabled && !panel);
@@ -20,6 +24,7 @@ export function useOwnershipHover(target: OwnershipTarget, disabled: boolean) {
   const enter = (element: HTMLElement) => {
     clearTimer();
     if (disabled || panel) return;
+    anchorRef.current = element;
     timer.current = setTimeout(() => setAnchor(element.getBoundingClientRect()), OWNERSHIP_HOVER_DELAY);
   };
   useEffect(() => {
@@ -28,24 +33,48 @@ export function useOwnershipHover(target: OwnershipTarget, disabled: boolean) {
   }, [disabled, panel, revision, target.id]);
   useEffect(() => {
     const dismiss = () => { clearTimeout(timer.current); setAnchor(null); };
+    const onScroll = (event: Event) => {
+      if (event.target instanceof Node && cardRef.current?.contains(event.target)) return;
+      dismiss();
+    };
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') dismiss(); };
-    window.addEventListener('scroll', dismiss, true);
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', dismiss);
     window.addEventListener('blur', dismiss);
     document.addEventListener('keydown', onKey);
     return () => {
       clearTimeout(timer.current);
-      window.removeEventListener('scroll', dismiss, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', dismiss);
       window.removeEventListener('blur', dismiss);
       document.removeEventListener('keydown', onKey);
     };
   }, []);
-  const visible = anchor && detail && !disabled && !panel;
-  const position = anchor ? ownershipCardPosition(anchor, { width: window.innerWidth, height: window.innerHeight }, { width: 300, height: 290 }) : null;
-  const card = visible ? createPortal(<div
-    id={id} role="tooltip" className="fixed z-[70] max-h-[calc(100vh-16px)] overflow-auto rounded-xl border border-border bg-surface p-4 shadow-xl"
-    style={{ ...position!, maxHeight: window.innerHeight - position!.top - 8 }}
+  const visible = !!(anchor && detail && !disabled && !panel);
+  const isTask = target.kind === OwnershipTargetKind.Task;
+  useLayoutEffect(() => {
+    const element = cardRef.current;
+    if (!visible || !element) { setCardHeight(undefined); return; }
+    const measure = () => {
+      const currentAnchor = anchorRef.current;
+      if (!currentAnchor?.isConnected) { setAnchor(null); return; }
+      const rect = currentAnchor.getBoundingClientRect();
+      setAnchor(previous => previous?.top === rect.top && previous?.bottom === rect.bottom
+        && previous?.left === rect.left && previous?.right === rect.right ? previous : rect);
+      const height = element.getBoundingClientRect().height;
+      setCardHeight(previous => previous === height ? previous : height);
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
+    observer?.observe(element);
+    if (anchorRef.current) observer?.observe(anchorRef.current);
+    return () => observer?.disconnect();
+  }, [visible, target.id]);
+  const position = anchor ? ownershipCardPosition(anchor, { width: window.innerWidth, height: window.innerHeight }, { width: 300, height: cardHeight ?? 0 }) : null;
+  const card = visible && detail ? createPortal(<div
+    ref={cardRef} id={id} role="tooltip"
+    className={`fixed z-[70] overflow-auto rounded-xl border border-border bg-surface ${isTask ? 'p-3 shadow-popover' : 'p-4 shadow-xl'}`}
+    style={{ ...position!, maxHeight: window.innerHeight - 16, visibility: cardHeight === undefined ? 'hidden' : undefined }}
     onMouseEnter={clearTimer} onMouseLeave={leave}
   ><OwnershipDetailContent detail={detail} compact /></div>, document.body) : null;
   return {

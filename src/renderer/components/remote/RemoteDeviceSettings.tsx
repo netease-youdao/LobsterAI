@@ -190,7 +190,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
       <div className="min-w-0 flex-1">
         <p className="mb-2 text-sm font-semibold">{t('remoteDevicesBannerTitle')}</p>
         <p className="text-xs leading-5 text-secondary">{t('remoteDevicesBannerBenefits')}</p>
-        <p className="mt-1 text-[11px] leading-4 text-secondary">{t(isDownload ? 'remoteQrAppDownloadHint' : 'remoteQrDownloadPending')}</p>
+        {isDownload && <p className="mt-1 text-[11px] leading-4 text-secondary">{t('remoteQrAppDownloadHint')}</p>}
       </div>
       <div aria-hidden="true" className="hidden h-20 w-20 shrink-0 items-center justify-center rounded-full bg-primary/5 text-primary/25 lg:flex">
         <RemoteControlIcon className="h-12 w-12" />

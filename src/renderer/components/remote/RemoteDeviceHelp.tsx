@@ -3,7 +3,6 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExte
 import { useSelector } from 'react-redux';
 
 import { i18nService } from '../../services/i18n';
-import { remoteDeviceConnectionsService } from '../../services/remoteDeviceConnections';
 import { remoteSettingsService } from '../../services/remoteSettings';
 import type { RootState } from '../../store';
 import {
@@ -19,7 +18,6 @@ const t = (key: string) => i18nService.t(key);
 /** Read-only help for the device-management heading. */
 export function RemoteDeviceHelp(): React.ReactElement {
   const { state } = useSyncExternalStore(remoteSettingsService.subscribe, remoteSettingsService.getSnapshot, remoteSettingsService.getSnapshot);
-  const management = useSyncExternalStore(remoteDeviceConnectionsService.subscribe, remoteDeviceConnectionsService.getSnapshot, remoteDeviceConnectionsService.getSnapshot);
   const accountGeneration = useSelector((root: RootState) => root.auth.accountGeneration);
   const identity = JSON.stringify([accountGeneration, state?.accountEpoch, state?.owner?.userId, state?.owner?.scopeKey]);
   const [openIdentity, setOpenIdentity] = useState<string | null>(null);
@@ -28,11 +26,6 @@ export function RemoteDeviceHelp(): React.ReactElement {
   const trigger = useRef<HTMLButtonElement>(null);
   const id = useId();
   const [layerId] = useState(createModalEscapeLayerId);
-  const connections = state?.owner && state.accountEpoch && state.accountEpoch === management.accountEpoch && management.data?.supported
-    ? management.data : null;
-  const limit = connections?.quota.maxOnlineDesktops;
-  const limitHelp = typeof limit === 'number' && Number.isInteger(limit) && limit > 0
-    ? t('remoteConnectionLimitHelp').replace('{limit}', String(limit)) : t('remoteDeviceHelpConnectionsFallback');
 
   useLayoutEffect(() => { setOpenIdentity(null); }, [identity]);
 
@@ -78,7 +71,7 @@ export function RemoteDeviceHelp(): React.ReactElement {
       <div className="space-y-3 text-xs leading-5 text-secondary">
         <section>
           <h4 className="mb-1 font-medium text-foreground">{t('remoteDeviceHelpConnections')}</h4>
-          <p>{limitHelp} {t('remoteDeviceHelpSlotDetails')}</p>
+          <p>{t('remoteDeviceHelpConnectionsFallback')} {t('remoteDeviceHelpSlotDetails')}</p>
         </section>
         <section>
           <h4 className="mb-1 font-medium text-foreground">{t('remoteDeviceHelpRemoval')}</h4>

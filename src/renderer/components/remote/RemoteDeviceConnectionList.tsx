@@ -14,9 +14,7 @@ export function RemoteDeviceConnectionSummary({ snapshot }: {
 }): React.ReactElement | null {
   const data = snapshot.data;
   if (data && !data.supported) return null;
-  const count = data?.presenceAvailable && !snapshot.error ? data.quota.onlineSlotsUsed : null;
   return <div className="flex items-center gap-2 text-xs text-secondary">
-    <span>{t('remoteConnectedSummary')} {count ?? '—'} / {data?.quota.maxOnlineDesktops ?? '—'}</span>
     <button type="button" disabled={snapshot.loading}
       className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-surface-raised hover:text-foreground disabled:opacity-50"
       onClick={() => { void remoteDeviceConnectionsService.refresh(); }}

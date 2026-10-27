@@ -67,7 +67,6 @@ describe('mobile connection popover', () => {
     expect(html).not.toContain(i18nService.t('remoteHowItWorks'));
     expect(html).not.toContain(i18nService.t('remoteAllowDescription'));
     expect(html).not.toContain(i18nService.t('remoteKeepAwakeDescription'));
-    expect(html).not.toContain(i18nService.t('remoteQrDownloadPending'));
     expect(html).not.toContain(i18nService.t('remoteQrAppDownloadHint'));
   });
 
@@ -79,7 +78,6 @@ describe('mobile connection popover', () => {
     expect(html).toContain('https://download.example.com/');
     expect(html).toContain(i18nService.t('remoteQrAppDownload'));
     expect(html).toContain(i18nService.t('remoteQrAppDownloadHint'));
-    expect(html).not.toContain(i18nService.t('remoteQrDownloadPending'));
   });
 
   test('signed-out switches initiate login without writing a preference or exposing the old alias', () => {

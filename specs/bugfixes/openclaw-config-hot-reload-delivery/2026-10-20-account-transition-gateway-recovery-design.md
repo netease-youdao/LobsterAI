@@ -6,6 +6,8 @@
 
 本文是[配置应用生命周期](2026-09-23-config-lifecycle-design.md)的增量设计，同时补齐[登录凭证生命周期](../auth-session-lifecycle/2026-07-23-auth-session-lifecycle-design.md)与[桌面账号隔离方案](../../../../lobsterai-server/docs/specs/mobile-remote-control/feature-2026-09-23-desktop-first-fault-containment.md)之间的恢复步骤。原有归属、执行幂等、凭据门禁及配置应用证明继续有效。
 
+2026-10-27 增量：[同账号资料刷新中断配置交付后的主动恢复](2026-10-27-auth-refresh-config-recovery.md)。补齐同账号认证 revision 变化取消配置同步后的恢复调度，保留账号 guard，并修正空闲时仍被提示“等待运行任务”的文案；验证状态以增量文档为准。
+
 ## 1. 概述
 
 ### 1.1 问题与证据

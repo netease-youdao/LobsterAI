@@ -1,8 +1,12 @@
-import { OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
+import { CalendarDaysIcon, ComputerDesktopIcon } from '@heroicons/react/24/outline';
+import { AgentOwnerKind } from '@shared/agent/constants';
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipDetail, OwnershipDisplay } from '@shared/ownership/types';
+import { RemoteRunStatus } from '@shared/remote/constants';
 import React from 'react';
 
 import { i18nService } from '../../services/i18n';
+import { CoworkSessionStatusValue } from '../../types/cowork';
 
 function ownerLabel(owner: OwnershipDisplay): string {
   if (owner.kind === 'anonymous') return i18nService.t('ownershipAnonymous');
@@ -14,36 +18,44 @@ export function ownershipSyncLabel(state: string): string { return i18nService.t
 const OwnershipDetailContent: React.FC<{ detail: OwnershipDetail; compact?: boolean }> = ({ detail, compact }) => {
   if (compact && detail.kind === OwnershipTargetKind.Task) {
     const t = (key: string) => i18nService.t(key);
-    const anonymous = detail.ownership.kind === 'anonymous';
-    const account = [t('ownershipCurrentAccount'), detail.ownership.scopeLabel].filter(Boolean).join(' · ');
-    const source = [detail.agent?.name, detail.deviceName || t('remoteThisComputer')].filter(Boolean).join(' · ');
+    const scope = detail.ownership.kind === AgentOwnerKind.Anonymous
+      ? t('ownershipUnassociatedAccount') : detail.ownership.scopeLabel;
     const locale = i18nService.getLanguage() === 'zh' ? 'zh-CN' : 'en-US';
     const updatedAt = detail.updatedAt !== undefined ? new Date(detail.updatedAt) : null;
-    const updatedLabel = updatedAt ? t('ownershipUpdatedSummary').replace('{time}', updatedAt.toLocaleString(locale, {
+    const updatedLabel = updatedAt ? t('ownershipCompactUpdatedAt').replace('{time}', updatedAt.toLocaleString(locale, {
       ...(updatedAt.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' as const } : {}),
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
     })) : null;
-    const syncClassName = detail.syncState === OwnershipSyncState.Failed ? 'text-red-600 dark:text-red-400'
-      : detail.syncState === OwnershipSyncState.Pending || detail.syncState === OwnershipSyncState.WaitingService
-        ? 'text-amber-600 dark:text-amber-400' : 'text-secondary';
-    const statusClassName = detail.status === 'error' ? 'text-red-600 dark:text-red-400'
-      : detail.status === 'waiting_approval' ? 'text-amber-600 dark:text-amber-400'
-        : detail.status === 'running' ? 'text-primary' : 'text-secondary';
-    return <div className="space-y-3">
+    const status = detail.status === CoworkSessionStatusValue.Running
+      ? { label: t('ownershipStatus_running'), className: 'bg-primary' }
+      : detail.status === RemoteRunStatus.WaitingApproval
+        ? { label: t('ownershipCompactStatus_waiting_approval'), className: 'bg-warning' }
+        : detail.status === CoworkSessionStatusValue.Error
+          ? { label: t('ownershipCompactStatus_error'), className: 'bg-destructive' } : null;
+    return <div className="space-y-2">
       <h3 className="line-clamp-2 break-words text-sm font-medium text-foreground" title={detail.title}>{detail.title}</h3>
-      <div className="space-y-1.5 text-xs leading-5 text-secondary">
-        <p className="break-words" title={anonymous ? undefined : `${ownerLabel(detail.ownership)} · ${ownershipSyncLabel(detail.syncState)}`}>
-          {anonymous ? t('ownershipAnonymousSummary') : <>{account} · <span className={syncClassName}>{t(`ownershipCompactSync_${detail.syncState}`)}</span></>}
+      <div className="flex flex-col gap-1 text-xs text-secondary">
+        <p className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center gap-1.5">
+            <ComputerDesktopIcon className="h-[1em] w-[1em] shrink-0" aria-hidden="true" />
+            <span>{t('ownershipLocalComputer')}</span>
+          </span>
+          {scope && <span className="min-w-0 max-w-full rounded bg-surface-raised px-1.5 py-0.5 text-xs [overflow-wrap:anywhere]">{scope}</span>}
         </p>
-        <p className="break-words" title={source}>{source}</p>
-        {(detail.status || updatedLabel) && <p className="break-words">
-          {detail.status && <span className={statusClassName}>{t(`ownershipStatus_${detail.status}`)}</span>}
-          {detail.status && updatedLabel && ' · '}
-          {updatedLabel && <span title={updatedAt!.toLocaleString(locale)}>{updatedLabel}</span>}
+        {(updatedLabel || status) && <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {updatedLabel && <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+            <CalendarDaysIcon className="h-[1em] w-[1em] shrink-0" aria-hidden="true" />
+            <span className="min-w-0 break-words">{updatedLabel}</span>
+          </span>}
+          {status && <span className="inline-flex items-center gap-1 whitespace-nowrap text-foreground">
+            <span className={`h-[0.4em] w-[0.4em] shrink-0 rounded-full ${status.className}`} aria-hidden="true" />
+            {status.label}
+          </span>}
         </p>}
       </div>
     </div>;
   }
+
   const rows = [
     [i18nService.t(detail.kind === OwnershipTargetKind.Task ? 'ownershipTaskOwner' : 'ownershipAgentOwner'), ownerLabel(detail.ownership)],
     ...(detail.agent ? [

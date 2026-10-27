@@ -2931,6 +2931,7 @@ let deferredRestartTimer: ReturnType<typeof setInterval> | null = null;
 let deferredRestartTimeout: ReturnType<typeof setTimeout> | null = null;
 let deferredRestartOverdue = false;
 const DEFERRED_RESTART_POLL_MS = 3_000;
+const AUTH_REFRESH_CONFIG_RECOVERY_REASON = 'auth-refresh-config-recovery';
 const DEFERRED_RESTART_OVERDUE_MS = 5 * 60_000;
 
 const hasActiveGatewayWorkloads = (): boolean => {
@@ -3019,9 +3020,11 @@ let openClawConfigApplyQueue: Promise<void> = Promise.resolve();
 let openClawConfigApplyState: GatewayConfigApplyState | null = null;
 let openClawConfigApplyGeneration = 0;
 const openClawConfigRecovery = new OpenClawConfigRecovery();
+let openClawConfigRecoveryGeneration = 0;
 let deferredRestartReason: string | null = null;
 let deferredRestartRequestedAt: number | null = null;
 const resetOpenClawConfigRecoveryForAccount = (ownerEpoch: string): void => {
+  openClawConfigRecoveryGeneration++;
   clearDeferredRestart();
   deferredRestartReason = null;
   deferredRestartRequestedAt = null;
@@ -3185,6 +3188,12 @@ const waitForOpenClawConfigApply = async (
   );
 };
 
+const canRunDeferredGatewayRestart = (): boolean => !isQuitting && !isDataMigrationRestoreInProgress
+  && !openClawManualRepairActive && !openClawAccountRecovery?.active
+  && !openClawAccountRecovery?.authMutationPending && !openClawConfigApplyState
+  && openClawConfigRecovery.pending && !openClawConfigRecovery.rejected && !openClawConfigRecovery.stalled
+  && openClawConfigRecovery.canRetry();
+
 const executeDeferredGatewayRestart = async (reason: string) => {
   const restartRequestedAt = deferredRestartRequestedAt ?? undefined;
   clearDeferredRestart();
@@ -3223,7 +3232,9 @@ const scheduleDeferredGatewayRestart = (reason: string, requestedAt = Date.now()
     `${gwDiagTs()} scheduleDeferredGatewayRestart: scheduling deferred restart, polling every ${DEFERRED_RESTART_POLL_MS}ms, overdue threshold ${DEFERRED_RESTART_OVERDUE_MS}ms (reason: ${reason})`,
   );
   deferredRestartOverdue = false;
-  deferredRestartTimer = setInterval(() => {
+  const recoveryGeneration = openClawConfigRecoveryGeneration;
+  const timer = setInterval(() => {
+    if (deferredRestartTimer !== timer || recoveryGeneration !== openClawConfigRecoveryGeneration) return;
     const fallbackRecovery = isConfigDeliveryFallbackReason(deferredRestartReason ?? reason);
     if (fallbackRecovery && openClawConfigRecovery.stalled) {
       clearDeferredRestart();
@@ -3231,17 +3242,20 @@ const scheduleDeferredGatewayRestart = (reason: string, requestedAt = Date.now()
       deferredRestartRequestedAt = null;
       return;
     }
-    if (fallbackRecovery && !openClawConfigRecovery.canRetry()) return;
+    if (!canRunDeferredGatewayRestart()) return;
     if (!hasActiveConfigRestartWorkloads(deferredRestartReason ?? reason)) {
       void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
     }
   }, DEFERRED_RESTART_POLL_MS);
+  deferredRestartTimer = timer;
 
   // Do not kill an active task at the threshold. Keep the original interval
   // alive so the restart happens at the first idle poll, and avoid re-running
   // sync every five minutes while a long task is still active.
-  deferredRestartTimeout = setTimeout(() => {
+  const timeout = setTimeout(() => {
+    if (deferredRestartTimeout !== timeout || recoveryGeneration !== openClawConfigRecoveryGeneration) return;
     deferredRestartTimeout = null;
+    if (!canRunDeferredGatewayRestart()) return;
     if (hasActiveConfigRestartWorkloads(deferredRestartReason ?? reason, true)) {
       deferredRestartOverdue = true;
       console.warn(
@@ -3254,6 +3268,22 @@ const scheduleDeferredGatewayRestart = (reason: string, requestedAt = Date.now()
     );
     void executeDeferredGatewayRestart(deferredRestartReason ?? reason);
   }, DEFERRED_RESTART_OVERDUE_MS);
+  deferredRestartTimeout = timeout;
+};
+
+/** Keep an interrupted pending target recoverable without reusing its account snapshot. */
+const scheduleInterruptedConfigRecovery = (
+  recoveryGeneration: number,
+  syncGeneration: number,
+  requestedAt?: number,
+): void => {
+  // Account fences and newer queue items own their own recovery. A same-owner
+  // auth refresh only cancels this attempt; it must not orphan the pending target.
+  if (recoveryGeneration !== openClawConfigRecoveryGeneration
+    || syncGeneration !== openClawConfigApplyGeneration
+    || !openClawConfigRecovery.pending || openClawConfigRecovery.rejected || openClawConfigRecovery.stalled
+    || isQuitting || isDataMigrationRestoreInProgress || openClawAccountRecovery?.active) return;
+  scheduleDeferredGatewayRestart(AUTH_REFRESH_CONFIG_RECOVERY_REASON, requestedAt);
 };
 
 const _syncOpenClawConfigImpl = async (
@@ -3665,6 +3695,8 @@ const _syncOpenClawConfigImpl = async (
 const syncOpenClawConfig = async (
   options: SyncOpenClawConfigOptions = { reason: 'unknown' },
 ): Promise<SyncOpenClawConfigResult> => {
+  const waitingRecoveryGeneration = openClawConfigRecoveryGeneration;
+  const waitingSyncGeneration = openClawConfigApplyGeneration;
   // Wait before enqueueing, so a background sync cannot block the repair's
   // own regeneration behind a promise that is waiting for repair completion.
   if (openClawManualRepairActive && !options.manualRepair) await openClawManualRepairBarrier;
@@ -3674,8 +3706,10 @@ const syncOpenClawConfig = async (
     do { await openClawAccountRecovery?.waitForAuthState(); }
     while (openClawAccountRecovery?.authMutationPending);
   } catch (error) {
+    scheduleInterruptedConfigRecovery(waitingRecoveryGeneration, waitingSyncGeneration, options.restartRequestedAt);
     return { success: false, changed: false, error: error instanceof Error ? error.message : String(error) };
   }
+  const recoveryGeneration = openClawConfigRecoveryGeneration;
   const isAccountCurrent = captureOpenClawAccountSnapshot();
   const generation = ++openClawConfigApplyGeneration;
   const enqueuedAt = Date.now();
@@ -3726,6 +3760,9 @@ const syncOpenClawConfig = async (
   try {
     return await resultPromise;
   } catch (error) {
+    if (!isAccountCurrent()) {
+      scheduleInterruptedConfigRecovery(recoveryGeneration, generation, options.restartRequestedAt);
+    }
     return {
       success: false,
       changed: false,

@@ -3,20 +3,24 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 import ts from 'typescript';
-import { expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
-import { OPENCLAW_MODEL_COMPAT_PLUGIN_ID, OpenClawEnginePhase } from '../shared/openclawEngine/constants';
+import { OPENCLAW_MODEL_COMPAT_PLUGIN_ID, OpenClawConfigApplyPendingReason, OpenClawEnginePhase } from '../shared/openclawEngine/constants';
+import { OpenClawAccountRecovery } from './libs/openclawAccountRecovery';
+import { OpenClawModelRuntimeChange, resolveOpenClawModelRuntimeChange } from './libs/openclawConfigAdmission';
 import {
   CONFIG_DELIVERY_FALLBACK_REASON_PREFIX,
   DEFERRED_SYNC_REASON_PREFIX,
+  deliverOpenClawConfigToGateway,
   isConfigDeliveryFallbackReason,
   isPersistentConfigDeliveryFailure,
   mergeDeferredGatewayRestartReason,
   type OpenClawConfigDeliveryInput,
   OpenClawConfigDeliveryMode,
+  OpenClawConfigRpcMethod,
 } from './libs/openclawConfigDelivery';
 import { createStableConfigFingerprint, OpenClawConfigImpact } from './libs/openclawConfigImpact';
-import { ConfigDiagnosticErrorKind } from './libs/openclawConfigObservation';
+import { ConfigDiagnosticErrorKind, ConfigDiagnosticOutcome, ConfigDiagnosticStage, ConfigWorkloadState, observeConfigRecovery } from './libs/openclawConfigObservation';
 import { OpenClawConfigRecovery } from './libs/openclawConfigRecovery';
 import { createOpenClawConfigStartupInputs } from './libs/openclawConfigRestartInputs';
 import { createOpenClawConfigTarget, rebaseOpenClawConfigTarget, sameOpenClawConfigContent } from './libs/openclawConfigTarget';
@@ -38,6 +42,9 @@ const names = new Set([
   'buildConfigApplyPendingStatus', 'buildConfigApplyErrorStatus', 'buildConfigRejectedStatus',
   'stallConfigRecoveryIfExhausted', 'executeDeferredGatewayRestart',
   'scheduleDeferredGatewayRestart', '_syncOpenClawConfigImpl', 'syncOpenClawConfig',
+  'resolvePendingConfigImpact', 'waitForOpenClawConfigApply',
+  'openClawConfigRecoveryGeneration', 'AUTH_REFRESH_CONFIG_RECOVERY_REASON',
+  'canRunDeferredGatewayRestart', 'scheduleInterruptedConfigRecovery',
 ]);
 const selected = source.statements.filter(statement => ts.isVariableStatement(statement)
   && statement.declarationList.declarations.some(declaration => ts.isIdentifier(declaration.name)
@@ -49,6 +56,9 @@ const compiled = ts.transpileModule(selected.map(statement => statement.getText(
     state: openClawConfigRecovery,
     reset: resetOpenClawConfigRecoveryForAccount,
     pendingReason: () => deferredRestartReason,
+    admit: model => waitForOpenClawConfigApply('fixture task startup', true, model),
+    syncing: () => openClawConfigApplyState !== null,
+    settled: async () => { await Promise.resolve(); await openClawConfigApplyQueue; },
   };`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 
 const raw = (models = ['first'], compat = false) => JSON.stringify({
@@ -57,8 +67,12 @@ const raw = (models = ['first'], compat = false) => JSON.stringify({
 type Phase = typeof OpenClawEnginePhase[keyof typeof OpenClawEnginePhase];
 type SyncOptions = { reason: string; isAccountCurrent?: () => boolean; restartGatewayIfRunning?: boolean };
 
-function fixture() {
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+function fixture(realDelivery = false) {
+  vi.useFakeTimers();
   const noop = () => {};
+  if (realDelivery) { vi.spyOn(console, 'log').mockImplementation(noop); vi.spyOn(console, 'warn').mockImplementation(noop); }
   let disk = '{}';
   let desired = raw();
   let desiredEnv = { KEY: 'first' };
@@ -79,6 +93,29 @@ function fixture() {
   const restartDemands: unknown[] = [];
   const intervals = new Set<() => void>();
   const timeouts = new Set<() => void>();
+  const intervalSchedules: number[] = [];
+  const intervalHandles = new Map<() => void, ReturnType<typeof setInterval>>();
+  const timeoutHandles = new Map<() => void, ReturnType<typeof setTimeout>>();
+  const diagnostics: Array<Record<string, unknown>> = [];
+  const rpcCalls: Array<{ method: string; params: any }> = [];
+  let onGet: (() => void | Promise<void>) | null = null;
+  let applicationUnconfirmed = false;
+  const account = new OpenClawAccountRecovery({
+    identity: () => `owner-${ownerEpoch}`, canRun: () => true, allowCredentials: noop,
+    prepare: async () => {}, start: async () => {}, confirm: async () => {}, complete: noop, changed: noop, canRetry: () => true,
+  });
+  const rpc = { request: async <T,>(method: string, params?: any): Promise<T> => {
+    rpcCalls.push({ method, params });
+    if (method === OpenClawConfigRpcMethod.Get) {
+      await onGet?.();
+      return { hash: 'fixture-hash', valid: true, raw: disk, configRevisionHash: 'resolved', appliedConfigHash: applicationUnconfirmed ? 'previous' : 'resolved' } as T;
+    }
+    if (method === OpenClawConfigRpcMethod.Apply) {
+      disk = params.raw; applied.push(disk); events.push('confirm');
+      return { ok: true } as T;
+    }
+    throw new Error('Unexpected fixture RPC');
+  } };
   const capture = () => ({ raw: disk, env: { ...managerEnv }, revision });
   const start = (inputs = capture()) => {
     generation++;
@@ -117,17 +154,22 @@ function fixture() {
   };
   const context = vm.createContext({
     console: { log: noop, warn: noop, error: noop }, process, Date,
-    setInterval: (callback: () => void) => { intervals.add(callback); return callback; },
-    clearInterval: (callback: () => void) => { intervals.delete(callback); },
-    setTimeout: (callback: () => void) => { timeouts.add(callback); return callback; },
-    clearTimeout: (callback: () => void) => { timeouts.delete(callback); },
+    setInterval: (callback: () => void, delay: number) => {
+      intervalSchedules.push(delay); intervals.add(callback); intervalHandles.set(callback, setInterval(callback, delay)); return callback;
+    },
+    clearInterval: (callback: () => void) => { clearInterval(intervalHandles.get(callback)); intervalHandles.delete(callback); intervals.delete(callback); },
+    setTimeout: (callback: () => void, delay: number) => {
+      timeouts.add(callback); timeoutHandles.set(callback, setTimeout(() => { timeouts.delete(callback); timeoutHandles.delete(callback); callback(); }, delay)); return callback;
+    },
+    clearTimeout: (callback: () => void) => { clearTimeout(timeoutHandles.get(callback)); timeoutHandles.delete(callback); timeouts.delete(callback); },
     OpenClawConfigRecovery, OpenClawImConfigRestartTracker, OpenClawEnginePhase, OpenClawConfigImpact,
     OpenClawConfigDeliveryMode, OpenClawPluginInstallMigrationStatus, ConfigDiagnosticErrorKind,
     CONFIG_DELIVERY_FALLBACK_REASON_PREFIX, DEFERRED_SYNC_REASON_PREFIX,
     isConfigDeliveryFallbackReason, mergeDeferredGatewayRestartReason, isPersistentConfigDeliveryFailure,
     createStableConfigFingerprint, createOpenClawConfigStartupInputs, sameOpenClawConfigContent,
     collectReferencedEnvVarNames, pickReferencedSecretEnvVars, rebaseOpenClawConfigTarget,
-    OpenClawConfigApplyPendingReason: { Applying: 'applying' },
+    OpenClawConfigApplyPendingReason, OpenClawModelRuntimeChange, resolveOpenClawModelRuntimeChange,
+    ConfigDiagnosticOutcome, ConfigDiagnosticStage, ConfigWorkloadState, observeConfigRecovery,
     app: { getPath: () => '/fixture' }, gwDiagTs: () => '', t: (key: string) => key,
     getOpenClawEngineManager: () => manager, getOpenClawConfigSync: () => configSync,
     getCoworkStore: () => ({ listUserPlugins: () => [] }),
@@ -136,19 +178,25 @@ function fixture() {
     migrateLegacyOpenClawPluginInstalls: () => migrate(),
     getMcpRuntime: () => ({ refreshResolvedServersCache: async () => {}, clearResolvedServersCache: noop }),
     remoteAccountTransition: { wait: async () => {} },
-    openClawAccountRecovery: null,
-    captureOpenClawAccountSnapshot: () => { const captured = ownerEpoch; return () => captured === ownerEpoch; },
+    openClawAccountRecovery: account,
+    captureOpenClawAccountSnapshot: () => {
+      const captured = ownerEpoch, revision = account.authRevision;
+      return () => captured === ownerEpoch && revision === account.authRevision && !account.authMutationPending
+        && !context.isQuitting && !context.isDataMigrationRestoreInProgress;
+    },
     runLegacyWeixinAllowFromMigration: noop,
     getIMGatewayManager: () => ({ getConfig: () => ({}) }),
     prepareEnterpriseOpenclawConfig: (text: string) => text,
     hasActiveConfigRestartWorkloads: () => workloads,
+    getConfigRestartWorkloads: () => ({ state: workloads ? ConfigWorkloadState.Busy : ConfigWorkloadState.Idle }),
     persistOpenClawConfigTarget: (_path: string, target: ReturnType<typeof createOpenClawConfigTarget>) => {
       disk = rebaseOpenClawConfigTarget(target, disk); events.push('persist'); return disk;
     },
     readOpenClawConfigRaw: () => disk,
     openClawRuntimeAdapter: { disconnectGatewayClient: () => events.push('disconnect'),
-      ensureGatewayRpcClient: async () => { events.push('connect'); return {}; } },
+      ensureGatewayRpcClient: async () => { events.push('connect'); return rpc; } },
     deliverOpenClawConfigToGateway: async (input: OpenClawConfigDeliveryInput) => {
+      if (realDelivery) return deliverOpenClawConfigToGateway(input);
       const next = input.readConfigFile();
       await input.ensureRpcClient();
       if (failedDeliveries > 0) {
@@ -159,7 +207,7 @@ function fixture() {
       disk = next; applied.push(next); events.push('confirm');
       return { mode: OpenClawConfigDeliveryMode.Applied, detail: 'confirmed', restartScheduled: false, elapsedMs: 0 };
     },
-    writeConfigDiagnostic: noop, forwardOpenClawStatus: noop,
+    writeConfigDiagnostic: (event: Record<string, unknown>) => diagnostics.push(event), forwardOpenClawStatus: noop,
     isQuitting: false, isDataMigrationRestoreInProgress: false,
     openClawManualRepairActive: false,
   });
@@ -170,10 +218,19 @@ function fixture() {
     reset: (epoch: string) => void;
     state: OpenClawConfigRecovery;
     pendingReason: () => string | null;
+    admit: (model: string) => Promise<{ configApplyPendingReason?: string } | null>;
+    syncing: () => boolean;
+    settled: () => Promise<void>;
   };
-  return { api, events, applied, restartDemands, intervals, timeouts, start, capture,
+  return { api, events, applied, restartDemands, intervals, timeouts, start, capture, account, diagnostics, rpcCalls, intervalSchedules,
+    onGet: (callback: (() => void | Promise<void>) | null) => { onGet = callback; },
+    unconfirmed: (value: boolean) => { applicationUnconfirmed = value; },
+    quit: () => { context.isQuitting = true; },
+    restore: () => { context.isDataMigrationRestoreInProgress = true; },
+    manualRepair: (value: boolean) => { context.openClawManualRepairActive = value; },
     desired: (next: string, env = desiredEnv) => { desired = next; desiredEnv = env; },
     starting: () => { phase = OpenClawEnginePhase.Starting; },
+    stopped: () => { phase = OpenClawEnginePhase.Ready; processRaw = null; processEnv = null; processRevision = null; },
     busy: (value: boolean) => { workloads = value; },
     staleRestarts: () => { keepStaleSpawnInputs = true; },
     failDeliveries: (count: number) => { failedDeliveries = count; },
@@ -290,4 +347,214 @@ test('main records one restart demand when ordinary delivery recovery reaches it
   expect(f.restartDemands[0]).toMatchObject({ requiredAfterGeneration: 1 });
   expect(f.api.state.pending).toBe(false);
   expect(f.events.filter(event => event === 'stop')).toHaveLength(1);
+});
+
+test('main retries a same-account refresh cancellation from a deferred config.get and admits the updated model', async () => {
+  const f = fixture(true);
+  await f.api.sync({ reason: 'bootstrap' }); f.start();
+  for (let index = 0; index < 4; index++) await f.api.sync({ reason: 'confirm' });
+  f.desired(raw(['latest'])); f.unconfirmed(true);
+  const initial = f.api.sync({ reason: 'server-models-updated' });
+  await vi.advanceTimersByTimeAsync(3000); await initial;
+  f.unconfirmed(false);
+  let refresh = 0;
+  f.onGet(() => { f.onGet(null); refresh = f.account.beginAuthMutation(); });
+  await vi.advanceTimersByTimeAsync(6000);
+  await f.api.settled();
+  expect(f.diagnostics.some(event => event.event === 'sync-start' && event.syncId === 7)).toBe(true);
+  expect(f.api.state.pending).toBe(true);
+  expect(f.api.syncing()).toBe(false);
+  expect(f.intervals.size).toBe(1);
+  expect(await f.api.admit('test/latest')).toMatchObject({ configApplyPendingReason: OpenClawConfigApplyPendingReason.ModelSettings });
+  const applied = f.applied.length;
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(f.applied).toHaveLength(applied);
+  f.account.commitAuthMutation(refresh);
+  await vi.advanceTimersByTimeAsync(3000);
+  await f.api.settled();
+  expect(f.api.state.pending).toBe(false);
+  expect(f.applied.at(-1)).toContain('latest');
+  expect(await f.api.admit('test/latest')).toBeNull();
+  expect(f.intervals.size).toBe(0);
+  expect(f.timeouts.size).toBe(0);
+  expect(f.events).not.toContain('stop');
+});
+
+async function runningConfigFixture() {
+  const f = fixture(true);
+  await f.api.sync({ reason: 'bootstrap' }); f.start();
+  await f.api.sync({ reason: 'confirm' });
+  return f;
+}
+
+async function interruptedConfigFixture() {
+  const f = await runningConfigFixture();
+  f.desired(raw(['latest']));
+  let refresh = 0;
+  f.onGet(() => { f.onGet(null); refresh = f.account.beginAuthMutation(); });
+  const sync = f.api.sync({ reason: 'server-models-updated' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect((await sync).success).toBe(false);
+  expect(f.api.state.pending).toBe(true);
+  expect(f.intervals.size).toBe(1);
+  return { ...f, refresh };
+}
+
+test('main retains one deferred poll across repeated same-account refresh cancellations', async () => {
+  const f = await interruptedConfigFixture();
+  let refresh = f.refresh;
+  for (let index = 0; index < 3; index++) {
+    f.onGet(() => { f.onGet(null); refresh = f.account.beginAuthMutation(); });
+    f.account.commitAuthMutation(refresh);
+    for (let second = 0; second < 6; second++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.intervals.size).toBeLessThanOrEqual(1);
+    }
+    await f.api.settled();
+    expect(f.api.state.pending).toBe(true);
+    expect(f.intervals.size).toBe(1);
+    expect(f.api.state.requiresRespawn).toBe(false);
+  }
+  f.account.commitAuthMutation(refresh);
+  f.desired(raw(['current-after-refresh']));
+  await vi.advanceTimersByTimeAsync(3000); await f.api.settled();
+  expect(f.api.state.pending).toBe(false);
+  expect(f.applied.at(-1)).toContain('current-after-refresh');
+  expect(f.intervalSchedules.every(delay => delay === 3000)).toBe(true);
+  expect(f.events).not.toContain('stop');
+});
+
+test.each(['auth', 'apply', 'repair', 'busy'] as const)(
+  'main interval and five-minute timeout respect the %s guard, then recover at idle', async guard => {
+    const f = await interruptedConfigFixture();
+    let queued: Promise<{ success: boolean }> | null = null;
+    let release = () => {};
+    if (guard !== 'auth') f.account.commitAuthMutation(f.refresh);
+    if (guard === 'repair') f.manualRepair(true);
+    if (guard === 'busy') f.busy(true);
+    if (guard === 'apply') {
+      let entered!: () => void;
+      const entry = new Promise<void>(resolve => { entered = resolve; });
+      f.migration(() => new Promise(resolve => {
+        release = () => resolve({ status: OpenClawPluginInstallMigrationStatus.NotNeeded }); entered();
+      }));
+      queued = f.api.sync({ reason: 'newer-sync-in-progress' });
+      await entry;
+      expect(f.api.syncing()).toBe(true);
+    }
+    const calls = f.rpcCalls.length, starts = f.diagnostics.filter(event => event.event === 'sync-start').length;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(f.rpcCalls).toHaveLength(calls);
+    expect(f.diagnostics.filter(event => event.event === 'sync-start')).toHaveLength(starts);
+    expect(f.intervals.size).toBe(1);
+    expect(f.api.state.pending).toBe(true);
+    expect(f.events).not.toContain('stop');
+    if (guard === 'auth') f.account.commitAuthMutation(f.refresh);
+    if (guard === 'repair') f.manualRepair(false);
+    if (guard === 'busy') f.busy(false);
+    if (guard === 'apply') { release(); expect((await queued!).success).toBe(true); }
+    await vi.advanceTimersByTimeAsync(3000); await f.api.settled();
+    expect(f.api.state.pending).toBe(false);
+    expect(f.intervals.size).toBe(0);
+    expect(f.timeouts.size).toBe(0);
+  },
+);
+
+test('main does not let an older cancelled sync schedule over a newer queued target', async () => {
+  const f = await runningConfigFixture();
+  f.desired(raw(['obsolete']));
+  let newer: Promise<{ success: boolean }> | undefined;
+  f.onGet(() => {
+    f.onGet(null);
+    const refresh = f.account.beginAuthMutation(); f.account.commitAuthMutation(refresh);
+    f.desired(raw(['newest']));
+    newer = f.api.sync({ reason: 'newer-models' });
+  });
+  const older = f.api.sync({ reason: 'older-models' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect((await older).success).toBe(false);
+  expect((await newer!).success).toBe(true);
+  expect(f.applied.at(-1)).toContain('newest');
+  expect(f.applied.some(value => value.includes('obsolete'))).toBe(false);
+  expect(f.api.state.pending).toBe(false);
+  expect(f.intervalSchedules).toHaveLength(0);
+});
+
+test.each(['owner', 'quit', 'restore'] as const)('main never re-arms old recovery after %s invalidates a delivery', async change => {
+  const f = await runningConfigFixture();
+  f.desired(raw(['obsolete']));
+  f.onGet(() => {
+    f.onGet(null);
+    if (change === 'owner') { f.changeOwner(); f.desired(raw(['new-owner'])); }
+    if (change === 'quit') f.quit();
+    if (change === 'restore') f.restore();
+  });
+  const operation = f.api.sync({ reason: 'old-models' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect((await operation).success).toBe(false);
+  expect(f.intervalSchedules).toHaveLength(0);
+  expect(f.applied.some(value => value.includes('obsolete'))).toBe(false);
+  if (change === 'owner') {
+    expect(f.api.state.pending).toBe(false);
+    expect((await f.api.sync({ reason: 'new-owner-models' })).success).toBe(true);
+    expect(f.applied.at(-1)).toContain('new-owner');
+  }
+});
+
+test('main discards callbacks captured before the account reset', async () => {
+  const f = await interruptedConfigFixture();
+  const stale = [...f.intervals, ...f.timeouts];
+  f.changeOwner(); f.account.commitAuthMutation(f.refresh);
+  expect(f.intervals.size).toBe(0); expect(f.timeouts.size).toBe(0);
+  expect(f.api.state.pending).toBe(false);
+  const calls = f.rpcCalls.length;
+  for (const callback of stale) callback();
+  await vi.advanceTimersByTimeAsync(3000); await f.api.settled();
+  expect(f.rpcCalls).toHaveLength(calls);
+  expect(f.intervalSchedules).toHaveLength(1);
+});
+
+test('main restores the retry chain when waiting for auth commit fails before enqueueing', async () => {
+  const f = await interruptedConfigFixture();
+  // A consumed retry loses its interval before the auth wait; failure must re-arm it.
+  const retry = f.api.retry();
+  f.account.failAuthMutation(f.refresh, new Error('Profile refresh failed'));
+  await retry;
+  expect(f.intervals.size).toBe(1);
+  expect(f.api.state.pending).toBe(true);
+  expect(f.api.syncing()).toBe(false);
+  const refresh = f.account.beginAuthMutation(); f.account.commitAuthMutation(refresh);
+  await vi.advanceTimersByTimeAsync(3000); await f.api.settled();
+  expect(f.api.state.pending).toBe(false);
+  expect(f.intervals.size).toBe(0);
+});
+
+test('main leaves a deliberately stopped gateway stopped while refreshing its next-start config', async () => {
+  const f = await interruptedConfigFixture();
+  f.stopped(); f.account.commitAuthMutation(f.refresh);
+  const generation = f.generation(), applied = f.applied.length;
+  await vi.advanceTimersByTimeAsync(3000); await f.api.settled();
+  expect(f.capture().raw).toContain('latest');
+  expect(f.events.at(-2)).toBe('persist');
+  expect(f.generation()).toBe(generation);
+  expect(f.applied).toHaveLength(applied);
+  expect(f.intervals.size).toBe(0);
+});
+
+test.each(['rejected', 'stalled', 'cooldown'] as const)('main automatic recovery respects %s even at the overdue deadline', async state => {
+  const f = await interruptedConfigFixture();
+  f.account.commitAuthMutation(f.refresh);
+  const target = f.api.state.pendingTarget!;
+  if (state === 'rejected') f.api.state.reject(target, 'Invalid target');
+  if (state === 'stalled') {
+    f.api.state.restarted();
+    f.api.state.failedAfterRespawn(target, 'Cannot confirm');
+    f.api.state.failedAfterRespawn(target, 'Cannot confirm');
+  }
+  if (state === 'cooldown') f.api.state.retryAfter(10 * 60_000);
+  const calls = f.rpcCalls.length;
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
+  expect(f.rpcCalls).toHaveLength(calls);
+  expect(f.api.state.pending).toBe(true);
+  expect(f.events).not.toContain('stop');
 });
