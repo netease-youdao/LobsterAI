@@ -2,6 +2,7 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteFileReason } from '../../shared/remote/files';
 import { RemoteInputReason } from '../../shared/remote/input';
 import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
+import { RemoteFileContextRequired } from './remoteFileRetry';
 import { remoteSyncErrorMetadata } from './remoteSyncLog';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
@@ -16,7 +17,7 @@ export const RemoteFileTelemetry = {
   FileOperation: 'FILE_OPERATION_FAILED', LocalIo: 'LOCAL_IO_FAILED', ContextChanged: 'CONTEXT_CHANGED',
   ResponseInvalid: 'RESPONSE_INVALID', RequestRejected: 'REQUEST_REJECTED', DiscoveryUnavailable: 'DISCOVERY_UNAVAILABLE',
 } as const;
-const knownReasons = new Set<string>([...Object.values(RemoteFileReason), ...Object.values(RemoteInputReason),
+const knownReasons = new Set<string>([RemoteFileContextRequired, ...Object.values(RemoteFileReason), ...Object.values(RemoteInputReason),
   'ASSET_FILE_CHANGED', 'ASSET_MISSING', 'ASSET_UPLOAD_FAILED', 'ASSET_EXPIRED', 'ACCESS_DENIED',
   'INPUT_TOTAL_TOO_LARGE', 'ACCOUNT_FILE_COUNT_LIMIT', 'UNBOUND_FILE_QUOTA_EXCEEDED', 'ACCOUNT_FILE_QUOTA_EXCEEDED',
   'TASK_FILE_QUOTA_EXCEEDED', 'FILE_QUOTA_INCONSISTENT', 'PRIVATE_INPUT_STORAGE_UNAVAILABLE',

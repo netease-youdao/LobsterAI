@@ -155,10 +155,12 @@ export class RemoteDeliveredFileSync {
           const validateIndexed = (file: LibraryIndexedFile): void => {
             assert();
             const stat = fs.lstatSync(filePath);
-            const root = path.dirname(filePath), directory = entry.baseline!.directories.find(item => item.path === root)!;
-            const rootStat = fs.lstatSync(root);
-            if (!stat.isFile() || stat.isSymbolicLink() || !rootStat.isDirectory() || rootStat.isSymbolicLink()
-              || `${rootStat.dev}:${rootStat.ino}` !== directory.identity || fs.realpathSync(filePath) !== filePath
+            for (const directory of receipt.directories) {
+              const rootStat = fs.lstatSync(directory.path);
+              if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || `${rootStat.dev}:${rootStat.ino}` !== directory.identity)
+                throw new Error(RemoteFileReason.Source);
+            }
+            if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(filePath) !== filePath
               || `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` !== receipt.identity
               || file.filePath !== filePath || file.fileIdentity !== `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`
               || file.sizeBytes !== stat.size || file.fileMtimeMs !== Math.trunc(stat.mtimeMs)) throw new Error(RemoteFileReason.Source);

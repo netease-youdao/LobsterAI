@@ -1,5 +1,7 @@
 import { RemoteFileReason } from '../../shared/remote/files';
 
+export const RemoteFileContextRequired = 'FILE_CONTEXT_REQUIRED';
+
 export const RemoteFileRetryPhase = {
   Backoff: 'backoff', Cooldown: 'cooldown', Waiting: 'waiting_dependency', Isolated: 'isolated',
 } as const;
@@ -34,7 +36,9 @@ export function nextFileRetry(previous: RemoteFileRetryState | undefined, error:
   const failures = (previous?.failures || 0) + 1;
   const waiting = dependencies.has(reason);
   const transient = !(error instanceof RemoteFileRequestError) && reason === RemoteFileReason.Transfer || error instanceof RemoteFileRequestError
-    && (error.httpStatus === undefined || error.httpStatus === 429 || error.httpStatus >= 500);
+    && (error.httpStatus === undefined || error.httpStatus === 429 || error.httpStatus >= 500
+      // Message and run publication can lag behind file capture on independent sync lanes.
+      || error.httpStatus === 403 && error.serverReason === RemoteFileContextRequired);
   if (!waiting && !transient) return { phase: RemoteFileRetryPhase.Isolated, failures, nextRetryAt: 0, policyVersion };
   const phase: RemoteFileRetryState['phase'] = waiting ? RemoteFileRetryPhase.Waiting : failures >= 5 ? RemoteFileRetryPhase.Cooldown : RemoteFileRetryPhase.Backoff;
   let nextRetryAt = now + (phase === RemoteFileRetryPhase.Backoff

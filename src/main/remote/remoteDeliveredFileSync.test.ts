@@ -400,6 +400,67 @@ describe('delivered files require live preparation and current successful-run ev
 });
 
 describe('MEDIA explicitly delivers existing files without a producer tool', () => {
+  test.each(['symlink', 'parent-symlink', 'outside', 'revoked', 'changed', 'new-run'])('rejects unsafe nested delivery: %s', async rejection => {
+    const f = fixture(), nested = path.join(f.workspace, 'nested');
+    fs.mkdirSync(nested);
+    const target = path.join(nested, 'report.md');
+    f.write('existing nested bytes', target);
+    await f.prepare();
+    let delivered = target;
+    if (rejection === 'symlink') {
+      delivered = path.join(nested, 'alias.md'); fs.symlinkSync(target, delivered);
+    } else if (rejection === 'parent-symlink') {
+      const alias = path.join(f.workspace, 'alias'); fs.symlinkSync(nested, alias, 'dir');
+      delivered = path.join(alias, 'report.md');
+    } else if (rejection === 'outside') {
+      const outside = `${f.workspace}-other`; fs.mkdirSync(outside);
+      delivered = path.join(outside, 'report.md'); f.write('outside bytes', delivered);
+    }
+    const finishedAt = f.finish({ withoutTools: true, assistantText: `MEDIA:${delivered}` });
+    if (rejection === 'revoked') f.revokeAccess();
+    if (rejection === 'changed') fs.utimesSync(target, new Date(finishedAt + 1000), new Date(finishedAt + 1000));
+    if (rejection === 'new-run') f.store.beginRun('s', 'run2');
+    await f.collect();
+    expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test('rejects a nested directory replaced between snapshot capture and library registration', async () => {
+    const f = fixture(), nested = path.join(f.workspace, 'nested'), moved = path.join(f.workspace, 'moved');
+    fs.mkdirSync(nested);
+    const target = path.join(nested, 'report.md'); f.write('original bytes', target);
+    await f.prepare();
+    f.finish({ withoutTools: true, assistantText: `MEDIA:${target}` });
+    f.recordArtifact.mockImplementationOnce(async (_candidate, _owner, assertCurrent, validateIndexed) => {
+      assertCurrent();
+      fs.renameSync(nested, moved); fs.mkdirSync(nested);
+      fs.renameSync(path.join(moved, 'report.md'), target);
+      const stat = fs.statSync(target);
+      validateIndexed({ filePath: target, fileIdentity: `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`,
+        sizeBytes: stat.size, fileMtimeMs: Math.trunc(stat.mtimeMs) } as LibraryIndexedFile);
+      return true;
+    });
+    await f.collect();
+    expect(f.recordArtifact).toHaveBeenCalledOnce();
+    expect(f.accept).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])('delivers an explicitly named nested image (existing=%s)', async existing => {
+    const f = fixture(), filePath = path.join(f.workspace, 'sealion06', 'official.jpg');
+    const rules = structuredClone(policy);
+    rules.types.push({ category: 'image', extensions: ['jpg'], maxFileBytes: '20971520', inputAllowed: true, artifactAutoSync: true });
+    const write = () => { fs.mkdirSync(path.dirname(filePath), { recursive: true }); f.write('image bytes', filePath); };
+    if (existing) write();
+    await f.prepare();
+    if (!existing) write();
+    f.finish({ withoutTools: true, assistantText: `原图在这里：\nMEDIA:${filePath}` });
+    await f.collect(rules);
+    expect(f.accept).toHaveBeenCalledOnce();
+    expect(f.recordArtifact.mock.calls[0][0]).toMatchObject({ filePath, relationKind: LibraryRelationKind.Referenced });
+    expect(fs.readFileSync(f.accept.mock.calls[0][4].path, 'utf8')).toBe('image bytes');
+    await f.collect(rules);
+    expect(f.accept).toHaveBeenCalledOnce();
+  });
+
   test('seals an unchanged DOCX explicitly resent by inline MEDIA without a producer tool', async () => {
     const f = fixture(), filePath = path.join(f.workspace, '工作简报.docx');
     const rules = structuredClone(policy);

@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   LibraryArtifactType,
@@ -83,11 +83,129 @@ function seedMarkers(db: Database.Database) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const db of databases.splice(0)) if (db.open) db.close();
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
 describe('RemoteStore triggers with the real local library', () => {
+  test('repairs existing card revisions once when upgrading legacy library triggers', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'library-live-upgrade-'));
+    directories.push(directory);
+    const filename = path.join(directory, 'library.sqlite');
+    const original = fixture(filename);
+    createSession(original.remote);
+    original.remote.transaction(() => original.db.prepare("INSERT INTO cowork_messages VALUES ('message-100','session','assistant','file','{}',100,1)").run());
+    upsert(original.library);
+    original.db.exec(`DROP TRIGGER remote_library_relation_insert;
+      CREATE TRIGGER remote_library_relation_insert AFTER INSERT ON library_artifact_sessions BEGIN
+        INSERT INTO remote_session_revisions(session_id,revision,dirty_at) VALUES (NEW.session_id,1,100)
+        ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
+    const revision = (db: Database.Database) => (db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='session' AND object_id='message-100'").get() as { revision: number }).revision;
+    const before = revision(original.db);
+    original.db.close();
+    const upgraded = fixture(filename);
+    expect(revision(upgraded.db)).toBe(before + 1);
+    upgraded.db.close();
+    const reopened = fixture(filename);
+    expect(revision(reopened.db)).toBe(before + 1);
+    expect(reopened.db.prepare('SELECT count(*) AS count FROM library_artifact_sessions').get()).toEqual({ count: 1 });
+  });
+
+  test('does not republish unchanged cards during repeated indexing or verification', () => {
+    const { db, library, remote } = fixture();
+    createSession(remote);
+    remote.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES ('message-100','session','assistant','file','{}',100,1)").run());
+    upsert(library);
+    const revision = () => (db.prepare("SELECT revision FROM remote_live_revisions WHERE object_id='message-100'").get() as { revision: number }).revision;
+    const before = revision();
+    for (let i = 0; i < 50; i++) upsert(library);
+    db.prepare('UPDATE library_local_artifacts SET last_verified_at=last_verified_at+1, updated_at=updated_at+1').run();
+    expect(revision()).toBe(before);
+    db.prepare("UPDATE library_local_artifacts SET file_name='renamed.pdf'").run();
+    expect(revision()).toBe(before + 1);
+  });
+
+  test('rolls back a failed trigger upgrade and can retry without losing user data', () => {
+    const { db, library, remote } = fixture();
+    createSession(remote); upsert(library);
+    db.exec('DROP TRIGGER remote_library_relation_insert');
+    const triggers = () => db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name").all();
+    const before = triggers();
+    const exec = db.exec.bind(db);
+    vi.spyOn(db, 'exec').mockImplementation(sql => {
+      if (sql.startsWith('CREATE TRIGGER remote_library_relation_insert')) throw new Error('Simulated migration failure');
+      return exec(sql);
+    });
+    expect(() => new RemoteStore(db, { restoreRuns: false })).toThrow('Simulated migration failure');
+    expect(triggers()).toEqual(before);
+    expect(library.list({}, owner).list).toHaveLength(1);
+    vi.restoreAllMocks();
+    expect(() => new RemoteStore(db, { restoreRuns: false })).not.toThrow();
+    expect(upsert(library).itemId).toBe(library.list({}, owner).list[0].itemId);
+  });
+
+  test('repairs a large historical library once without copying message bodies', () => {
+    const { db, library, remote } = fixture();
+    createSession(remote); const item = upsert(library);
+    remote.transaction(() => {
+      db.exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10000)
+        INSERT INTO cowork_messages SELECT 'bulk-'||x,'session','assistant',zeroblob(2048),'{}',100,x FROM n;`);
+      db.prepare(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10000)
+        INSERT INTO library_local_artifacts
+        SELECT 'artifact-'||x,'/workspace/'||x||'.pdf','/workspace/'||x||'.pdf',file_name,extension,artifact_type,category,
+          file_identity,client_source_key,size_bytes,file_mtime_ms,sort_time_ms,availability,origin,first_seen_at,last_seen_at,
+          last_verified_at,missing_since,created_at,updated_at FROM n,library_local_artifacts WHERE id=?`).run(item.itemId);
+      db.exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10000)
+        INSERT INTO library_artifact_sessions SELECT 'artifact-'||x,'session','created',100,100,'bulk-'||x,NULL,100,100 FROM n;`);
+    });
+    db.exec('DROP TRIGGER remote_library_relation_insert');
+    const total = () => (db.prepare("SELECT sum(revision) AS total FROM remote_live_revisions WHERE object_id LIKE 'bulk-%'").get() as { total: number }).total;
+    const before = total(), started = performance.now();
+    new RemoteStore(db, { restoreRuns: false });
+    const upgraded = total();
+    expect(upgraded).toBe(before + 10000);
+    new RemoteStore(db, { restoreRuns: false });
+    expect(total()).toBe(upgraded);
+    expect(db.prepare('SELECT count(*) AS count,sum(length(content)) AS bytes FROM cowork_messages').get())
+      .toEqual({ count: 10000, bytes: 20480000 });
+    console.debug('[RemoteStore test] Historical library upgrade and reopen.', { cards: 10000, elapsedMs: Math.round(performance.now() - started) });
+  });
+
+  test('invalidates an already published message when its artifact arrives later', () => {
+    const { db, library, remote } = fixture();
+    createSession(remote);
+    remote.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES ('message-100','session','assistant','MEDIA:/workspace/report.pdf','{}',100,1)").run());
+    const revision = () => (db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='session' AND object_id='message-100'").get() as { revision: number }).revision;
+    let previous = revision();
+    const item = upsert(library);
+    expect(revision()).toBeGreaterThan(previous);
+    previous = revision();
+    db.prepare("UPDATE library_local_artifacts SET availability='missing' WHERE id=?").run(item.itemId);
+    expect(revision()).toBeGreaterThan(previous);
+    previous = revision();
+    db.prepare('DELETE FROM library_artifact_sessions WHERE artifact_id=?').run(item.itemId);
+    expect(revision()).toBeGreaterThan(previous);
+    expect(remote.owner('session')).toEqual(owner);
+  });
+
+  test('invalidates both messages when a relation moves, without reviving deleted messages', () => {
+    const { db, library, remote } = fixture();
+    createSession(remote);
+    remote.transaction(() => {
+      for (const id of ['message-100', 'message-200']) db.prepare("INSERT INTO cowork_messages VALUES (?,'session','assistant','file','{}',100,1)").run(id);
+    });
+    upsert(library);
+    const revisions = () => db.prepare("SELECT object_id,revision,deleted FROM remote_live_revisions WHERE session_id='session' ORDER BY object_id").all() as Array<{ object_id: string; revision: number; deleted: number }>;
+    const before = revisions();
+    upsert(library, 200);
+    const after = revisions();
+    expect(after.every((row, index) => row.revision > before[index].revision)).toBe(true);
+    remote.transaction(() => db.prepare("DELETE FROM cowork_messages WHERE id='message-200'").run());
+    db.prepare("UPDATE library_local_artifacts SET availability='missing'").run();
+    expect(revisions().find(row => row.object_id === 'message-200')?.deleted).toBe(1);
+  });
+
   test.each([
     { enabled: true, alreadyDirty: false },
     { enabled: true, alreadyDirty: true },

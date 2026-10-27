@@ -12,7 +12,7 @@ import { hasRemoteArtifactSyncFailure, projectRemoteArtifacts, type RemoteArtifa
 import { touchAvailabilityMessage } from './remoteAvailabilitySource';
 import { type DeliveredFileDependencies,RemoteDeliveredFileSync } from './remoteDeliveredFileSync';
 import { type DesktopMessageAssetJob, uploadDesktopMessageAsset } from './remoteDesktopAssetUpload';
-import { fileRetryAllowed, nextFileRetry, RemoteFileRequestError, RemoteFileRetryPhase, type RemoteFileRetryState } from './remoteFileRetry';
+import { fileRetryAllowed, nextFileRetry, RemoteFileContextRequired, RemoteFileRequestError, RemoteFileRetryPhase, type RemoteFileRetryState } from './remoteFileRetry';
 import { captureRemoteFileSnapshot, remoteFileCacheDirectory, type RemoteFileSnapshot, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
 import { captureRemoteFileTelemetry, remoteFileRequestBytes, remoteFileRequestFailure, remoteFileRequestFailureFields, remoteFileRequestOperation, RemoteFileTelemetry as Telemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
 import { requestRemoteFilePart } from './remoteFileTransferLog';
@@ -221,6 +221,21 @@ export class RemoteFileSync {
         if (this.deps.store.get(`${RemoteDeletion.Closed}${job.localSessionId}`)) continue;
         if (!this.current(connection)) return;
         if (!this.current(connection, job.localSessionId)) continue;
+        // Older clients permanently isolated registration before its message reached the server.
+        // Restore only that exact failure; publish still verifies ownership, binding and sealed bytes.
+        if (job.queue.length && !job.artifactId && job.reason === RemoteFileContextRequired
+          && job.retry?.phase === RemoteFileRetryPhase.Isolated) {
+          job.retry = nextFileRetry(job.retry, new RemoteFileRequestError(RemoteFileContextRequired, 403, null, RemoteFileContextRequired),
+            Date.now(), this.policy.policyVersion);
+          job.retryAt = job.retry.nextRetryAt;
+          this.save(key, job);
+          console.info('[RemoteFileSync] Restored artifact registration retry.', {
+            localSessionId: job.localSessionId, messageId: job.messageId, localArtifactId: job.localArtifactId, retryAt: job.retryAt,
+          });
+          telemetry.emit(Telemetry.File, { phase: Telemetry.Retry, outcome: Telemetry.Deferred,
+            reason: RemoteFileContextRequired, from_state: RemoteFileRetryPhase.Isolated, to_state: job.retry.phase,
+            retry_phase: job.retry.phase, failure_count: job.retry.failures, retry_after_ms: Math.max(0, job.retryAt - Date.now()) });
+        }
         this.fileHealth.pending = (this.fileHealth.pending || 0) + job.queue.length + (job.rename ? 1 : 0);
         if (hasRemoteArtifactSyncFailure(job, job.queue.length > 0 || !!job.rename)) this.fileHealth.degraded = true;
         if ((!job.queue.length && !job.rename) || !this.retryAllowed(job)) continue;
@@ -244,6 +259,12 @@ export class RemoteFileSync {
           job.reason = error instanceof Error ? error.message : RemoteFileReason.Transfer;
           job.retry = nextFileRetry(job.retry, error, Date.now(), this.policy?.policyVersion || ''); job.retryAt = job.retry.nextRetryAt;
           this.save(key, job);
+          if (error instanceof RemoteFileRequestError && error.httpStatus === 403
+            && error.serverReason === RemoteFileContextRequired && job.retry.failures === 1) {
+            console.warn('[RemoteFileSync] Artifact registration is waiting for server context.', {
+              localSessionId: job.localSessionId, messageId: job.messageId, localArtifactId: job.localArtifactId, retryAt: job.retryAt,
+            });
+          }
           telemetry.emit(Telemetry.File, { phase: Telemetry.Retry, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error),
             retry_phase: job.retry.phase, failure_count: job.retry.failures });
           if (job.artifactId) await this.json(connection, `/artifacts/${escapeId(job.artifactId)}/sync-state`, {
