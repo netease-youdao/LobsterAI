@@ -5,7 +5,7 @@ import { resolve } from 'path';
 import { AgentOwnerKind } from '../../shared/agent/constants';
 import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
-import type { OwnershipTarget } from '../../shared/ownership/types';
+import type { OwnershipTarget, OwnershipTaskSync } from '../../shared/ownership/types';
 import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReasonCode, type RemoteConnectionRemoveRequest, type RemoteConnectionResumeRequest, RemoteDeviceAdmissionState, type RemoteDeviceConnection, RemoteDeviceConnectionState } from '../../shared/remote/connections';
 import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
@@ -36,6 +36,8 @@ import type { ImportPartIndex } from './remoteImportSnapshotWorker';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import type { RemoteSocket } from './remoteNetworkProtocol';
 import { remoteResponseJson } from './remoteNetworkTransport';
+import { RemoteOwnershipContentCache } from './remoteOwnershipContentCache';
+import { type OwnershipContentSyncSnapshot, unknownOwnershipContentSync } from './remoteOwnershipContentSync';
 import { remotePerformance, RemotePerformanceEvent, RemotePerformanceOutcome, RemotePerformanceReason, RemotePerformanceStage } from './remotePerformanceLog';
 import { isTransientProjectionFailure } from './remoteProjectionCoordinator';
 import { RemoteQuestionError } from './remoteQuestionService';
@@ -160,6 +162,8 @@ export class RemoteBridge {
   private readonly requestErrorKeys = new WeakMap<object, string>();
   private readonly displayJob = new RemoteHistoryJob();
   private readonly displaySnapshot: RemoteDisplaySnapshot<RemoteDisplayHealthResult>;
+  private readonly contentJob = new RemoteHistoryJob();
+  private readonly contentSnapshot: RemoteOwnershipContentCache<OwnershipContentSyncSnapshot>;
   private displaySettings: { key: string; value: LocalSettings } | null = null;
   private sessionSyncFailed = false;
   private historyWork: Promise<void> | null = null;
@@ -257,6 +261,22 @@ export class RemoteBridge {
       },
       onChanged: () => this.changed(),
     });
+    this.contentSnapshot = new RemoteOwnershipContentCache({
+      produce: async (key, contentTaskId, signal) => {
+        const input = this.displayInput();
+        if (!input || !contentTaskId || key !== this.displayKey() || signal.aborted || input.database === ':memory:') return null;
+        const cancel = (): void => this.contentJob.cancel();
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          const value = await this.contentJob.run<OwnershipContentSyncSnapshot>(remoteWorkerPath(RemoteWorkerFile.DisplayHealth), { ...input, contentTaskId }, {
+            timeoutMs: 5000, memoryMb: 96, resultLimitBytes: 4096, prefix: 'REMOTE_DISPLAY_HEALTH',
+            current: () => !signal.aborted && key === this.displayKey(),
+          });
+          return value?.contentSync ? value : null;
+        } finally { signal.removeEventListener('abort', cancel); }
+      },
+      onChanged: () => this.changed(),
+    });
     this.targets = new RemoteSyncTargetStore(deps.store);
     this.taskSync = new RemoteTaskSyncState(deps.store.db, undefined, undefined, observer => deps.store.afterCommit(observer));
     this.availability = new RemoteAvailabilityPublisher({
@@ -337,7 +357,7 @@ export class RemoteBridge {
     return { ready: this.capabilitiesKnown || Boolean(this.targetId), connectionAttemptId: this.telemetryConnectionAttemptId, targetId: this.targetId, dataSpaceId: target?.dataSpaceId, dataGeneration: target?.dataGeneration };
   }
   start(): void {
-    this.displaySnapshot.start();
+    this.displaySnapshot.start(); this.contentSnapshot.start();
     remoteDiagnostics.start(() => {
       const observed = this.state();
       const health = observed.syncHealth;
@@ -362,7 +382,7 @@ export class RemoteBridge {
   }
   canCaptureRemoteFiles(): boolean { return !this.deps.store.needsSecurityRecovery() && this.files?.canCaptureInput() === true && this.settings().enabled; }
   getInputAgentCatalog(): RemoteAgentCatalog | null { return this.agentCatalog; }
-  stop(): void { this.displaySnapshot.stop(); this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
+  stop(): void { this.contentSnapshot.stop(); this.displaySnapshot.stop(); this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.fileTimer) clearInterval(this.fileTimer); this.fileTimer = null; this.files?.pause(); this.disconnect(); }
   accountChanged(): void { this.ensureAccount(); this.schedule(0); }
   private changed(): void { try { remotePerformance.sync(RemotePerformanceStage.StateNotify, () => this.deps.onStateChange?.()); } catch { remoteLogMessage('warn', '[RemoteSync] State notification deferred', {}); } }
@@ -417,7 +437,8 @@ export class RemoteBridge {
       const transient = this.availability.displayTransientHealth(current ? this.displayInput()?.availabilityScope ?? null : null);
       const lanes = { ...availabilityHealth?.lanes };
       if (transient.controlInFlight && (!lanes.control || lanes.control === RemoteSyncLaneStatus.Idle || lanes.control === RemoteSyncLaneStatus.Pending)) lanes.control = RemoteSyncLaneStatus.InFlight;
-      if (transient.degraded && lanes.recovery !== RemoteSyncLaneStatus.Degraded && lanes.recovery !== RemoteSyncLaneStatus.Unknown) lanes.recovery = RemoteSyncLaneStatus.Backoff;
+      if (transient.controlBackoff && lanes.control !== RemoteSyncLaneStatus.Degraded && lanes.control !== RemoteSyncLaneStatus.Unknown) lanes.control = RemoteSyncLaneStatus.Backoff;
+      if (transient.liveBackoff && lanes.live !== RemoteSyncLaneStatus.Degraded && lanes.live !== RemoteSyncLaneStatus.Unknown) lanes.live = RemoteSyncLaneStatus.Backoff;
       const oldestTimes = [health?.legacy.oldest, availabilityHealth?.oldest].filter((value): value is number => typeof value === 'number');
       const pending = health ? Math.max(health.legacy.pendingSessions + (availabilityHealth?.pendingSessions ?? 0), transient.pending ? 1 : 0) : null;
       const recoveryRequired = this.deps.store.needsSecurityRecovery();
@@ -432,6 +453,7 @@ export class RemoteBridge {
       const syncHealth: RemoteSyncHealth = {
         ...taskHealth, lanes, countsTruncated: taskHealth?.countsTruncated || availabilityHealth?.countsTruncated,
         statisticsUnavailable: !health, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: current && this.admissionDeferred,
+        desktopOnlySessions: availabilityHealth?.desktopOnlySessions,
         status: recoveryRequired || !currentOwner || !settings.enabled || current && (this.connectionRemoved || this.quotaBlocked) ? RemoteSyncHealthStatus.Paused
           : syncFailed || filesDegraded || !health ? RemoteSyncHealthStatus.Degraded : (pending ?? 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
         ...(reason ? { reason } : {}), pendingSessions: pending, oldestPendingAt: oldestTimes.length ? new Date(Math.min(...oldestTimes)).toISOString() : null,
@@ -451,6 +473,14 @@ export class RemoteBridge {
         workspaces: settings.workspaces.map(({ path: _path, ...w }) => w), error: current ? this.error : undefined, errorCode: current ? this.errorCode : undefined,
         accessRequests: current ? this.accesses : [] };
     });
+  }
+  /** Task detail reads only the current readonly-worker snapshot; it never runs sessionHealth or grants admission. */
+  associationTaskSync(target: OwnershipTarget): OwnershipTaskSync {
+    if (target.kind !== OwnershipTargetKind.Task || typeof target.id !== 'string' || !target.id || target.id.length > 256) return unknownOwnershipContentSync();
+    const key = this.displayKey(), snapshot = this.contentSnapshot.read(key, target.id);
+    if (!key || !snapshot || !Number.isSafeInteger(snapshot.observedAt) || Date.now() - snapshot.observedAt > 15000 || snapshot.observedAt > Date.now()) return unknownOwnershipContentSync();
+    return { syncState: snapshot.syncState, contentSync: { ...snapshot.contentSync,
+      retryable: snapshot.contentSync.retryable && !!this.generation && !this.syncPaused() && !this.connectionRemoved && !this.quotaBlocked } };
   }
   associationSyncState(target: OwnershipTarget): OwnershipSyncState {
     return remotePerformance.sync(RemotePerformanceStage.RemoteState, () => {
@@ -480,7 +510,11 @@ export class RemoteBridge {
       // Old-target ACKs/failures do not describe an unverified current target.
       if (row?.sync_environment && !this.targets.matchesEnvironment(this.remoteEnvironment(), row.sync_environment)) return pending;
       const independent = this.availability.sessionHealth(target.id);
-      if (independent) return independent.degraded ? OwnershipSyncState.Failed : independent.ready && !independent.pending ? OwnershipSyncState.Synced : pending;
+      if (independent) {
+        if (independent.degraded) return OwnershipSyncState.Failed;
+        return independent.ready && !independent.pending
+          ? independent.desktopOnly ? OwnershipSyncState.Partial : OwnershipSyncState.Synced : pending;
+      }
       if (this.deps.store.get(`syncFailure:${target.id}`)
         || this.deps.store.db.prepare('SELECT 1 FROM remote_projection_failures WHERE session_id=?').get(target.id)) return OwnershipSyncState.Failed;
       const dirty = this.deps.store.db.prepare('SELECT session_id FROM remote_dirty WHERE session_id=?').get(target.id);
@@ -515,9 +549,13 @@ export class RemoteBridge {
     if (changes.retrySessionId) {
       const id = changes.retrySessionId, context = this.taskContext();
       if (!context || !sameOwner(this.deps.store.owner(id), context.owner) || !this.sessionAdmitted(id)) throw new Error('Task synchronization identity is not verified');
+      if (this.availability.ownsHistory(id)) {
+        if (!this.availability.retryLive(id)) throw new Error('Task synchronization retry is unavailable');
+        this.displaySnapshot.invalidate(); this.contentSnapshot.invalidate(id); this.changed(); return this.state();
+      }
       if (!this.taskSync.manualRetry(context, id)) throw new Error('Task synchronization retry is unavailable');
       this.deps.store.requestProjectionRecheck(id);
-      this.files?.retrySession(id);
+      this.files?.retrySession(id); this.contentSnapshot.invalidate(id);
       this.sessionChecks.delete(id); this.taskMemoryBlocks.delete(id);
       this.changed(); this.schedule(0); return this.state();
     }
@@ -545,7 +583,7 @@ export class RemoteBridge {
           changes: [...(previous?.route === this.accountRoute ? previous.changes : []), deferred] });
       }
     });
-    this.displaySettings = { key: this.displaySettingsKey(), value: settings }; this.displaySnapshot.invalidate();
+    this.displaySettings = { key: this.displaySettingsKey(), value: settings }; this.displaySnapshot.invalidate(); this.contentSnapshot.invalidate();
     this.retryAfter = 0;
     if (changes.retry || changes.enabled === true && !wasEnabled) {
       this.retryGeneration++;
@@ -553,6 +591,8 @@ export class RemoteBridge {
       this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
       this.connectionReason = RemoteConnectionReason.Reconnecting;
       if (changes.retry) {
+        try { this.availability.retryLive(); }
+        catch (error) { remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'live', reason: 'STORAGE_UNAVAILABLE', error }, 'warn'); }
         this.deps.store.transaction(() => {
           this.deps.store.remove(this.catalogFailureKey());
         });

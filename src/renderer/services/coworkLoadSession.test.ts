@@ -55,6 +55,47 @@ afterEach(() => {
 });
 
 describe('coworkService.loadSession', () => {
+  test('does not select or mark a task after its details panel was closed', async () => {
+    const previous = { ...makeSession([], 0, 0), id: 'previous-task' };
+    store.dispatch(setCurrentSession(previous));
+    let active = true;
+    const markSessionViewed = vi.fn(async () => undefined);
+    const remoteManaged = vi.fn(async () => ({ remoteManaged: false }));
+    let resolveSession!: (result: { success: true; session: CoworkSession }) => void;
+    const getSession = vi.fn(() => new Promise<{ success: true; session: CoworkSession }>(resolve => { resolveSession = resolve; }));
+    vi.stubGlobal('window', { electron: { cowork: { getSession, markSessionViewed, remoteManaged } } });
+
+    const loading = coworkService.loadSession('session-1', { isCurrent: () => active });
+    active = false;
+    resolveSession({ success: true, session: makeSession(makeMessages(2), 0, 2) });
+
+    expect(await loading).toBeNull();
+    expect(store.getState().cowork.currentSession?.id).toBe('previous-task');
+    expect(markSessionViewed).not.toHaveBeenCalled();
+    expect(remoteManaged).not.toHaveBeenCalled();
+  });
+
+  test('rechecks the caller after awaiting the preserved history window', async () => {
+    const previous = makeSession(makeMessages(39), 0, 39);
+    store.dispatch(setCurrentSession(previous));
+    let active = true;
+    const markSessionViewed = vi.fn(async () => undefined);
+    const remoteManaged = vi.fn(async () => ({ remoteManaged: false }));
+    vi.stubGlobal('window', { electron: { cowork: {
+      getSession: vi.fn(async () => ({ success: true, session: makeSession(makeMessages(39).slice(9), 9, 39) })),
+      getSessionMessages: vi.fn(async () => {
+        active = false;
+        return { success: true, messages: makeMessages(39), offset: 0, total: 39 };
+      }),
+      markSessionViewed, remoteManaged,
+    } } });
+
+    expect(await coworkService.loadSession('session-1', { preserveLoadedRange: true, isCurrent: () => active })).toBeNull();
+    expect(store.getState().cowork.currentSession).toEqual(previous);
+    expect(markSessionViewed).not.toHaveBeenCalled();
+    expect(remoteManaged).not.toHaveBeenCalled();
+  });
+
   test('preserves history already loaded before the default 30-message window', async () => {
     const allMessages = makeMessages(39);
     const defaultPageSession = makeSession(allMessages.slice(9), 9, 39);

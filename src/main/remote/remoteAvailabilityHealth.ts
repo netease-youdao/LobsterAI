@@ -23,7 +23,13 @@ function prepareReads(db: Database.Database) {
     tools: db.prepare(`SELECT COUNT(*) AS pending FROM remote_live_tools r
       LEFT JOIN remote_availability_health_acks a ON a.scope=? AND a.session_id=r.session_id AND a.object_key='tool:'||r.tool_id
       WHERE r.session_id=? AND r.revision>COALESCE(a.revision,0)`),
-    unavailable: db.prepare("SELECT 1 FROM remote_availability_health_acks WHERE scope=? AND session_id=? AND representation<>'complete' LIMIT 1"),
+    unavailable: db.prepare("SELECT 1 FROM remote_availability_health_acks WHERE scope=? AND session_id=? AND representation NOT IN ('complete','desktop_only','local_only') LIMIT 1"),
+    desktopOnly: db.prepare(`SELECT 1 FROM remote_availability_health_acks a
+      LEFT JOIN cowork_messages m ON m.session_id=a.session_id AND a.object_key='message:'||m.id
+      LEFT JOIN remote_live_revisions r ON r.session_id=m.session_id AND r.object_id=m.id
+      LEFT JOIN remote_live_tools t ON t.session_id=a.session_id AND a.object_key='tool:'||t.tool_id
+      WHERE a.scope=? AND a.session_id=? AND a.representation='desktop_only'
+        AND ((m.id IS NOT NULL AND COALESCE(r.deleted,0)=0 AND COALESCE(r.revision,1)=a.revision) OR t.revision=a.revision) LIMIT 1`),
   };
 }
 interface HealthStatements {
@@ -52,9 +58,9 @@ export function recordAvailabilityObjectHealth(store: RemoteStore, scope: string
   if (current && (current.revision > next || current.revision === next && current.representation === representation)) return;
   writes.write.run(scope, localId, key, next, representation);
 }
-export function availabilitySourceHealth(store: RemoteStore, scope: string, localId: string): { pending: number; oldest: number | null; unavailable: boolean } {
+export function availabilitySourceHealth(store: RemoteStore, scope: string, localId: string): { pending: number; oldest: number | null; unavailable: boolean; desktopOnly: boolean } {
   const saved = queries(store.db), reads = saved.reads ??= prepareReads(store.db);
   const messages = reads.messages.get(scope, localId) as { pending: number; oldest: number | null };
   const tools = reads.tools.get(scope, localId) as { pending: number };
-  return { pending: messages.pending + tools.pending, oldest: messages.oldest, unavailable: !!reads.unavailable.get(scope, localId) };
+  return { pending: messages.pending + tools.pending, oldest: messages.oldest, unavailable: !!reads.unavailable.get(scope, localId), desktopOnly: !!reads.desktopOnly.get(scope, localId) };
 }

@@ -213,10 +213,45 @@ describe('historical ownership association', () => {
     expect(receiptStore.prepareRemoteAdmission({ ...context, owner: b }, false).blockedAgentIds.size).toBe(0);
   });
 
-  it('does not gate a task-only association on Agent promotion capability and reports actual sync failures', () => {
+  it('preserves partial content in grouped results while failures and pending work retain priority', () => {
+    const f = fixture(); f.create('partial'); f.create('other');
+    const { request } = f.commit(agent());
+    let other: OwnershipSyncState = OwnershipSyncState.Synced;
+    const service = new OwnershipAssociationService({ ...f.deps,
+      syncState: target => target.id === 'partial' ? OwnershipSyncState.Partial : other });
+    expect(service.getResult({ requestId: request.requestId })).toMatchObject({ syncState: OwnershipSyncState.Partial });
+    for (const state of [OwnershipSyncState.Pending, OwnershipSyncState.Failed, OwnershipSyncState.WaitingService]) {
+      other = state;
+      expect(service.getResult({ requestId: request.requestId })).toMatchObject({ syncState: state });
+    }
+  });
+  it('does not gate a task-only association on Agent promotion capability or invent unsampled content status', () => {
     const f = fixture(); f.create('s'); f.commit(task('s'));
     expect(f.service.receipts.prepareRemoteAdmission({ owner: a, environment: 'test', deviceId: 'desktop' }, false).blockedSessionIds.size).toBe(0);
     f.remote.put('syncFailure:s', { code: 'offline' });
-    expect(f.service.getDetail(task('s')).syncState).toBe(OwnershipSyncState.Failed);
+    expect(f.service.getDetail(task('s'))).toMatchObject({ syncState: OwnershipSyncState.Pending,
+      contentSync: { state: 'unknown', reason: 'unavailable', retryable: false } });
+  });
+});
+
+
+describe('ownership task content detail delegation', () => {
+  it('uses one task snapshot after visibility checks and never invokes the old task sync reader', () => {
+    const f = fixture(); f.create('mine', 'office', a); f.create('foreign', 'office', b); f.create('anonymous');
+    const syncState = vi.fn(() => { throw new Error('heavy legacy reader must not run'); });
+    const taskSync = vi.fn(() => ({ syncState: OwnershipSyncState.Pending, contentSync: { state: 'unknown' as const, retryable: false } }));
+    const service = new OwnershipAssociationService({ ...f.deps, syncState, taskSync });
+    expect(service.getDetail(task('mine')).contentSync).toEqual({ state: 'unknown', retryable: false });
+    expect(taskSync).toHaveBeenCalledOnce(); expect(syncState).not.toHaveBeenCalled();
+    expect(() => service.getDetail(task('foreign'))).toThrow(OwnershipErrorCode.NotAvailable);
+    expect(taskSync).toHaveBeenCalledOnce();
+    expect(service.getDetail(task('anonymous')).contentSync).toEqual({ state: 'local', retryable: false });
+    expect(taskSync).toHaveBeenCalledOnce();
+  });
+  it('keeps a readable task available when optional display sampling fails', () => {
+    const f = fixture(); f.create('mine', 'office', a);
+    const service = new OwnershipAssociationService({ ...f.deps, taskSync: () => { throw new Error('unavailable'); } });
+    expect(service.getDetail(task('mine'))).toMatchObject({ syncState: OwnershipSyncState.Pending,
+      contentSync: { state: 'unknown', reason: 'unavailable', retryable: false } });
   });
 });

@@ -3,17 +3,19 @@ import { QRCodeSVG } from 'qrcode.react';
 import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from 'react-redux';
 
+import { OwnershipTargetKind } from '../../../shared/ownership/constants';
 import { RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../../shared/remote/connections';
-import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteInitializationFailure, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
+import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteInitializationFailure, RemoteSyncStatus, RemoteSyncTaskIssueSource, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
 import { RemoteTelemetryUiAction, RemoteTelemetryUiStage, RemoteTelemetryUiSurface } from '../../../shared/remote/telemetryUi';
 import { getMobileAppEntry, MobileAppEntryKind } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
+import { ownershipService } from '../../services/ownership';
 import { remoteDeviceConnectionsService } from '../../services/remoteDeviceConnections';
 import { remoteSettingsService } from '../../services/remoteSettings';
 import type { RootState } from '../../store';
 import Modal from '../common/Modal';
 import RemoteControlIcon from '../icons/RemoteControlIcon';
-import { isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteConnectionDescription, remoteConnectionFailure, remoteSyncDescription } from '../settings/remoteControlState';
+import { isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteTaskContentSummary } from '../settings/remoteControlState';
 import { RemoteDeviceConnectionList, RemoteDeviceConnectionSummary } from './RemoteDeviceConnectionList';
 
 interface RemoteDeviceSettingsProps {
@@ -22,7 +24,7 @@ interface RemoteDeviceSettingsProps {
 }
 
 const t = (key: string) => i18nService.t(key);
-const DeviceAction = { Reregister: 'reregister', Rename: 'rename', Retry: 'retry', RetryTask: 'retry_task', Enable: 'enable' } as const;
+const DeviceAction = { Reregister: 'reregister', Rename: 'rename', Retry: 'retry', Enable: 'enable' } as const;
 const TASK_STATUS_KEYS = {
   [RemoteSyncTaskIssueStatus.Retrying]: 'remoteTaskSyncRetrying',
   [RemoteSyncTaskIssueStatus.Isolated]: 'remoteTaskSyncIsolated',
@@ -67,12 +69,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const initializationFailed = Boolean(state?.initializationFailure);
   const admissionDeferred = Boolean(!initializationFailed && state?.owner && state.enabled && !signInRequired && state.syncHealth?.admissionDeferred);
   const connectionFailure = remoteConnectionFailure(state);
-  const contentStatus = remoteSyncDescription(state);
-  const contentLabel = contentStatus === 'remoteTasksSyncFailed'
-    ? t('remoteTasksSyncFailedCount').replace('{count}', `${state?.syncHealth?.countsTruncated ? '≥' : ''}${state?.syncHealth?.failedSessions ?? 0}`)
-    : t(contentStatus ?? 'remoteCurrentDevice');
-  const taskIssues = !initializationFailed && state?.owner && state.enabled && !signInRequired
-    ? (state.syncHealth?.taskIssues ?? []).filter(issue => issue.status !== RemoteSyncTaskIssueStatus.Closed).slice(0, 20) : [];
+  const contentSummary = remoteTaskContentSummary(state);
   const displayName = state?.owner ? state.name || state.hostName : state?.hostName;
   const connections = !initializationFailed && state?.accountEpoch === management.accountEpoch ? management.data : null;
   const showConnections = Boolean(!initializationFailed && state?.owner && !signInRequired && (state.deviceConnectionManagementSupported || connections?.supported) && management.accountEpoch === state.accountEpoch);
@@ -157,7 +154,6 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         setFeedback(pending ? 'remoteNamePending' : 'remoteNameSaved');
       }
       if (saved && action === DeviceAction.Reregister) setFeedback('remoteReregisterRequested');
-      if (saved && action === DeviceAction.RetryTask) setFeedback('remoteTaskRetryRequested');
       return saved;
     } catch {
       if (mounted.current && generation === requestGeneration.current) setActionError('remoteSaveFailed');
@@ -209,8 +205,8 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium leading-5" title={displayName} data-remote-device-name="true">{displayName || t('remoteThisComputer')}</p>
           <p className="mt-0.5 text-xs leading-4 text-secondary" role="status">
-            <span className={quotaBlocked ? 'text-amber-700 dark:text-amber-400' : undefined}>{t(statusKey)}</span>
-            {` · ${removed || quotaBlocked ? t('remoteSyncPaused') : contentLabel}`}
+            <span className={quotaBlocked ? 'text-amber-700 dark:text-amber-400' : connectionFailure === statusKey ? 'text-destructive' : undefined}>{t(statusKey)}</span>
+            {` · ${t('remoteCurrentDevice')}`}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2 text-xs">
@@ -264,28 +260,33 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
           <button type="button" disabled={busy} className={ACTION_CLASS} onClick={refresh}>{t('retry')}</button>
         </div>}
       </div>
+      {contentSummary && (contentSummary.key === 'remoteDesktopOnlyContent'
+        ? <p className="mt-3 text-xs text-secondary">{t(contentSummary.key)}</p>
+        : <details key={identity} className="mt-3 text-xs text-secondary">
+          <summary className="w-fit max-w-full cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+            {t(contentSummary.key)}<span aria-hidden="true"> · </span><span className="text-primary">{t('remoteTaskContentViewDetails')}</span>
+          </summary>
+          <p className="mt-2">{t('remoteLocalTasksUnaffected')}</p>
+          {contentSummary.detailsUnavailable && <p className="mt-2">{t('remoteTaskContentDetailsUnavailable')}</p>}
+          {contentSummary.issues.length > 0 && <ul className="mt-2 divide-y divide-border">
+            {contentSummary.issues.map(issue => <li key={issue.localSessionId}>
+              <button type="button" disabled={!state?.accountEpoch}
+                className="w-full rounded px-2 py-2 text-left hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
+                onClick={() => {
+                  const current = remoteSettingsService.getSnapshot().state;
+                  if (!state?.accountEpoch || state.accountEpoch !== current?.accountEpoch || remoteOwnerKey(state) !== remoteOwnerKey(current)
+                    || !current?.enabled || current.initializationFailure || needsRemoteSignIn(current)) return;
+                  void ownershipService.open({ kind: OwnershipTargetKind.Task, id: issue.localSessionId });
+                }}>
+                <span className="block truncate font-medium text-foreground" title={issue.title}>{issue.title || t('remoteUnnamedTask')}</span>
+                <span className="mt-1 block">{t(issue.source === RemoteSyncTaskIssueSource.Live && (issue.status === RemoteSyncTaskIssueStatus.Isolated || issue.status === RemoteSyncTaskIssueStatus.Retrying) ? 'ownershipContentSyncEntryFailed' : TASK_STATUS_KEYS[issue.status])}</span>
+              </button>
+            </li>)}
+          </ul>}
+          {contentSummary.truncated && <p className="mt-2">{t('remoteTaskContentLimited')}</p>}
+          {contentSummary.desktopOnly && <p className="mt-2">{t('remoteDesktopOnlyContent')}</p>}
+        </details>)}
     </section>
-    {taskIssues.length > 0 && <details key={identity} className="rounded-xl border border-border bg-surface px-3.5 py-2.5">
-      <summary className="cursor-pointer text-xs font-medium text-secondary">{t('remoteTaskSyncDetails')}</summary>
-      <p className="mt-2 text-xs leading-5 text-secondary">{t(contentStatus === 'remoteTasksSyncFailed' ? 'remoteTaskSyncLocalUnaffected' : 'remoteLocalTasksUnaffected')}</p>
-      <ul className="mt-2 divide-y divide-border">
-        {taskIssues.map(issue => <li key={issue.localSessionId} className="flex items-center gap-3 py-2">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium" title={issue.title}>{issue.title || t('remoteUnnamedTask')}</p>
-            <p className="mt-0.5 text-[11px] leading-4 text-secondary">{t(TASK_STATUS_KEYS[issue.status])}</p>
-            {Number.isFinite(issue.nextRetryAt) && (issue.nextRetryAt ?? 0) > Date.now() && <p className="mt-0.5 text-[11px] leading-4 text-secondary">
-              {t('remoteTaskNextRetry').replace('{time}', new Date(issue.nextRetryAt ?? 0).toLocaleTimeString())}
-            </p>}
-          </div>
-          <button type="button" disabled={busy || !issue.retryable || !state?.accountEpoch}
-            className={`${ACTION_CLASS} min-h-7 shrink-0 text-xs`}
-            onClick={() => { if (!issue.retryable) return; void submit({ retrySessionId: issue.localSessionId }, DeviceAction.RetryTask); }}>
-            {t('remoteRetryTask')}
-          </button>
-        </li>)}
-      </ul>
-      {state?.syncHealth?.taskIssuesTruncated && <p className="mt-1 text-[11px] text-secondary">{t('remoteTaskIssuesTruncated')}</p>}
-    </details>}
     {showConnections && <RemoteDeviceConnectionList snapshot={management} sectionRef={connectionsSection} />}
     <Modal isOpen={renameOpen} onClose={closeRename} onEscape={closeRename}
       overlayClassName="fixed inset-0 z-[60] modal-backdrop flex items-center justify-center p-4"

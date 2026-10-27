@@ -153,6 +153,7 @@ import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
 import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
+import OwnershipTaskSyncButton from '../ownership/OwnershipTaskSyncButton';
 import { type ToastEventDetail } from '../Toast';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
@@ -6175,6 +6176,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           <h1 className="text-sm leading-5 font-medium text-foreground truncate max-w-[360px]">
             {getSessionTitleForDisplay(currentSession.title) || i18nService.t('coworkNewSession')}
           </h1>
+          <OwnershipTaskSyncButton sessionId={currentSession.id} />
         </div>
 
         {isConversationSearchOpen ? (

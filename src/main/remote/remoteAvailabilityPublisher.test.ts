@@ -1,10 +1,15 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { remoteConnectionFailure, remoteTaskContentSummary } from '../../renderer/components/settings/remoteControlState';
+import { RemoteSyncHealthStatus, RemoteSyncLaneStatus } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
 import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
 import { payloadHash } from './canonical';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { ReplyModelDisplayVersion } from './remoteAvailabilityStore';
+import { RemoteBridge } from './remoteBridge';
+import { RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { recordRemoteSessionDeletion } from './remoteLocalGc';
 import { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
@@ -51,7 +56,7 @@ function fixture() {
         ...(begin?.sourceManifestHash ? { sourceManifestHash: begin.sourceManifestHash, frozenThroughSourceSeq: begin.frozenThroughSourceSeq, expectedResolvedSourceSeq: begin.expectedResolvedSourceSeq } : {}) };
     }
     if (pathname === '/control/facts/batches') return { state: 'committed', lastFactSeq: body.lastFactSeq };
-    if (pathname === '/sync/live-projections') return { publicationId: body.publicationId, state: 'accepted', projectionRevision: '900', committedSeq: '10' };
+    if (pathname === '/sync/live-projections') return { publicationId: body.publicationId, sessionId: body.sessionId, writerGeneration: body.writerGeneration, objectKind: body.objectKind, objectId: body.objectId, sourceObjectRevision: body.sourceObjectRevision, state: 'accepted', projectionRevision: '900', committedSeq: '10' };
     throw Object.assign(new Error('unknown operation'), { httpStatus: 404 });
   });
   const publisher = new RemoteAvailabilityPublisher({ store, context: () => context, admitted: () => true, request });
@@ -62,6 +67,84 @@ function fixture() {
   const live = (): Promise<void> => (publisher as any).live(context);
   return { db, store, owner, context: context!, setContext: (value: AvailabilityContext | null) => { context = value; }, request, publisher, controls, live };
 }
+
+describe('publisher transient lanes reach device UI', () => {
+  function display(f: ReturnType<typeof fixture>): any {
+    const bridge: any = new RemoteBridge({ store: f.store, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'db' },
+      runSessionTransaction: operation => f.store.transaction(operation), getOwner: () => f.owner,
+      getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request: async () => new Response(),
+      metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
+      prepare: () => { throw new Error('not used'); }, execute: async () => ({ outcome: 'started' }), onAccountChange: vi.fn(),
+    });
+    bridge.availability.dispose(); bridge.availability = f.publisher;
+    bridge.owner = f.owner; bridge.targetId = 'target'; bridge.registration = { deviceId: 'desktop', ...f.owner, metadataVersion: '1' };
+    bridge.generation = '1'; bridge.lastPong = Date.now();
+    vi.spyOn(bridge.displaySnapshot, 'read').mockReturnValue({ status: RemoteDisplayHealthStatus.Known, observedAt: Date.now(), settings: null,
+      pendingSettings: false, pendingName: false, catalogFailed: false,
+      legacy: { pendingSessions: 0, oldest: null, lastSuccess: null }, availability: null });
+    cleanup.push(() => bridge.stop());
+    return bridge;
+  }
+
+  it('keeps a real control request failure near the device and removes it after successful replay', async () => {
+    const f = fixture(), now = Date.now();
+    f.request.mockRejectedValueOnce(new Error('control request unavailable'));
+    await f.controls();
+    expect(f.request).toHaveBeenCalled();
+    const bridge = display(f), failed = bridge.state();
+    expect(failed.syncHealth.lanes).toEqual({ control: RemoteSyncLaneStatus.Backoff });
+    expect(failed.syncHealth.status).toBe(RemoteSyncHealthStatus.Degraded);
+    expect(remoteConnectionFailure(failed)).toBe('remoteControlSyncFailed');
+    expect(remoteTaskContentSummary(failed)).toBeNull();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 2000);
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(bridge.state().syncHealth.lanes).toEqual({});
+    expect(remoteConnectionFailure(bridge.state())).toBeNull();
+  });
+
+  it('keeps live publication failure separate from control failure, including simultaneous failures', async () => {
+    const f = fixture(); await f.controls();
+    const normal = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') throw new Error('live request unavailable');
+      return normal(...args);
+    });
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+    const bridge = display(f), failed = bridge.state();
+    expect(failed.syncHealth.lanes).toEqual({ live: RemoteSyncLaneStatus.Backoff });
+    expect(remoteConnectionFailure(failed)).toBeNull();
+    expect(remoteTaskContentSummary(failed)?.key).toBe('remoteTaskContentUnknown');
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_sessions SET title=? WHERE id=?').run('Changed', 'local'));
+    f.request.mockRejectedValueOnce(new Error('control request unavailable'));
+    await f.controls();
+    const both = bridge.state();
+    expect(both.syncHealth.lanes).toEqual({ live: RemoteSyncLaneStatus.Backoff, control: RemoteSyncLaneStatus.Backoff });
+    expect(remoteConnectionFailure(both)).toBe('remoteControlSyncFailed');
+    expect(remoteTaskContentSummary(both)?.key).toBe('remoteTaskContentUnknown');
+    expect(f.publisher.displayTransientHealth(null)).toMatchObject({ pending: false, controlBackoff: false, liveBackoff: false });
+    expect(f.publisher.displayTransientHealth('another-scope')).toMatchObject({ pending: false, controlBackoff: false, liveBackoff: false });
+  });
+
+  it.each(['control', 'live'] as const)('keeps a top-level %s failure until its eligible successful turn', async lane => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(), publisher = f.publisher as any;
+      const method = lane === 'control' ? 'controls' : 'live';
+      const run = vi.spyOn(publisher, method).mockRejectedValueOnce(new Error('lane unavailable')).mockResolvedValue(undefined);
+      vi.spyOn(publisher, lane === 'control' ? 'live' : 'controls').mockResolvedValue(undefined);
+      vi.spyOn(publisher, 'history').mockResolvedValue(undefined);
+      publisher.tick(); await vi.advanceTimersByTimeAsync(0);
+      expect(f.publisher.displayTransientHealth(f.context.scope)).toMatchObject({ [`${lane}Backoff`]: true });
+      await vi.advanceTimersByTimeAsync(999); expect(run).toHaveBeenCalledTimes(1);
+      expect(f.publisher.displayTransientHealth(f.context.scope).degraded).toBe(true);
+      await vi.advanceTimersByTimeAsync(1); expect(run).toHaveBeenCalledTimes(2);
+      expect(f.publisher.displayTransientHealth(f.context.scope)).toMatchObject({ degraded: false, controlBackoff: false, liveBackoff: false });
+      f.publisher.stop();
+    } finally { vi.useRealTimers(); }
+  });
+});
 
 describe('September reliability protocols', () => {
   it('never turns a missing current identity into an unowned legacy writer', () => {

@@ -1,4 +1,4 @@
-import type { OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from './constants';
+import type { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from './constants';
 
 export interface OwnershipTarget { kind: OwnershipTargetKind; id: string }
 export interface OwnershipResources { agentIds: string[]; sessionIds: string[] }
@@ -6,11 +6,15 @@ export interface OwnershipAccount { label: string; scopeLabel: string; partition
 export interface OwnershipDisplay {
   kind: 'anonymous' | 'owned' | 'default'; label: string; scopeLabel: string; associatedAt?: number;
 }
+export interface OwnershipContentSync {
+  state: OwnershipContentSyncState; retryable: boolean; reason?: OwnershipContentSyncReason; nextRetryAt?: number;
+}
+export interface OwnershipTaskSync { syncState: OwnershipSyncState; contentSync: OwnershipContentSync }
 export interface OwnershipDetail extends OwnershipTarget {
   title: string; ownership: OwnershipDisplay;
   agent?: { id: string; name: string; ownership: OwnershipDisplay };
   deviceName: string; syncState: OwnershipSyncState; canAssociate: boolean; accountPartition: string | null;
-  status?: string; updatedAt?: number;
+  status?: string; updatedAt?: number; contentSync?: OwnershipContentSync;
   description?: string; visibleTaskCount?: number; latestTaskTitle?: string;
 }
 export interface OwnershipPreview {

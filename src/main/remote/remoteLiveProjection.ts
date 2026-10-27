@@ -5,30 +5,38 @@ import { isConversationArtifactFileName } from '../../shared/artifactPreview/dis
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { type ArtifactProjectionJob, projectRemoteArtifacts, type RemoteArtifactProjection } from './remoteArtifactProjection';
+import { liveMetadataToolId, normalizeLiveMetadata, RemoteLiveEncodingError, RemoteLiveEncodingLimits, RemoteLiveMetadataMode } from './remoteLiveMetadata';
 import { replyInputModel, replyModelLabel, type ReplyModelPresetNames } from './remoteReplyModel';
-import { isPublicReplyMessage, redactReplyText, replyBlocks, replyToolState } from './remoteReplyProjection';
+import { redactReplyText, replyToolState } from './remoteReplyProjection';
 
 export interface LiveProjectionInput { database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames }
-export interface LiveProjection { resolvedModelLabel?: string; objectKind: 'message' | 'tool'; objectId: string; sourceObjectRevision: string; representation: 'complete' | 'desktop_only'; payloadHash: string; payload: Record<string, any> }
+export interface LiveToolSource { messageId: string; toolId: string; sourceRevision: string }
+/** Local diagnostics; tool values sum only the source rows actually read by this job. */
+export interface LiveEncodingStats { rawMetadataBytes: number; normalizedMetadataBytes: number }
+export interface LiveProjection { resolvedModelLabel?: string; toolSource?: LiveToolSource; encodingStats?: LiveEncodingStats; objectKind: 'message' | 'tool'; objectId: string; sourceObjectRevision: string; representation: 'complete' | 'desktop_only'; payloadHash: string; payload: Record<string, any> }
 /** Read one bounded source object. No historic projection, outbox or NOS is consulted. */
 export function projectLiveMessage(db: Database.Database, input: LiveProjectionInput): LiveProjection | null {
   return db.transaction((): LiveProjection | null => {
     const owner = db.prepare('SELECT owner_user_id,owner_scope_key,ownership_status FROM cowork_session_ownership WHERE session_id=?').get(input.localId) as any;
     const binding = db.prepare('SELECT session_id,device_id,migration_frozen FROM remote_sync WHERE local_id=?').get(input.localId) as any;
     if (!owner || owner.ownership_status !== 'confirmed' || !sameOwner({ userId: owner.owner_user_id, scopeKey: owner.owner_scope_key }, input.owner)
-      || !binding || binding.session_id !== input.sessionId || binding.device_id !== input.deviceId || binding.migration_frozen) throw new Error('REMOTE_LIVE_OWNER_CHANGED');
+      || !binding || binding.session_id !== input.sessionId || binding.device_id !== input.deviceId || binding.migration_frozen) throw new Error(RemoteLiveEncodingError.OwnerChanged);
     if (input.objectKind === 'tool') return projectLiveTool(db, input);
     const revision = db.prepare('SELECT revision,deleted FROM remote_live_revisions WHERE session_id=? AND object_id=?').get(input.localId, input.objectId) as { revision: number; deleted: number } | undefined;
     if (!revision || revision.deleted || String(revision.revision) !== input.revision) return null;
     const row = db.prepare(`SELECT id,session_id,type,created_at,sequence,
       length(CAST(content AS BLOB)) AS content_bytes,length(CAST(metadata AS BLOB)) AS metadata_bytes,
-      CASE WHEN length(CAST(content AS BLOB))<=131072 THEN content ELSE '' END AS content,
-      CASE WHEN length(CAST(metadata AS BLOB))<=32768 THEN metadata ELSE NULL END AS metadata
+      CASE WHEN octet_length(content)<=${RemoteLiveEncodingLimits.ContentBytes} THEN content ELSE NULL END AS content,
+      CASE WHEN octet_length(metadata)<=${RemoteLiveEncodingLimits.RawMetadataBytes} THEN metadata ELSE NULL END AS metadata
       FROM cowork_messages WHERE session_id=? AND id=?`).get(input.localId, input.objectId) as any;
     if (!row || !['user', 'assistant', 'system', 'tool_use', 'tool_result'].includes(row.type)) return null;
-    if (row.metadata_bytes > 32768) throw new Error('REMOTE_LIVE_METADATA_BUDGET');
-    const metadata = JSON.parse(row.metadata || '{}');
-    if (!isPublicReplyMessage(row)) return null;
+    // Missing source bytes cannot be reported as a truthful canonical public-content size.
+    if (row.content_bytes > RemoteLiveEncodingLimits.ContentBytes) throw new Error(RemoteLiveEncodingError.ContentSizeUnknown);
+    const normalized = normalizeLiveMetadata(row.metadata, row.metadata_bytes, RemoteLiveMetadataMode.Message, row);
+    const metadata = normalized.metadata;
+    if (!normalized.isPublic(row)) return null;
+    const toolSource = row.type === 'tool_use' || row.type === 'tool_result'
+      ? { messageId: row.id, toolId: liveMetadataToolId(metadata, row.id), sourceRevision: input.revision } : undefined;
     const readState = (key: string): any => {
       const value = db.prepare('SELECT value FROM remote_state WHERE key=?').get(key) as { value: string } | undefined;
       return value ? JSON.parse(value.value) : null;
@@ -44,7 +52,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       if (prepared) content = redactReplyText(prepared.input.text);
       else if (desktop && sameOwner(desktop.owner, input.owner)) content = redactReplyText(desktop.text);
     }
-    const blocks: Record<string, any>[] = replyBlocks({ ...row, content }, metadata);
+    const blocks: Record<string, any>[] = normalized.blocks({ ...row, content });
     if (row.type === 'user' && prepared) for (const asset of prepared.input.attachments || []) blocks.push({ type: 'attachment',
       assetId: asset.assetId, version: asset.version, name: asset.fileName, mimeType: asset.mimeType, sizeBytes: asset.sizeBytes, availability: 'ready', intent: asset.intent });
     if (row.type === 'user' && desktop && sameOwner(desktop.owner, input.owner)) for (const [index, source] of (desktop.attachments || []).entries()) {
@@ -57,7 +65,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
     }
     blocks.push(...liveArtifactBlocks(db, input, row.id));
     const originalBytes = Buffer.byteLength(stableJson(blocks));
-    const omitted = row.content_bytes > 131072 || originalBytes > 48 * 1024;
+    const omitted = normalized.publicFieldsOmitted || originalBytes > RemoteLiveEncodingLimits.InlineBytes;
     const payload: Record<string, any> = {
       messageId: row.id, ordinal: String(Math.max(1, row.sequence || 1)), runId,
       commandId: runId ? metadata.remoteCommandId || null : null,
@@ -65,14 +73,15 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       createdAt: new Date(row.created_at).toISOString(), projectionVersion: 4,
       displayOrdinal: String(Math.max(1, row.sequence || 1)), contentState: omitted ? 'desktop_only' : 'complete',
       preview: Buffer.from(content).subarray(0, 1000).toString('utf8').replace(/\uFFFD$/u, ''),
-      originalContentBytes: String(omitted && row.content_bytes > 131072 ? row.content_bytes : originalBytes),
+      originalContentBytes: String(originalBytes),
       blocks: omitted ? [] : blocks,
       ...(model ? { inputModel: replyInputModel(row.type, metadata, model, input.modelPresetNames) } : {}),
       ...(omitted ? { contentUnavailableReason: 'CONTENT_LIMIT_EXCEEDED' } : {}),
     };
     const resolvedModelLabel = model && (row.type === 'user' || row.type === 'assistant') ? replyModelLabel(metadata, input.modelPresetNames) : null;
     return { objectKind: 'message', objectId: row.id, sourceObjectRevision: input.revision,
-      ...(resolvedModelLabel ? { resolvedModelLabel } : {}),
+      ...(resolvedModelLabel ? { resolvedModelLabel } : {}), ...(toolSource ? { toolSource } : {}),
+      encodingStats: { rawMetadataBytes: row.metadata_bytes ?? 0, normalizedMetadataBytes: normalized.normalizedBytes },
       representation: omitted ? 'desktop_only' : 'complete', payloadHash: payloadHash(payload), payload };
   })();
 }
@@ -80,17 +89,32 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
 function projectLiveTool(db: Database.Database, input: LiveProjectionInput): LiveProjection | null {
   const revision = db.prepare('SELECT revision FROM remote_live_tools WHERE session_id=? AND tool_id=?').get(input.localId, input.objectId) as { revision: number } | undefined;
   if (!revision || String(revision.revision) !== input.revision) return null;
-  const rows = db.prepare(`SELECT m.id,m.type,m.created_at,m.sequence,
-    CASE WHEN length(CAST(m.metadata AS BLOB))<=32768 THEN m.metadata ELSE NULL END AS metadata
+  // Select sizes before payloads; at most 256 KiB is parsed across all 16 candidate sources.
+  const rows = db.prepare(`SELECT m.id,m.type,m.created_at,m.sequence,octet_length(m.metadata) AS metadata_bytes
     FROM remote_live_tool_sources t JOIN cowork_messages m ON m.id=t.message_id AND m.session_id=t.session_id
     WHERE t.session_id=? AND t.tool_id=? ORDER BY m.sequence DESC LIMIT 16`).all(input.localId, input.objectId) as any[];
   if (!rows.length) return null;
+  let remaining: number = RemoteLiveEncodingLimits.RawMetadataBytes;
+  let normalizedBytes = 0;
+  const readMetadata = (row: any): Record<string, any> => {
+    if (!['tool_use', 'tool_result'].includes(row.type)) throw new Error(RemoteLiveEncodingError.IdentityInvalid);
+    if (row.metadata_bytes !== null && (!Number.isSafeInteger(row.metadata_bytes) || row.metadata_bytes < 0 || row.metadata_bytes > remaining))
+      throw new Error(RemoteLiveEncodingError.RawMetadataBudget);
+    const source = db.prepare(`SELECT CASE WHEN octet_length(metadata)<=? THEN metadata ELSE NULL END AS metadata
+      FROM cowork_messages WHERE session_id=? AND id=?`).get(remaining, input.localId, row.id) as { metadata: string | null } | undefined;
+    if (!source) throw new Error(RemoteLiveEncodingError.IdentityInvalid);
+    const normalized = normalizeLiveMetadata(source.metadata, row.metadata_bytes, RemoteLiveMetadataMode.Tool);
+    remaining -= row.metadata_bytes ?? 0;
+    normalizedBytes += normalized.normalizedBytes;
+    if (liveMetadataToolId(normalized.metadata, row.id) !== input.objectId) throw new Error(RemoteLiveEncodingError.IdentityInvalid);
+    return normalized.metadata;
+  };
   const latest = rows[0];
-  if (!latest.metadata) throw new Error('REMOTE_LIVE_METADATA_BUDGET');
-  const metadata = JSON.parse(latest.metadata);
+  if (!latest.metadata_bytes) throw new Error(RemoteLiveEncodingError.MetadataInvalid);
+  const metadata = readMetadata(latest);
   let name = metadata.toolName;
-  if (!name) for (const row of rows.slice(1)) { name = JSON.parse(row.metadata || '{}').toolName; if (name) break; }
-  if (typeof name !== 'string' || !name) throw new Error('REMOTE_LIVE_TOOL_IDENTITY_MISSING');
+  if (!name) for (const row of rows.slice(1)) { name = readMetadata(row).toolName; if (name) break; }
+  if (typeof name !== 'string' || !name) throw new Error(RemoteLiveEncodingError.ToolIdentityMissing);
   const read = (key: string): any => { const row = db.prepare('SELECT value FROM remote_state WHERE key=?').get(key) as { value: string } | undefined; return row ? JSON.parse(row.value) : null; };
   const runId = metadata.remoteRunId || null;
   if (runId && (read(`runPublished:${runId}`) === false || (read(`syncTargetHistory:${input.localId}`)?.runIds || []).includes(runId))) return null;
@@ -98,7 +122,9 @@ function projectLiveTool(db: Database.Database, input: LiveProjectionInput): Liv
   const payload: Record<string, any> = { toolCallId: input.objectId, runId, name: redactReplyText(name).slice(0, 128).replace(/[\uD800-\uDBFF]$/u, ''),
     status, summary: '', startedAt: new Date(rows.at(-1).created_at).toISOString(),
     finishedAt: ['succeeded','failed','cancelled'].includes(status) ? new Date(latest.created_at).toISOString() : null, error: null };
-  return { objectKind: 'tool', objectId: input.objectId, sourceObjectRevision: input.revision, representation: 'complete', payloadHash: payloadHash(payload), payload };
+  return { objectKind: 'tool', objectId: input.objectId, sourceObjectRevision: input.revision, representation: 'complete',
+    encodingStats: { rawMetadataBytes: RemoteLiveEncodingLimits.RawMetadataBytes - remaining, normalizedMetadataBytes: normalizedBytes },
+    payloadHash: payloadHash(payload), payload };
 }
 
 function liveArtifactBlocks(db: Database.Database, input: LiveProjectionInput, messageId: string): Record<string, unknown>[] {

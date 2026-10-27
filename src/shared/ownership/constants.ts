@@ -15,9 +15,16 @@ export type OwnershipErrorCode = typeof OwnershipErrorCode[keyof typeof Ownershi
 
 export const OwnershipSyncState = {
   Local: 'local', Pending: 'pending', Synced: 'synced', WaitingService: 'waiting_service',
-  Failed: 'failed',
+  Failed: 'failed', Partial: 'partial',
 } as const;
 export type OwnershipSyncState = typeof OwnershipSyncState[keyof typeof OwnershipSyncState];
+
+export const OwnershipContentSyncState = {
+  Unknown: 'unknown', Failed: 'failed', Partial: 'partial', Pending: 'pending', Synced: 'synced', Local: 'local', Waiting: 'waiting',
+} as const;
+export type OwnershipContentSyncState = typeof OwnershipContentSyncState[keyof typeof OwnershipContentSyncState];
+export const OwnershipContentSyncReason = { Content: 'content', History: 'history', Connection: 'connection', Unavailable: 'unavailable' } as const;
+export type OwnershipContentSyncReason = typeof OwnershipContentSyncReason[keyof typeof OwnershipContentSyncReason];
 
 export const OwnershipResultStatus = {
   Associated: 'associated', AlreadyAssociated: 'already_associated', NotCommitted: 'not_committed',

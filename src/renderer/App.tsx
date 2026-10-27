@@ -90,6 +90,7 @@ import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { installOfficeAgentBridges } from './services/office/officeFormats';
 import { getOnboardingErrorCode, reportOnboardingAction } from './services/onboardingAnalytics';
 import { resolveOpenWithAttachments } from './services/openWith';
+import { ownershipService } from './services/ownership';
 import { remoteSettingsService } from './services/remoteSettings';
 import { scheduledTaskService } from './services/scheduledTask';
 import { type SettingsOpenDiagnostic, settingsOpenDiagnostics } from './services/settingsOpenDiagnostics';
@@ -814,6 +815,16 @@ const App: React.FC = () => {
       }));
     });
   }, [dispatch]);
+
+  const handleOpenOwnershipTask = useCallback(async (sessionId: string) => {
+    const generation = store.getState().auth.accountGeneration;
+    const sequence = ownershipService.getSequence();
+    const isCurrent = () => generation === store.getState().auth.accountGeneration && sequence === ownershipService.getSequence();
+    const loaded = await coworkService.loadSession(sessionId, { isCurrent });
+    if (!loaded || !isCurrent()) throw new Error('OWNERSHIP_TASK_UNAVAILABLE');
+    setShowSettings(false);
+    setMainView(MainView.Cowork);
+  }, []);
 
   const handleShowKits = useCallback(() => {
     setMainView(MainView.Kits);
@@ -2222,7 +2233,7 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
-      <OwnershipHost />
+      <OwnershipHost onOpenTask={handleOpenOwnershipTask} />
       <SubscriptionTrialCampaign
         privacyAgreed={privacyAgreed}
         taskCreatedSignal={trialTaskCreatedSignal}

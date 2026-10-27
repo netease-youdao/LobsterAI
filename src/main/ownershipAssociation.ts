@@ -2,12 +2,12 @@ import { randomUUID } from 'crypto';
 
 import { AgentId, AgentOwnerKind } from '../shared/agent/constants';
 import {
-  OWNERSHIP_MANUAL_SOURCE, OWNERSHIP_PLAN_TTL_MS, OwnershipErrorCode, OwnershipResultStatus,
-  OwnershipSyncState, OwnershipTargetKind,
+  OWNERSHIP_MANUAL_SOURCE, OWNERSHIP_PLAN_TTL_MS, OwnershipContentSyncReason,   OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus,
+OwnershipSyncState, OwnershipTargetKind,
 } from '../shared/ownership/constants';
 import type {
   OwnershipAccount, OwnershipCommitRequest, OwnershipCommitResult, OwnershipDetail, OwnershipDisplay,
-  OwnershipPreview, OwnershipResources, OwnershipResult, OwnershipTarget,
+  OwnershipPreview, OwnershipResources, OwnershipResult, OwnershipTarget, OwnershipTaskSync,
 } from '../shared/ownership/types';
 import { type RemoteOwner,RemoteRunStatus } from '../shared/remote/constants';
 import { type AgentOwnerStore, sessionVisibilitySql } from './agentOwnership';
@@ -31,6 +31,7 @@ interface AssociationDependencies {
   isBusy?(resources: OwnershipResources): boolean;
   deviceName?(): string;
   syncState?(target: OwnershipTarget): OwnershipSyncState | undefined;
+  taskSync?(target: OwnershipTarget): OwnershipTaskSync | undefined;
   afterCommit?(result: OwnershipCommitResult): void;
   now?(): number;
 }
@@ -119,7 +120,7 @@ export class OwnershipAssociationService {
     this.validateTarget(target);
     const actor = this.deps.actor();
     const common = { ...target, deviceName: this.deps.deviceName?.() ?? '',
-      accountPartition: this.account(actor)?.partition ?? null, syncState: this.syncState(target) };
+      accountPartition: this.account(actor)?.partition ?? null };
     if (target.kind === OwnershipTargetKind.Agent) {
       if (!this.agents.canView(target.id, actor.owner)) return fail(OwnershipErrorCode.NotAvailable);
       const record = this.agents.get(target.id)!;
@@ -128,7 +129,7 @@ export class OwnershipAssociationService {
       const visibleTaskCount = (this.remote.db.prepare(`SELECT COUNT(*) AS total ${filter}`).get(target.id, ...visibility.parameters) as { total: number }).total;
       const latest = this.remote.db.prepare(`SELECT s.title ${filter} ORDER BY s.updated_at DESC,s.id DESC LIMIT 1`).get(target.id, ...visibility.parameters) as { title: string } | undefined;
       const agent = this.remote.db.prepare('SELECT * FROM agents WHERE id=?').get(target.id) as { description?: string } | undefined;
-      return { ...common, title: this.agentName(target.id), ownership: this.displayAgent(target.id, actor),
+      return { ...common, syncState: this.syncState(target), title: this.agentName(target.id), ownership: this.displayAgent(target.id, actor),
         description: agent?.description?.slice(0, 160), visibleTaskCount, latestTaskTitle: latest?.title,
         canAssociate: record.ownerKind === AgentOwnerKind.Anonymous, updatedAt: record.updatedAt };
     }
@@ -138,7 +139,13 @@ export class OwnershipAssociationService {
     const ownership: OwnershipDisplay = owner ? { kind: AgentOwnerKind.Owned, label: actor.label, scopeLabel: actor.scopeLabel,
       ...(owner.source === OWNERSHIP_MANUAL_SOURCE ? { associatedAt: owner.created_at } : {}) }
       : { kind: AgentOwnerKind.Anonymous, label: '', scopeLabel: '' };
-    return { ...common, title: task.title, ownership, agent: { id: agentId, name: this.agentName(agentId), ownership: this.displayAgent(agentId, actor) },
+    let taskSync: OwnershipTaskSync = owner ? { syncState: OwnershipSyncState.Pending,
+      contentSync: { state: OwnershipContentSyncState.Unknown, reason: OwnershipContentSyncReason.Unavailable, retryable: false } }
+      : { syncState: OwnershipSyncState.Local, contentSync: { state: OwnershipContentSyncState.Local, retryable: false } };
+    if (owner) {
+      try { taskSync = this.deps.taskSync?.(target) ?? taskSync; } catch { /* Optional display failure never hides a readable task. */ }
+    }
+    return { ...common, ...taskSync, title: task.title, ownership, agent: { id: agentId, name: this.agentName(agentId), ownership: this.displayAgent(agentId, actor) },
       canAssociate: !owner, status: task.status, updatedAt: task.updated_at };
   }
 
@@ -380,7 +387,8 @@ export class OwnershipAssociationService {
     if (manifest.agentId) states.push(this.syncState({ kind: OwnershipTargetKind.Agent, id: manifest.agentId }));
     const syncState = states.includes(OwnershipSyncState.Failed) ? OwnershipSyncState.Failed
       : states.includes(OwnershipSyncState.WaitingService) ? OwnershipSyncState.WaitingService
-      : states.length && states.every(state => state === OwnershipSyncState.Synced) ? OwnershipSyncState.Synced : OwnershipSyncState.Pending;
+      : states.length && states.every(state => state === OwnershipSyncState.Synced || state === OwnershipSyncState.Partial)
+        ? states.includes(OwnershipSyncState.Partial) ? OwnershipSyncState.Partial : OwnershipSyncState.Synced : OwnershipSyncState.Pending;
     return { status: OwnershipResultStatus.Associated, operationId: receipt.operation_id, requestId: receipt.request_id,
       agentIds: manifest.affectedAgentIds.filter(id => this.agents.canView(id, actor.owner)), sessionIds,
       syncState,

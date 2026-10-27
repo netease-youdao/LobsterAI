@@ -2,14 +2,16 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { OwnershipTargetKind } from '../../../shared/ownership/constants';
 import { type RemoteConnectionsSnapshot, RemoteDeviceAdmissionState, RemoteDeviceConnectionState } from '../../../shared/remote/connections';
-import { RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
+import { RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, RemoteSyncTaskIssueSource, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
 import { i18nService } from '../../services/i18n';
 import RemoteDeviceSettings from './RemoteDeviceSettings';
 
 const harness = vi.hoisted(() => ({
   snapshot: { state: null as RemoteSettingsState | null, busy: false, error: null as string | null },
   submit: vi.fn(async () => true),
+  openTask: vi.fn(async () => undefined),
   refresh: vi.fn(async () => undefined),
   management: { accountEpoch: null as string | null, data: null as RemoteConnectionsSnapshot | null, loading: false, error: null as string | null, operations: {} },
   resume: vi.fn(async () => true),
@@ -24,6 +26,7 @@ vi.mock('../../services/remoteSettings', () => ({ remoteSettingsService: {
 vi.mock('../../services/remoteDeviceConnections', () => ({ remoteDeviceConnectionsService: {
   getSnapshot: () => harness.management, subscribe: () => () => undefined, refresh: harness.refresh, resume: harness.resume,
 } }));
+vi.mock('../../services/ownership', () => ({ ownershipService: { open: harness.openTask } }));
 vi.mock('react-redux', () => ({ useSelector: () => 1 }));
 vi.mock('react/jsx-dev-runtime', async (importOriginal) => {
   const runtime = await importOriginal<typeof import('react/jsx-dev-runtime')>();
@@ -46,7 +49,9 @@ const render = (loginAllowed = true) => {
   harness.buttons.length = 0;
   const html = renderToStaticMarkup(React.createElement(RemoteDeviceSettings, { onLogin, loginAllowed }));
   const button = (key: string) => harness.buttons.find(props => props['aria-label'] === i18nService.t(key) || props.children === i18nService.t(key));
-  return { html, onLogin, button };
+  const taskButton = (title: string) => harness.buttons.find(props => React.Children.toArray(props.children)
+    .some(child => React.isValidElement<{ children?: React.ReactNode }>(child) && child.props.children === title));
+  return { html, onLogin, button, taskButton };
 };
 const click = (button: React.ButtonHTMLAttributes<HTMLButtonElement> | undefined) => {
   expect(button).toBeDefined();
@@ -55,7 +60,7 @@ const click = (button: React.ButtonHTMLAttributes<HTMLButtonElement> | undefined
 
 beforeEach(() => {
   harness.snapshot = { state: connected, busy: false, error: null };
-  harness.submit.mockClear(); harness.refresh.mockClear(); harness.resume.mockClear();
+  harness.submit.mockClear(); harness.refresh.mockClear(); harness.resume.mockClear(); harness.openTask.mockClear();
   harness.management = { accountEpoch: null, data: null, loading: false, error: null, operations: {} };
   const logError = console.error;
   vi.spyOn(console, 'error').mockImplementation((message: unknown, ...args: unknown[]) => {
@@ -152,31 +157,90 @@ describe('current remote device settings', () => {
     expect(harness.submit).not.toHaveBeenCalled();
   });
 
-  test('partial task errors keep online status and retry only the affected task', () => {
+  test('partial task errors stay separate from connection status and open task details', () => {
     harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
       syncHealth: { status: RemoteSyncHealthStatus.Degraded, reason: RemoteSyncHealthReason.Projection,
         pendingSessions: 2, failedSessions: 2, isolatedSessions: 1, retryingSessions: 1,
         oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-09-23T00:00:00Z',
         taskIssues: [{ localSessionId: 'task-1', title: 'Affected task', status: RemoteSyncTaskIssueStatus.Retrying, retryable: true }] } };
-    const { html, button } = render();
-    expect(html).toContain(i18nService.t('remoteOnline'));
-    expect(html).toContain(i18nService.t('remoteTasksSyncFailedCount').replace('{count}', '2'));
+    const { html, button, taskButton } = render();
+    expect(html).toContain(`${i18nService.t('remoteOnline')}</span> · ${i18nService.t('remoteCurrentDevice')}`);
+    expect(html).toContain(i18nService.t('remoteTaskContentIncomplete'));
     expect(html).not.toContain(i18nService.t('remoteSyncPaused'));
     expect(html).not.toContain(i18nService.t('remoteSessionSyncFailed'));
     expect(html).toContain('Affected task');
     expect(html).toContain('<details');
     expect(html).not.toContain('<details open');
     expect(button('retry')).toBeUndefined();
-    click(button('remoteRetryTask'));
-    expect(harness.submit.mock.calls).toEqual([[{ retrySessionId: 'task-1' }]]);
+    expect(button('remoteRetryTask')).toBeUndefined();
+    click(taskButton('Affected task'));
+    expect(harness.openTask).toHaveBeenCalledExactlyOnceWith({ kind: OwnershipTargetKind.Task, id: 'task-1' });
+    expect(harness.submit).not.toHaveBeenCalled();
   });
 
+  test('object faults expose the affected session without promising automatic repair or pausing the whole connection', () => {
+    harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
+      syncHealth: { status: RemoteSyncHealthStatus.Degraded, reason: RemoteSyncHealthReason.Projection,
+        pendingSessions: 1, failedSessions: 1, isolatedSessions: 1, retryingSessions: 0,
+        oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z',
+        taskIssues: [{ localSessionId: 'live-task', title: 'Affected live session', source: RemoteSyncTaskIssueSource.Live,
+          status: RemoteSyncTaskIssueStatus.Isolated, retryable: true }] } };
+    const { html, button } = render();
+    expect(html).toContain(i18nService.t('remoteOnline'));
+    expect(html).toContain(i18nService.t('remoteTaskContentIncomplete'));
+    expect(html).toContain('Affected live session'); expect(html).toContain(i18nService.t('ownershipContentSyncEntryFailed'));
+    expect(html).not.toContain(i18nService.t('remoteTaskLiveSyncIssue'));
+    expect(html).not.toContain(i18nService.t('remoteSyncPaused')); expect(html).not.toContain(i18nService.t('remoteSessionSyncFailed'));
+    expect(html).not.toContain(i18nService.t('remoteTaskSyncRetrying'));
+    expect(button('remoteRetryTask')).toBeUndefined();
+    click(render().taskButton('Affected live session'));
+    expect(harness.openTask).toHaveBeenCalledExactlyOnceWith({ kind: OwnershipTargetKind.Task, id: 'live-task' });
+    expect(harness.submit).not.toHaveBeenCalled();
+  });
+  test('desktop-only content has a neutral explanation, including alongside a separate pending upload', () => {
+    harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Synced,
+      syncHealth: { status: RemoteSyncHealthStatus.Idle, pendingSessions: 0, desktopOnlySessions: 1, failedSessions: 0,
+        oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z', taskIssues: [] } };
+    const { html, button } = render();
+    expect(html).toContain(i18nService.t('remoteOnline')); expect(html).toContain(i18nService.t('remoteDesktopOnlyContent'));
+    expect(html).not.toContain('role="alert"'); expect(html).not.toContain(i18nService.t('remoteSyncPaused'));
+    expect(html).not.toContain('<details'); expect(button('retry')).toBeUndefined();
+    harness.snapshot.state = { ...harness.snapshot.state, syncHealth: { ...harness.snapshot.state.syncHealth!, status: RemoteSyncHealthStatus.Syncing, pendingSessions: 1 } };
+    const pending = render().html;
+    expect(pending).not.toContain(i18nService.t('remoteContentSyncing')); expect(pending).toContain(i18nService.t('remoteDesktopOnlyContent'));
+    expect(pending).not.toContain('role="alert"');
+  });
   test('marks bounded health counts as lower bounds instead of presenting an exact total', () => {
     harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
       syncHealth: { status: RemoteSyncHealthStatus.Degraded, reason: RemoteSyncHealthReason.Projection,
         pendingSessions: 64, failedSessions: 64, countsTruncated: true, taskIssuesTruncated: true,
         oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-09-23T00:00:00Z' } };
-    expect(render().html).toContain(i18nService.t('remoteTasksSyncFailedCount').replace('{count}', '≥64'));
+    const { html } = render();
+    expect(html).toContain(i18nService.t('remoteTaskContentIncomplete'));
+    expect(html).toContain(i18nService.t('remoteTaskContentLimited'));
+    expect(html).toContain(i18nService.t('remoteTaskContentDetailsUnavailable'));
+    expect(html).not.toContain('≥64');
+  });
+
+  test('legacy session errors without a task summary show uncertainty without inventing a target or retry', () => {
+    harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error };
+    const { html, button } = render();
+    expect(html).toContain(i18nService.t('remoteTaskContentUnknown'));
+    expect(html).toContain(i18nService.t('remoteTaskContentDetailsUnavailable'));
+    expect(html).not.toContain(i18nService.t('remoteTaskContentIncomplete'));
+    expect(html).not.toContain('role="alert"');
+    expect(button('retry')).toBeUndefined(); expect(button('remoteRetryTask')).toBeUndefined();
+  });
+
+  test('the disclosure shows at most twenty identified tasks and states that the list is incomplete', () => {
+    harness.snapshot.state = { ...connected, syncHealth: { status: RemoteSyncHealthStatus.Degraded, failedSessions: 25,
+      pendingSessions: 25, oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z',
+      taskIssues: Array.from({ length: 25 }, (_, index) => ({ localSessionId: `task-${index}`, title: `Affected-${index}`,
+        status: RemoteSyncTaskIssueStatus.Isolated, retryable: false })) } };
+    const { html, taskButton } = render();
+    expect(taskButton('Affected-19')).toBeDefined(); expect(taskButton('Affected-20')).toBeUndefined();
+    expect(html).toContain(i18nService.t('remoteTaskContentLimited'));
+    expect(html).not.toContain(i18nService.t('remoteRetryTask'));
   });
 
   test('explains deferred history admission while preserving online status and a reconnect action', () => {
@@ -185,7 +249,7 @@ describe('current remote device settings', () => {
         pendingSessions: 2, oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-09-23T00:00:00Z' } };
     const { html, button } = render();
     expect(html).toContain(i18nService.t('remoteOnline'));
-    expect(html).toContain(i18nService.t('remoteSyncPaused'));
+    expect(html).not.toContain(i18nService.t('remoteSyncPaused'));
     expect(html).toContain(i18nService.t('remoteHistoryAdmissionDeferred'));
     expect(html).not.toContain(i18nService.t('remoteUnavailable'));
     expect(html).not.toContain(i18nService.t('remoteSessionSyncFailed'));
@@ -203,20 +267,22 @@ describe('current remote device settings', () => {
       taskIssues: [{ localSessionId: 'task-1', title: 'Protected task', status: RemoteSyncTaskIssueStatus.Isolated, retryable: false }] } };
     const { html, button } = render();
     expect(html).toContain(i18nService.t('remoteTaskSyncIsolated'));
-    expect(button('remoteRetryTask')?.disabled).toBe(true);
-    click(button('remoteRetryTask'));
+    expect(button('remoteRetryTask')).toBeUndefined();
+    click(render().taskButton('Protected task'));
+    expect(harness.openTask).toHaveBeenCalledExactlyOnceWith({ kind: OwnershipTargetKind.Task, id: 'task-1' });
     expect(harness.submit).not.toHaveBeenCalled();
     harness.snapshot.state = { ...harness.snapshot.state, owner: null };
     expect(render().html).not.toContain('Protected task');
   });
 
-  test('a task retry button captured before an account change cannot retry in the new account', () => {
+  test('a task details button captured before an account change cannot open a stale target', () => {
     harness.snapshot.state = { ...connected, syncHealth: { status: RemoteSyncHealthStatus.Degraded, failedSessions: 1,
       pendingSessions: 1, oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-09-23T00:00:00Z',
       taskIssues: [{ localSessionId: 'task-1', status: RemoteSyncTaskIssueStatus.Retrying, retryable: true }] } };
-    const retry = render().button('remoteRetryTask');
+    const retry = render().taskButton(i18nService.t('remoteUnnamedTask'));
     harness.snapshot.state = { ...connected, accountEpoch: 'epoch-b', owner: { userId: 'user-b', scopeKey: 'personal' } };
     click(retry);
+    expect(harness.openTask).not.toHaveBeenCalled();
     expect(harness.submit).not.toHaveBeenCalled();
   });
 
@@ -256,21 +322,23 @@ describe('current remote device settings', () => {
         pendingSessions: 1, oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-09-23T03:03:23Z' } };
     const { html, button } = render();
     expect(html).toContain(i18nService.t('remoteUnavailable'));
-    expect(html).toContain(i18nService.t('remoteSyncPaused'));
+    expect(html).not.toContain(i18nService.t('remoteSyncPaused'));
     expect(html).not.toContain(i18nService.t('remoteContentSyncing'));
     expect(button('remoteReconnect')).toBeDefined();
     harness.snapshot.state = { ...harness.snapshot.state, connected: true, connectionStatus: RemoteConnectionStatus.Online,
       connectionReason: undefined };
     const recovered = render();
-    expect(recovered.html).toContain(i18nService.t('remoteContentSyncing'));
+    expect(recovered.html).not.toContain(i18nService.t('remoteContentSyncing'));
+    expect(recovered.html).not.toContain('<details');
     expect(recovered.html).not.toContain(i18nService.t('remoteSyncPaused'));
   });
 
   test.each([
-    ['agentCatalogSyncStatus', 'remoteAgentCatalogSyncFailed'],
-    ['sessionSyncStatus', 'remoteSessionSyncFailed'],
-  ] as const)('keeps the device online and offers retry for %s', (field, message) => {
-    harness.snapshot.state = { ...connected, [field]: RemoteSyncStatus.Error, connectionReason: RemoteConnectionReason.Connecting };
+    [{ agentCatalogSyncStatus: RemoteSyncStatus.Error }, 'remoteAgentCatalogSyncFailed'],
+    [{ syncHealth: { status: RemoteSyncHealthStatus.Degraded, lanes: { control: RemoteSyncLaneStatus.Backoff }, pendingSessions: 1,
+      oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z' } }, 'remoteControlSyncFailed'],
+  ] as const)('keeps the device online and preserves catalog/control recovery: %j', (failure, message) => {
+    harness.snapshot.state = { ...connected, ...failure, connectionReason: RemoteConnectionReason.Connecting };
     const { html, button } = render();
     expect(html).toContain(i18nService.t('remoteOnline'));
     expect(html).toContain(i18nService.t(message));

@@ -19,6 +19,7 @@ export interface AvailabilityRequest {
   key: string; lane: 'control' | 'live'; scope: string; localId: string; method: string; pathname: string; version: number;
   body: Record<string, any>; lookup: string | null; lookupVersion: number; createdAt: number; attempted: boolean;
   replyModelDisplayVersion?: number;
+  liveEncoderVersion?: number;
 }
 export const ReplyModelDisplayVersion = 1;
 export const AvailabilityReadState = { Valid: 'valid', Corrupt: 'corrupt' } as const;
@@ -101,6 +102,11 @@ export class RemoteAvailabilityStore {
         CREATE TABLE IF NOT EXISTS availability_progress(scope TEXT NOT NULL,local_id TEXT NOT NULL,lane TEXT NOT NULL,ack_at INTEGER NOT NULL,PRIMARY KEY(scope,local_id,lane));
         CREATE TABLE IF NOT EXISTS availability_checkpoint_uploaded(operation_id TEXT NOT NULL,part_no INTEGER NOT NULL,payload_hash TEXT NOT NULL,
           PRIMARY KEY(operation_id,part_no));
+        CREATE TABLE IF NOT EXISTS availability_encoding_probes(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_key TEXT NOT NULL,
+          fingerprint TEXT NOT NULL,encoder_version INTEGER NOT NULL,manual_retry_at INTEGER NOT NULL DEFAULT -1,
+          PRIMARY KEY(scope,local_id,object_key));
+        CREATE TABLE IF NOT EXISTS availability_tool_refresh(scope TEXT NOT NULL,local_id TEXT NOT NULL,tool_id TEXT NOT NULL,
+          PRIMARY KEY(scope,local_id,tool_id));
         CREATE TABLE IF NOT EXISTS availability_faults(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_key TEXT NOT NULL,
           fingerprint TEXT NOT NULL,attempts INTEGER NOT NULL,window_start INTEGER NOT NULL,next_retry INTEGER NOT NULL,
           PRIMARY KEY(scope,local_id,object_key));`);
@@ -357,11 +363,16 @@ export class RemoteAvailabilityStore {
       this.db.prepare(`INSERT INTO availability_objects VALUES(?,?,?,?,?) ON CONFLICT(scope,local_id,object_id)
         DO UPDATE SET source_revision=excluded.source_revision,result=excluded.result`).run(request.scope, request.localId,
           `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, stableJson({ ...result,
-            representation: request.body.representation === 'repair' ? request.body.payload?.contentState || 'unknown' : request.body.representation,
+            representation: request.body.representation === 'repair' ? request.body.objectKind === 'tool' ? 'complete' : request.body.payload?.contentState || 'unknown' : request.body.representation,
             ...(request.replyModelDisplayVersion === ReplyModelDisplayVersion && ['accepted', 'superseded'].includes(result.state)
               ? { replyModelDisplayVersion: ReplyModelDisplayVersion } : {}) }));
-      if (result.state === 'accepted' || result.state === 'superseded') this.db.prepare('DELETE FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?')
-        .run(request.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`);
+      if (result.state === 'accepted' || result.state === 'superseded') {
+        const objectKey = `${request.body.objectKind}:${request.body.objectId}`;
+        this.db.prepare('DELETE FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?').run(request.scope, request.localId, objectKey);
+        this.db.prepare('DELETE FROM availability_encoding_probes WHERE scope=? AND local_id=? AND object_key=?').run(request.scope, request.localId, objectKey);
+        if (request.body.objectKind === 'tool') this.db.prepare('DELETE FROM availability_tool_refresh WHERE scope=? AND local_id=? AND tool_id=?')
+          .run(request.scope, request.localId, request.body.objectId);
+      }
       this.complete(request.key);
       this.recordProgress(request.scope, request.localId, request.lane);
     })());

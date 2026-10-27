@@ -6642,6 +6642,7 @@ if (!gotTheLock) {
       isBusy: resources => resources.sessionIds.some(id => getCoworkEngineRouter().isSessionActive(id))
         || getCoworkEngineRouter().listPendingPermissions().some(item => item.sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID),
       syncState: target => remoteBridge?.associationSyncState(target),
+      taskSync: target => remoteBridge?.associationTaskSync(target),
       afterCommit: result => {
         revalidateArtifactPreviews();
         libraryIndexService?.notifySessionProjectionChanges({ changedSessionIds: result.sessionIds, deletedSessionIds: [], affectedArtifactIds: [] });

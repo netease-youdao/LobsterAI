@@ -1840,15 +1840,16 @@ class CoworkService {
 
   async loadSession(
     sessionId: string,
-    options: { preserveLoadedRange?: boolean } = {},
+    options: { preserveLoadedRange?: boolean; isCurrent?: () => boolean } = {},
   ): Promise<CoworkSession | null> {
     try {
       const cowork = window.electron?.cowork;
-      if (!cowork) return null;
+      if (!cowork || options.isCurrent?.() === false) return null;
       const requestId = ++this.latestLoadSessionRequestId;
       const previouslyLoadedSession = store.getState().cowork.currentSession;
 
       const result = await accountBoundRequest(async () => cowork.getSession(sessionId));
+      if (options.isCurrent?.() === false) return null;
       if (result.success && result.session) {
         this.logDiagnostic(
           'info',
@@ -1885,6 +1886,7 @@ class CoworkService {
               );
               return previouslyLoadedSession;
             }
+            if (options.isCurrent?.() === false) return null;
             if (requestId !== this.latestLoadSessionRequestId) {
               this.logDiagnostic('debug', `ignored stale preserved session load result for session ${sessionId}.`);
               return session;
@@ -1938,7 +1940,7 @@ class CoworkService {
         });
 
         const imResult = await accountBoundRequest(async () => cowork.remoteManaged(sessionId));
-        if (requestId === this.latestLoadSessionRequestId) {
+        if (requestId === this.latestLoadSessionRequestId && options.isCurrent?.() !== false) {
           store.dispatch(setRemoteManaged(imResult?.remoteManaged ?? false));
         }
 

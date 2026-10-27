@@ -14,6 +14,7 @@ import {
   remoteAttention,
   remoteOwnerKey,
   remoteSettingsSwitchChecked,
+  remoteTaskContentSummary,
 } from '../settings/remoteControlState';
 import SettingsSwitch from '../settings/SettingsSwitch';
 
@@ -84,6 +85,7 @@ export function RemoteControlPopover({ anchorRef, onClose, onLogin, loginAllowed
   const keepAwake = remoteSettingsSwitchChecked(state, RemoteSetting.KeepAwake);
   const displayedError = error || actionError;
   const attention = remoteAttention(state);
+  const contentSummary = remoteTaskContentSummary(state);
   const attentionIdentity = attention ? `${state?.accountEpoch ?? remoteOwnerKey(state)}:${attention.key}` : '';
   const [visibleAttention, setVisibleAttention] = useState('');
   useEffect(() => {
@@ -237,6 +239,11 @@ export function RemoteControlPopover({ anchorRef, onClose, onLogin, loginAllowed
       {attention && (attention.immediate || visibleAttention === attentionIdentity) && onOpenDeviceManagement && <div role="status" className="mt-2 flex items-start justify-between gap-2 text-xs leading-5 text-amber-700 dark:text-amber-400">
         <span>{t(attention.key)}</span>
         <button type="button" className={`${ACTION_CLASS} shrink-0`} onClick={() => { restoreFocus.current = false; onClose(); onOpenDeviceManagement(); }}>{t('remoteDeviceManagement')}</button>
+      </div>}
+      {contentSummary && <div role="status" className="mt-2 flex items-start justify-between gap-2 text-xs text-secondary">
+        <span>{t(contentSummary.key)}</span>
+        {onOpenDeviceManagement && <button type="button" className={`${ACTION_CLASS} shrink-0`}
+          onClick={() => { restoreFocus.current = false; onClose(); onOpenDeviceManagement(); }}>{t('remoteTaskContentViewDetails')}</button>}
       </div>}
       {state && signInRequired && !loginAllowed && <p className="mt-1 text-xs text-secondary">{t('remoteLoginUnavailable')}</p>}
       {!state && !displayedError && <p role="status" className="mt-1 text-xs text-secondary">{t('remoteLoading')}</p>}

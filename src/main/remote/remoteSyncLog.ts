@@ -5,6 +5,7 @@ import { RemoteInputReason } from '../../shared/remote/input';
 import { RemoteQuestion } from '../../shared/remote/questions';
 import { RemoteReply } from '../../shared/remote/reply';
 import { RemoteImportValidation } from '../../shared/remote/retention';
+import { RemoteLiveEncodingError } from './remoteLiveMetadata';
 import { enqueueRemoteLog } from './remoteLogSink';
 import { remoteTransportErrorMetadata } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
@@ -20,7 +21,7 @@ const eventTypes = new Set(['session.upsert', 'session.deleted', 'message.upsert
 const manifestEventTypes = [...eventTypes].filter(type => type !== RemoteReply.DeltaEvent).concat(RemoteQuestion.Event);
 const lifecycleStates = new Set(['starting', 'running', 'waiting_approval', 'waiting_local', 'cancelling', 'reconciling', 'succeeded', 'failed', 'cancelled', 'interrupted', 'pending', 'approved', 'rejected', 'expired', 'streaming', 'complete', 'error', 'queued', 'waiting_user', 'unavailable', 'uploading', 'committed', 'aborted']);
 const validationMessages = new Set([
-  ...Object.values(RemoteNetworkFailure),
+  ...Object.values(RemoteNetworkFailure), ...Object.values(RemoteLiveEncodingError),
   'Remote ACK outside durable local bounds', 'Remote batch ACK identity mismatch',
   'Remote import receipt identity mismatch', 'Import receipt identity mismatch', 'Import abortion is not confirmed',
   'REMOTE_IMPORT_BUDGET', 'REMOTE_IMPORT_RECORD_LIMIT', 'REMOTE_IMPORT_PART_UNAVAILABLE', 'REMOTE_IMPORT_CONTEXT_CHANGED',
@@ -147,6 +148,7 @@ const diagnosticEvents = new Set([
   'desktop.action.reconciled', 'desktop.account_transition.changed',
 ]);
 const diagnosticIds = new Set(['requestId','connectionId','connectionGeneration','generation','localSessionId','sessionId','commandId','runId','operationId','writerGeneration','objectId','revision','jobId','transitionId','preparationId','assetId','transportRequestId']);
+const diagnosticEncodingNumbers = new Set(['encoderVersion','rawMetadataBytes','normalizedMetadataBytes']);
 const diagnosticNumbers = new Set(['durationMs','elapsedMs','count','bytes','retryAttempt','nextRetryAt','retryAfterMs','scanned','processed','isolated','firstSeenAt','lastSeenAt','actualBytes','expectedBytes']);
 const diagnosticValues = new Set(['desktop','mobile','im','cron','control','live','history','files','transport','success','failed','unknown','deferred','corrupt','active','ready','blocked','fencing','stopping','validating','recovery_required','prepared','executing','applied','rejected','accepted','superseded','starting','running','waiting_approval','waiting_local','waiting_user','succeeded','cancelled','interrupted','complete','error']);
 const diagnosticReasons = new Set([...Object.values(RemoteInputReason), RemoteInputDiagnostic.SizeMismatch, RemoteInputDiagnostic.HashMismatch, RemoteInputDiagnostic.DownloadRejected, RemoteInputDiagnostic.ImageInvalid, 'LOCAL_IO_FAILED', 'FILE_OPERATION_FAILED','RECORD_INVALID','ENCODING_FAILED','STORAGE_UNAVAILABLE','REQUEST_FAILED','CONTEXT_CHANGED','EXECUTION_UNKNOWN','DEPENDENCY_UNAVAILABLE','STATE_CHANGED','REMOTE_AVAILABILITY_RECORD_INVALID']);
@@ -168,6 +170,7 @@ export function remoteDiagnosticLog(event: string, fields: Record<string, unknow
   const clean: Record<string, unknown> = { event, timestamp: new Date().toISOString(), component: 'desktop' };
   for (const [key, value] of Object.entries(fields)) {
     if (diagnosticIds.has(key)) { const safe = key === 'requestId' || key === 'transportRequestId' ? remoteSyncRequestId(value) : id(value); if (safe) clean[key] = safe; }
+    else if (diagnosticEncodingNumbers.has(key) && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 1024 * 1024 * 1024) clean[key] = value;
     else if (diagnosticNumbers.has(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0) clean[key] = value;
     else if (['origin','lane','status','result'].includes(key) && typeof value === 'string' && diagnosticValues.has(value)) clean[key] = value;
     else if (key === 'stage' && typeof value === 'string' && inputStages.has(value)) clean[key] = value;

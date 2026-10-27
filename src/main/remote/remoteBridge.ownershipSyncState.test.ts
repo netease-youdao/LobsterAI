@@ -2,7 +2,9 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
+import { RemoteConnectionReason } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 
@@ -90,6 +92,25 @@ describe('task detail synchronization state', () => {
     f.store.db.prepare('DELETE FROM remote_projection_failures WHERE session_id=?').run('task');
     expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Synced);
   });
+  it('distinguishes a real desktop-only ACK, new pending content and an object fault in task detail', () => {
+    const f = fixture(); f.ack();
+    const scope = `${f.bridge.targetId}:${owner.userId}:${owner.scopeKey}:desktop`;
+    const row = f.store.sync('task')!;
+    const revision = (f.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get('task') as { revision: number } | undefined)?.revision || 1;
+    f.bridge.availability.ledger.saveSession({ scope, localId: 'task', sessionId: row.session_id, deviceId: 'desktop', owner,
+      writerGeneration: 'writer', phase: 'active', controlEpoch: 'epoch', operationId: 'operation', pendingCommandIds: [], pendingRunIds: [],
+      controlRevision: String(revision), factSeq: '0', records: {} });
+    f.store.transaction(() => f.store.db.prepare("INSERT INTO cowork_messages VALUES('message','task','assistant','content','{}',1,1)").run());
+    const sourceRevision = (f.store.db.prepare('SELECT revision FROM remote_live_revisions WHERE session_id=? AND object_id=?').get('task', 'message') as { revision: number } | undefined)?.revision || 1;
+    recordAvailabilityObjectHealth(f.store, scope, 'task', 'message:message', String(sourceRevision), 'desktop_only');
+    expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Partial);
+    f.store.transaction(() => f.store.db.prepare('UPDATE remote_live_revisions SET revision=? WHERE session_id=? AND object_id=?').run(sourceRevision + 1, 'task', 'message'));
+    expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Pending);
+    recordAvailabilityObjectHealth(f.store, scope, 'task', 'message:message', String(sourceRevision + 1), 'complete');
+    expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Synced);
+    f.bridge.availability.ledger.objectFault(scope, 'task', 'message:message', 'fingerprint');
+    expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Failed);
+  });
   it('does not expose a different account or scope synchronization state', () => {
     const f = fixture(); f.ack(); f.unavailable();
     f.account({ ...owner, scopeKey: 'team:another' });
@@ -113,6 +134,29 @@ describe('ownership task retry routing', () => {
     f.store.put('syncFailure:task', { blocked: true, code: 47019 });
     return { ...f, context };
   }
+  it('routes availability-owned task retries through bounded object recovery and respects cooldown rejection', async () => {
+    const f = fixture(); f.ack();
+    vi.spyOn(f.bridge.availability, 'ownsHistory').mockReturnValue(true);
+    const live = vi.spyOn(f.bridge.availability, 'retryLive').mockReturnValue(true);
+    const legacy = vi.spyOn(f.bridge.taskSync, 'manualRetry');
+    const before = f.store.sync('task');
+    await expect(f.bridge.configure({ retrySessionId: 'task' })).resolves.toBeDefined();
+    expect(live).toHaveBeenCalledWith('task'); expect(legacy).not.toHaveBeenCalled();
+    expect(f.store.sync('task')).toEqual(before);
+    live.mockReturnValue(false);
+    await expect(f.bridge.configure({ retrySessionId: 'task' })).rejects.toThrow('Task synchronization retry is unavailable');
+    expect(legacy).not.toHaveBeenCalled(); expect(f.store.sync('task')).toEqual(before);
+  });
+  it('continues ordinary reconnect scheduling when optional live recovery storage fails', async () => {
+    const f = fixture(); f.ack(); f.unavailable();
+    const schedule = vi.spyOn(f.bridge, 'schedule').mockImplementation(() => undefined);
+    const disconnect = vi.spyOn(f.bridge, 'disconnect');
+    const live = vi.spyOn(f.bridge.availability, 'retryLive').mockImplementation(() => { throw Object.assign(new Error('Storage unavailable'), { code: 'SQLITE_BUSY' }); });
+    await expect(f.bridge.configure({ retry: true })).resolves.toBeDefined();
+    expect(live).toHaveBeenCalledWith(); expect(disconnect).toHaveBeenCalled(); expect(schedule).toHaveBeenCalledWith(0);
+    expect(f.bridge.connectionReason).toBe(RemoteConnectionReason.Reconnecting);
+    expect(f.bridge.error).toBeUndefined();
+  });
   it('keeps task safety blocks intact during a global reconnect', async () => {
     const f = isolatedTask(), before = f.bridge.taskSync.get(f.context, 'task');
     await f.bridge.configure({ retry: true });
@@ -128,5 +172,31 @@ describe('ownership task retry routing', () => {
     expect(f.store.get('syncFailure:task')).toEqual({ blocked: true, code: 47019 });
     expect(f.store.sync('task')).toEqual(before);
     expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Failed);
+  });
+});
+
+
+describe('task detail readonly snapshot path', () => {
+  it('returns unknown before sampling and never runs the synchronous per-task health reader', () => {
+    const f = fixture(); f.ack();
+    const heavy = vi.spyOn(f.bridge.availability, 'sessionHealth').mockImplementation(() => { throw new Error('heavy'); });
+    vi.spyOn(f.bridge.contentSnapshot, 'read').mockReturnValue(null);
+    expect(f.bridge.associationTaskSync(target)).toEqual({ syncState: OwnershipSyncState.Pending,
+      contentSync: { state: 'unknown', reason: 'unavailable', retryable: false } });
+    expect(heavy).not.toHaveBeenCalled();
+  });
+  it('uses current target cache only, expires old observations and suppresses retry when disconnected', () => {
+    const f = fixture(); f.ack();
+    const sample = { observedAt: Date.now(), syncState: OwnershipSyncState.Failed,
+      contentSync: { state: 'failed', reason: 'content', retryable: true } };
+    const read = vi.spyOn(f.bridge.contentSnapshot, 'read').mockReturnValue(sample);
+    expect(f.bridge.associationTaskSync(target).contentSync.retryable).toBe(false);
+    f.bridge.generation = 'connection';
+    expect(f.bridge.associationTaskSync(target).contentSync.retryable).toBe(true);
+    read.mockReturnValue({ ...sample, observedAt: Date.now() - 16000 });
+    expect(f.bridge.associationTaskSync(target).contentSync.state).toBe('unknown');
+    read.mockReturnValue(sample); f.route('https://different.example');
+    expect(f.bridge.associationTaskSync(target).contentSync.state).toBe('unknown');
+    expect(read).toHaveBeenLastCalledWith(null, 'task');
   });
 });

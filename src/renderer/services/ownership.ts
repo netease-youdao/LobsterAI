@@ -1,5 +1,5 @@
 import { AgentId } from '@shared/agent';
-import { OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
+import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipCommitResult, OwnershipDetail, OwnershipPreview, OwnershipResponse,OwnershipTarget } from '@shared/ownership/types';
 
 import { remoteConnectionFailure } from '../components/settings/remoteControlState';
@@ -14,6 +14,7 @@ export interface OwnershipPanelState {
   target: OwnershipTarget;
   view: OwnershipView;
   loading?: boolean;
+  retrying?: boolean;
   detail?: OwnershipDetail;
   preview?: OwnershipPreview;
   error?: string;
@@ -64,6 +65,7 @@ function finishAssociation(target: OwnershipTarget, result: OwnershipCommitResul
 export const ownershipService = {
   subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   getSnapshot: () => panel,
+  getSequence: () => sequence,
   getRevision: () => revision,
   subscribeChange(listener: () => void) { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; },
   async getDetail(target: OwnershipTarget): Promise<OwnershipDetail> {
@@ -120,46 +122,64 @@ export const ownershipService = {
   },
   async retrySync(target?: OwnershipTarget) {
     const generation = identity();
+    if (panel?.retrying && (!target || target.kind === panel.target.kind && target.id === panel.target.id)) return;
     if (target) {
       const opening = this.open(target);
       const openSequence = sequence;
       await opening;
-      if (generation !== identity() || openSequence !== sequence
-        || panel?.detail?.ownership.kind !== 'owned' || panel.detail.syncState !== OwnershipSyncState.Failed) return;
+      if (generation !== identity() || openSequence !== sequence) return;
     }
-    if (!panel?.detail || panel.loading) return;
+    if (!panel?.detail || panel.loading || panel.retrying || panel.view !== OwnershipView.Detail) return;
     const requestSequence = sequence;
+    const currentTarget = panel.target;
+    const openingDetail = panel.detail;
+    const current = () => requestSequence === sequence && generation === identity() && panel?.view === OwnershipView.Detail;
+    panel = { ...panel, retrying: true, notice: undefined };
+    notify();
     try {
+      // Details are authorized per task. A missing item in the capped overview never permits global recovery.
+      const detail = target ? openingDetail : await this.getDetail(currentTarget);
+      if (!current() || !panel) return;
+      panel = { ...panel, detail };
+      const task = currentTarget.kind === OwnershipTargetKind.Task;
+      const content = detail.contentSync;
+      const permitted = detail.ownership.kind === 'owned' && (task
+        ? content?.state === OwnershipContentSyncState.Failed && content.retryable
+          && (content.reason === OwnershipContentSyncReason.Content || content.reason === OwnershipContentSyncReason.History)
+        : detail.syncState === OwnershipSyncState.Failed);
+      if (!permitted) {
+        panel = { ...panel, notice: 'remoteTaskSyncWaiting' };
+        return;
+      }
       const remote = await window.electron.remote.state();
-      if (requestSequence !== sequence || generation !== identity() || !panel) return;
+      if (!current() || !panel) return;
       if (!remote.owner || !remote.enabled) {
         panel = { ...panel, notice: !remote.owner ? 'remoteLoginRequired' : 'remoteDisabled' };
-        notify();
         return;
       }
-      const issue = panel.target.kind === OwnershipTargetKind.Task
-        ? remote.syncHealth?.taskIssues?.find(item => item.localSessionId === panel!.target.id) : undefined;
-      if (issue && (!issue.retryable || !remote.accountEpoch)) {
+      if (task && !remote.accountEpoch) {
         panel = { ...panel, notice: 'remoteTaskSyncWaiting' };
-        notify();
         return;
       }
-      const updated = await window.electron.remote.configure(issue
-        ? { retrySessionId: panel.target.id, expectedAccountEpoch: remote.accountEpoch! }
+      const updated = await window.electron.remote.configure(task
+        ? { retrySessionId: currentTarget.id, expectedAccountEpoch: remote.accountEpoch! }
         : { retry: true, ...(remote.accountEpoch ? { expectedAccountEpoch: remote.accountEpoch } : {}) });
-      if (requestSequence !== sequence || generation !== identity() || !panel) return;
+      if (!current() || !panel) return;
       if (updated.initializationFailure) {
         panel = { ...panel, notice: remoteConnectionFailure(updated) ?? 'remoteLocalInitializationFailed' };
-        notify();
+        return;
+      }
+      if (updated.accountEpoch && updated.accountEpoch !== remote.accountEpoch) {
+        panel = { ...panel, notice: 'remoteTaskSyncWaiting' };
         return;
       }
       panel = { ...panel, notice: 'ownershipRetryScheduled' };
       notify();
       await this.refreshDetail();
     } catch {
-      if (requestSequence !== sequence || generation !== identity() || !panel) return;
-      panel = { ...panel, notice: 'remoteUnavailable' };
-      notify();
+      if (current() && panel) panel = { ...panel, notice: 'remoteUnavailable' };
+    } finally {
+      if (current() && panel) { panel = { ...panel, retrying: false }; notify(); }
     }
   },
   async commit() {

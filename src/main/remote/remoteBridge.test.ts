@@ -220,6 +220,21 @@ describe('device synchronization health', () => {
       expect(read).not.toHaveBeenCalled();
     } finally { read.mockRestore(); bridge.stop(); }
   });
+  it('keeps acknowledged desktop-only content separate from failed object health in the cached state', () => {
+    const { bridge, setDisplay } = fixture(); bridge.lastPong = Date.now();
+    const availability = { sessions: 1, pendingSessions: 0, degraded: false, oldest: null, lastSuccess: null,
+      lanes: { live: RemoteSyncLaneStatus.Idle }, countsTruncated: false, desktopOnlySessions: 1 };
+    setDisplay(knownDisplay({ availability }));
+    expect(bridge.state()).toMatchObject({ connected: true, sessionSyncStatus: RemoteSyncStatus.Synced,
+      syncHealth: { status: RemoteSyncHealthStatus.Idle, pendingSessions: 0, desktopOnlySessions: 1 } });
+    setDisplay(knownDisplay({ availability: { ...availability, pendingSessions: 1, degraded: true },
+      taskHealth: { failedSessions: 1, isolatedSessions: 1, retryingSessions: 0, taskIssues: [], taskIssuesTruncated: false } }));
+    expect(bridge.state()).toMatchObject({ connected: true, sessionSyncStatus: RemoteSyncStatus.Error,
+      syncHealth: { status: RemoteSyncHealthStatus.Degraded, failedSessions: 1, desktopOnlySessions: 1 } });
+    setDisplay(null);
+    expect(bridge.state().syncHealth).toMatchObject({ statisticsUnavailable: true, pendingSessions: null });
+    expect(bridge.state().syncHealth.desktopOnlySessions).toBeUndefined(); bridge.stop();
+  });
   it('uses v3 publication health independently of its fenced legacy outbox and historical failure', () => {
     const { bridge, store, setDisplay } = fixture(); store.setEnabledOwner(owner); bridge.lastPong = Date.now();
     store.transaction(() => { store.db.exec("INSERT INTO cowork_sessions VALUES('v3-task','Task',1,1,'idle')"); store.assignNew('v3-task', owner, 'local_create'); });
@@ -242,10 +257,10 @@ describe('device synchronization health', () => {
       bridge.availability.failures.set(`${scope}:live:task`, { count: 1, retryAt: Date.now() + 5000 });
       expect(bridge.state()).toMatchObject({ connected: true, sessionSyncStatus: RemoteSyncStatus.Error,
         syncHealth: { status: RemoteSyncHealthStatus.Degraded, pendingSessions: 1,
-          lanes: { control: RemoteSyncLaneStatus.InFlight, recovery: RemoteSyncLaneStatus.Backoff } } });
+          lanes: { control: RemoteSyncLaneStatus.InFlight, live: RemoteSyncLaneStatus.Backoff } } });
       setDisplay(knownDisplay({ availability: { sessions: 1, pendingSessions: 0, degraded: false, oldest: null, lastSuccess: null,
-        countsTruncated: false, lanes: { control: RemoteSyncLaneStatus.Unknown, recovery: RemoteSyncLaneStatus.Degraded } } }));
-      expect(bridge.state().syncHealth.lanes).toEqual({ control: RemoteSyncLaneStatus.Unknown, recovery: RemoteSyncLaneStatus.Degraded });
+        countsTruncated: false, lanes: { control: RemoteSyncLaneStatus.Unknown, live: RemoteSyncLaneStatus.Degraded, recovery: RemoteSyncLaneStatus.Degraded } } }));
+      expect(bridge.state().syncHealth.lanes).toEqual({ control: RemoteSyncLaneStatus.Unknown, live: RemoteSyncLaneStatus.Degraded, recovery: RemoteSyncLaneStatus.Degraded });
       setDisplay(null);
       expect(bridge.state().syncHealth).toMatchObject({ status: RemoteSyncHealthStatus.Degraded, statisticsUnavailable: true, pendingSessions: null });
       expect(read).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled(); expect(scan).not.toHaveBeenCalled();

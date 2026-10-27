@@ -1,6 +1,6 @@
 import { ChevronRightIcon } from '@heroicons/react/24/outline';
-import { OwnershipErrorCode, OwnershipSyncState } from '@shared/ownership/constants';
-import React, { useEffect, useRef, useSyncExternalStore } from 'react';
+import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { authService } from '../../services/auth';
 import { i18nService } from '../../services/i18n';
@@ -8,11 +8,13 @@ import { ownershipService, OwnershipView } from '../../services/ownership';
 import Modal from '../common/Modal';
 import OwnershipDetailContent from './OwnershipDetailContent';
 
-const OwnershipHost: React.FC = () => {
+const OwnershipHost: React.FC<{ onOpenTask?: (id: string) => Promise<void> | void }> = ({ onOpenTask }) => {
   const panel = useSyncExternalStore(ownershipService.subscribe, ownershipService.getSnapshot, ownershipService.getSnapshot);
   const dialog = useRef<HTMLDivElement>(null);
   const focusReturn = useRef<HTMLElement | null>(null);
   const open = panel !== null;
+  const [openingTask, setOpeningTask] = useState<string | null>(null);
+  const [openTaskError, setOpenTaskError] = useState<string | null>(null);
   useEffect(() => ownershipService.start(), []);
   useEffect(() => {
     if (!open) return;
@@ -30,6 +32,27 @@ const OwnershipHost: React.FC = () => {
   }, [panel?.view, panel?.target.kind, panel?.target.id]);
   if (!panel) return null;
   const t = (key: string) => i18nService.t(key);
+  const panelKey = JSON.stringify([ownershipService.getSequence(), panel.target, panel.detail?.accountPartition]);
+  const taskOpening = openingTask === panelKey;
+  const content = panel.detail?.contentSync;
+  const retryable = panel.detail?.ownership.kind === 'owned' && (panel.target.kind === OwnershipTargetKind.Task
+    ? content?.state === OwnershipContentSyncState.Failed && content.retryable
+      && (content.reason === OwnershipContentSyncReason.Content || content.reason === OwnershipContentSyncReason.History)
+    : panel.detail.syncState === OwnershipSyncState.Failed);
+  const openTask = async () => {
+    if (!onOpenTask || taskOpening || panel.retrying) return;
+    const requestSequence = ownershipService.getSequence();
+    const current = () => {
+      const latest = ownershipService.getSnapshot();
+      return ownershipService.getSequence() === requestSequence && latest?.view === OwnershipView.Detail
+        && latest.target.kind === panel.target.kind && latest.target.id === panel.target.id
+        && latest.detail?.accountPartition === panel.detail?.accountPartition;
+    };
+    setOpeningTask(panelKey); setOpenTaskError(null);
+    try { await onOpenTask(panel.target.id); if (current()) ownershipService.close(); }
+    catch { if (current()) setOpenTaskError(panelKey); }
+    finally { setOpeningTask(current => current === panelKey ? null : current); }
+  };
   const preview = panel.preview;
   const taskCount = preview ? preview.anonymousTaskCount + preview.subtaskCount : 0;
   const additionalTasks = preview?.tasks.filter(task => preview.agentWillAssociate || task.id !== preview.targetId) ?? [];
@@ -54,6 +77,7 @@ const OwnershipHost: React.FC = () => {
       <div className="min-h-0 space-y-4 overflow-auto px-6 py-5 text-sm text-foreground" aria-live="polite">
         {panel.loading && <p className="text-secondary">{t(panel.intent ? 'ownershipCommitting' : 'loading')}</p>}
         {!panel.loading && panel.view === OwnershipView.Detail && panel.detail && <OwnershipDetailContent detail={panel.detail} />}
+        {openTaskError === panelKey && <p role="alert" className="text-xs text-secondary">{t('ownershipOpenTaskFailed')}</p>}
         {panel.notice && <p className="text-secondary">{t(panel.notice)}</p>}
         {reason && <p role="alert" className="rounded-lg bg-surface-raised p-3 text-sm">{t(`ownershipError_${reason}`)}</p>}
         {preview?.eligible && !panel.loading && <>
@@ -93,7 +117,7 @@ const OwnershipHost: React.FC = () => {
         </>}
         {panel.view === OwnershipView.Unknown && <p>{t('ownershipUnknown')}</p>}
       </div>
-      <div className="flex shrink-0 justify-end gap-2 border-t border-border px-6 py-4">
+      <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-border px-6 py-4">
         <button type="button" disabled={panel.loading} onClick={close} className="rounded-lg border border-border px-4 py-2 text-sm text-foreground disabled:opacity-40">
           {t(panel.view === OwnershipView.Preview ? 'cancel' : 'close')}
         </button>
@@ -103,8 +127,12 @@ const OwnershipHost: React.FC = () => {
         }} className="rounded-lg bg-primary px-4 py-2 text-sm text-white">{t('ownershipLogin')}</button>}
         {panel.view === OwnershipView.Unknown && panel.intent && <button type="button"
           onClick={() => void ownershipService.reconcile(panel.intent!)} className="rounded-lg bg-primary px-4 py-2 text-sm text-white">{t('ownershipCheckResult')}</button>}
-        {!panel.loading && panel.view === OwnershipView.Detail && panel.detail?.syncState === OwnershipSyncState.Failed && <button type="button"
-          onClick={() => void ownershipService.retrySync()} className="rounded-lg border border-border px-4 py-2 text-sm text-foreground">{t('ownershipRetrySync')}</button>}
+        {!panel.loading && panel.view === OwnershipView.Detail && panel.detail && panel.target.kind === OwnershipTargetKind.Task && onOpenTask && <button type="button"
+          disabled={taskOpening || panel.retrying} onClick={() => { void openTask(); }}
+          className="rounded-lg border border-border px-4 py-2 text-sm text-foreground disabled:opacity-40">{t('ownershipViewTask')}</button>}
+        {!panel.loading && panel.view === OwnershipView.Detail && retryable && <button type="button"
+          disabled={panel.retrying || taskOpening} onClick={() => { if (!panel.retrying && !taskOpening) void ownershipService.retrySync(); }}
+          className="rounded-lg border border-border px-4 py-2 text-sm text-foreground disabled:opacity-40">{t(panel.retrying ? 'ownershipRetryingSync' : 'ownershipRetrySync')}</button>}
         {!authRequired && !panel.loading && panel.view === OwnershipView.Detail && panel.detail?.canAssociate && <button type="button"
           onClick={() => void ownershipService.open(panel.target, OwnershipView.Preview)} className="rounded-lg bg-primary px-4 py-2 text-sm text-white">{t('ownershipAssociate')}</button>}
         {preview?.eligible && <button type="button" disabled={panel.loading || !!panel.error}

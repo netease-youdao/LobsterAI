@@ -69,3 +69,31 @@
 回归覆盖坏历史下的当前消息/控制、迟到回执不回退新基线、核心版本回滚、多墓碑分批、旧终态 run、审批完整基线、关闭新接管公告后的既有 writer、显式历史缺口/缺失保护证据、文件上传后 ready 版本更新、子进程终止及打包。最终验证：`npm run compile:electron` 通过；全部 33 个改动 TypeScript 文件严格 ESLint（0 warning）通过；23 个定向测试文件共 385 条通过。测试数量去重计算：综合回归中未再修改的 18 文件/256 条，加上最终增量回归的 5 文件/129 条，未重复累计中间测试。最终增量包含 availability 22、恢复证明 4、命令轮询 26、命令执行 28、文件同步 49 条。
 
 尚未执行测试服迁移/部署、双端真机验收或规模压测。上线应实测原坏会话能继续对话、停止/审批正常、新回复和 ready 文件卡片到达、断线与未知响应重启后仍使用原操作 ID。回滚须使用理解新 fence 的构建，不能删除账本或启动不认识 fence 的旧桌面。
+
+
+## 2026-10-27 补充：metadata 投影与旧对象恢复
+
+本轮实现仅在桌面客户端；服务端仅补充文档，**没有 HTTP API、认证、错误码、配置或 MySQL DDL 变更**，不要求手机因本修复新增协议字段。上文 V103/V104/V105、能力协商与 writer fence 是既有部署要求，并非本轮新增迁移。
+
+桌面 live 编码改为分层预算：raw metadata 读取上限 256 KiB、归一化公开 metadata 32 KiB、inline blocks 48 KiB。先去除公共投影不消费的 diff/patch 等内部字段；非法或未知必要事实、超原始读取预算仍隔离。真正省略公开内容时，使用原有 `desktop_only`，不把截断结果声明为 complete。`originalContentBytes` 取完整候选 blocks 的规范 JSON UTF-8 字节数；大小未知时不造占位值。Tool 维持原 DTO，不追加 contentState 等字段。
+
+独立 worker 的 2 秒作业截止与 `--max-old-space-size=96` 继续有效；96 MiB 是 V8 old-space 堆限制，**不是 RSS 硬上限**。不把失败解析回退到主进程执行，IPC 结果仍有 128 KiB 限制。
+
+旧 message/tool fault 使用独立有界分页，不依赖最近 64 个正常候选。每编码版本对相同旧故障提供一次额外持久 probe，派发前消费，重启不重置；保留既有退避。手动操作最多安排 4 个已有对象，每对象 60 秒持久冷却，不清除故障证据。工具派生索引按当前来源版本核对后修复，必要的同来源发布沿用原 repair/CAS 协议。原 publication 的 ID/body/hash 不变；只有核验并持久确认 accepted/superseded 后才清对应 fault/probe。
+
+设备连接、待同步、真实对象失败与已确认的部分内容分别展示。对象故障进入会话明细；current-revision desktop_only 显示“部分内容需在电脑查看”，不作为红色失败。完整归属详情使用 Partial，简洁 hover 不增加行。未知统计不当零，合法 local_only 保持中性。诊断仅含固定原因、版本、字节数、关联标识和耗时，不含正文、metadata、diff/patch、工具输入输出或凭据。
+
+具体实现、兼容字段、工具恢复与验收边界见[客户端修复 Spec](../../specs/bugfixes/remote-metadata-projection/2026-10-27-remote-metadata-projection.md)，跨端约束见[服务端对应 Spec](../../../lobsterai-server/docs/specs/mobile-remote-control/bugfix-2026-10-27-remote-metadata-projection.md)与[服务端接入说明](../../../lobsterai-server/docs/integration/2026-10-27-remote-metadata-projection.md)。
+
+上节 2026-09-23 的 385 项为历史验证记录，不能与本轮重复累计。本轮未重启应用或改写真实用户数据，不能把源码与文档完成当作线上恢复证据。
+
+本次最终定向回归为 27 文件/564 项通过，31 个改动文件严格 ESLint、Electron 编译和 renderer 类型检查通过；扩展两文件的 8 项既有失败已在修改前 HEAD 同样复现，详见修复 Spec。服务端测试、安装包与手机/桌面现场验收未执行。
+
+
+## 2026-10-27 补充：任务内容同步提示位置
+
+桌面设备管理将连接状态与内容汇总分开，内容问题仅保留低强调摘要和受影响任务入口；完整说明及按任务重试移至“归属与同步详情”。任务标题栏在内容故障/部分内容时提供入口，简洁 hover 不扩展。内容重试必须携带目标 task ID 和当前 account epoch，不能因目标未在全局摘要中而回退全局重试；已安排重试不表示已同步。
+
+新增可选 `OwnershipDetail.contentSync` 是 Electron 本地 IPC 字段，缺失/未知时保守显示，不开放任务重试。按 ID 的状态证据在后台只读 worker 采样，不向 UI/getDetail 同步扫描消息表；真实控制/认证/连接错误保留独立设备提示。HTTP API、认证、错误码、服务端配置及 MySQL DDL 均无变化，手机、Portal、Admin 无新接入要求。
+
+完整方案、状态矩阵和本轮验证记录见[任务内容同步提示 Spec](../../specs/bugfixes/task-sync-status-placement/2026-10-27-task-content-sync-status.md)。

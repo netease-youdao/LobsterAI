@@ -1,6 +1,6 @@
 import { CalendarDaysIcon, ComputerDesktopIcon } from '@heroicons/react/24/outline';
 import { AgentOwnerKind } from '@shared/agent/constants';
-import { OwnershipTargetKind } from '@shared/ownership/constants';
+import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipDetail, OwnershipDisplay } from '@shared/ownership/types';
 import { RemoteRunStatus } from '@shared/remote/constants';
 import React from 'react';
@@ -66,9 +66,20 @@ const OwnershipDetailContent: React.FC<{ detail: OwnershipDetail; compact?: bool
     ...(detail.latestTaskTitle ? [[i18nService.t('ownershipLatestTask'), detail.latestTaskTitle]] : []),
     ...(detail.status ? [[i18nService.t('ownershipTaskStatus'), i18nService.t(`ownershipStatus_${detail.status}`)]] : []),
     ...(detail.updatedAt ? [[i18nService.t('ownershipUpdatedAt'), new Date(detail.updatedAt).toLocaleString()]] : []),
-    [i18nService.t('ownershipMobileSync'), ownershipSyncLabel(detail.syncState)],
+    ...(detail.kind === OwnershipTargetKind.Task ? [] : [[i18nService.t('ownershipMobileSync'), ownershipSyncLabel(detail.syncState)]]),
     ...(detail.ownership.associatedAt ? [[i18nService.t('ownershipAssociatedAt'), new Date(detail.ownership.associatedAt).toLocaleString()]] : []),
   ];
+  const content = detail.kind === OwnershipTargetKind.Task ? detail.contentSync : undefined;
+  const contentState = content?.state ?? OwnershipContentSyncState.Unknown;
+  const contentLabel = contentState === OwnershipContentSyncState.Partial
+    ? i18nService.t('ownershipSync_partial') : i18nService.t(`ownershipContentSync_${contentState}`);
+  const help = contentState === OwnershipContentSyncState.Failed && content?.reason === OwnershipContentSyncReason.Content
+    ? 'remoteTaskLiveSyncIssue'
+    : contentState === OwnershipContentSyncState.Failed && content?.reason === OwnershipContentSyncReason.History
+      ? 'ownershipContentSyncHistoryHelp'
+      : content?.reason === OwnershipContentSyncReason.Connection ? 'ownershipContentSyncConnectionHelp'
+        : contentState === OwnershipContentSyncState.Unknown || content?.reason === OwnershipContentSyncReason.Unavailable
+          ? 'ownershipContentSyncUnavailableHelp' : null;
   return <div className="space-y-3">
     <h3 className={`break-words font-medium text-foreground ${compact ? 'line-clamp-2 text-sm' : 'text-base'}`}>{detail.title}</h3>
     {detail.description && <p className="line-clamp-2 break-words text-xs text-secondary">{detail.description}</p>}
@@ -78,6 +89,13 @@ const OwnershipDetailContent: React.FC<{ detail: OwnershipDetail; compact?: bool
         <dd className="min-w-0 break-words text-foreground">{value}</dd>
       </div>)}
     </dl>
+    {detail.kind === OwnershipTargetKind.Task && <section className="space-y-1.5 border-t border-border pt-3" aria-label={i18nService.t('ownershipMobileContentSync')}>
+      <h4 className="text-xs text-secondary">{i18nService.t('ownershipMobileContentSync')}</h4>
+      <p className={`text-xs ${contentState === OwnershipContentSyncState.Failed ? 'text-amber-700 dark:text-amber-400' : 'text-foreground'}`}>{contentLabel}</p>
+      {help && <p className="text-xs leading-5 text-secondary">{i18nService.t(help)}</p>}
+      {contentState === OwnershipContentSyncState.Failed && Number.isFinite(content?.nextRetryAt) && (content?.nextRetryAt ?? 0) > Date.now()
+        && <p className="text-xs leading-5 text-secondary">{i18nService.t('ownershipContentSyncRetryAfter').replace('{time}', new Date(content!.nextRetryAt!).toLocaleTimeString())}</p>}
+    </section>}
   </div>;
 };
 export default OwnershipDetailContent;

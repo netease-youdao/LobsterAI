@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 
-import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus as Lane,type RemoteWorkspace } from '../../shared/remote/constants';
+import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus as Lane, type RemoteSyncTaskIssue, RemoteSyncTaskIssueSource, RemoteSyncTaskIssueStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import { payloadHash } from './canonical';
 import { readRemoteDisplayAdmission, RemoteSyncAdmissionBudgetError } from './remoteDisplayHealthAdmission';
 import { readRemoteDisplayTaskHealth, type TaskSyncHealth } from './remoteDisplayHealthTask';
@@ -24,7 +24,7 @@ export interface RemoteDisplayHealthInput {
 }
 export interface RemoteDisplayAvailabilityHealth {
   sessions: number; pendingSessions: number; degraded: boolean; oldest: number | null; lastSuccess: number | null;
-  lanes: RemoteSyncLanes; countsTruncated: boolean;
+  lanes: RemoteSyncLanes; countsTruncated: boolean; desktopOnlySessions?: number;
 }
 export interface RemoteDisplaySettings { enabled?: boolean; name?: string; workspaces?: Array<RemoteWorkspace & { path: string }>; settingsVersion?: string }
 export type RemoteDisplayHealthResult = {
@@ -141,6 +141,12 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
     if (last !== null && (typeof last !== 'string' || !Number.isFinite(Date.parse(last)))) unknown(RemoteDisplayHealthFailure.Inconsistent);
     const legacy = { pendingSessions: legacyPending.length, oldest: minTime(legacyPending.map(row => timestamp(row.oldest))), lastSuccess: last as string | null };
     let availability: RemoteDisplayAvailabilityHealth | null = null;
+    let availabilityFailedSessions = 0, admissionFailure: unknown = null;
+    const availabilityTaskIssues: RemoteSyncTaskIssue[] = [];
+    const admitted = (id: string): boolean => {
+      try { return readRemoteDisplayAdmission(core, input.owner, input.deviceId!, input.targetId, id); }
+      catch (error) { admissionFailure = error; return false; }
+    };
     if (control && scope) {
       // This disposable ACK cache was formerly created lazily by the display read.
       // Absence means no known ACKs; deriving pending must not create a table.
@@ -156,13 +162,13 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
         unknown(RemoteDisplayHealthFailure.Inconsistent);
       const rows = control.prepare(`SELECT local_id,CASE WHEN octet_length(body)<=? THEN body END AS body
         FROM availability_sessions WHERE scope=? ORDER BY local_id LIMIT ?`).all(Limit.JsonBytes, scope, Limit.Sessions + 1) as Array<{ local_id: string; body: string | null }>;
-      let pending = 0, oldest: number | null = null;
+      let pending = 0, desktopOnlySessions = 0, oldest: number | null = null;
       const lanes: RemoteSyncLanes = {}, rank = [Lane.Idle, Lane.Pending, Lane.InFlight, Lane.Backoff, Lane.Degraded, Lane.Unknown];
       for (const row of rows.slice(0, Limit.Sessions)) {
         guard();
         const saved = jsonRecord(row.body);
-        const binding = scalar<{ session_id: string; device_id: string | null; migration_frozen: number; owner_user_id: string; owner_scope_key: string; ownership_status: string }>(core, `SELECT s.session_id,s.device_id,s.migration_frozen,o.owner_user_id,o.owner_scope_key,o.ownership_status
-          FROM remote_sync s JOIN cowork_session_ownership o ON o.session_id=s.local_id WHERE s.local_id=?`, row.local_id);
+        const binding = scalar<{ session_id: string; device_id: string | null; migration_frozen: number; owner_user_id: string; owner_scope_key: string; ownership_status: string; title: string }>(core, `SELECT s.session_id,s.device_id,s.migration_frozen,o.owner_user_id,o.owner_scope_key,o.ownership_status,substr(c.title,1,256) AS title
+          FROM remote_sync s JOIN cowork_session_ownership o ON o.session_id=s.local_id JOIN cowork_sessions c ON c.id=s.local_id WHERE s.local_id=?`, row.local_id);
         if (!binding || binding.owner_user_id !== input.owner.userId || binding.owner_scope_key !== input.owner.scopeKey || binding.ownership_status !== 'confirmed'
           || !currentBinding(row.local_id) || binding.session_id !== saved.sessionId || binding.device_id !== input.deviceId || saved.scope !== scope || saved.localId !== row.local_id
           || typeof saved.writerGeneration !== 'string' || !['activating','bootstrap','active'].includes(String(saved.phase)) || !sequence(saved.controlRevision))
@@ -181,11 +187,35 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
         const tools = deletion ? 0 : count(scalar<{ pending: number }>(core, `SELECT COUNT(*) AS pending FROM remote_live_tools r
           LEFT JOIN ${healthAcks} a ON a.scope=? AND a.session_id=r.session_id AND a.object_key='tool:'||r.tool_id
           WHERE r.session_id=? AND r.revision>COALESCE(a.revision,0)`, scope, row.local_id)?.pending);
-        const unavailable = !deletion && hasHealthAcks && !!scalar(core, "SELECT 1 FROM remote_availability_health_acks WHERE scope=? AND session_id=? AND representation<>'complete' LIMIT 1", scope, row.local_id);
-        const fault = !!scalar(control, 'SELECT 1 FROM availability_faults WHERE scope=? AND local_id=? LIMIT 1', scope, row.local_id);
+        // Only ACKs for the current source revision describe current content. Older ACKs are backlog,
+        // while unsupported/unknown representations cannot claim complete synchronization.
+        const representations = deletion || !hasHealthAcks ? undefined : scalar<{ desktopOnly: number; unavailable: number }>(core, `SELECT
+          COALESCE(SUM(CASE WHEN representation='desktop_only' AND ack_revision=source_revision THEN 1 ELSE 0 END),0) AS desktopOnly,
+          COALESCE(SUM(CASE WHEN representation IS NULL OR representation NOT IN ('complete','desktop_only','local_only') OR ack_revision>source_revision THEN 1 ELSE 0 END),0) AS unavailable
+          FROM (SELECT a.representation,a.revision AS ack_revision,COALESCE(r.revision,1) AS source_revision FROM cowork_messages m
+            LEFT JOIN remote_live_revisions r ON r.session_id=m.session_id AND r.object_id=m.id
+            JOIN remote_availability_health_acks a ON a.scope=? AND a.session_id=m.session_id AND a.object_key='message:'||m.id
+            WHERE m.session_id=? AND m.type IN ('user','assistant','system','tool_use','tool_result') AND a.revision>=COALESCE(r.revision,1) AND COALESCE(r.deleted,0)=0
+            UNION ALL SELECT a.representation,a.revision,r.revision FROM remote_live_tools r
+            JOIN remote_availability_health_acks a ON a.scope=? AND a.session_id=r.session_id AND a.object_key='tool:'||r.tool_id
+            WHERE r.session_id=? AND a.revision>=r.revision)`, scope, row.local_id, scope, row.local_id);
+        if (representations && count(representations.desktopOnly) > 0) desktopOnlySessions++;
+        const unavailable = !!representations && count(representations.unavailable) > 0;
+        const faultRow = scalar<{ total: number; nextRetryAt: number | null; liveObjects: number }>(control,
+          `SELECT COUNT(*) AS total,MIN(next_retry) AS nextRetryAt,
+            COALESCE(SUM(CASE WHEN substr(object_key,1,8)='message:' OR substr(object_key,1,5)='tool:' THEN 1 ELSE 0 END),0) AS liveObjects
+          FROM availability_faults WHERE scope=? AND local_id=?`, scope, row.local_id)!;
+        const fault = count(faultRow.total) > 0;
+        if (fault) {
+          availabilityFailedSessions++;
+          const nextRetryAt = count(faultRow.nextRetryAt), hasLiveFault = count(faultRow.liveObjects) > 0;
+          if (availabilityTaskIssues.length < 20) availabilityTaskIssues.push({ localSessionId: row.local_id,
+            title: typeof binding.title === 'string' ? binding.title : '', ...(hasLiveFault ? { source: RemoteSyncTaskIssueSource.Live } : {}),
+            status: RemoteSyncTaskIssueStatus.Isolated, nextRetryAt, retryable: hasLiveFault && admitted(row.local_id) });
+        }
         const taskLanes: RemoteSyncLanes = {
           control: !deletion && (saved.phase !== 'active' || saved.controlRevision !== String(revision)) || requests.some(request => request.lane === 'control') ? Lane.Pending : Lane.Idle,
-          live: unavailable || fault ? Lane.Degraded : count(messages.pending) + tools || requests.some(request => request.lane === 'live') ? Lane.Pending : Lane.Idle,
+          live: unavailable ? Lane.Unknown : fault ? Lane.Degraded : count(messages.pending) + tools || requests.some(request => request.lane === 'live') ? Lane.Pending : Lane.Idle,
           deletion: deletion && !deletion.ackAt ? Lane.Pending : Lane.Idle, recovery: Lane.Idle,
         };
         if (input.historySupported && !deletion && saved.phase === 'active') {
@@ -231,14 +261,19 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
       const countsTruncated = rows.length > Limit.Sessions;
       if (countsTruncated) { degraded = true; lanes.recovery = Lane.Unknown; }
       const lastSuccess = timestamp(scalar<{ at: number | null }>(control, 'SELECT MAX(ack_at) AS at FROM availability_progress WHERE scope=?', scope)?.at);
-      availability = { sessions: total, pendingSessions: Math.max(pending, persistedPending), degraded, oldest, lastSuccess, lanes, countsTruncated };
+      availability = { sessions: total, pendingSessions: Math.max(pending, persistedPending), degraded, oldest, lastSuccess, lanes, countsTruncated, desktopOnlySessions };
     }
     guard();
-    let admissionFailure: unknown = null;
-    const taskHealth = input.deviceId ? readRemoteDisplayTaskHealth(core, { owner: input.owner, target: input.target, deviceId: input.deviceId }, id => {
-      try { return readRemoteDisplayAdmission(core, input.owner, input.deviceId!, input.targetId, id); }
-      catch (error) { admissionFailure = error; throw error; }
-    }, visible, observedAt) : undefined;
+    const taskHealth = input.deviceId ? readRemoteDisplayTaskHealth(core, { owner: input.owner, target: input.target, deviceId: input.deviceId }, admitted, visible, observedAt) : undefined;
+    if (taskHealth) {
+      // visible() excludes availability sessions, so these two task sets cannot double-count a session.
+      taskHealth.failedSessions += availabilityFailedSessions;
+      taskHealth.isolatedSessions += availabilityFailedSessions;
+      const issues = [...availabilityTaskIssues, ...taskHealth.taskIssues];
+      taskHealth.taskIssuesTruncated ||= availabilityFailedSessions > availabilityTaskIssues.length || issues.length > 20;
+      taskHealth.taskIssues = issues.slice(0, 20);
+      taskHealth.countsTruncated ||= availability?.countsTruncated;
+    }
     if (admissionFailure) unknown(admissionFailure instanceof RemoteSyncAdmissionBudgetError ? RemoteDisplayHealthFailure.Budget : RemoteDisplayHealthFailure.Inconsistent);
     guard();
     for (const { db, version } of handles) {

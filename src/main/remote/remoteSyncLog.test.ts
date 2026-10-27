@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { RemoteImportValidation } from '../../shared/remote/retention';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
+import { RemoteLiveEncodingError } from './remoteLiveMetadata';
 import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import {
@@ -173,5 +174,26 @@ describe('local input diagnostics', () => {
     remoteDiagnosticLog(RemoteInputDiagnostic.Event, { ...fields, assetId: 'dedup-other-asset' }, 'warn');
     remoteDiagnosticLog(RemoteInputDiagnostic.Event, { ...fields, stage: 'decode' }, 'warn');
     expect(logged).toHaveLength(4);
+  });
+});
+
+
+describe('safe live-encoding diagnostics', () => {
+  it('retains only exact encoder error codes and bounded numeric evidence', () => {
+    for (const code of Object.values(RemoteLiveEncodingError)) {
+      expect(remoteSyncErrorMetadata(new Error(code)).validation).toBe(code);
+      expect(remoteSyncErrorMetadata(new Error(`${code}: ${privateText}`)).validation).toBeNull();
+    }
+    remoteDiagnosticLog('remote.record.probe', { objectId: 'metadata-object', encoderVersion: 2,
+      rawMetadataBytes: 64628, normalizedMetadataBytes: 300, metadata: privateText, error: new Error(RemoteLiveEncodingError.MetadataInvalid) });
+    expect(logged.at(-1)).toMatchObject({ encoderVersion: 2, rawMetadataBytes: 64628, normalizedMetadataBytes: 300,
+      error: { validation: RemoteLiveEncodingError.MetadataInvalid } });
+    for (const invalid of [-1, 1.5, Infinity, NaN, 1024 * 1024 * 1024 + 1, privateText]) {
+      remoteDiagnosticLog('remote.record.probe', { encoderVersion: invalid, rawMetadataBytes: invalid, normalizedMetadataBytes: invalid });
+      expect(logged.at(-1)).not.toHaveProperty('encoderVersion');
+      expect(logged.at(-1)).not.toHaveProperty('rawMetadataBytes');
+      expect(logged.at(-1)).not.toHaveProperty('normalizedMetadataBytes');
+    }
+    expect(JSON.stringify(logged)).not.toContain(privateText);
   });
 });

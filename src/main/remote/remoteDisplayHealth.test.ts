@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { RemoteSyncLaneStatus, RemoteSyncTaskIssueSource, RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
 import { payloadHash } from './canonical';
 import { RemoteAvailabilityStore } from './remoteAvailabilityStore';
 import { collectRemoteDisplayHealth, type RemoteDisplayHealthInput, type RemoteDisplayHealthResult, RemoteDisplayHealthStatus as Status } from './remoteDisplayHealth';
@@ -41,7 +42,7 @@ function fixture() {
     CREATE TABLE remote_control_revisions(session_id TEXT PRIMARY KEY,revision INTEGER);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,created_at INTEGER);
     CREATE INDEX messages_session ON cowork_messages(session_id);
-    CREATE TABLE remote_live_revisions(session_id TEXT,object_id TEXT,revision INTEGER,PRIMARY KEY(session_id,object_id));
+    CREATE TABLE remote_live_revisions(session_id TEXT,object_id TEXT,revision INTEGER,deleted INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_id,object_id));
     CREATE TABLE remote_live_tools(session_id TEXT,tool_id TEXT,revision INTEGER,PRIMARY KEY(session_id,tool_id));
     CREATE TABLE remote_availability_health_acks(scope TEXT,session_id TEXT,object_key TEXT,revision INTEGER,representation TEXT,PRIMARY KEY(scope,session_id,object_key));
     CREATE TABLE remote_control_ledger_locator(id INTEGER PRIMARY KEY,ledger_id TEXT,phase TEXT);
@@ -60,7 +61,7 @@ function fixture() {
     CREATE TABLE availability_sessions(scope TEXT,local_id TEXT,body TEXT,PRIMARY KEY(scope,local_id));
     CREATE TABLE availability_requests(key TEXT PRIMARY KEY,lane TEXT,scope TEXT,local_id TEXT,body TEXT,resolution_receipt TEXT);
     CREATE INDEX requests_scope ON availability_requests(scope,local_id,lane);
-    CREATE TABLE availability_faults(scope TEXT,local_id TEXT);
+    CREATE TABLE availability_faults(scope TEXT,local_id TEXT,object_key TEXT,fingerprint TEXT,attempts INTEGER,window_start INTEGER,next_retry INTEGER);
     CREATE TABLE availability_progress(scope TEXT,local_id TEXT,lane TEXT,ack_at INTEGER);`);
   history.exec(`CREATE TABLE history_identity(id INTEGER PRIMARY KEY,sidecar_id TEXT);
     INSERT INTO history_identity VALUES(1,'history-identity');
@@ -163,6 +164,90 @@ describe('read-only display health collection', () => {
     expect(JSON.stringify(result)).not.toContain('never-return');
     expect(files.map(file => fs.readFileSync(file))).toEqual(before);
     expect([f.core, f.control, f.history].map(db => db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all())).toEqual(tables);
+  });
+  it('reports object faults once per visible session, including already acknowledged sources, without writing files', async () => {
+    const f = fixture(); f.session('live'); f.available('live'); f.session('legacy');
+    f.core.prepare("INSERT INTO cowork_messages VALUES('message','live','assistant',2000)").run();
+    f.core.prepare("INSERT INTO remote_availability_health_acks VALUES(?,'live','message:message',1,'complete')").run(f.input.availabilityScope);
+    for (const key of ['message:message', 'tool:tool']) f.control.prepare('INSERT INTO availability_faults VALUES(?,?,?,?,1,0,300000)')
+      .run(f.input.availabilityScope, 'live', key, 'fingerprint');
+    f.control.prepare('INSERT INTO availability_faults VALUES(?,?,?,?,1,0,300000)').run('other-scope', 'private-session', 'private-object', 'private-fingerprint');
+    const context = { owner, target: 'target', deviceId: 'device' };
+    // The old task row must not count this same v3 session twice.
+    for (const id of ['live', 'legacy']) f.tasks.fail(context, id, { phase: TaskSyncPhase.Backoff, scope: 'session', reason: 'NETWORK' });
+    const files = [f.core.name, f.control.name, f.history.name], before = files.map(file => fs.readFileSync(file));
+    const result = await runWorker(f.input);
+    expect(result).toMatchObject({ status: Status.Known,
+      availability: { pendingSessions: 1, degraded: true, desktopOnlySessions: 0, lanes: { live: RemoteSyncLaneStatus.Degraded } },
+      taskHealth: { failedSessions: 2, isolatedSessions: 1, retryingSessions: 1, taskIssues: [
+        { localSessionId: 'live', title: 'Title live', source: RemoteSyncTaskIssueSource.Live, status: RemoteSyncTaskIssueStatus.Isolated, nextRetryAt: 300000, retryable: true },
+        { localSessionId: 'legacy', status: RemoteSyncTaskIssueStatus.Retrying },
+      ] } });
+    expect(JSON.stringify(result)).not.toContain('private-');
+    expect(files.map(file => fs.readFileSync(file))).toEqual(before);
+    f.core.prepare("INSERT INTO remote_run_isolation VALUES('live')").run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ taskHealth: { taskIssues: expect.arrayContaining([
+      expect.objectContaining({ localSessionId: 'live', retryable: false }),
+    ]) } });
+  });
+  it('keeps history-only fault details visible without offering an unsupported live-object retry', () => {
+    const f = fixture(); f.session('history'); f.available('history');
+    f.control.prepare('INSERT INTO availability_faults VALUES(?,?,?,?,1,0,300000)').run(f.input.availabilityScope, 'history', 'history-recovery', 'fingerprint');
+    const result = collectRemoteDisplayHealth(f.input);
+    expect(result).toMatchObject({ status: Status.Known, taskHealth: { failedSessions: 1, taskIssues: [
+      { localSessionId: 'history', status: RemoteSyncTaskIssueStatus.Isolated, retryable: false },
+    ] } });
+    if (result.status === Status.Known) expect(result.taskHealth?.taskIssues[0]).not.toHaveProperty('source');
+  });
+  it('distinguishes a current desktop-only ACK from queued newer content and complete content', () => {
+    const f = fixture(); f.session('live'); f.available('live');
+    f.core.prepare("INSERT INTO cowork_messages VALUES('message','live','assistant',2000)").run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known,
+      availability: { pendingSessions: 1, degraded: false, desktopOnlySessions: 0 }, taskHealth: { failedSessions: 0 } });
+    f.core.prepare("INSERT INTO remote_availability_health_acks VALUES(?,'live','message:message',1,'desktop_only')").run(f.input.availabilityScope);
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known,
+      availability: { pendingSessions: 0, degraded: false, desktopOnlySessions: 1, lanes: { live: RemoteSyncLaneStatus.Idle } }, taskHealth: { failedSessions: 0, taskIssues: [] } });
+    f.core.prepare("INSERT INTO remote_live_revisions(session_id,object_id,revision) VALUES('live','message',2)").run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known,
+      availability: { pendingSessions: 1, degraded: false, desktopOnlySessions: 0, lanes: { live: RemoteSyncLaneStatus.Pending } } });
+    f.core.prepare("UPDATE remote_availability_health_acks SET revision=2,representation='complete'").run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known,
+      availability: { pendingSessions: 0, degraded: false, desktopOnlySessions: 0 } });
+  });
+  it('keeps intentional local-only skips neutral and recognizes only current nondeleted desktop-only sources', () => {
+    const f = fixture(); f.session('live'); f.available('live');
+    f.core.prepare("INSERT INTO cowork_messages VALUES('message','live','assistant',2000)").run();
+    f.core.prepare("INSERT INTO remote_availability_health_acks VALUES(?,'live','message:message',1,'local_only')").run(f.input.availabilityScope);
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known,
+      availability: { pendingSessions: 0, degraded: false, desktopOnlySessions: 0 } });
+    f.core.prepare("INSERT INTO remote_live_revisions VALUES('live','message',1,1)").run();
+    f.core.prepare("UPDATE remote_availability_health_acks SET representation='desktop_only'").run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known, availability: { desktopOnlySessions: 0 } });
+    f.core.prepare("INSERT INTO remote_live_tools VALUES('live','tool',2)").run();
+    f.core.prepare("INSERT INTO remote_availability_health_acks VALUES(?,'live','tool:tool',1,'desktop_only')").run(f.input.availabilityScope);
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known, availability: { desktopOnlySessions: 0, pendingSessions: 1 } });
+    f.core.prepare("UPDATE remote_availability_health_acks SET revision=2 WHERE object_key='tool:tool'").run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known, availability: { desktopOnlySessions: 1, pendingSessions: 0, degraded: false } });
+  });
+  it.each(['unknown', 'unsupported', null])('does not call an unrecognized ACK representation %s successful desktop-only content', representation => {
+    const f = fixture(); f.session('live'); f.available('live');
+    f.core.prepare("INSERT INTO cowork_messages VALUES('message','live','assistant',2000)").run();
+    f.core.prepare("INSERT INTO remote_availability_health_acks VALUES(?,'live','message:message',1,?)").run(f.input.availabilityScope, representation);
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known,
+      availability: { pendingSessions: 1, degraded: true, desktopOnlySessions: 0, lanes: { live: RemoteSyncLaneStatus.Unknown } } });
+  });
+  it('bounds live issue details while retaining known failed-session counts and marks malformed retry evidence unknown', () => {
+    const f = fixture();
+    for (let index = 0; index < 21; index++) {
+      const id = `live-${index}`; f.session(id); f.available(id);
+      f.control.prepare('INSERT INTO availability_faults VALUES(?,?,?,?,1,0,300000)').run(f.input.availabilityScope, id, 'message:one', 'fingerprint');
+    }
+    const result = collectRemoteDisplayHealth(f.input);
+    expect(result).toMatchObject({ status: Status.Known, taskHealth: { failedSessions: 21, isolatedSessions: 21, taskIssuesTruncated: true } });
+    if (result.status === Status.Known) expect(result.taskHealth?.taskIssues).toHaveLength(20);
+    f.control.prepare('UPDATE availability_faults SET next_retry=NULL').run();
+    const unknown = collectRemoteDisplayHealth(f.input);
+    expect(unknown.status).toBe(Status.Unknown); expect(unknown).not.toHaveProperty('taskHealth');
   });
   it('keeps owner, target, device and availability visibility filters for task issues and retry admission', () => {
     const f = fixture();

@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import { RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
-import { isNewRemoteState, isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteAttention, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteSettingsSwitchChecked, remoteSyncDescription, toggleRemoteSettingsSwitch } from './remoteControlState';
+import { RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
+import { isNewRemoteState, isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteAttention, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteSettingsSwitchChecked, remoteSyncDescription, remoteTaskContentSummary, toggleRemoteSettingsSwitch } from './remoteControlState';
 
 const connected: RemoteSettingsState = {
   enabled: true, connected: true, name: 'Computer', owner: { userId: 'user-a', scopeKey: 'personal' },
@@ -145,7 +145,7 @@ describe('connection failure feedback', () => {
 
   test.each([
     ['agentCatalogSyncStatus', 'remoteAgentCatalogSyncFailed'],
-    ['sessionSyncStatus', 'remoteSessionSyncFailed'],
+    ['sessionSyncStatus', null],
   ] as const)('distinguishes %s failures from an unavailable connection', (field, message) => {
     const failed = { ...connected, [field]: RemoteSyncStatus.Error };
     expect(isRemoteOnline(failed)).toBe(true);
@@ -192,7 +192,7 @@ describe('connection and content health remain independent', () => {
     expect(isRemoteOnline(state)).toBe(true);
     expect(remoteSettingsSwitchChecked(state, 'enabled')).toBe(true);
     expect(remoteSyncDescription(state)).toBe('remoteFilesPending');
-    expect(remoteAttention(state)).toEqual({ key: 'remoteFilesPending', immediate: false });
+    expect(remoteAttention(state)).toBeNull();
   });
   test('isolated tasks stay visible without turning a healthy device into a paused connection', () => {
     const state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
@@ -200,12 +200,22 @@ describe('connection and content health remain independent', () => {
     expect(isRemoteOnline(state)).toBe(true);
     expect(remoteConnectionFailure(state)).toBeNull();
     expect(remoteSyncDescription(state)).toBe('remoteTasksSyncFailed');
-    expect(remoteAttention(state)).toEqual({ key: 'remoteTasksSyncFailed', immediate: false });
+    expect(remoteAttention(state)).toBeNull();
     expect(remoteSyncDescription({ ...state, connected: false })).toBe('remoteSyncPaused');
     expect(remoteSyncDescription({ ...state, syncHealth: { ...state.syncHealth, reason: RemoteSyncHealthReason.StorageDependency } })).toBe('remoteSyncPaused');
     expect(remoteSyncDescription({ ...state, syncHealth: { ...state.syncHealth, reason: RemoteSyncHealthReason.StorageDependency, statisticsUnavailable: true } })).toBe('remoteSyncStatisticsUnavailable');
   });
 
+  test('acknowledged desktop-only content is informational, while queued content and unknown health retain priority', () => {
+    const state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Synced,
+      syncHealth: { ...health, status: RemoteSyncHealthStatus.Idle, reason: undefined, pendingSessions: 0, desktopOnlySessions: 1 } };
+    expect(isRemoteOnline(state)).toBe(true);
+    expect(remoteSyncDescription(state)).toBe('remoteDesktopOnlyContent');
+    expect(remoteConnectionFailure(state)).toBeNull(); expect(remoteAttention(state)).toBeNull();
+    expect(remoteSyncDescription({ ...state, syncHealth: { ...state.syncHealth, status: RemoteSyncHealthStatus.Syncing, pendingSessions: 1 } })).toBe('remoteContentSyncing');
+    expect(remoteSyncDescription({ ...state, syncHealth: { ...state.syncHealth, status: RemoteSyncHealthStatus.Degraded,
+      reason: RemoteSyncHealthReason.StorageDependency, statisticsUnavailable: true, pendingSessions: null } })).toBe('remoteSyncStatisticsUnavailable');
+  });
   test('new clients distinguish backlog and cache recovery; old clients do not claim full sync', () => {
     expect(remoteSyncDescription(connected)).toBeNull();
     expect(remoteSyncDescription({ ...connected, syncHealth: { ...health, status: RemoteSyncHealthStatus.Syncing } })).toBe('remoteContentSyncing');
@@ -235,6 +245,51 @@ describe('connection and content health remain independent', () => {
     for (const state of [{ ...connected, owner: null, syncHealth: health }, { ...connected, enabled: false, syncHealth: health }]) {
       expect(remoteSyncDescription(state)).toBeNull();
       expect(remoteAttention(state)).toBeNull();
+    }
+  });
+});
+
+
+describe('bounded task content summaries', () => {
+  const health = { status: RemoteSyncHealthStatus.Idle, pendingSessions: 0, oldestPendingAt: null,
+    lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z' };
+  test('normal pending content does not create an error or occupy a summary', () => {
+    const state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Pending,
+      syncHealth: { ...health, status: RemoteSyncHealthStatus.Syncing, pendingSessions: 2 } };
+    expect(remoteTaskContentSummary(state)).toBeNull(); expect(remoteConnectionFailure(state)).toBeNull();
+    expect(remoteTaskContentSummary({ ...state, syncHealth: { ...state.syncHealth, taskIssues: [
+      { localSessionId: 'waiting', status: RemoteSyncTaskIssueStatus.WaitingDependency, retryable: false },
+    ] } })?.key).toBe('remoteTaskContentWaiting');
+  });
+  test('missing statistics and truncated scans cannot imply a confirmed zero or fabricate a task', () => {
+    for (const incomplete of [{ statisticsUnavailable: true }, { countsTruncated: true }, { taskIssuesTruncated: true }]) {
+      const summary = remoteTaskContentSummary({ ...connected, syncHealth: { ...health, ...incomplete } });
+      expect(summary?.key).toBe('remoteTaskContentUnknown'); expect(summary?.issues).toEqual([]);
+      expect(summary?.detailsUnavailable).toBe(true);
+    }
+    expect(remoteTaskContentSummary({ ...connected, sessionSyncStatus: RemoteSyncStatus.Error })?.key).toBe('remoteTaskContentUnknown');
+    expect(remoteConnectionFailure({ ...connected, sessionSyncStatus: RemoteSyncStatus.Error })).toBeNull();
+  });
+  test('confirmed faults remain visible when counts or issue lists are truncated', () => {
+    const state = { ...connected, syncHealth: { ...health, failedSessions: 1, countsTruncated: true, taskIssuesTruncated: true } };
+    expect(remoteTaskContentSummary(state)).toMatchObject({ key: 'remoteTaskContentIncomplete', truncated: true, detailsUnavailable: true });
+    expect(remoteTaskContentSummary({ ...state, syncHealth: { ...state.syncHealth, failedSessions: 0,
+      taskIssues: [{ localSessionId: 'fault', status: RemoteSyncTaskIssueStatus.Isolated, retryable: true }] } })?.key).toBe('remoteTaskContentIncomplete');
+  });
+  test('catalog and explicit control failures preserve device recovery, even beside a content fault', () => {
+    const state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
+      syncHealth: { ...health, failedSessions: 1, lanes: { control: RemoteSyncLaneStatus.Degraded } } };
+    expect(remoteConnectionFailure(state)).toBe('remoteControlSyncFailed');
+    expect(remoteConnectionFailure({ ...state, agentCatalogSyncStatus: RemoteSyncStatus.Error })).toBe('remoteAgentCatalogSyncFailed');
+    expect(remoteTaskContentSummary(state)?.key).toBe('remoteTaskContentIncomplete');
+    expect(remoteTaskContentSummary({ ...state, syncHealth: { ...state.syncHealth, failedSessions: 0 } })).toBeNull();
+  });
+  test('statistics failure and account boundaries suppress stale task details', () => {
+    const state = { ...connected, syncHealth: { ...health, statisticsUnavailable: true,
+      taskIssues: [{ localSessionId: 'old', status: RemoteSyncTaskIssueStatus.Isolated, retryable: true }] } };
+    expect(remoteTaskContentSummary(state)).toMatchObject({ key: 'remoteTaskContentUnknown', issues: [] });
+    for (const boundary of [{ owner: null }, { enabled: false }, { errorCode: 401 }, { initializationFailure: RemoteInitializationFailure.IdentityUnreadable }]) {
+      expect(remoteTaskContentSummary({ ...state, ...boundary })).toBeNull();
     }
   });
 });

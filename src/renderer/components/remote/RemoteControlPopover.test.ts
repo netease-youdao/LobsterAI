@@ -3,7 +3,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncStatus } from '../../../shared/remote/constants';
+import { RemoteConnectionReason, RemoteConnectionStatus, type RemoteSettingsState, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
 import * as endpoints from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { getRemotePopoverPosition, RemoteControlPopover } from './RemoteControlPopover';
@@ -11,6 +11,7 @@ import { getRemotePopoverPosition, RemoteControlPopover } from './RemoteControlP
 const harness = vi.hoisted(() => ({
   snapshot: { state: null as RemoteSettingsState | null, busy: false, error: null as string | null },
   submit: vi.fn(async () => true),
+  buttons: [] as React.ButtonHTMLAttributes<HTMLButtonElement>[],
   switches: [] as Array<{ checked: boolean; disabled?: boolean; onClick: () => void | Promise<void> }>,
 }));
 vi.mock('../../services/remoteSettings', () => ({ remoteSettingsService: {
@@ -26,6 +27,16 @@ vi.mock('../settings/SettingsSwitch', () => ({ default: (props: {
   return React.createElement('button', { role: 'switch', 'aria-label': props.label, 'aria-checked': props.checked, disabled: props.disabled });
 } }));
 
+vi.mock('react/jsx-dev-runtime', async (importOriginal) => {
+  const runtime = await importOriginal<typeof import('react/jsx-dev-runtime')>();
+  const jsxDEV: typeof runtime.jsxDEV = (...args) => {
+    const element = runtime.jsxDEV(...args);
+    if (element.type === 'button') harness.buttons.push(element.props as React.ButtonHTMLAttributes<HTMLButtonElement>);
+    return element;
+  };
+  return { ...runtime, jsxDEV };
+});
+
 const connected: RemoteSettingsState = {
   accountEpoch: 'epoch-a', stateRevision: 1, enabled: true, connected: true,
   keepAwakeEnabled: true, keepAwakeActive: true, name: 'Private alias', hostName: 'Local host',
@@ -33,16 +44,16 @@ const connected: RemoteSettingsState = {
   connectionStatus: RemoteConnectionStatus.Online, settingsSyncStatus: RemoteSyncStatus.Synced,
 };
 const render = (loginAllowed = true) => {
-  const onClose = vi.fn(); const onLogin = vi.fn();
+  const onClose = vi.fn(); const onLogin = vi.fn(); const onOpenDeviceManagement = vi.fn();
   const html = renderToStaticMarkup(React.createElement(RemoteControlPopover, {
-    anchorRef: React.createRef<HTMLButtonElement>(), onClose, onLogin, loginAllowed, onOpenDeviceManagement: vi.fn(),
+    anchorRef: React.createRef<HTMLButtonElement>(), onClose, onLogin, loginAllowed, onOpenDeviceManagement,
   }));
-  return { html, onClose, onLogin };
+  return { html, onClose, onLogin, onOpenDeviceManagement };
 };
 
 beforeEach(() => {
   harness.snapshot = { state: connected, busy: false, error: null };
-  harness.switches = [];
+  harness.switches = []; harness.buttons = [];
   harness.submit.mockClear();
   const logError = console.error;
   vi.spyOn(console, 'error').mockImplementation((message: unknown, ...args: unknown[]) => {
@@ -145,6 +156,21 @@ describe('mobile connection popover', () => {
     expect(html).toContain(i18nService.t('remoteQuotaAttention'));
     expect(html).toContain(i18nService.t('remoteDeviceManagement'));
     expect(html).not.toContain('Private alias');
+  });
+
+  test('content faults have a neutral management entry without a second task list or connection failure', () => {
+    harness.snapshot.state = { ...connected, sessionSyncStatus: RemoteSyncStatus.Error,
+      syncHealth: { status: RemoteSyncHealthStatus.Degraded, failedSessions: 1, pendingSessions: 1,
+        oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z' } };
+    const { html, onClose, onOpenDeviceManagement } = render();
+    expect(html).toContain(i18nService.t('remoteTaskContentIncomplete'));
+    expect(html).not.toContain('role="alert"'); expect(html).not.toContain('<details');
+    expect(html).not.toContain(i18nService.t('remoteConnectionAttention'));
+    expect(html).toContain('text-xs text-secondary');
+    const details = harness.buttons.find(button => button.children === i18nService.t('remoteTaskContentViewDetails'));
+    expect(details).toBeDefined(); details?.onClick?.({} as React.MouseEvent<HTMLButtonElement>);
+    expect(onClose).toHaveBeenCalledOnce(); expect(onOpenDeviceManagement).toHaveBeenCalledOnce();
+    expect(harness.submit).not.toHaveBeenCalled();
   });
 
   test('uncertain persistence still gets an explicit retry message', () => {

@@ -1,4 +1,4 @@
-import { OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
+import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipCommitResult, OwnershipDetail, OwnershipPreview } from '@shared/ownership/types';
 import { RemoteInitializationFailure } from '@shared/remote/constants';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -37,6 +37,7 @@ const remote = { state: vi.fn(), configure: vi.fn() };
 const dispatchEvent = vi.fn();
 const failedDetail: OwnershipDetail = {
   ...detail, canAssociate: false, syncState: OwnershipSyncState.Failed,
+  contentSync: { state: OwnershipContentSyncState.Failed, reason: OwnershipContentSyncReason.Content, retryable: true },
   ownership: { kind: 'owned', label: 'A', scopeLabel: 'Personal' },
 };
 function toast() { return (dispatchEvent.mock.calls[0][0] as CustomEvent<ToastEventDetail>).detail; }
@@ -57,14 +58,14 @@ beforeEach(() => {
   api.preview.mockResolvedValue({ success: true, data: preview });
   api.commit.mockResolvedValue({ success: true, data: result });
   api.getResult.mockResolvedValue({ success: true, data: result });
-  remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true });
+  remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch: 'main-epoch' });
   remote.configure.mockResolvedValue({});
   ownershipService.close();
 });
 afterEach(() => { dispose?.(); dispose = undefined; ownershipService.close(); vi.unstubAllGlobals(); });
 
 describe('ownership confirmation and recovery', () => {
-  test.each([OwnershipSyncState.Local, OwnershipSyncState.Pending, OwnershipSyncState.Synced, OwnershipSyncState.WaitingService])(
+  test.each([OwnershipSyncState.Local, OwnershipSyncState.Pending, OwnershipSyncState.Synced, OwnershipSyncState.Partial, OwnershipSyncState.WaitingService])(
     'closes only after a confirmed local commit and reports association without claiming sync success (%s)', async syncState => {
       let resolve!: (value: unknown) => void;
       api.commit.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
@@ -132,7 +133,7 @@ describe('ownership confirmation and recovery', () => {
     toast().onAction!();
     await settle();
     expect(ownershipService.getSnapshot()).toMatchObject({ view: OwnershipView.Detail, notice: 'ownershipRetryScheduled' });
-    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retry: true });
+    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retrySessionId: target.id, expectedAccountEpoch: 'main-epoch' });
     expect(api.commit).toHaveBeenCalledTimes(1);
   });
   test.each([true, false])('retries the identified task with the current account epoch (explicit target=%s)', async explicitTarget => {
@@ -148,19 +149,45 @@ describe('ownership confirmation and recovery', () => {
     { retryable: false, accountEpoch: 'main-epoch' },
     { retryable: true, accountEpoch: undefined },
   ])('does not claim a task retry when admission is unavailable: %j', async ({ retryable, accountEpoch }) => {
-    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    api.getDetail.mockResolvedValue({ success: true, data: { ...failedDetail, contentSync: { ...failedDetail.contentSync, retryable } } });
     remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch,
       syncHealth: { taskIssues: [{ localSessionId: target.id, retryable, status: 'isolated' }] } });
     await ownershipService.retrySync(target);
     expect(remote.configure).not.toHaveBeenCalled();
     expect(ownershipService.getSnapshot()?.notice).toBe('remoteTaskSyncWaiting');
   });
-  test('retains account-fenced global recovery for a task without a task-level issue', async () => {
+  test('targets the authorized task even when absent from the capped global issue list', async () => {
     api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
     remote.state.mockResolvedValue({ owner: { userId: 'A' }, enabled: true, accountEpoch: 'main-epoch',
       syncHealth: { taskIssues: [{ localSessionId: 'another-task', retryable: true, status: 'isolated' }] } });
     await ownershipService.retrySync(target);
-    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retry: true, expectedAccountEpoch: 'main-epoch' });
+    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retrySessionId: target.id, expectedAccountEpoch: 'main-epoch' });
+  });
+  test.each([undefined, { state: OwnershipContentSyncState.Unknown, retryable: false },
+    { state: OwnershipContentSyncState.Partial, retryable: false },
+    { state: OwnershipContentSyncState.Failed, reason: OwnershipContentSyncReason.Connection, retryable: true }])(
+    'never falls back to global recovery for missing or ineligible task evidence (%j)', async contentSync => {
+      api.getDetail.mockResolvedValue({ success: true, data: { ...failedDetail, contentSync } });
+      await ownershipService.retrySync(target);
+      expect(remote.configure).not.toHaveBeenCalled();
+      expect(ownershipService.getSnapshot()?.notice).toBe('remoteTaskSyncWaiting');
+    },
+  );
+  test('disables duplicate retry while retaining the failure until a later authoritative result', async () => {
+    api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
+    let resolve!: (value: unknown) => void;
+    remote.configure.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    await ownershipService.open(target);
+    const retry = ownershipService.retrySync();
+    await settle();
+    expect(ownershipService.getSnapshot()?.retrying).toBe(true);
+    await ownershipService.retrySync();
+    await ownershipService.retrySync(target);
+    expect(remote.configure).toHaveBeenCalledTimes(1);
+    resolve({ accountEpoch: 'main-epoch' });
+    await retry;
+    expect(ownershipService.getSnapshot()).toMatchObject({ retrying: false, notice: 'ownershipRetryScheduled',
+      detail: { contentSync: { state: OwnershipContentSyncState.Failed } } });
   });
   test('keeps Agent catalog retry global even when a task has the same ID', async () => {
     const agent = { ...target, kind: OwnershipTargetKind.Agent };
@@ -200,7 +227,7 @@ describe('ownership confirmation and recovery', () => {
     api.getDetail.mockResolvedValue({ success: true, data: failedDetail });
     remote.configure.mockResolvedValueOnce({ owner: { userId: 'A' }, enabled: true, initializationFailure, error: 'private cipher error' });
     await ownershipService.retrySync(target);
-    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retry: true });
+    expect(remote.configure).toHaveBeenCalledExactlyOnceWith({ retrySessionId: target.id, expectedAccountEpoch: 'main-epoch' });
     expect(ownershipService.getSnapshot()?.notice).toBe(notice);
     expect(JSON.stringify(ownershipService.getSnapshot())).not.toContain('private cipher error');
     expect(api.getDetail).toHaveBeenCalledTimes(1);

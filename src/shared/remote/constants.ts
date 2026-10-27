@@ -39,8 +39,10 @@ export const RemoteSyncHealthReason = { Connection: 'connection', Quota: 'quota'
 export const RemoteSyncTaskIssueStatus = {
   Retrying: 'retrying', Isolated: 'isolated', WaitingDependency: 'waiting_dependency', Repairing: 'repairing', Closed: 'closed',
 } as const;
+export const RemoteSyncTaskIssueSource = { Live: 'live' } as const;
 export interface RemoteSyncTaskIssue {
   localSessionId: string;
+  source?: typeof RemoteSyncTaskIssueSource[keyof typeof RemoteSyncTaskIssueSource];
   title?: string;
   status: typeof RemoteSyncTaskIssueStatus[keyof typeof RemoteSyncTaskIssueStatus];
   nextRetryAt?: number | null;
@@ -59,6 +61,8 @@ export interface RemoteSyncHealth {
   retryingSessions?: number;
   isolatedSessions?: number;
   pendingFiles?: number;
+  /** Current-revision ACKs with content intentionally available only on this desktop. */
+  desktopOnlySessions?: number;
   taskIssues?: RemoteSyncTaskIssue[];
   taskIssuesTruncated?: boolean;
   status: typeof RemoteSyncHealthStatus[keyof typeof RemoteSyncHealthStatus];

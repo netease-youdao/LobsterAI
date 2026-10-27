@@ -1,4 +1,4 @@
-import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncStatus } from '../../../shared/remote/constants';
+import { REMOTE_DEVICE_RETIRED_CODE, type RemoteConfigureRequest, RemoteConnectionReason, RemoteConnectionStatus, RemoteInitializationFailure, type RemoteSettingsState, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, type RemoteSyncTaskIssue, RemoteSyncTaskIssueStatus } from '../../../shared/remote/constants';
 
 export function remoteOwnerKey(state: RemoteSettingsState | null): string {
   return state?.owner ? JSON.stringify([state.owner.userId, state.owner.scopeKey]) : '';
@@ -76,8 +76,8 @@ export function remoteConnectionFailure(state: RemoteSettingsState | null): stri
   if (state.connectionReason === RemoteConnectionReason.DeviceUnavailable) return 'remoteDeviceUnavailable';
   if (state.error || state.errorCode || state.connectionReason === RemoteConnectionReason.ServerUnavailable) return 'remoteUnavailable';
   if (state.agentCatalogSyncStatus === RemoteSyncStatus.Error) return 'remoteAgentCatalogSyncFailed';
-  if (state.sessionSyncStatus === RemoteSyncStatus.Error && !state.syncHealth?.admissionDeferred
-    && !(state.syncHealth?.failedSessions && state.syncHealth.failedSessions > 0)) return 'remoteSessionSyncFailed';
+  if (state.syncHealth?.lanes?.control === RemoteSyncLaneStatus.Backoff
+    || state.syncHealth?.lanes?.control === RemoteSyncLaneStatus.Degraded) return 'remoteControlSyncFailed';
   return null;
 }
 
@@ -117,7 +117,45 @@ export function remoteSyncDescription(state: RemoteSettingsState | null): string
   if (health?.status === RemoteSyncHealthStatus.Syncing || (health?.pendingSessions ?? 0) > 0) return pendingDescription;
   if (state.sessionSyncStatus === RemoteSyncStatus.Error || state.agentCatalogSyncStatus === RemoteSyncStatus.Error) return 'remoteSyncPaused';
   if (state.sessionSyncStatus === RemoteSyncStatus.Pending || state.agentCatalogSyncStatus === RemoteSyncStatus.Pending) return pendingDescription;
+  if ((health?.desktopOnlySessions ?? 0) > 0) return 'remoteDesktopOnlyContent';
   return null;
+}
+
+export interface RemoteTaskContentSummary {
+  key: string;
+  issues: RemoteSyncTaskIssue[];
+  detailsUnavailable: boolean;
+  truncated: boolean;
+  desktopOnly: boolean;
+}
+
+/** Connection health and a bounded content snapshot are separate facts. Never infer a task from an aggregate. */
+export function remoteTaskContentSummary(state: RemoteSettingsState | null): RemoteTaskContentSummary | null {
+  if (!state?.owner || !state.enabled || state.initializationFailure || needsRemoteSignIn(state)) return null;
+  const health = state.syncHealth;
+  const active = (health?.taskIssues ?? []).filter(issue => issue.status !== RemoteSyncTaskIssueStatus.Closed);
+  const seen = new Set<string>();
+  const located = active.filter(issue => {
+    if (!issue.localSessionId?.trim() || seen.has(issue.localSessionId)) return false;
+    seen.add(issue.localSessionId); return true;
+  });
+  const issues = located.slice(0, 20);
+  const desktopOnly = (health?.desktopOnlySessions ?? 0) > 0;
+  const failed = (health?.failedSessions ?? 0) > 0 || active.some(issue => issue.status === RemoteSyncTaskIssueStatus.Isolated
+    || issue.status === RemoteSyncTaskIssueStatus.Retrying);
+  const controlFailed = health?.lanes?.control === RemoteSyncLaneStatus.Backoff || health?.lanes?.control === RemoteSyncLaneStatus.Degraded;
+  const contentUnconfirmed = health?.lanes?.live === RemoteSyncLaneStatus.Backoff || health?.lanes?.live === RemoteSyncLaneStatus.Degraded
+    || health?.lanes?.live === RemoteSyncLaneStatus.Unknown || health?.lanes?.history === RemoteSyncLaneStatus.Backoff
+    || health?.lanes?.history === RemoteSyncLaneStatus.Degraded || health?.lanes?.history === RemoteSyncLaneStatus.Unknown;
+  const unknown = contentUnconfirmed || health?.statisticsUnavailable || health?.countsTruncated || health?.taskIssuesTruncated
+    || !health?.admissionDeferred && !controlFailed && (state.sessionSyncStatus === RemoteSyncStatus.Error
+      || health?.status === RemoteSyncHealthStatus.Degraded && health.reason !== RemoteSyncHealthReason.Files);
+  const key = health?.statisticsUnavailable ? 'remoteTaskContentUnknown' : failed ? 'remoteTaskContentIncomplete'
+    : active.length ? 'remoteTaskContentWaiting' : unknown ? 'remoteTaskContentUnknown' : desktopOnly ? 'remoteDesktopOnlyContent' : null;
+  if (!key) return null;
+  return { key, issues: health?.statisticsUnavailable ? [] : issues,
+    detailsUnavailable: Boolean(health?.statisticsUnavailable || key !== 'remoteDesktopOnlyContent' && !issues.length),
+    truncated: Boolean(health?.countsTruncated || health?.taskIssuesTruncated || located.length > 20), desktopOnly };
 }
 
 export function remoteAttention(state: RemoteSettingsState | null): { key: string; immediate: boolean } | null {
@@ -126,8 +164,6 @@ export function remoteAttention(state: RemoteSettingsState | null): { key: strin
   if (state.connectionReason === RemoteConnectionReason.QuotaBlocked || state.errorCode === 47022) return { key: 'remoteQuotaAttention', immediate: true };
   if (state.connectionReason === RemoteConnectionReason.Removed || state.errorCode === 47121) return { key: 'remoteRemovedAttention', immediate: true };
   if (!isRemoteOnline(state)) return { key: 'remoteConnectionAttention', immediate: false };
-  const sync = remoteSyncDescription(state);
-  if (sync && sync !== 'remoteContentSyncing') return { key: sync, immediate: false };
   if (remoteConnectionFailure(state)) return { key: 'remoteConnectionAttention', immediate: false };
   return null;
 }

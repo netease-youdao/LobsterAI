@@ -166,7 +166,7 @@ describe('availability health uses current persisted evidence without no-op writ
   it('does not prepare, create tables or write again for unchanged evidence and preserves revision order', () => {
     const f = fixture(); f.add('m', 'assistant');
     const record = (revision = '1', representation = 'complete') => recordAvailabilityObjectHealth(f.store, 'scope', 's', 'message:m', revision, representation);
-    record(); expect(availabilitySourceHealth(f.store, 'scope', 's')).toEqual({ pending: 0, oldest: null, unavailable: false });
+    record(); expect(availabilitySourceHealth(f.store, 'scope', 's')).toEqual({ pending: 0, oldest: null, unavailable: false, desktopOnly: false });
     const prepare = vi.spyOn(f.db, 'prepare'), exec = vi.spyOn(f.db, 'exec'), before = f.changes();
     for (let i = 0; i < 1000; i++) { record(); availabilitySourceHealth(f.store, 'scope', 's'); }
     expect(prepare).not.toHaveBeenCalled(); expect(exec).not.toHaveBeenCalled(); expect(f.changes()).toBe(before);
@@ -175,7 +175,7 @@ describe('availability health uses current persisted evidence without no-op writ
     record('1'); expect(f.changes()).toBe(before + 1);
     record('2'); expect(f.changes()).toBe(before + 2);
     expect(availabilitySourceHealth(f.store, 'scope', 's').unavailable).toBe(false);
-    expect(availabilitySourceHealth(f.store, 'other', 's')).toEqual({ pending: 1, oldest: 2, unavailable: false });
+    expect(availabilitySourceHealth(f.store, 'other', 's')).toEqual({ pending: 1, oldest: 2, unavailable: false, desktopOnly: false });
   });
 
   it('sees external updates and dropped evidence instead of reporting cached success', () => {
@@ -188,7 +188,7 @@ describe('availability health uses current persisted evidence without no-op writ
     recordAvailabilityObjectHealth(f.store, 'scope', 's', 'message:m', '1', 'complete');
     expect(availabilitySourceHealth(f.store, 'scope', 's').unavailable).toBe(false);
     external.exec('DROP TABLE remote_availability_health_acks');
-    expect(availabilitySourceHealth(f.store, 'scope', 's')).toEqual({ pending: 1, oldest: 2, unavailable: false });
+    expect(availabilitySourceHealth(f.store, 'scope', 's')).toEqual({ pending: 1, oldest: 2, unavailable: false, desktopOnly: false });
     external.exec('DROP TABLE remote_availability_health_acks; CREATE TABLE remote_availability_health_acks(wrong TEXT)');
     expect(() => availabilitySourceHealth(f.store, 'scope', 's')).toThrow();
   });
@@ -200,6 +200,6 @@ describe('availability health uses current persisted evidence without no-op writ
       throw new Error('rollback');
     })()).toThrow('rollback');
     f.db.exec('CREATE TABLE unrelated_fixture(id INTEGER)');
-    expect(availabilitySourceHealth(f.store, 'scope', 's')).toEqual({ pending: 1, oldest: 2, unavailable: false });
+    expect(availabilitySourceHealth(f.store, 'scope', 's')).toEqual({ pending: 1, oldest: 2, unavailable: false, desktopOnly: false });
   });
 });
