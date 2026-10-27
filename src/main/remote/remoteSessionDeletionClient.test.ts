@@ -31,7 +31,7 @@ function fixture(localEnvironment = environment, serviceScope = localEnvironment
   const claim: DeletionClaim = { operation: { operationId: 'op', sessionId: 'session', deviceId: 'device', deletionVersion: '1', stateVersion: '2', state: 'processing', action: RemoteDeletion.StopAndDelete, approvedGuard: guard },
     target: { ...owner, serviceScope, deviceId: 'device', sessionId: 'session', localSessionId: 'local', streamEpoch: 'epoch' },
     claim: { claimId: 'claim', claimToken: 'token', deletionVersion: '1', leaseUntil: new Date(Date.now() + 30000).toISOString() } };
-  let active = false, enabled = true, claimed = false, loseReport = false;
+  let active = false, enabled = true, claimed = false, loseReport = false, routeEpoch = 1;
   let operation: any = claim.operation;
   const runtime = { isSessionActive: () => active, stopSession: vi.fn(), cancelSessionConfirmed: vi.fn(async () => { active = false; return true; }) } as unknown as CoworkRuntime;
   const cleanup = vi.fn();
@@ -57,13 +57,73 @@ function fixture(localEnvironment = environment, serviceScope = localEnvironment
     if (method === undefined) return operation;
     throw new Error('Unexpected request');
   });
-  const deps = { store, service, runtime, context: () => ({ owner, environment: localEnvironment, deviceId: 'device', generation: '1', enabled }), request, reconcileStop: vi.fn(async () => false) };
+  const deps = { store, service, runtime, context: () => ({ owner, environment: localEnvironment, deviceId: 'device', generation: '1', enabled, routeEpoch }), request, reconcileStop: vi.fn(async () => false) };
   const client = new RemoteSessionDeletionClient(deps);
   return { db, store, claim, service, runtime, cleanup, request, client, deps, exists: () => !!db.prepare("SELECT 1 FROM cowork_sessions WHERE id='local'").get(),
+    returnToSameRoute: () => { routeEpoch += 2; },
     active: () => { active = true; store.put('run:local', { runId: 'run', status: 'running', statusVersion: '1' }); }, disable: () => { enabled = false; }, requeue: () => { claimed = false; claim.claim.claimToken = 'rotated-token'; }, lose: () => { loseReport = true; } };
 }
 
 describe('bidirectional session deletion control lane', () => {
+  it.each([RemoteDeletion.Prepared, RemoteDeletion.Execute])('does not resume old deletion authorization after A → B → A during %s journal commit', async phase => {
+    const f = fixture(); f.active();
+    const client = new RemoteSessionDeletionClient({ ...f.deps, security: {
+      commit: async <T>(_id: string, operation: unknown, apply: () => T): Promise<T> => {
+        const result = apply();
+        if ((operation as { phase: string }).phase === phase) f.returnToSameRoute();
+        return result;
+      },
+    } });
+    await client.poll(true, true);
+    expect(f.exists()).toBe(true);
+    expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/permit'))).toHaveLength(phase === RemoteDeletion.Prepared ? 0 : 1);
+    expect(f.request.mock.calls.some(([path]) => path.endsWith('/reports'))).toBe(false);
+    expect(f.store.entries<any>(RemoteDeletion.Inbox)[0].value.localFenceId).toEqual(expect.any(String));
+  });
+
+  it.each(['/claim', '/permit'])('does not apply a first-A %s response to the returned A context', async endpoint => {
+    const f = fixture(); f.active();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      if (args[0].endsWith(endpoint)) f.returnToSameRoute();
+      return result;
+    });
+    await f.client.poll(true, true);
+    expect(f.exists()).toBe(true); expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+    expect(f.request.mock.calls.some(([path]) => path.endsWith('/reports'))).toBe(false);
+    const entries = f.store.entries<any>(RemoteDeletion.Inbox);
+    if (endpoint === '/claim') expect(entries).toHaveLength(0);
+    else expect(entries[0].value).toMatchObject({ phase: RemoteDeletion.Prepared, permitRequestPending: true });
+  });
+
+  it('records a real old-context stop locally without deleting or reporting in the returned context', async () => {
+    const f = fixture(); f.active();
+    const stop = vi.mocked(f.runtime.cancelSessionConfirmed!);
+    const original = stop.getMockImplementation()!;
+    stop.mockImplementation(async (...args) => { const result = await original(...args); f.returnToSameRoute(); return result; });
+    await f.client.poll(true, true);
+    expect(stop).toHaveBeenCalledOnce(); expect(f.exists()).toBe(true);
+    const entry = f.store.entries<any>(RemoteDeletion.Inbox)[0].value;
+    expect(entry).toMatchObject({ phase: RemoteDeletion.Stopped, stopStatus: 'cancelled', report: { result: { kind: 'stopped_before_delete' } } });
+    expect(f.store.run('local')?.status).toBe('cancelled');
+    expect(f.request.mock.calls.some(([path]) => path.endsWith('/reports'))).toBe(false);
+    expect(f.store.get(`${RemoteDeletion.Closed}local`)).toBeNull();
+  });
+
+  it('preserves an already committed local deletion receipt and only reports it in a fresh poll', async () => {
+    const f = fixture(); f.cleanup.mockImplementation(() => f.returnToSameRoute());
+    await f.client.poll(true, true);
+    expect(f.exists()).toBe(false);
+    const saved = structuredClone(f.store.entries<any>(RemoteDeletion.Inbox)[0].value.receipt);
+    expect(saved).toBeDefined(); expect(f.store.get<any>('localGcDeleted:local').ackAt).toBeNull();
+    expect(f.request.mock.calls.some(([path]) => path.endsWith('/reports'))).toBe(false);
+    await f.client.poll(true, false);
+    expect(f.store.entries<any>(RemoteDeletion.Inbox)[0].value).toMatchObject({ phase: RemoteDeletion.Completed, receipt: saved });
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/permit'))).toHaveLength(1);
+  });
+
   it('preserves corrupt pending and inbox records without starving a healthy new claim', async () => {
     const f = fixture();
     const badPending = `${RemoteDeletion.Pending}${RemoteDeletion.Inbox}bad:1:claim`;

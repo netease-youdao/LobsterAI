@@ -16,6 +16,8 @@ import { initializeAvailabilityProjectionSources, initializeAvailabilitySource, 
 import type { InboxEntry } from './remoteBridge';
 import { replaceCoreTrigger } from './remoteCoreTriggers';
 import { RemoteDatabaseHealth } from './remoteDatabaseHealth';
+import { RemoteDeletionSyncKind } from './remoteDeletionSyncPolicy';
+import { hasRemoteDeletionAdoption, initializeRemoteDeletionSync, isRemoteDeletionSettled, reconcileRemoteDeletionSync, type RemoteDeletionSyncContext } from './remoteDeletionSyncState';
 import { ensureRecentDesktopInputJobs } from './remoteDesktopInputJobs';
 import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { RemoteHistoryStore } from './remoteHistoryStore';
@@ -231,6 +233,7 @@ export class RemoteStore {
       if (!syncColumns.has(name)) db.exec(`ALTER TABLE remote_sync ADD COLUMN ${name} ${declaration}`);
     }
     initializeAvailabilitySource(db);
+    initializeRemoteDeletionSync(db);
     // Upgrade old triggers before any local mutation; optional projections must never own core writes.
     db.transaction(() => {
       for (const table of ['cowork_sessions', 'cowork_messages']) {
@@ -339,14 +342,21 @@ export class RemoteStore {
         WHERE s.session_id IS NULL OR r.revision>s.revision ORDER BY r.dirty_at,r.session_id LIMIT 128`)
         .all() as Array<{ session_id: string; revision: number }>;
       for (const row of rows) {
-        this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(row.session_id);
-        this.db.prepare('INSERT OR IGNORE INTO remote_content_dirty VALUES (?)').run(row.session_id);
+        if (this.canProjectDeletion(row.session_id) && !this.isSyncClosed(row.session_id)) {
+          this.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(row.session_id);
+          this.db.prepare('INSERT OR IGNORE INTO remote_content_dirty VALUES (?)').run(row.session_id);
+        }
         this.db.prepare(`INSERT INTO remote_projection_scan VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision`)
           .run(row.session_id, row.revision);
       }
     })();
   }
+  private canProjectDeletion(sessionId: string): boolean {
+    if (!this.db.prepare("SELECT 1 FROM remote_state WHERE key='localGcDeleted:'||?").get(sessionId)) return true;
+    return reconcileRemoteDeletionSync(this, sessionId).kind === RemoteDeletionSyncKind.LegacyDelete;
+  }
   private markProjectionDirty(sessionId: string): void {
+    if (this.isSyncClosed(sessionId)) return;
     this.touchProjection(sessionId);
   }
   /** Core writers never require the optional projection schema. */
@@ -442,6 +452,7 @@ export class RemoteStore {
       const publication = this.db.prepare('SELECT * FROM remote_projection_publications WHERE session_id=?').get(id) as
         { path: string; source_seq: number; revision: number; digest: string } | undefined;
       try {
+        if (!this.canProjectDeletion(id)) { skipped++; continue; }
         if (this.isSyncClosed(id)) {
           this.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run(id);
           this.db.prepare('DELETE FROM remote_content_dirty WHERE session_id=?').run(id);
@@ -801,7 +812,11 @@ export class RemoteStore {
       // Only reconstructible/display-only keys have a fallback; run/approval/inbox/ownership facts never do.
       this.db.prepare('INSERT OR IGNORE INTO remote_corrupt_state VALUES (?,?,?)').run(key, row.value, Date.now());
       this.db.prepare('DELETE FROM remote_state WHERE key=?').run(key);
-      if (key === 'replyProjectionMode' || key.startsWith('projectionMode:') || key.startsWith('questionProjectionMode:')) this.db.prepare('UPDATE remote_sync SET needs_snapshot=1').run();
+      if (key === 'replyProjectionMode' || key.startsWith('projectionMode:') || key.startsWith('questionProjectionMode:')) {
+        // Only live tasks can be invalidated by projection capability changes. Deletion
+        // intents retain their original protocol bytes and have an independent recovery path.
+        this.db.prepare('UPDATE remote_sync SET needs_snapshot=1 WHERE local_id IN (SELECT id FROM cowork_sessions)').run();
+      }
       return null;
     }
   }
@@ -1019,7 +1034,7 @@ export class RemoteStore {
   }
   /** A copied history archive never becomes a live legacy writer after a cache or control-ledger restart. */
   hasIndependentHistoryFence(sessionId: string): boolean {
-    return !!this.db.prepare(`SELECT 1 FROM remote_history_migrations h JOIN remote_sync s ON s.local_id=h.local_id
+    return hasRemoteDeletionAdoption(this, sessionId) || !!this.db.prepare(`SELECT 1 FROM remote_history_migrations h JOIN remote_sync s ON s.local_id=h.local_id
       WHERE h.local_id=? AND json_extract(h.manifest_json,'$.context.sessionId')=s.session_id
       AND json_extract(h.manifest_json,'$.legacy.sync_environment') IS s.sync_environment LIMIT 1`).get(sessionId);
   }
@@ -1077,7 +1092,12 @@ export class RemoteStore {
     }
   }
   /** Local deletion is global; its remote closure receipt closes only the original stream. */
+  reconcileDeletionSync(sessionId: string, context?: RemoteDeletionSyncContext) {
+    return reconcileRemoteDeletionSync(this, sessionId, context);
+  }
   isSyncClosed(sessionId: string): boolean {
+    if (this.db.prepare("SELECT 1 FROM remote_state WHERE key='localGcDeleted:'||?").get(sessionId)
+      && isRemoteDeletionSettled(this, sessionId)) return true;
     if (!this.get(`${RemoteDeletion.Closed}${sessionId}`)) return false;
     const row = this.sync(sessionId), owner = this.owner(sessionId);
     const deleted = this.get<{ owner: RemoteOwner; sessionId: string; deviceId: string; environment: string | null; streamEpoch: string | null }>(`localGcDeleted:${sessionId}`);
@@ -1333,6 +1353,7 @@ export class RemoteStore {
   private bumpControl(sessionId: string): void { this.put(`control:${sessionId}`, String(BigInt(this.controlVersion(sessionId)) + 1n)); }
 
   requireSnapshot(sessionId: string, reason = 'local_change'): void {
+    if (!this.canProjectDeletion(sessionId)) return;
     if (this.isSyncClosed(sessionId)) return;
     this.put(`snapshotReason:${sessionId}`, reason);
     this.db.prepare('UPDATE remote_sync SET needs_snapshot=1 WHERE local_id=?').run(sessionId);
@@ -1452,11 +1473,14 @@ export class RemoteStore {
     this.record(sessionId, `question:${question.questionId}`, { eventType: RemoteQuestion.Event, payload: { question, controlVersion: this.controlVersion(sessionId) } });
   }
   project(sessionId: string, summaryOnly = false): void {
+    if (!this.canProjectDeletion(sessionId)) return;
     if (this.sync(sessionId)?.migration_frozen || this.isSyncClosed(sessionId)) return;
     const s = this.db.prepare('SELECT * FROM cowork_sessions WHERE id=?').get(sessionId) as any;
     if (!s) {
       if (!this.get<string>(`deletedAt:${sessionId}`)) this.requireSnapshot(sessionId);
-      const deletedAt = this.get<string>(`deletedAt:${sessionId}`) || iso(Date.now());
+      const original = this.db.prepare("SELECT record_json FROM remote_projection WHERE session_id=? AND object_key='deleted'").get(sessionId) as { record_json: string } | undefined;
+      const originalDeletedAt = original ? (JSON.parse(original.record_json) as ProjectionRecord).payload.deletedAt : undefined;
+      const deletedAt = this.get<string>(`deletedAt:${sessionId}`) || originalDeletedAt || iso(Date.now());
       this.put(`deletedAt:${sessionId}`, deletedAt);
       this.db.prepare("DELETE FROM remote_projection WHERE session_id=? AND object_key<>'deleted'").run(sessionId);
       this.record(sessionId, 'deleted', { eventType: 'session.deleted', payload: { deletedAt } });

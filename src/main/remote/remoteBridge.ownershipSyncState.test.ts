@@ -2,8 +2,10 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
-import { RemoteConnectionReason } from '../../shared/remote/constants';
+import { RemoteConnectionReasonCode } from '../../shared/remote/connections';
+import { REMOTE_DEVICE_RETIRED_CODE, RemoteConnectionReason } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteSyncTarget } from '../../shared/remote/syncTarget';
 import { recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
@@ -19,11 +21,13 @@ function fixture() {
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const store = new RemoteStore(db);
   let route = 'https://service.example';
+  let routeEpoch = 1;
   let account = owner;
+  const request = vi.fn();
   const bridge: any = new RemoteBridge({ store, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'db' },
     runSessionTransaction: <T>(operation: () => T) => store.transaction(operation),
-    getOwner: () => account, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => route,
-    request: vi.fn(), metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
+    getOwner: () => account, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => route, getRouteEpoch: () => routeEpoch,
+    request, metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
     prepare: () => ({ localSessionId: 'task', remoteSessionId: 'remote', runId: null }), execute: vi.fn(), onAccountChange: vi.fn(),
   });
   cleanup.push(() => { bridge.stop(); db.close(); });
@@ -44,7 +48,8 @@ function fixture() {
     store.acknowledge('task', 'desktop', row.session_id, snapshot.baseSourceSeq, '1', true, snapshot.snapshotEpoch);
   };
   const unavailable = () => bridge.recordConnectionFailure(new RemoteApiError(47003, 'Service not ready', { reason: 'DEVICE_NOT_READY' }, 503));
-  return { bridge, store, ack, unavailable, route: (value: string) => { route = value; }, account: (value: typeof owner) => { account = value; } };
+  return { bridge, store, ack, unavailable, request, route: (value: string) => { route = value; },
+    routeEpoch: (value: number) => { routeEpoch = value; }, account: (value: typeof owner) => { account = value; } };
 }
 
 describe('task detail synchronization state', () => {
@@ -77,6 +82,45 @@ describe('task detail synchronization state', () => {
   it('does not reuse an old ACK or connection error while the API route is changing', () => {
     const f = fixture(); f.ack(); f.unavailable(); f.route('https://new-service.example');
     expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Pending);
+  });
+  it('hides old connection state and ACKs after same-URL ABA before bridge account notification', () => {
+    const f = fixture(); f.ack(); f.unavailable();
+    f.bridge.generation = 'connection'; f.bridge.lastPong = Date.now();
+    f.bridge.error = 'Old route failure'; f.bridge.errorCode = 47003;
+    expect(f.bridge.state()).toMatchObject({ connected: true, deviceId: 'desktop', error: 'Old route failure', errorCode: 47003 });
+    const before = f.store.sync('task');
+    f.routeEpoch(3);
+    expect(f.bridge.associationSyncState(target)).toBe(OwnershipSyncState.Pending);
+    expect(f.bridge.state()).toMatchObject({ connected: false, deviceId: undefined, error: undefined, errorCode: undefined,
+      connectionReason: RemoteConnectionReason.Connecting });
+    expect(f.store.sync('task')).toEqual(before);
+  });
+  it.each([
+    ['removed', 409, { reason: RemoteConnectionReasonCode.Removed, connectionVersion: '2' }],
+    ['retired', REMOTE_DEVICE_RETIRED_CODE, null],
+    ['target changed', RemoteSyncTarget.ChangedCode, null],
+  ] as const)('ignores a delayed %s transport rejection after same-URL ABA', async (_name, code, data) => {
+    const f = fixture(); f.ack();
+    let reject!: (reason: unknown) => void;
+    f.request.mockReturnValue(new Promise<Response>((_resolve, rejectPromise) => { reject = rejectPromise; }));
+    f.bridge.generation = 'connection'; f.bridge.lastPong = Date.now();
+    const ensureAccount = vi.spyOn(f.bridge, 'ensureAccount'), disconnect = vi.spyOn(f.bridge, 'disconnect');
+    const before = { registration: f.bridge.registration, targetId: f.bridge.targetId, reason: f.bridge.connectionReason,
+      persisted: f.store.db.prepare('SELECT * FROM remote_state ORDER BY key').all(), sync: f.store.sync('task') };
+    const pending = f.bridge.api('/devices/desktop/heartbeat', 'POST');
+    expect(f.request).toHaveBeenCalledTimes(1);
+    f.routeEpoch(3);
+    const failure = new RemoteApiError(code, 'Old route rejection', data);
+    const rejected = expect(pending).rejects.toBe(failure);
+    reject(failure);
+    await rejected;
+    expect(ensureAccount).not.toHaveBeenCalled(); expect(disconnect).not.toHaveBeenCalled();
+    expect(f.bridge.registration).toBe(before.registration); expect(f.bridge.targetId).toBe(before.targetId);
+    expect(f.bridge.generation).toBe('connection'); expect(f.bridge.connectionReason).toBe(before.reason);
+    expect(f.bridge.connectionRemoved).toBe(false); expect(f.bridge.suspended).toBe(false);
+    expect(f.bridge.error).toBeUndefined(); expect(f.bridge.errorCode).toBeUndefined();
+    expect(f.store.db.prepare('SELECT * FROM remote_state ORDER BY key').all()).toEqual(before.persisted);
+    expect(f.store.sync('task')).toEqual(before.sync);
   });
   it('does not present another target ACK or failure as the current target state', () => {
     const f = fixture(); f.ack(); f.bridge.targetId = 'other-target';

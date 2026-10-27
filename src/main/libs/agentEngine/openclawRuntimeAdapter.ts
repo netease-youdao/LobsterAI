@@ -91,12 +91,13 @@ import type {
 import { OpenClawGatewayFailureKind } from '../../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyStatus } from '../../../shared/openclawTranscript/constants';
 import { ProviderName } from '../../../shared/providers';
-import type { RemoteOwner } from '../../../shared/remote/constants';
+import { type RemoteOwner, RemoteRunStatus } from '../../../shared/remote/constants';
 import { RemoteInputOperationPhase } from '../../../shared/remote/input';
 import type { LocalQuestionState, QuestionAnswers, QuestionDecisionOptions, QuestionDecisionOutcome, QuestionStatus } from '../../../shared/remote/questions';
 import type { Agent, CoworkExecutionMode, CoworkMessage, CoworkMessageMetadata, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import { MediaGenerationTool } from '../../mediaGenerationPolicy';
+import { payloadHash } from '../../remote/canonical';
 import { type QuestionRegistration, RemoteQuestionError, RemoteQuestionService } from '../../remote/remoteQuestionService';
 import type { SubagentMessageStore } from '../../subagentMessageStore';
 import type { SubagentRunStore } from '../../subagentRunStore';
@@ -191,6 +192,7 @@ import {
 import { OpenClawImWorkloadTracker } from './openclawImWorkloadTracker';
 import { OpenClawQuestionController } from './openclawQuestionController';
 import { readOpenClawSessionRecovery } from './openclawSessionRecovery';
+import { confirmOpenClawSessionStopped } from './openclawSessionStop';
 import {
   buildOpenClawTranscriptOversizedError,
   inspectOpenClawTranscriptSafety,
@@ -5568,7 +5570,38 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!client) return false;
     if (!turn) {
       const yielded = this.yieldedSessions.get(sessionId);
-      if (!yielded) return false;
+      if (!yielded) {
+        // After a restart, a stopped task can retain a reconciling run without
+        // an in-memory turn. Confirm the persisted session with the live gateway.
+        try {
+          const runId = this.store.remote.run(sessionId)?.runId;
+          const binding = this.store.remote.get<{ runId: string; remoteRunId: string; sessionKey: string }>(`gatewayRun:${sessionId}`);
+          const bootId = this.getRecoveryGatewayBootId();
+          if (!runId || !binding?.runId?.trim() || binding.remoteRunId !== runId || !bootId
+            || binding.sessionKey !== this.resolveInteractiveSessionKey(sessionId, { requirePersistedChannelKey: true })) return false;
+          const bindingHash = payloadHash(binding), ownerHash = payloadHash(this.store.remoteCreationOwner());
+          const guardVersion = this.store.remote.deletionGuard(sessionId).version;
+          const epoch = this.accountRecoveryEpoch, generation = this.gatewayClientGeneration;
+          const pid = this.getRecoveryGatewayProcessPid();
+          const isCurrent = () => client === this.gatewayClient && generation === this.gatewayClientGeneration
+            && bootId === this.getRecoveryGatewayBootId() && pid === this.getRecoveryGatewayProcessPid()
+            && pid === (this.engineManager.getGatewayProcessPid?.() ?? undefined)
+            && epoch === this.accountRecoveryEpoch && !this.accountRecoveryActive
+            && ownerHash === payloadHash(this.store.remoteCreationOwner())
+            && this.store.canReadSession(sessionId, this.store.remoteCreationOwner())
+            && !this.activeTurns.has(sessionId) && !this.yieldedSessions.has(sessionId)
+            && this.store.remote.run(sessionId)?.runId === runId
+            && this.store.remote.deletionGuard(sessionId).version === guardVersion
+            && payloadHash(this.store.remote.get(`gatewayRun:${sessionId}`)) === bindingHash
+            && binding.sessionKey === this.resolveInteractiveSessionKey(sessionId, { requirePersistedChannelKey: true });
+          if (!await confirmOpenClawSessionStopped(client, binding.sessionKey, isCurrent) || !isCurrent()) return false;
+          this.stopSession(sessionId);
+          this.emit('runTermination', sessionId, binding.runId, RemoteRunStatus.Cancelled);
+          return true;
+        } catch {
+          return false;
+        }
+      }
       const remoteRunId = this.store.remote.run(sessionId)?.runId;
       const isCurrentWait = () => this.gatewayClient === client
         && this.yieldedSessions.get(sessionId) === yielded

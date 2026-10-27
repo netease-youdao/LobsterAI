@@ -16,7 +16,8 @@ export function initializeAvailabilitySource(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS remote_live_tools(session_id TEXT NOT NULL,tool_id TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(session_id,tool_id));
     CREATE TABLE IF NOT EXISTS remote_control_revisions(session_id TEXT PRIMARY KEY,revision INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS remote_control_pending(session_id TEXT NOT NULL,object_key TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(session_id,object_key));
-    CREATE INDEX IF NOT EXISTS idx_remote_live_revision_session ON remote_live_revisions(session_id,revision,object_id);`);
+    CREATE INDEX IF NOT EXISTS idx_remote_live_revision_session ON remote_live_revisions(session_id,revision,object_id);
+    CREATE INDEX IF NOT EXISTS idx_remote_live_deleted ON remote_live_revisions(session_id,object_id) WHERE deleted=1;`);
   for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
     const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
     const toolId = `COALESCE(CASE WHEN json_valid(${ref}.metadata) THEN COALESCE(json_extract(${ref}.metadata,'$.toolUseId'),json_extract(${ref}.metadata,'$.toolCallId')) END,${ref}.id)`;
@@ -77,7 +78,7 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
     const controlVersion = store.controlVersion(localId);
     const pending = store.db.prepare(`SELECT object_key FROM remote_control_pending WHERE session_id=? ORDER BY revision,object_key LIMIT ${options.incremental ? 16 : 65}`).all(localId) as Array<{ object_key: string }>;
     const pendingRuns = pending.filter(item => item.object_key.startsWith('run.updated:')).map(item => item.object_key.slice('run.updated:'.length));
-    pendingRunIds = [...new Set([...pendingRunIds, ...(includeDirtyRuns ? pendingRuns.slice(0,8) : [])])];
+    pendingRunIds = [...new Set([...pendingRunIds, ...(includeDirtyRuns ? pendingRuns.slice(0,8) : [])])].filter(visible);
     const decisionChanges = includeDirtyRuns ? pending : [];
     const requiredApprovals = [...new Set([...(required.approvalIds || []), ...decisionChanges.filter(item => item.object_key.startsWith('approval.updated:')).map(item => item.object_key.slice('approval.updated:'.length))])];
     const requiredQuestions = [...new Set([...(required.questionIds || []), ...decisionChanges.filter(item => item.object_key.startsWith('question.updated:')).map(item => item.object_key.slice('question.updated:'.length))])];
@@ -92,7 +93,8 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
       if (rows.length > 64 || rows.some(row => row.bytes > 32768) || capturedBytes > 1024 * 1024) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
       return rows.map(row => JSON.parse((store.db.prepare('SELECT value FROM remote_state WHERE key=?').get(row.key) as { value: string }).value) as Record<string, any>);
     };
-    const approvals = decisionRows('approval', requiredApprovals).filter(item => visible(item.runId));
+    const approvalRows = decisionRows('approval', requiredApprovals);
+    const approvals = approvalRows.filter(item => visible(item.runId));
     const publicQuestions = decisionRows('question', requiredQuestions);
     const questionIds = [...new Set([...requiredQuestions, ...publicQuestions.map(item => String(item.questionId))])];
     if (!store.questionEvidenceHealthy(localId)) throw new Error('REMOTE_CONTROL_DECISION_EVIDENCE_MISSING');
@@ -104,11 +106,14 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
       questionIds.push(...privateRows.map(item => item.id).filter(id => !questionIds.includes(id)));
     }
     if (questionIds.length > 64 || pendingRunIds.length > 64) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
-    const questions: ReturnType<RemoteStore['questionStates']> = [];
+    const questionRows: ReturnType<RemoteStore['questionStates']> = [];
     for (let offset = 0; offset < questionIds.length; offset += 64)
-      questions.push(...store.questionStates(localId, undefined, questionIds.slice(offset, offset + 64)).filter(item => visible(item.runId)));
-    if ((required.approvalIds || []).some(id => !approvals.some(item => item.approvalId === id))
-      || (required.questionIds || []).some(id => !questions.some(item => item.questionId === id))) throw new Error('REMOTE_CONTROL_DECISION_EVIDENCE_MISSING');
+      questionRows.push(...store.questionStates(localId, undefined, questionIds.slice(offset, offset + 64)));
+    // A valid foreign decision is historical evidence, not a missing current-target decision.
+    // Still require the original row: absence cannot be explained by a guessed foreign origin.
+    if ((required.approvalIds || []).some(id => !approvalRows.some(item => item.approvalId === id))
+      || (required.questionIds || []).some(id => !questionRows.some(item => item.questionId === id))) throw new Error('REMOTE_CONTROL_DECISION_EVIDENCE_MISSING');
+    const questions = questionRows.filter(item => visible(item.runId));
     const neededRuns = new Set([...pendingRunIds, ...approvals.map(item => item.runId), ...questions.map(item => item.runId)]);
     if (run) neededRuns.add(run.runId);
     const runs = new Map<string, RemoteRun>();
@@ -140,11 +145,21 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
     for (const item of runs.values()) if (!terminal.has(item.status)) records.push({ eventType: 'run.updated', payload: { run: item, controlVersion } });
     records.push(...decisions);
     for (const item of runs.values()) if (terminal.has(item.status)) records.push({ eventType: 'run.updated', payload: { run: item, controlVersion } });
-    const deletedIds = options.incremental ? pending.filter(item => item.object_key.startsWith('message.deleted:')).map(item => item.object_key.slice('message.deleted:'.length)) : required.deletedMessageIds || [];
+    const requiredDeletedIds = [...new Set(required.deletedMessageIds || [])];
+    const deletedIds = [...new Set([...requiredDeletedIds, ...(options.incremental
+      ? pending.filter(item => item.object_key.startsWith('message.deleted:')).map(item => item.object_key.slice('message.deleted:'.length)) : [])])];
+    if (deletedIds.length > 64) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
+    const deletedLimit = options.incremental ? deletedIds.length : options.paged ? 4097 : includeDirtyRuns ? 24 : 65;
+    if (requiredDeletedIds.length > deletedLimit) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
+    const prioritizeRequired = !options.incremental && requiredDeletedIds.length > 0;
+    // A reconciliation page must contain every required source object. The publisher separately
+    // limits wire batches and advances this page only after all changed records are acknowledged.
     const deleted = store.db.prepare(`SELECT object_id,revision FROM remote_live_revisions r WHERE session_id=? AND deleted=1
       ${options.incremental ? 'AND object_id IN (SELECT value FROM json_each(?))' : includeDirtyRuns ? `AND (EXISTS(SELECT 1 FROM remote_control_pending p WHERE p.session_id=r.session_id AND p.object_key='message.deleted:'||r.object_id)
-        OR object_id IN (SELECT value FROM json_each(?)))` : ''} ORDER BY object_id LIMIT ${options.incremental ? 16 : options.paged ? 4097 : includeDirtyRuns ? 24 : 65}`)
-      .all(localId,...(includeDirtyRuns || options.incremental ? [JSON.stringify(deletedIds)] : [])) as Array<{ object_id: string; revision: number }>;
+        OR object_id IN (SELECT value FROM json_each(?)))` : ''} ORDER BY ${prioritizeRequired ? 'CASE WHEN object_id IN (SELECT value FROM json_each(?)) THEN 0 ELSE 1 END,' : ''}object_id LIMIT ${deletedLimit}`)
+      .all(localId,...(includeDirtyRuns || options.incremental ? [JSON.stringify(deletedIds)] : []),
+        ...(prioritizeRequired ? [JSON.stringify(requiredDeletedIds)] : [])) as Array<{ object_id: string; revision: number }>;
+    if (requiredDeletedIds.some(id => !deleted.some(item => item.object_id === id))) throw new Error('REMOTE_CONTROL_DELETION_EVIDENCE_MISSING');
     records.push(...deleted.map(item => ({ eventType: 'message.deleted', payload: { messageId: item.object_id, sourceObjectRevision: String(item.revision) } })));
     if (records.length > (options.paged ? 4096 : 64) || Buffer.byteLength(stableJson(records)) > (options.paged ? 16 * 1024 * 1024 : 240 * 1024)) throw new Error('REMOTE_CONTROL_CHECKPOINT_BUDGET');
     const revision = (store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(localId) as { revision: number } | undefined)?.revision || 1;

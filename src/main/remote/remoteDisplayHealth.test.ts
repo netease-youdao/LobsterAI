@@ -10,9 +10,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { RemoteSyncLaneStatus, RemoteSyncTaskIssueSource, RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
 import { payloadHash } from './canonical';
+import { acknowledgeAvailabilityDeletion, availabilityDeletion, deletionRequestHash, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
+import type { AvailabilityContext } from './remoteAvailabilityPublisher';
 import { RemoteAvailabilityStore } from './remoteAvailabilityStore';
 import { collectRemoteDisplayHealth, type RemoteDisplayHealthInput, type RemoteDisplayHealthResult, RemoteDisplayHealthStatus as Status } from './remoteDisplayHealth';
 import { readRemoteDisplayAdmission } from './remoteDisplayHealthAdmission';
+import { acknowledgeRemoteSessionDeletion, recordRemoteSessionDeletion, RemoteLocalGc } from './remoteLocalGc';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
 import { RemoteTaskSyncState, TaskSyncPhase } from './remoteTaskSyncState';
@@ -93,6 +96,45 @@ function fixture() {
   };
   return { directory, core, control, history, tasks, targets, input, state, session, available, historyReady };
 }
+function acknowledgedDeletionFixture(controlProtocol: boolean) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-display-deleted-'));
+  cleanup.push(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const core = new Database(path.join(directory, 'core.sqlite'));
+  cleanup.push(() => { if (core.open) core.close(); });
+  core.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
+    CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
+  const store = new RemoteStore(core, { deferredProjection: true, restoreRuns: false });
+  const ledger = new RemoteAvailabilityStore(core); cleanup.push(() => ledger.close());
+  new RemoteTaskSyncState(core); new RemoteSyncTargetStore(store);
+  core.prepare('INSERT INTO remote_sync_targets VALUES(?,?,?,?,NULL)').run('target', owner.userId, owner.scopeKey, 'device');
+  core.prepare('INSERT INTO remote_sync_target_active VALUES(?,?,?,1)').run(owner.userId, owner.scopeKey, 'target');
+  const context: AvailabilityContext = { environment: 'target', targetId: 'target', owner, deviceId: 'device', scope: 'target:owner:personal:device', generation: '1', supported: true };
+  const input: RemoteDisplayHealthInput = { database: core.name, owner, target: 'target', targetId: 'target', deviceId: 'device',
+    availabilityScope: context.scope, historySupported: true, settingsKey: 'settings', controlsKey: 'controls', nameKey: 'name', catalogFailureKey: 'catalog' };
+  store.transaction(() => { core.prepare("INSERT INTO cowork_sessions VALUES('deleted','Title',1,1,'idle')").run(); store.assignNew('deleted', owner, 'local_create'); });
+  core.prepare("UPDATE remote_sync SET session_id='remote-deleted',device_id='device',sync_environment='target',source_seq=116,ack_seq=116,needs_snapshot=0 WHERE local_id='deleted'").run();
+  const state = { scope: context.scope, localId: 'deleted', sessionId: 'remote-deleted', writerGeneration: 'writer', controlEpoch: 'epoch', operationId: 'operation',
+    phase: 'active' as const, pendingCommandIds: [], pendingRunIds: [], controlRevision: '1', factSeq: '0', records: {} };
+  if (controlProtocol) { ledger.saveSession(state); rememberAvailabilityDeletionBinding(store, context, state); }
+  else expect(ledger.db.open).toBe(true);
+  store.transaction(() => { recordRemoteSessionDeletion(store, 'deleted', 1000); core.prepare("DELETE FROM cowork_sessions WHERE id='deleted'").run(); });
+  if (controlProtocol) {
+    const deletion = availabilityDeletion(store, context, state)!;
+    const request = ledger.saveRequest({ key: 'delete-batch', lane: 'control', scope: context.scope, localId: 'deleted', method: 'POST', pathname: '/control/facts/batches',
+      version: 1, lookup: '/control/operations/delete-batch', lookupVersion: 1, attempted: true, createdAt: 2000,
+      body: { batchId: 'delete-batch', sessionId: state.sessionId, writerGeneration: state.writerGeneration, controlEpoch: state.controlEpoch,
+        facts: [{ eventType: 'session.deleted', eventId: deletion.deleteEventId, factSeq: '1', payload: { deletedAt: new Date(1000).toISOString() } }] } });
+    acknowledgeAvailabilityDeletion(store, context, state, request, { state: 'committed', operationId: 'delete-batch', batchId: 'delete-batch', sessionId: state.sessionId,
+      writerGeneration: state.writerGeneration, controlEpoch: state.controlEpoch, requestHash: deletionRequestHash(request), firstFactSeq: '1', lastFactSeq: '1', committedSeq: '42',
+      deletionReceipts: [{ eventId: deletion.deleteEventId, factSeq: '1', deletedAt: new Date(1000).toISOString(), serverSeq: '42' }] });
+  } else {
+    core.prepare('INSERT INTO remote_projection VALUES(?,?,?,?,?)').run('deleted', 'deleted', 'hash', 1,
+      JSON.stringify({ eventType: 'session.deleted', payload: { deletedAt: new Date(1406).toISOString() } }));
+    core.prepare("UPDATE remote_sync SET source_seq=117,ack_seq=117 WHERE local_id='deleted'").run();
+    acknowledgeRemoteSessionDeletion(store, 'deleted', 2000);
+  }
+  return { core, store, ledger, input };
+}
 function runWorker(input: RemoteDisplayHealthInput): Promise<RemoteDisplayHealthResult> {
   return new Promise((resolve, reject) => {
     const child = fork(worker, [], { execArgv: [], env: { ...process.env, NODE_PATH: path.join(process.cwd(), 'node_modules') }, stdio: ['ignore','ignore','ignore','ipc'] });
@@ -106,6 +148,64 @@ function runWorker(input: RemoteDisplayHealthInput): Promise<RemoteDisplayHealth
 }
 
 describe('read-only display health collection', () => {
+  it('keeps a committed control deletion visible until its sidecar operation is locally completed', async () => {
+    const f = acknowledgedDeletionFixture(true);
+    const before = [f.core, f.ledger.db].map(db => db.prepare('SELECT total_changes() AS n').get());
+    expect(await runWorker(f.input)).toMatchObject({ status: Status.Known, pendingDeletions: 1,
+      availability: { pendingSessions: 1, lanes: { control: RemoteSyncLaneStatus.Pending, deletion: RemoteSyncLaneStatus.Pending } }, taskHealth: { taskIssues: [] } });
+    expect([f.core, f.ledger.db].map(db => db.prepare('SELECT total_changes() AS n').get())).toEqual(before);
+    f.ledger.complete('delete-batch');
+    const complete = await runWorker(f.input);
+    expect(complete).toMatchObject({ status: Status.Known, availability: { pendingSessions: 0, lanes: { deletion: RemoteSyncLaneStatus.Idle } } });
+    expect(complete).not.toHaveProperty('pendingDeletions');
+  });
+  it('retains core recovery bodies until a committed deletion has finished its sidecar operation', async () => {
+    const f = acknowledgedDeletionFixture(true);
+    f.core.prepare('INSERT INTO remote_projection VALUES(?,?,?,?,?)').run('deleted', 'message:retained', 'hash', 1, '{}');
+    const gc = new RemoteLocalGc({ store: f.store, cacheRoot: path.dirname(f.core.name), owner: () => owner });
+    const now = Date.now() + 24 * 60 * 60_000 + 2000;
+    for (let i = 0; i < 8; i++) await gc.sweep(now);
+    expect(f.core.prepare("SELECT 1 FROM remote_projection WHERE object_key='message:retained'").get()).toBeDefined();
+    f.ledger.complete('delete-batch');
+    const saved = f.ledger.session(f.input.availabilityScope!, 'deleted')!;
+    f.ledger.db.prepare('DELETE FROM availability_sessions WHERE scope=? AND local_id=?').run(f.input.availabilityScope, 'deleted');
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known, pendingDeletions: 1 });
+    for (let i = 0; i < 8; i++) await gc.sweep(now);
+    expect(f.core.prepare("SELECT 1 FROM remote_projection WHERE object_key='message:retained'").get()).toBeDefined();
+    f.ledger.saveSession(saved);
+    for (let i = 0; i < 8; i++) await gc.sweep(now);
+    expect(f.core.prepare("SELECT 1 FROM remote_projection WHERE object_key='message:retained'").get()).toBeUndefined();
+  });
+  it.each(['digest', 'schema', 'protocol', 'intent', 'projection', 'missing'])('does not hide %s corruption behind an acknowledged deletion row', corrupt => {
+    const f = acknowledgedDeletionFixture(false);
+    const complete = collectRemoteDisplayHealth(f.input);
+    expect(complete.status).toBe(Status.Known); expect(complete).not.toHaveProperty('pendingDeletions');
+    if (corrupt === 'digest') f.core.prepare("UPDATE remote_session_deletion_sync SET evidence_digest='invalid'").run();
+    if (corrupt === 'schema') f.core.prepare('UPDATE remote_session_deletion_sync SET schema_version=999').run();
+    if (corrupt === 'protocol') f.core.prepare("UPDATE remote_session_deletion_sync SET protocol='invalid'").run();
+    if (corrupt === 'intent') f.core.prepare("UPDATE remote_state SET value=json_set(value,'$.deleteRevision',999) WHERE key='localGcDeleted:deleted'").run();
+    if (corrupt === 'projection') f.core.prepare("UPDATE remote_projection SET record_json=json_set(record_json,'$.payload.deletedAt','2026-01-01T00:00:00Z') WHERE object_key='deleted'").run();
+    if (corrupt === 'missing') f.core.prepare('DELETE FROM remote_session_deletion_sync').run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known, pendingDeletions: 1, taskHealth: { taskIssues: [] } });
+  });
+  it('reports a valid deletion as pending when its target admission is quarantined', () => {
+    const f = acknowledgedDeletionFixture(false);
+    f.core.prepare("INSERT INTO remote_sync_session_admissions(target_id,local_session_id,owner_user_id,owner_scope_key,device_id,remote_session_id,admission,origin_environment,archive_id) VALUES('target','deleted','owner','personal','device','remote-deleted','quarantined','target','archive')").run();
+    expect(collectRemoteDisplayHealth(f.input)).toMatchObject({ status: Status.Known, pendingDeletions: 1 });
+  });
+  it('reports deleted-task reconciliation separately and never offers a missing task', () => {
+    const f = fixture();
+    f.session('deleted'); f.session('foreign', { userId: 'other', scopeKey: 'personal' });
+    f.core.prepare('DELETE FROM cowork_sessions').run();
+    for (const id of ['deleted', 'foreign']) f.state(`localGcDeleted:${id}`, { deletedAt: 1000, ackAt: null });
+    const before = f.core.prepare('SELECT name FROM sqlite_master ORDER BY name').all();
+    const result = collectRemoteDisplayHealth(f.input);
+    expect(result.status).toBe(Status.Known);
+    if (result.status !== Status.Known) return;
+    expect(result.pendingDeletions).toBe(1);
+    expect(result.taskHealth?.taskIssues).toEqual([]);
+    expect(f.core.prepare('SELECT name FROM sqlite_master ORDER BY name').all()).toEqual(before);
+  });
   it('reads files initialized by the real stores without changing durable bytes or schema', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-display-health-real-'));
     cleanup.push(() => fs.rmSync(directory, { recursive: true, force: true }));

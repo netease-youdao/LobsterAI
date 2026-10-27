@@ -38,7 +38,7 @@ function fixture(independent = false) {
   if (independent) { store.setTaskProjectionEligibility(() => false); store.setIndependentControlReady(() => true); }
   let actor: RemoteOwner | null = owner, enabled = true, now = 1_000_000;
   vi.spyOn(Date, 'now').mockImplementation(() => now);
-  const connection = { owner, environment: 'https://example.invalid', deviceId: 'pc', generation: '1' };
+  const connection = { owner, environment: 'https://example.invalid', deviceId: 'pc', generation: '1', routeEpoch: 1 };
   const uploads: Array<Record<string, unknown>> = [];
   const request = vi.fn(async (_connection: unknown, pathname: string, init: RequestInit) => {
     if (pathname.startsWith('/file-policy')) return ok(policy);
@@ -76,6 +76,30 @@ function fixture(independent = false) {
 }
 
 describe('desktop input capture and upload admission', () => {
+  it('preserves the original pending upload when A returns before its old ready receipt', async () => {
+    const f = fixture(); const snapshot = await f.capture();
+    const original = f.request.getMockImplementation()!;
+    let release!: () => void, started!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const arrived = new Promise<void>(resolve => { started = resolve; });
+    let held = false;
+    f.request.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      if (args[1] === '/devices/pc/input-assets' && !held) { held = true; started(); await waiting; }
+      return result;
+    });
+    const first = f.tick(); await arrived;
+    const pending = structuredClone(f.job());
+    f.sync.pause(); f.connection.routeEpoch += 2; f.sync.tick({ ...f.connection });
+    release(); await first;
+    expect(f.job()).toEqual(pending);
+    expect(fs.existsSync(snapshot.path)).toBe(true);
+    expect(f.sync.health().degraded).toBe(false);
+    await f.tick();
+    expect(f.job().availability).toBe('ready');
+    expect(f.uploads.map(value => value.uploadRequestId)).toEqual([pending.uploadRequestId, pending.uploadRequestId]);
+  });
+
   it.each(['md', 'json', 'py', 'pdf', 'docx', 'mp4'])('uploads only the sealed send-time .%s input after the task edits the source', async extension => {
     const f = fixture();
     const snapshot = await f.capture(extension);

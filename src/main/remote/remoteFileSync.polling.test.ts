@@ -14,7 +14,7 @@ function fixture() {
   const sync = new RemoteFileSync({ store: store as unknown as RemoteStore, cacheRoot: '/unused', owner: () => owner,
     environment: () => 'https://example.invalid', enabled: () => true, access: () => ({ assertAllowed: () => {} }), request });
   sync.configure(true);
-  const connection = { owner, environment: 'https://example.invalid', deviceId: 'pc', generation: '1' };
+  const connection = { owner, environment: 'https://example.invalid', deviceId: 'pc', generation: '1', routeEpoch: 1 };
   const tick = async (): Promise<void> => { sync.tick({ ...connection }); await sync.settled(); };
   return { sync, request, connection, tick, advance: (ms: number) => { now += ms; } };
 }
@@ -37,10 +37,10 @@ describe('remote file policy polling', () => {
     connection.generation = '2'; await tick(); expect(request).toHaveBeenCalledTimes(3);
   });
   it('invalidates cached policy when the server reports a changed policy version', async () => {
-    const { request, connection, sync, tick } = fixture();
+    const { request, sync, tick } = fixture();
     await tick();
     request.mockResolvedValueOnce(new Response(JSON.stringify({ code: 47067, data: { reason: RemoteFileReason.Policy } }), { status: 409 }));
-    await expect((sync as any).json(connection, '/artifact-operation', {})).rejects.toThrow(RemoteFileReason.Policy);
+    await expect((sync as any).json((sync as any).connection, '/artifact-operation', {})).rejects.toThrow(RemoteFileReason.Policy);
     await tick(); expect(request).toHaveBeenCalledTimes(3);
   });
   it('reports unavailable file transport independently and clears it when disabled', async () => {
@@ -51,6 +51,35 @@ describe('remote file policy polling', () => {
     expect(sync.health()).toEqual({ degraded: true, pending: null });
     sync.configure(false);
     expect(sync.health()).toEqual({ degraded: false, pending: null });
+  });
+
+  it.each([false, true])('rejects a late policy after A returns with the same server generation (pause=%s)', async pause => {
+    const { request, sync, tick, connection } = fixture();
+    let finish!: (response: Response) => void;
+    const response = new Promise<Response>(resolve => { finish = resolve; });
+    const original = request.getMockImplementation()!;
+    request.mockImplementationOnce(() => response);
+    const first = tick();
+    if (pause) sync.pause(); else connection.routeEpoch += 2;
+    sync.tick({ ...connection });
+    finish(await original());
+    await first;
+    expect(sync.health()).toEqual({ degraded: false, pending: null });
+    await tick();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(sync.health()).toEqual({ degraded: false, pending: 0 });
+  });
+
+  it('ignores the first A failure instead of degrading the returned A connection', async () => {
+    const { request, sync, tick, connection } = fixture();
+    let fail!: (error: Error) => void;
+    request.mockImplementationOnce(() => new Promise<Response>((_resolve, reject) => { fail = reject; }));
+    const first = tick();
+    connection.routeEpoch += 2; sync.tick({ ...connection });
+    fail(new Error('first A failed'));
+    await first;
+    expect(sync.health()).toEqual({ degraded: false, pending: null });
+    await tick(); expect(request).toHaveBeenCalledTimes(2);
   });
 
 });

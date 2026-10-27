@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -6,6 +7,7 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import { type DeletionClaim, type DeletionCompletion, type DeletionReceipt, RemoteDeletion } from '../../shared/remote/deletions';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { type AvailabilityDeletionAck, type AvailabilityDeletionBinding, validAvailabilityDeletionAck } from './remoteAvailabilityDeletion';
+import { hasRemoteDeletionAdoption, isRemoteDeletionSettled, recordRemoteDeletionSyncIntent, remoteDeletionTombstoneForBinding, writeRemoteDeletionTombstone } from './remoteDeletionSyncState';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { matchesRemoteDeletionTargetScope, samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import { remoteFileCacheDirectory } from './remoteFileSnapshots';
@@ -48,11 +50,14 @@ export function recordRemoteSessionDeletion(store: RemoteStore, sessionId: strin
     deleteRevision: store.projectionRevision(sessionId) + 1, sourceHighWatermark: sync.source_seq,
     ackAt: null, ackSourceSeq: null, phase: Phase.Eligible };
   store.put(`${Prefix.Deleted}${sessionId}`, value);
+  recordRemoteDeletionSyncIntent(store, sessionId);
 }
 
 /** Call only after RemoteStore.acknowledge has validated and committed the server ACK. */
 export function acknowledgeRemoteSessionDeletion(store: RemoteStore, sessionId: string, now = Date.now()): void {
-  const key = `${Prefix.Deleted}${sessionId}`, saved = store.get<Tombstone>(key), sync = store.sync(sessionId);
+  const key = `${Prefix.Deleted}${sessionId}`, sync = store.sync(sessionId);
+  const scoped = !!sync?.sync_environment && !!sync.device_id;
+  const saved = scoped ? remoteDeletionTombstoneForBinding(store, sessionId) : store.get<Tombstone>(key);
   if (!saved || !sync || saved.phase === Phase.Deleted || store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(sessionId)
     || sync.session_id !== saved.sessionId || (saved.deviceId && sync.device_id !== saved.deviceId)
     || (saved.environment && (sync.sync_environment === null
@@ -61,15 +66,21 @@ export function acknowledgeRemoteSessionDeletion(store: RemoteStore, sessionId: 
     || sync.needs_snapshot || sync.source_seq !== sync.ack_seq || sync.ack_seq <= saved.sourceHighWatermark) return;
   const deletion = store.db.prepare("SELECT record_json FROM remote_projection WHERE session_id=? AND object_key='deleted'").get(sessionId) as { record_json: string } | undefined;
   if (!deletion || JSON.parse(deletion.record_json).eventType !== 'session.deleted') return;
-  store.put(key, { ...saved, deviceId: sync.device_id, environment: sync.sync_environment, streamEpoch: sync.stream_epoch,
-    ackAt: saved.ackAt ?? now, ackSourceSeq: sync.ack_seq });
+  const acknowledged = { ...saved, deviceId: sync.device_id, environment: sync.sync_environment, streamEpoch: sync.stream_epoch,
+    ackAt: saved.ackAt ?? now, ackSourceSeq: sync.ack_seq };
+  store.db.transaction(() => {
+    if (scoped) writeRemoteDeletionTombstone(store, sessionId, acknowledged);
+    else store.put(key, acknowledged);
+  })();
 }
 
 /** Dedicated deletion proof closes unsent source data without inventing a source ACK. */
 export function acknowledgeRemoteDeletionCompletion(store: RemoteStore, entry: DeletionClaim & { receipt?: DeletionReceipt }, completion: DeletionCompletion, now = Date.now()): boolean {
   const receipt = entry.receipt, target = entry.target, sync = store.sync(target.localSessionId);
   const closed = store.get<{ receiptId: string; receiptDigest: string }>(`${RemoteDeletion.Closed}${target.localSessionId}`);
-  const key = `${Prefix.Deleted}${target.localSessionId}`, saved = store.get<Tombstone>(key);
+  const key = `${Prefix.Deleted}${target.localSessionId}`;
+  const scoped = !!sync?.sync_environment && !!sync.device_id;
+  const saved = scoped ? remoteDeletionTombstoneForBinding(store, target.localSessionId) : store.get<Tombstone>(key);
   if (!receipt || !saved || !sync || !closed || completion.proofKind !== 'remote_execution'
     || completion.operationId !== entry.operation.operationId || completion.deletionVersion !== entry.operation.deletionVersion
     || !sameOwner(completion.owner, target) || !sameOwner(saved.owner, target)
@@ -82,8 +93,12 @@ export function acknowledgeRemoteDeletionCompletion(store: RemoteStore, entry: D
     || sync.sync_environment === null || !matchesRemoteDeletionTargetScope(store, target, sync.sync_environment)
     || String(sync.source_seq) !== receipt.closedSourceHighWatermark || sync.ack_seq < Number(receipt.lastAcknowledgedSourceSeq)
     || store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(target.localSessionId)) return false;
-  store.put(key, { ...saved, deviceId: sync.device_id, environment: sync.sync_environment, streamEpoch: sync.stream_epoch,
-    completionReceipt: completion, ackAt: saved.ackAt ?? now, ackSourceSeq: sync.ack_seq });
+  const acknowledged = { ...saved, deviceId: sync.device_id, environment: sync.sync_environment, streamEpoch: sync.stream_epoch,
+    completionReceipt: completion, ackAt: saved.ackAt ?? now, ackSourceSeq: sync.ack_seq };
+  store.db.transaction(() => {
+    if (scoped) writeRemoteDeletionTombstone(store, target.localSessionId, acknowledged);
+    else store.put(key, acknowledged);
+  })();
   return true;
 }
 
@@ -154,12 +169,53 @@ export class RemoteLocalGc {
           && closed?.operationId === tombstone.completionReceipt.operationId && closed?.deletionVersion === tombstone.completionReceipt.deletionVersion
           && payloadHash(store.deletionGuard(tombstone.localSessionId)) === payloadHash(tombstone.completionReceipt.guard || null)
           && String(sync.source_seq) === tombstone.completionReceipt.closedSourceHighWatermark
-        : !sync.needs_snapshot && sync.ack_seq === sync.source_seq && sync.ack_seq === tombstone.ackSourceSeq)
+        : (isRemoteDeletionSettled(store, tombstone.localSessionId) || !sync.needs_snapshot)
+          && sync.ack_seq === sync.source_seq && sync.ack_seq === tombstone.ackSourceSeq)
       && !store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(tombstone.localSessionId)
       && !store.projectionPublishing(tombstone.localSessionId);
   }
+  private unfinishedControlSidecar(sessionId: string): boolean {
+    const store = this.deps.store;
+    if (!hasRemoteDeletionAdoption(store, sessionId)) return false;
+    // An in-memory core has no independently recoverable control ledger location.
+    if (store.db.name === ':memory:') return true;
+    let control: Database.Database | undefined;
+    try {
+      const locator = store.db.prepare('SELECT ledger_id,phase FROM remote_control_ledger_locator WHERE id=1').get() as { ledger_id: string; phase: string } | undefined;
+      if (!locator || locator.phase !== 'ready') return true;
+      control = new Database(path.join(path.dirname(store.db.name), 'remote-control.sqlite'), { readonly: true, fileMustExist: true, timeout: 50 });
+      control.pragma('query_only=ON');
+      const identity = control.prepare('SELECT ledger_id FROM availability_identity WHERE id=1').get() as { ledger_id: string } | undefined;
+      if (identity?.ledger_id !== locator.ledger_id) return true;
+      const rows = store.db.prepare(`SELECT CASE WHEN octet_length(binding_json)<=65536 THEN binding_json END AS binding
+        FROM remote_session_deletion_sync WHERE local_session_id=? LIMIT 33`).all(sessionId) as Array<{ binding: string | null }>;
+      if (rows.length > 32) return true;
+      const scopes = new Set<string>();
+      const current = remoteDeletionTombstoneForBinding(store, sessionId)?.availabilityBinding?.scope;
+      if (current) scopes.add(current);
+      for (const row of rows) {
+        if (row.binding === null) return true;
+        const saved = JSON.parse(row.binding) as { control?: { scope?: unknown } };
+        if (saved.control && (typeof saved.control.scope !== 'string' || saved.control.scope.length > 1024)) return true;
+        if (typeof saved.control?.scope === 'string') scopes.add(saved.control.scope);
+      }
+      if (!scopes.size) return true;
+      for (const scope of scopes) {
+        const session = control.prepare(`SELECT CASE WHEN octet_length(body)>1048576 OR NOT json_valid(body) THEN 1
+          ELSE COALESCE(json_extract(body,'$.phase'),'')<>'active' END AS invalid FROM availability_sessions WHERE scope=? AND local_id=?`)
+          .get(scope, sessionId) as { invalid: number } | undefined;
+        if (!session || session.invalid || control.prepare("SELECT 1 FROM availability_requests WHERE scope=? AND lane IN ('control','live') AND local_id=? AND resolution_receipt IS NULL LIMIT 1")
+          .get(scope, sessionId)) return true;
+      }
+      return false;
+    } catch { return true; } // Missing or unavailable evidence is never a GC permit.
+    finally { control?.close(); }
+  }
   private async blocked(sessionId: string): Promise<boolean> {
     const store = this.deps.store, run = store.run(sessionId);
+    if (this.unfinishedControlSidecar(sessionId)) return true;
+    if (store.db.prepare("SELECT 1 FROM sqlite_master WHERE name='remote_session_deletion_sync'").get()
+      && store.db.prepare("SELECT 1 FROM remote_session_deletion_sync WHERE local_session_id=? AND state<>'acknowledged' LIMIT 1").get(sessionId)) return true;
     if (run && !terminalRuns.has(run.status)) return true;
     if (store.get(`inputFence:${sessionId}`) || store.get(`${RemoteDeletion.Fence}${sessionId}`)) return true;
     const imported = store.get<JsonRecord>(`import:${sessionId}`);

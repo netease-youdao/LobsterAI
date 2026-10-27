@@ -227,7 +227,8 @@ describe('remote sync persistence logging', () => {
     await bridge.syncSessions();
     const failure = store.get<any>('syncFailure:sync-task')!;
     await bridge.syncSessions(); await bridge.syncSessions(); await bridge.syncSessions();
-    expect(request).toHaveBeenCalledTimes(1); expect(warning).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warning.mock.calls.filter(([message]) => message === '[RemoteSync] Session synchronization failed')).toHaveLength(1);
     const deferred = () => debug.mock.calls.filter(([message]) => message === '[RemoteSync] Session synchronization deferred');
     expect(deferred()).toHaveLength(1);
     expect(deferred()[0][1]).toMatchObject({ reason: 'retry_backoff', retryAt: failure.retryAt, localSessionId: 'sync-task' });

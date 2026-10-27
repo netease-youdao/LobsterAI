@@ -25,7 +25,7 @@ function fixture(environment: string | null = null) {
   db.prepare("UPDATE remote_sync SET device_id='device',source_seq=1,ack_seq=1,needs_snapshot=0,sync_environment=? WHERE local_id='s'").run(environment);
   store.transaction(() => { recordRemoteSessionDeletion(store, 's', 100); db.prepare("DELETE FROM cowork_sessions WHERE id='s'").run(); });
   db.prepare("UPDATE remote_sync SET source_seq=2,ack_seq=2 WHERE local_id='s'").run();
-  db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', 'deleted', 'hash', 1, JSON.stringify({ eventType: 'session.deleted', payload: { deletedAt: 'date' } }));
+  db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', 'deleted', 'hash', 1, JSON.stringify({ eventType: 'session.deleted', payload: { deletedAt: new Date(506).toISOString() } }));
   db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', 'message:m', 'hash', 1, JSON.stringify({ content: 'secret body' }));
   db.prepare('INSERT INTO remote_reply_chunks VALUES (?,?,?,?)').run('s', 'sha', 'body', 4);
   db.prepare('INSERT INTO remote_object_state VALUES (?,?,?,?)').run('s', 'message:m', 1, JSON.stringify({ ordinal: '1', digest: 'hash' }));

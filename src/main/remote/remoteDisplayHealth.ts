@@ -3,6 +3,7 @@ import path from 'path';
 
 import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus as Lane, type RemoteSyncTaskIssue, RemoteSyncTaskIssueSource, RemoteSyncTaskIssueStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import { payloadHash } from './canonical';
+import { readRemoteDisplayDeletionHealth, type RemoteDisplayDeletionHealth } from './remoteDisplayDeletionHealth';
 import { readRemoteDisplayAdmission, RemoteSyncAdmissionBudgetError } from './remoteDisplayHealthAdmission';
 import { readRemoteDisplayTaskHealth, type TaskSyncHealth } from './remoteDisplayHealthTask';
 
@@ -34,6 +35,7 @@ export type RemoteDisplayHealthResult = {
   availability: RemoteDisplayAvailabilityHealth | null;
   /** Snapshot only; configure/command handlers continue to use live authoritative checks. */
   taskHealth?: TaskSyncHealth;
+  pendingDeletions?: number;
 } | { status: typeof RemoteDisplayHealthStatus.Unknown; observedAt: number; reason: typeof RemoteDisplayHealthFailure[keyof typeof RemoteDisplayHealthFailure] };
 const Limit = { Sessions: 128, LegacyRows: 10000, JsonBytes: 1024 * 1024, DurationMs: 4500 } as const;
 class DisplayHealthError extends Error {
@@ -147,6 +149,23 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
       try { return readRemoteDisplayAdmission(core, input.owner, input.deviceId!, input.targetId, id); }
       catch (error) { admissionFailure = error; return false; }
     };
+    let pendingDeletions = 0;
+    // Registration has not established a deletion target while these identities are absent.
+    const deletedRows = input.targetId && input.deviceId ? core.prepare(`SELECT s.local_id,s.session_id,s.device_id,s.stream_epoch,s.source_seq,s.ack_seq FROM remote_sync s
+      JOIN cowork_session_ownership o ON o.session_id=s.local_id
+      WHERE o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=?
+        AND EXISTS(SELECT 1 FROM remote_state WHERE key='localGcDeleted:'||s.local_id)
+        AND NOT EXISTS(SELECT 1 FROM cowork_sessions WHERE id=s.local_id) LIMIT ?`)
+      .all(input.owner.userId, input.owner.scopeKey, Limit.Sessions + 1) as Array<{ local_id: string; session_id: string; device_id: string; stream_epoch: string | null; source_seq: number; ack_seq: number }> : [];
+    if (deletedRows.length > Limit.Sessions) unknown(RemoteDisplayHealthFailure.Budget);
+    const deletions = new Map<string, RemoteDisplayDeletionHealth>();
+    for (const row of deletedRows) {
+      guard();
+      if (!currentBinding(row.local_id)) continue;
+      const deletion = readRemoteDisplayDeletionHealth(core, control, { owner: input.owner, targetId: input.targetId, deviceId: input.deviceId, scope }, row.local_id);
+      deletions.set(row.local_id, deletion);
+      if (deletion.pending) pendingDeletions++;
+    }
     if (control && scope) {
       // This disposable ACK cache was formerly created lazily by the display read.
       // Absence means no known ACKs; deriving pending must not create a table.
@@ -167,8 +186,8 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
       for (const row of rows.slice(0, Limit.Sessions)) {
         guard();
         const saved = jsonRecord(row.body);
-        const binding = scalar<{ session_id: string; device_id: string | null; migration_frozen: number; owner_user_id: string; owner_scope_key: string; ownership_status: string; title: string }>(core, `SELECT s.session_id,s.device_id,s.migration_frozen,o.owner_user_id,o.owner_scope_key,o.ownership_status,substr(c.title,1,256) AS title
-          FROM remote_sync s JOIN cowork_session_ownership o ON o.session_id=s.local_id JOIN cowork_sessions c ON c.id=s.local_id WHERE s.local_id=?`, row.local_id);
+        const binding = scalar<{ session_id: string; device_id: string | null; migration_frozen: number; owner_user_id: string; owner_scope_key: string; ownership_status: string; title: string; local_exists: number }>(core, `SELECT s.session_id,s.device_id,s.migration_frozen,o.owner_user_id,o.owner_scope_key,o.ownership_status,substr(c.title,1,256) AS title,c.id IS NOT NULL AS local_exists
+          FROM remote_sync s JOIN cowork_session_ownership o ON o.session_id=s.local_id LEFT JOIN cowork_sessions c ON c.id=s.local_id WHERE s.local_id=?`, row.local_id);
         if (!binding || binding.owner_user_id !== input.owner.userId || binding.owner_scope_key !== input.owner.scopeKey || binding.ownership_status !== 'confirmed'
           || !currentBinding(row.local_id) || binding.session_id !== saved.sessionId || binding.device_id !== input.deviceId || saved.scope !== scope || saved.localId !== row.local_id
           || typeof saved.writerGeneration !== 'string' || !['activating','bootstrap','active'].includes(String(saved.phase)) || !sequence(saved.controlRevision))
@@ -176,6 +195,8 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
         const revision = scalar<{ revision: number }>(core, 'SELECT revision FROM remote_control_revisions WHERE session_id=?', row.local_id)?.revision || 1;
         const deletionValue = state(core, `localGcDeleted:${row.local_id}`);
         const deletion = deletionValue === null ? null : object(deletionValue) ? deletionValue : unknown(RemoteDisplayHealthFailure.Inconsistent);
+        if (!binding.local_exists && !deletion) unknown(RemoteDisplayHealthFailure.Inconsistent);
+        const deletionPending = !!deletion && (deletions.get(row.local_id)?.pending ?? true);
         const requests = control.prepare(`SELECT lane,MIN(CASE WHEN octet_length(body)<=? AND json_valid(body) THEN json_extract(body,'$.createdAt') END) AS oldest,
           SUM(CASE WHEN octet_length(body)>? OR NOT json_valid(body) THEN 1 ELSE 0 END) AS invalid FROM availability_requests
           WHERE scope=? AND local_id=? AND resolution_receipt IS NULL GROUP BY lane`).all(Limit.JsonBytes, Limit.JsonBytes, scope, row.local_id) as Array<{ lane: string; oldest: number | null; invalid: number }>;
@@ -216,7 +237,7 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
         const taskLanes: RemoteSyncLanes = {
           control: !deletion && (saved.phase !== 'active' || saved.controlRevision !== String(revision)) || requests.some(request => request.lane === 'control') ? Lane.Pending : Lane.Idle,
           live: unavailable ? Lane.Unknown : fault ? Lane.Degraded : count(messages.pending) + tools || requests.some(request => request.lane === 'live') ? Lane.Pending : Lane.Idle,
-          deletion: deletion && !deletion.ackAt ? Lane.Pending : Lane.Idle, recovery: Lane.Idle,
+          deletion: deletionPending ? Lane.Pending : Lane.Idle, recovery: Lane.Idle,
         };
         if (input.historySupported && !deletion && saved.phase === 'active') {
           if (!history) {
@@ -252,7 +273,7 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
         }
         if (Object.values(taskLanes).some(lane => lane !== Lane.Idle)) pending++;
         degraded ||= unavailable || fault || Object.values(taskLanes).includes(Lane.Unknown);
-        oldest = minTime([oldest, timestamp(messages.oldest), ...requests.map(request => timestamp(request.oldest)), deletion && !deletion.ackAt ? timestamp(deletion.deletedAt) : null]);
+        oldest = minTime([oldest, timestamp(messages.oldest), ...requests.map(request => timestamp(request.oldest)), deletionPending ? timestamp(deletion!.deletedAt) : null]);
         for (const [name, status] of Object.entries(taskLanes)) {
           const lane = name as keyof RemoteSyncLanes;
           if (!lanes[lane] || rank.indexOf(status!) > rank.indexOf(lanes[lane]!)) lanes[lane] = status;
@@ -269,7 +290,8 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
       // visible() excludes availability sessions, so these two task sets cannot double-count a session.
       taskHealth.failedSessions += availabilityFailedSessions;
       taskHealth.isolatedSessions += availabilityFailedSessions;
-      const issues = [...availabilityTaskIssues, ...taskHealth.taskIssues];
+      const issues = [...availabilityTaskIssues, ...taskHealth.taskIssues].filter(issue =>
+        !!scalar(core, 'SELECT 1 FROM cowork_sessions WHERE id=?', issue.localSessionId));
       taskHealth.taskIssuesTruncated ||= availabilityFailedSessions > availabilityTaskIssues.length || issues.length > 20;
       taskHealth.taskIssues = issues.slice(0, 20);
       taskHealth.countsTruncated ||= availability?.countsTruncated;
@@ -280,7 +302,8 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
       db.exec('ROLLBACK');
       if (Number(db.pragma('data_version', { simple: true })) !== version) unknown(RemoteDisplayHealthFailure.Inconsistent);
     }
-    const result: RemoteDisplayHealthResult = { status: RemoteDisplayHealthStatus.Known, observedAt: Date.now(), settings, pendingSettings, pendingName, catalogFailed, legacy, availability, ...(taskHealth ? { taskHealth } : {}) };
+    const result: RemoteDisplayHealthResult = { status: RemoteDisplayHealthStatus.Known, observedAt: Date.now(), settings, pendingSettings, pendingName, catalogFailed, legacy, availability,
+      ...(pendingDeletions ? { pendingDeletions } : {}), ...(taskHealth ? { taskHealth } : {}) };
     if (Buffer.byteLength(JSON.stringify(result)) > 64 * 1024) unknown(RemoteDisplayHealthFailure.Budget);
     return result;
   } catch (error) {

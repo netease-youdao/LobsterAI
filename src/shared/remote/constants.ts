@@ -61,6 +61,8 @@ export interface RemoteSyncHealth {
   retryingSessions?: number;
   isolatedSessions?: number;
   pendingFiles?: number;
+  /** Deleted local tasks whose current remote binding still needs reconciliation. */
+  pendingDeletions?: number;
   /** Current-revision ACKs with content intentionally available only on this desktop. */
   desktopOnlySessions?: number;
   taskIssues?: RemoteSyncTaskIssue[];

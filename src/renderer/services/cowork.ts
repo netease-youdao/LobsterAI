@@ -1654,18 +1654,22 @@ class CoworkService {
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {
+    return (await this.deleteSessionWithResult(sessionId)).success;
+  }
+
+  async deleteSessionWithResult(sessionId: string): Promise<{ success: boolean; error?: string }> {
     const cowork = window.electron?.cowork;
-    if (!cowork) return false;
+    if (!cowork) return { success: false, error: i18nService.t('deleteTaskFailed') };
 
     const result = await accountBoundRequest(async () => cowork.deleteSession(sessionId));
     if (result.success) {
       this.queuedFollowUpCoordinator.clearSession(sessionId);
       store.dispatch(deleteSessionAction(sessionId));
-      return true;
+      return { success: true };
     }
 
     console.error('Failed to delete session:', result.error);
-    return false;
+    return { success: false, error: result.error || i18nService.t('deleteTaskFailed') };
   }
 
   async deleteSessions(sessionIds: string[]): Promise<boolean> {

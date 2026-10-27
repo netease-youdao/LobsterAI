@@ -5,7 +5,9 @@ import path from 'path';
 import { expect, it, vi } from 'vitest';
 import vm from 'vm';
 
+import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { CoworkIpcChannel } from '../../shared/cowork/constants';
+import { AuthSessionRequestError } from '../libs/authSessionManager';
 import { remoteNetworkBinaryDownload } from './remoteNetworkProtocol';
 import { currentRemoteExecution, SessionCommandService } from './sessionCommandService';
 
@@ -61,9 +63,11 @@ it('preserves successful JSON attachment streams while still checking enterprise
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf8');
   const wrapper = source.slice(source.indexOf('  const fetchWithAuth = async'), source.indexOf('  let sessionDeletionService:'));
   const revoked = vi.fn(), session = { userId: 'owner' };
+  let sessionKey = 'owner:route-1';
   let response: Response;
   const sandbox = {
     authSessionManager: { fetchWithAuth: vi.fn(async () => response) },
+    getAuthSessionKey: () => sessionKey, AuthSessionRequestError, AuthSessionStatus, AuthRefreshFailureKind,
     captureEnterpriseAuthSessionSnapshot: () => session, remoteNetworkBinaryDownload,
     readEnterpriseApiErrorCode: (value: { code?: number }) => value.code,
     EnterpriseApiErrorCode: { NotMember: 40301 },
@@ -89,4 +93,19 @@ fetchWithAuth;`, { loader: 'ts', format: 'cjs' }).code, sandbox);
   }
   expect(revoked).toHaveBeenCalledTimes(2);
   expect(revoked).toHaveBeenLastCalledWith({ code: 40301, source: 'remote', requestSession: session });
+
+  let release!: () => void, reading!: () => void;
+  const paused = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { reading = resolve; });
+  response = new Response('{"code":40301}', { headers: { 'content-type': 'application/json' } });
+  vi.spyOn(response, 'clone').mockImplementation(() => {
+    const copy = new Response();
+    copy.json = async () => { reading(); await paused; return { code: 40301 }; };
+    return copy;
+  });
+  const stale = fetchWithAuth('https://example.invalid/api/remote/v1/capabilities');
+  const rejected = expect(stale).rejects.toMatchObject({ failureKind: AuthRefreshFailureKind.ContextChanged });
+  await started; sessionKey = 'owner:route-3'; release();
+  await rejected;
+  expect(revoked).toHaveBeenCalledTimes(2);
 });

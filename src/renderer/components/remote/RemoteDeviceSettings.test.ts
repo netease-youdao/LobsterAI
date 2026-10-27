@@ -68,9 +68,52 @@ beforeEach(() => {
     logError(message, ...args);
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('current remote device settings', () => {
+  test('shows deletion recovery separately from a real control failure and opens logs without opening a deleted task', () => {
+    const openFolder = vi.fn(async () => undefined);
+    vi.stubGlobal('window', { electron: { log: { openFolder } } });
+    harness.snapshot.state = { ...connected, syncHealth: { status: RemoteSyncHealthStatus.Degraded, pendingDeletions: 1,
+      lanes: { control: RemoteSyncLaneStatus.Backoff }, pendingSessions: 0, oldestPendingAt: null,
+      lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z' } };
+    const { html, button } = render();
+    expect(html).toContain(i18nService.t('remoteOnline'));
+    expect(html).toContain(i18nService.t('remoteDeletedTasksSyncPending'));
+    expect(html).toContain(i18nService.t('remoteControlSyncFailed'));
+    expect(button('retry')).toBeDefined();
+    click(button('remoteOpenDiagnostics'));
+    expect(openFolder).toHaveBeenCalledOnce();
+    expect(harness.openTask).not.toHaveBeenCalled();
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(html).not.toContain(i18nService.t('remoteUnnamedTask'));
+  });
+
+  test('a pending deletion does not invent a task or a successful recovery action', () => {
+    harness.snapshot.state = { ...connected, syncHealth: { status: RemoteSyncHealthStatus.Idle, pendingDeletions: 1,
+      pendingSessions: 0, oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z' } };
+    const { html, button } = render();
+    expect(html).toContain(i18nService.t('remoteDeletedTasksSyncPending'));
+    expect(html).not.toContain(i18nService.t('remoteControlSyncFailed'));
+    expect(html).not.toContain('<details');
+    expect(button('retry')).toBeUndefined();
+    harness.snapshot.state = { ...harness.snapshot.state, syncHealth: { ...harness.snapshot.state.syncHealth!, pendingDeletions: 0 } };
+    expect(render().button('remoteOpenDiagnostics')).toBeUndefined();
+  });
+
+  test('a diagnostic button captured before a route change cannot act for the new context', () => {
+    const openFolder = vi.fn(async () => undefined);
+    vi.stubGlobal('window', { electron: { log: { openFolder } } });
+    harness.snapshot.state = { ...connected, syncHealth: { status: RemoteSyncHealthStatus.Idle, pendingDeletions: 1,
+      pendingSessions: 0, oldestPendingAt: null, lastSuccessfulSyncAt: null, observedAt: '2026-10-27T00:00:00Z' } };
+    const oldButton = render().button('remoteOpenDiagnostics');
+    harness.snapshot.state = { ...harness.snapshot.state, accountEpoch: 'epoch-b' };
+    click(oldButton);
+    expect(openFolder).not.toHaveBeenCalled();
+    harness.snapshot.state = { ...harness.snapshot.state, owner: null };
+    expect(render().html).not.toContain(i18nService.t('remoteDeletedTasksSyncPending'));
+  });
+
   test('shows the current device, public QR banner and identity without duplicating preference switches', () => {
     const { html, button } = render();
     expect(html).toContain('Private alias');

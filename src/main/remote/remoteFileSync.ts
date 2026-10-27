@@ -43,7 +43,7 @@ interface InputJob extends DesktopMessageAssetJob {
   environment?: string;
   preparedSource?: RemotePreparedInputSource;
 }
-interface Connection { owner: RemoteOwner; environment: string; deviceId: string; generation: string }
+interface Connection { owner: RemoteOwner; environment: string; deviceId: string; generation: string; routeEpoch?: number }
 interface TerminalBoundary { owner: RemoteOwner; environment: string; deviceId: string; ordinal: string; finishedAt: string }
 export interface RemoteFileSyncDependencies {
   store: RemoteStore; cacheRoot: string; owner(): RemoteOwner | null; environment(): string; enabled(): boolean;
@@ -120,23 +120,24 @@ export class RemoteFileSync {
       this.delivered.startPreparation(sessionId, roots, connection.owner, () => validEpoch() && this.current(connection, sessionId));
     } else await this.delivered.prepare(sessionId, roots, connection.owner, () => validEpoch() && this.current(connection, sessionId));
   }
-  pause(): void { this.delivered.clear(); this.fileHealth = { degraded: false, pending: null }; this.connection = null; this.policy = null; this.policyAt = 0; this.policyRetryAt = 0; }
+  pause(): void { this.delivered.clear(); this.fileHealth = { degraded: false, pending: null }; this.connection = null; this.policy = null; this.policyAt = 0; this.policyRetryAt = 0; this.observationCursor = 0; this.coldObservationAt.clear(); }
   private prefix(connection: Connection): string {
     return `fileOutput:${createHash('sha256').update(JSON.stringify([connection.environment, connection.owner, connection.deviceId])).digest('hex')}:`;
   }
   private current(connection: Connection, sessionId?: string): boolean {
-    return this.enabled && this.deps.enabled() && sameOwner(connection.owner, this.deps.owner())
+    return this.connection === connection && this.enabled && this.deps.enabled() && sameOwner(connection.owner, this.deps.owner())
       && connection.environment === this.deps.environment() && this.connection?.generation === connection.generation
       && this.connection.deviceId === connection.deviceId && (!sessionId || this.deps.store.isTaskAdmitted(sessionId) && !this.deps.store.get(`${RemoteDeletion.Closed}${sessionId}`) && sameOwner(this.deps.store.owner(sessionId), connection.owner));
   }
   private assert(connection: Connection, sessionId?: string): void { if (!this.current(connection, sessionId)) throw new Error(RemoteFileReason.Access); }
-  tick(connection: Connection): void {
+  tick(next: Connection): void {
     if (!this.enabled) return;
-    if (!this.connection || !sameOwner(this.connection.owner, connection.owner) || this.connection.environment !== connection.environment
-      || this.connection.deviceId !== connection.deviceId || this.connection.generation !== connection.generation) {
-      this.policy = null; this.policyAt = 0; this.policyRetryAt = 0; this.fileHealth = { degraded: false, pending: null };
+    if (!this.connection || !sameOwner(this.connection.owner, next.owner) || this.connection.environment !== next.environment
+      || this.connection.deviceId !== next.deviceId || this.connection.generation !== next.generation || this.connection.routeEpoch !== next.routeEpoch) {
+      this.pause();
+      this.connection = Object.freeze({ ...next, owner: Object.freeze({ ...next.owner }) });
     }
-    this.connection = connection;
+    const connection = this.connection;
     this.deps.store.setFileEnvironment(connection.environment);
     if (this.work) return;
     const telemetry = captureRemoteFileTelemetry(connection.owner, { device_id: connection.deviceId, operation_kind: 'file_publication' });
@@ -188,6 +189,7 @@ export class RemoteFileSync {
       if (Date.now() < this.policyRetryAt) return;
       this.policyRetryAt = Date.now() + 60_000;
       const policy = await this.json(connection, `/file-policy?deviceId=${escapeId(connection.deviceId)}`) as RemoteFilePolicy;
+      this.assert(connection);
       if (!Array.isArray(policy.types) || !policy.features || !policy.limits || !/^\d+$/u.test(policy.policyVersion)) {
         telemetry.emit(Telemetry.Stage, { stage: Telemetry.Validate, outcome: Telemetry.Failed, operation_kind: 'file_policy', reason: Telemetry.ResponseInvalid }); return;
       }
@@ -196,12 +198,14 @@ export class RemoteFileSync {
     this.fileHealth = { degraded: false, pending: 0 };
     if (Date.now() - this.cleanupAt > 3_600_000) {
       // Unknown references prohibit garbage collection, not independent publication of verified resources.
-      await this.cleanupSnapshots(connection).catch(error => { telemetry.emit(Telemetry.Stage, { stage: Telemetry.Cleanup, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); }); this.cleanupAt = Date.now();
+      await this.cleanupSnapshots(connection).catch(error => { telemetry.emit(Telemetry.Stage, { stage: Telemetry.Cleanup, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); });
+      this.assert(connection); this.cleanupAt = Date.now();
     }
     if (this.canUploadInput()) await this.inputs(connection);
     if (!this.policy?.features.artifactPublish || !this.current(connection)) return;
     await this.delivered.collect(connection.owner, this.policy, sessionId => this.current(connection, sessionId),
       (sessionId, messageId, runId, filePath, snapshot) => {
+        if (!this.current(connection, sessionId)) return false;
         const sync = this.deps.store.sync(sessionId);
         if (!sync || sync.device_id !== connection.deviceId) return false;
         const source = this.sources(sessionId, runId, { messageId, filePath })[0];
@@ -210,10 +214,12 @@ export class RemoteFileSync {
         // The immutable bytes were sealed after completion: publish current/latest, never fabricate a terminal version.
         this.enqueueSnapshot(source, job, snapshot, false);
         job.reason = undefined; job.terminalRuns.push(runId);
-        this.save(key, job);
+        this.save(connection, key, job);
         return true;
-      }).catch(error => { this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); });
-    await this.observe(connection).catch(error => { this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); });
+      }).catch(error => { if (!this.current(connection)) return; this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); });
+    this.assert(connection);
+    await this.observe(connection).catch(error => { if (!this.current(connection)) return; this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); });
+    this.assert(connection);
     for (const { key, value: job } of this.fileEntries<ArtifactJob>(this.prefix(connection), true)) {
       const telemetry = captureRemoteFileTelemetry(connection.owner, { device_id: connection.deviceId, direction: Telemetry.Artifact,
         local_session_id: job.localSessionId, session_id: job.sessionId, operation_id: job.queue?.[0]?.publicationId ?? job.rename?.operationId, operation_kind: 'file_publication' });
@@ -228,7 +234,7 @@ export class RemoteFileSync {
           job.retry = nextFileRetry(job.retry, new RemoteFileRequestError(RemoteFileContextRequired, 403, null, RemoteFileContextRequired),
             Date.now(), this.policy.policyVersion);
           job.retryAt = job.retry.nextRetryAt;
-          this.save(key, job);
+          this.save(connection, key, job);
           console.info('[RemoteFileSync] Restored artifact registration retry.', {
             localSessionId: job.localSessionId, messageId: job.messageId, localArtifactId: job.localArtifactId, retryAt: job.retryAt,
           });
@@ -244,10 +250,10 @@ export class RemoteFileSync {
             const rename = job.rename;
             if (!rename.expectedRevision) {
               const value = await this.json(connection, `/sessions/${escapeId(job.sessionId)}/artifacts/${escapeId(job.artifactId)}`);
-              rename.expectedRevision = value.revision; this.save(key, job);
+              rename.expectedRevision = value.revision; this.save(connection, key, job);
             }
             const renamed = await this.json(connection, `/artifacts/${escapeId(job.artifactId)}`, rename, 'PATCH');
-            job.name = renamed.name; job.revision = renamed.revision; job.rename = undefined; this.save(key, job);
+            job.name = renamed.name; job.revision = renamed.revision; job.rename = undefined; this.save(connection, key, job);
           }
           await this.publish(connection, key, job);
         }
@@ -258,7 +264,7 @@ export class RemoteFileSync {
           this.fileHealth.degraded = true;
           job.reason = error instanceof Error ? error.message : RemoteFileReason.Transfer;
           job.retry = nextFileRetry(job.retry, error, Date.now(), this.policy?.policyVersion || ''); job.retryAt = job.retry.nextRetryAt;
-          this.save(key, job);
+          this.save(connection, key, job);
           if (error instanceof RemoteFileRequestError && error.httpStatus === 403
             && error.serverReason === RemoteFileContextRequired && job.retry.failures === 1) {
             console.warn('[RemoteFileSync] Artifact registration is waiting for server context.', {
@@ -272,7 +278,7 @@ export class RemoteFileSync {
             reason: remoteArtifactReasons.has(job.reason) ? job.reason : RemoteFileReason.Transfer,
           }, 'PUT').catch((): void => undefined);
         }
-      } catch (error) { this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.LocalCommit, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); /* Preserve the resource and continue even if its failure record is malformed. */ }
+      } catch (error) { if (!this.current(connection)) return; this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.LocalCommit, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); /* Preserve the resource and continue even if its failure record is malformed. */ }
     }
   }
   private retryAllowed(job: { retry?: RemoteFileRetryState; retryAt?: number }): boolean {
@@ -359,7 +365,8 @@ export class RemoteFileSync {
       }
     }
   }
-  private save(key: string, job: ArtifactJob): void {
+  private save(connection: Connection, key: string, job: ArtifactJob): void {
+    this.assert(connection, job.localSessionId);
     this.deps.store.transaction(() => {
       // A terminal boundary can enqueue while an HTTP await is outstanding. Merge durable additions before saving the receipt.
       const persisted = this.deps.store.get<ArtifactJob>(key);
@@ -488,6 +495,7 @@ export class RemoteFileSync {
             const previousReason = job.reason, previousQueue = job.queue.length;
             try {
               const stat = await fs.promises.stat(source.file_path);
+              this.assert(connection, row.local_id);
               job.sizeBytes = String(stat.size);
               const signature = `${source.updated_at}:${source.message_id}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
               if (signature !== job.signature) { job.signature = signature; job.changedAt = Date.now(); job.dirtyAt ||= Date.now(); }
@@ -511,14 +519,14 @@ export class RemoteFileSync {
                 job.reason = RemoteFileReason.Final; job.terminalRuns.push(source.run_id);
               } else if (job.dirtyAt && !job.queue.length && run?.runId === source.run_id && !terminal.has(run.status)
                 && (Date.now() - (job.changedAt || 0) >= 2_000 || Date.now() - job.dirtyAt >= 10_000)) await this.capture(connection, source, job);
-            } catch (error) { job.reason = error instanceof Error ? error.message : RemoteFileReason.Source; }
-            this.save(key, job);
+            } catch (error) { if (!this.current(connection)) return; job.reason = error instanceof Error ? error.message : RemoteFileReason.Source; }
+            this.save(connection, key, job);
             if (job.reason && job.reason !== previousReason) telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Deferred,
               reason: remoteFileTelemetryReason(new Error(job.reason)), run_id: source.run_id });
             if (job.queue.length > previousQueue) telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Succeeded, run_id: source.run_id });
-          } catch (error) { this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); }
+          } catch (error) { if (!this.current(connection)) return; this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); }
         }
-      } catch (error) { this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); }
+      } catch (error) { if (!this.current(connection)) return; this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); }
     }
   }
   private captureTerminal(sessionId: string, runId: string): void {
@@ -539,7 +547,7 @@ export class RemoteFileSync {
         if (this.captureProducerVersion(connection, source, job)) job.terminalRuns.push(runId);
         else job.reason = RemoteFileReason.Final;
       } catch { job.reason = RemoteFileReason.Final; job.terminalRuns.push(runId); }
-      this.save(key, job);
+      this.save(connection, key, job);
     }
   }
 
@@ -581,8 +589,11 @@ export class RemoteFileSync {
           job.deviceId = connection.deviceId; job.sessionId = session.session_id; job.environment = connection.environment;
           const uploadedAsset = await uploadDesktopMessageAsset({ ...job, path: job.snapshot.path, sha256: job.snapshot.sha256, fileIdentity: undefined }, {
             current: () => this.current(connection, job.localSessionId) && !!this.deps.store.db.prepare("SELECT id FROM cowork_messages WHERE id=? AND session_id=? AND type='user'").get(job.messageId, job.localSessionId),
-            request: (pathname, init) => this.deps.request(connection, pathname.replace(/^\/api\/remote\/v1/u, ''), { ...init,
-              headers: { ...init.headers, 'X-Remote-File-Policy-Version': this.policy!.policyVersion } }),
+            request: (pathname, init) => {
+              this.assert(connection, job.localSessionId);
+              return this.deps.request(connection, pathname.replace(/^\/api\/remote\/v1/u, ''), { ...init,
+                headers: { ...init.headers, 'X-Remote-File-Policy-Version': this.policy!.policyVersion } });
+            },
             persist: patch => {
               this.assert(connection, job.localSessionId);
               const changed = patch.availability !== undefined && (job.availability !== patch.availability || job.reason !== undefined);
@@ -618,7 +629,7 @@ export class RemoteFileSync {
           telemetry.emit(Telemetry.File, { phase: Telemetry.Retry, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error),
             retry_phase: job.retry.phase, failure_count: job.retry.failures });
         }
-      } catch (error) { this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.LocalCommit, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); /* A resource read/recovery failure cannot starve the next job. */ }
+      } catch (error) { if (!this.current(connection)) return; this.fileHealth.degraded = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.LocalCommit, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) }); /* A resource read/recovery failure cannot starve the next job. */ }
     }
   }
   private async publish(connection: Connection, key: string, job: ArtifactJob): Promise<void> {
@@ -646,7 +657,7 @@ export class RemoteFileSync {
         localArtifactId: job.localArtifactId, sessionId: job.sessionId, messageId: pending.messageId, runId: pending.runId, name: job.name,
       });
       if (!safeId(registered.artifactId)) throw new Error(RemoteFileReason.Transfer);
-      job.artifactId = registered.artifactId; job.revision = registered.revision; this.save(key, job);
+      job.artifactId = registered.artifactId; job.revision = registered.revision; this.save(connection, key, job);
     }
     const artifactPath = `/artifacts/${escapeId(job.artifactId)}`;
     // Query authoritative state before retrying an unknown publish result or advancing the queue.
@@ -665,7 +676,7 @@ export class RemoteFileSync {
       if (messageId === pending.messageId || reference.pinned) continue;
       await this.json(connection, `${artifactPath}/references`, { requestId: `history-${createHash('sha256').update(`${job.artifactId}:${messageId}:${reference.latest.artifactVersion}`).digest('hex').slice(0, 32)}`,
         artifactVersion: reference.latest.artifactVersion, messageId, runId: reference.runId, sha256: reference.latest.sha256, kind: 'history' });
-      reference.pinned = true; this.save(key, job);
+      reference.pinned = true; this.save(connection, key, job);
       telemetry.emit(Telemetry.File, { phase: Telemetry.Reference, outcome: Telemetry.Succeeded }); return;
     }
     let upload: Record<string, any>;
@@ -674,7 +685,7 @@ export class RemoteFileSync {
       if (pending.assetId) {
         upload = await this.json(connection, `/artifact-uploads/${escapeId(pending.assetId)}`);
       } else {
-        pending.expectedLatestVersion ??= manifest.latest?.artifactVersion || '0'; this.save(key, job);
+        pending.expectedLatestVersion ??= manifest.latest?.artifactVersion || '0'; this.save(connection, key, job);
         upload = await this.json(connection, `${artifactPath}/versions`, {
           publicationId: pending.publicationId, expectedLatestVersion: pending.expectedLatestVersion, captureSequence: pending.captureSequence,
           messageId: pending.messageId, runId: pending.runId, fileName: pending.fileName, mimeType: pending.mimeType, sizeBytes: pending.snapshot.sizeBytes, sha256,
@@ -688,7 +699,7 @@ export class RemoteFileSync {
     }
     // An idempotent CREATE can return an old-generation upload after its first receipt was lost.
     if (upload.writerGeneration !== connection.generation) upload = await this.json(connection, `/artifact-uploads/${escapeId(pending.assetId!)}/resume`, { publicationId: pending.publicationId, sha256 });
-    pending.generation = connection.generation; this.save(key, job);
+    pending.generation = connection.generation; this.save(connection, key, job);
     const uploadPath = `/artifact-uploads/${escapeId(pending.assetId!)}`;
     if (upload.status !== 'ready' && upload.status !== 'published') {
       const partBytes = Number(upload.partBytes), partCount = Number(upload.partCount), size = Number(pending.snapshot.sizeBytes);
@@ -708,7 +719,7 @@ export class RemoteFileSync {
           // Electron computes Content-Length from these fixed bytes; setting it manually rejects net.fetch.
           await this.request(connection, `${uploadPath}/parts/${partNo}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-Content-SHA256': digest }, body: buffer.buffer });
           telemetry.emit(Telemetry.File, { phase: Telemetry.Upload, outcome: Telemetry.Succeeded, part_count: 1, bytes: buffer.byteLength });
-          sent = true; job.retry = undefined; job.retryAt = undefined; this.save(key, job);
+          sent = true; job.retry = undefined; job.retryAt = undefined; this.save(connection, key, job);
         }
       } finally { await handle.close(); }
       await this.json(connection, `${uploadPath}/complete`, { sha256 });
@@ -739,7 +750,7 @@ export class RemoteFileSync {
     // Retire the old ID atomically so the durable queue merge cannot resurrect it. Preserve bytes, order and the original CAS.
     job.completedPublications = [...(job.completedPublications || []), pending.publicationId];
     pending.publicationId = randomUUID(); pending.assetId = undefined; pending.artifactVersion = undefined; pending.generation = undefined;
-    job.latest = latest.latest; job.revision = latest.revision; this.save(key, job);
+    job.latest = latest.latest; job.revision = latest.revision; this.save(connection, key, job);
   }
   private async finish(connection: Connection, key: string, job: ArtifactJob, pending: Publication): Promise<void> {
     const telemetry = captureRemoteFileTelemetry(connection.owner, { device_id: connection.deviceId, direction: Telemetry.Artifact,
@@ -757,7 +768,7 @@ export class RemoteFileSync {
     job.queue = job.queue.filter(item => item.publicationId !== pending.publicationId);
     job.completedPublications = [...(job.completedPublications || []), pending.publicationId];
     if (job.reason !== RemoteFileReason.Final) job.reason = undefined;
-    job.retry = undefined; job.retryAt = undefined; this.save(key, job);
+    job.retry = undefined; job.retryAt = undefined; this.save(connection, key, job);
     telemetry.emit(Telemetry.File, { phase: Telemetry.LocalCommit, outcome: Telemetry.Succeeded });
     await fs.promises.rm(pending.snapshot.path, { force: true }).catch(error => { telemetry.emit(Telemetry.Stage, { stage: Telemetry.Cleanup, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); });
   }

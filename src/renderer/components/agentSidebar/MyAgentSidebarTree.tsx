@@ -341,14 +341,13 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   }, [agentNodes, collapseAgent, collapseTasks, currentAgentId, expandAgent, expandTasks, onShowCowork]);
 
   const handleDeleteTask = async (task: AgentSidebarTaskNode) => {
-    const deleted = await coworkService.deleteSession(task.id);
-    onSidebarAction?.(deleted ? 'task_delete_success' : 'task_delete_failed', {
+    const result = await coworkService.deleteSessionWithResult(task.id);
+    onSidebarAction?.(result.success ? 'task_delete_success' : 'task_delete_failed', {
       ...getTaskActionParams(task),
-      result: deleted ? 'success' : 'failed',
+      result: result.success ? 'success' : 'failed',
     });
-    if (deleted) {
-      removeTaskPreview(task.id);
-    }
+    if (!result.success) throw new Error(result.error || i18nService.t('deleteTaskFailed'));
+    removeTaskPreview(task.id);
   };
 
   const handleToggleTaskPin = async (task: AgentSidebarTaskNode, pinned: boolean) => {

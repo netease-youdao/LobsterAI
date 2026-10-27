@@ -13,6 +13,7 @@ import { LogReporterStoreKey } from '../shared/analytics/constants';
 import * as OpenClawConstants from '../shared/openclawEngine/constants';
 import * as AccountRecovery from './libs/openclawAccountRecovery';
 import { OPENCLAW_LOOPBACK_STATE_FILE } from './libs/openclawLoopbackState';
+import { ServerRouteContextTracker } from './libs/serverRouteContext';
 import { payloadHash, sameOwner } from './remote/canonical';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
 import { RemoteStore } from './remote/remoteStore';
@@ -37,6 +38,7 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
   const ready = deferred<void>();
   const created = deferred<unknown>();
   const events: string[] = [];
+  const routeTrackers: ServerRouteContextTracker[] = [];
   const values = new Map<string, unknown>(savedFence !== undefined ? [['remote_account_execution_fence', savedFence]] : []);
   const stopped = deferred<void>();
   let failFence = false;
@@ -108,6 +110,9 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     '../shared/analytics/constants': moduleOf({ LogReporterStoreKey }),
     '../shared/openclawEngine/constants': moduleOf(OpenClawConstants),
     './libs/openclawAccountRecovery': moduleOf(AccountRecovery),
+    './libs/serverRouteContext': moduleOf({ ServerRouteContextTracker: class extends ServerRouteContextTracker {
+      constructor() { super(); routeTrackers.push(this); }
+    } }),
     './appConstants': moduleOf({ APP_NAME: 'LobsterAI', DB_FILENAME: 'lobsterai.sqlite' }),
     './sqliteStore': moduleOf({ SqliteStore: { create: () => { events.push('store:creating'); return created.promise; } } }),
     './coworkStore': moduleOf({ CoworkStore: function () {
@@ -142,6 +147,7 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
   });
   return {
     events, errors, values,
+    routeEpoch: () => routeTrackers[0]?.peekEpoch() ?? 0,
     confirmStop: async () => { stopped.resolve(); await settle(); },
     failFence: () => { failFence = true; },
     evaluate: () => vm.runInContext(compiledMain, context, { filename: mainPath }),
@@ -194,10 +200,14 @@ describe('main remote-control startup lifecycle', () => {
   test('does not access the database or construct remote services before app and store readiness', async () => {
     const fixture = startupFixture();
     expect(() => fixture.evaluate()).not.toThrow();
+    expect(fixture.routeEpoch()).toBe(0);
     expect(fixture.events).toEqual(['app:waiting']);
     await fixture.appReady();
     expect(fixture.events).toEqual(['app:waiting', 'store:creating']);
     expect(fixture.errors).toEqual([]);
+    expect(fixture.routeEpoch()).toBe(0);
+    await fixture.storeReady();
+    expect(fixture.routeEpoch()).toBeGreaterThan(0);
   });
 
   test('initializes ownership and configures command handlers before starting the bridge', async () => {

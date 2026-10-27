@@ -19,7 +19,7 @@ function deferred<T>() {
   const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 }
-const lifecycleChanges = ['stop', 'context', 'restart'] as const;
+const lifecycleChanges = ['stop', 'context', 'restart', 'route_aba', 'invalidated_aba'] as const;
 type LifecycleChange = typeof lifecycleChanges[number];
 const contextChanged = 'REMOTE_AVAILABILITY_CONTEXT_CHANGED';
 function notFound() { return Object.assign(new Error('No receipt yet'), { httpStatus: 404 }); }
@@ -38,7 +38,7 @@ function fixture(attempted = true) {
   });
   const sessionId = store.sync('local')!.session_id;
   store.bindRemote('local', sessionId, 'desktop');
-  const initial: AvailabilityContext = { scope: 'target:1:personal:desktop', owner, deviceId: 'desktop', generation: '1', supported: true, publicationResolutionSupported: true };
+  const initial: AvailabilityContext = { scope: 'target:1:personal:desktop', routeEpoch: 1, owner, deviceId: 'desktop', generation: '1', supported: true, publicationResolutionSupported: true };
   let context = initial;
   const receipt = { state: 'accepted', publicationId: 'pending', projectionRevision: '1', committedSeq: '1' };
   const request = vi.fn(async (_path: string, _method: string, _body: unknown, _version: number, _timeout?: number): Promise<any> => receipt);
@@ -58,6 +58,13 @@ function fixture(attempted = true) {
   const send = () => access.send(context, publisher.ledger.request(sealed.key)!);
   const change = (mode: LifecycleChange) => {
     if (mode === 'context') context = { ...initial, scope: 'other:1:personal:desktop', generation: '2' };
+    else if (mode === 'route_aba') {
+      context = { ...initial, scope: 'other:1:personal:desktop', routeEpoch: 2 };
+      context = { ...initial, routeEpoch: 3 };
+    } else if (mode === 'invalidated_aba') {
+      publisher.invalidateContext(); context = { ...initial, scope: 'other:1:personal:desktop' };
+      publisher.invalidateContext(); context = initial;
+    }
     else { publisher.stop(); if (mode === 'restart') publisher.start(); }
   };
   const resume = () => { context = initial; publisher.start(); };

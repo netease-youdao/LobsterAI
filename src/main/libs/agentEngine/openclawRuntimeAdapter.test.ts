@@ -42,7 +42,10 @@ import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
 import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
 import { ProviderName } from '../../../shared/providers/constants';
+import { type RemoteOwner, RemoteRunStatus } from '../../../shared/remote/constants';
+import type { DeletionGuard } from '../../../shared/remote/deletions';
 import { setLanguage, t } from '../../i18n';
+import type { RemoteRun } from '../../remote/remoteStore';
 import { getServerApiBaseUrl } from '../endpoints';
 import { OpenClawChannelSessionSync } from '../openclawChannelSessionSync';
 import { ConfigWorkloadState } from '../openclawConfigObservation';
@@ -11342,6 +11345,137 @@ test('late aborted evidence after legacy local stop is emitted before closed-run
   expect(termination).not.toHaveBeenCalled();
   adapter.handleChatEvent({ state: 'aborted', runId: 'old-run' });
   expect(termination).toHaveBeenCalledWith('local-stop-session', 'old-run', 'cancelled');
+});
+
+function createRecoveredCancellationFixture() {
+  const { session, store } = createReconcileStore([]);
+  session.status = 'idle';
+  let owner: RemoteOwner | null = { userId: 'owner-a', scopeKey: 'personal' };
+  store.remoteCreationOwner = () => owner;
+  const getGatewayProcessPid = vi.fn(() => 42);
+  const adapter = new OpenClawRuntimeAdapter(store, { getGatewayProcessPid });
+  const remote = adapter.store.remote;
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const binding = { runId: 'persisted-gateway-run', remoteRunId: 'persisted-core-run', sessionKey, gatewayBootId: 'old-boot' };
+  remote.run = (id: string) => remote.get<RemoteRun>(`run:${id}`);
+  remote.deletionGuard = (id: string) => remote.get<DeletionGuard>(`guard:${id}`)!;
+  remote.put(`run:${session.id}`, { runId: binding.remoteRunId, status: RemoteRunStatus.Reconciling,
+    statusVersion: '3', startedAt: new Date(1).toISOString(), finishedAt: null, error: null });
+  remote.put(`gatewayRun:${session.id}`, binding);
+  remote.put(`guard:${session.id}`, { version: '1', runId: binding.remoteRunId });
+  adapter.recoveryGatewayBootId = 'current-boot';
+  adapter.recoveryGatewayProcessPid = 42;
+  adapter.gatewayClientGeneration = 1;
+  adapter.accountRecoveryEpoch = 1;
+  const inactive = () => ({ sessions: [{ key: sessionKey, hasActiveRun: false, hasActiveSubagentRun: false }] });
+  const request = vi.fn(async (method: string): Promise<unknown> => method === OpenClawGatewayMethod.SessionsAbort
+    ? { ok: true } : inactive());
+  adapter.gatewayClient = { request, start: () => {}, stop: () => {} };
+  const stopped = vi.spyOn(adapter, 'stopSession');
+  const termination = vi.fn();
+  adapter.on('runTermination', termination);
+  return { adapter, remote, session, sessionKey, binding, request, inactive, stopped, termination, getGatewayProcessPid,
+    changeOwner: () => { owner = { userId: 'owner-b', scopeKey: 'personal' }; },
+  };
+}
+
+test.each([undefined, false])('recovered cancellation confirms an old-boot idle task with inactive descendants %s', async hasActiveSubagentRun => {
+  const f = createRecoveredCancellationFixture();
+  let finishSnapshot!: (value: unknown) => void;
+  f.request.mockImplementation(async method => method === OpenClawGatewayMethod.SessionsAbort
+    ? { ok: true } : new Promise(resolve => { finishSnapshot = resolve; }));
+  const operation = f.adapter.cancelSessionConfirmed(f.session.id);
+  await Promise.resolve();
+  expect(f.request).toHaveBeenCalledWith(OpenClawGatewayMethod.SessionsAbort,
+    { key: f.sessionKey, clearQueued: true }, { timeoutMs: 15_000 });
+  expect(f.request).toHaveBeenCalledWith(OpenClawGatewayMethod.SessionsList,
+    { search: f.sessionKey, limit: 50, archived: 'all' }, { timeoutMs: 2_000 });
+  expect(f.stopped).not.toHaveBeenCalled();
+  expect(f.termination).not.toHaveBeenCalled();
+  finishSnapshot({ sessions: [{ key: f.sessionKey, hasActiveRun: false, hasActiveSubagentRun }] });
+  await expect(operation).resolves.toBe(true);
+  expect(f.stopped).toHaveBeenCalledExactlyOnceWith(f.session.id);
+  expect(f.termination).toHaveBeenCalledExactlyOnceWith(f.session.id, f.binding.runId, RemoteRunStatus.Cancelled);
+  expect(f.session.status).toBe('idle');
+  expect(f.request).toHaveBeenCalledTimes(2);
+});
+
+type RecoveredCancellationFixture = ReturnType<typeof createRecoveredCancellationFixture>;
+test.each([
+  ['missing binding', (f: RecoveredCancellationFixture) => f.remote.put(`gatewayRun:${f.session.id}`, null)],
+  ['mismatched core run', (f: RecoveredCancellationFixture) => f.remote.put(`gatewayRun:${f.session.id}`, { ...f.binding, remoteRunId: 'other-run' })],
+  ['missing gateway run', (f: RecoveredCancellationFixture) => f.remote.put(`gatewayRun:${f.session.id}`, { ...f.binding, runId: '' })],
+  ['mismatched session key', (f: RecoveredCancellationFixture) => f.remote.put(`gatewayRun:${f.session.id}`, { ...f.binding, sessionKey: 'agent:other:lobsterai:other' })],
+  ['missing core run', (f: RecoveredCancellationFixture) => f.remote.put(`run:${f.session.id}`, null)],
+  ['missing current boot', (f: RecoveredCancellationFixture) => { f.adapter.recoveryGatewayBootId = ''; }],
+  ['denied session access', (f: RecoveredCancellationFixture) => { f.adapter.store.canReadSession = () => false; }],
+  ['changed gateway process', (f: RecoveredCancellationFixture) => f.getGatewayProcessPid.mockReturnValue(43)],
+  ['active account recovery', (f: RecoveredCancellationFixture) => { f.adapter.accountRecoveryActive = true; }],
+] as const)('recovered cancellation rejects %s before sending a stop', async (_scenario, invalidate) => {
+  const f = createRecoveredCancellationFixture();
+  invalidate(f);
+  await expect(f.adapter.cancelSessionConfirmed(f.session.id)).resolves.toBe(false);
+  expect(f.request).not.toHaveBeenCalled();
+  expect(f.stopped).not.toHaveBeenCalled();
+  expect(f.termination).not.toHaveBeenCalled();
+});
+
+const recoveredStopChanges = [
+  ['core run', (f: RecoveredCancellationFixture) => f.remote.put(`run:${f.session.id}`, { ...f.remote.run(f.session.id), runId: 'new-core-run' })],
+  ['guard', (f: RecoveredCancellationFixture) => f.remote.put(`guard:${f.session.id}`, { version: '2', runId: f.binding.remoteRunId })],
+  ['binding', (f: RecoveredCancellationFixture) => f.remote.put(`gatewayRun:${f.session.id}`, { ...f.binding, runId: 'new-gateway-run' })],
+  ['binding boot', (f: RecoveredCancellationFixture) => f.remote.put(`gatewayRun:${f.session.id}`, { ...f.binding, gatewayBootId: 'replacement-binding-boot' })],
+  ['session key', (f: RecoveredCancellationFixture) => { f.adapter.resolveInteractiveSessionKey = () => 'agent:other:lobsterai:other'; }],
+  ['owner', (f: RecoveredCancellationFixture) => f.changeOwner()],
+  ['read access', (f: RecoveredCancellationFixture) => { f.adapter.store.canReadSession = () => false; }],
+  ['account ABA', (f: RecoveredCancellationFixture) => { f.adapter.accountRecoveryEpoch += 2; }],
+  ['account recovery', (f: RecoveredCancellationFixture) => { f.adapter.accountRecoveryActive = true; }],
+  ['client', (f: RecoveredCancellationFixture) => { f.adapter.gatewayClient = { request: f.request, start: () => {}, stop: () => {} }; }],
+  ['client generation', (f: RecoveredCancellationFixture) => { f.adapter.gatewayClientGeneration++; }],
+  ['gateway boot', (f: RecoveredCancellationFixture) => { f.adapter.recoveryGatewayBootId = 'replacement-boot'; }],
+  ['adapter process', (f: RecoveredCancellationFixture) => { f.adapter.recoveryGatewayProcessPid = 43; }],
+  ['managed process', (f: RecoveredCancellationFixture) => f.getGatewayProcessPid.mockReturnValue(43)],
+  ['active turn', (f: RecoveredCancellationFixture) => f.adapter.activeTurns.set(f.session.id, createActiveTurn(f.session.id, f.sessionKey, 'new-active-run'))],
+  ['yielded wait', (f: RecoveredCancellationFixture) => f.adapter.yieldedSessions.set(f.session.id,
+    { sessionKey: f.sessionKey, runId: 'new-yielded-run', turnToken: 2, yieldedAt: Date.now() })],
+] as const;
+for (const responseMethod of [OpenClawGatewayMethod.SessionsAbort, OpenClawGatewayMethod.SessionsList]) {
+  test.each(recoveredStopChanges)(`recovered cancellation rejects changed %s after ${responseMethod}`, async (_scenario, invalidate) => {
+    const f = createRecoveredCancellationFixture();
+    f.request.mockImplementation(async method => {
+      if (method === responseMethod) invalidate(f);
+      return method === OpenClawGatewayMethod.SessionsAbort ? { ok: true } : f.inactive();
+    });
+    await expect(f.adapter.cancelSessionConfirmed(f.session.id)).resolves.toBe(false);
+    expect(f.stopped).not.toHaveBeenCalled();
+    expect(f.termination).not.toHaveBeenCalled();
+    expect(f.request).toHaveBeenCalledTimes(responseMethod === OpenClawGatewayMethod.SessionsAbort ? 1 : 2);
+  });
+}
+
+test.each([
+  { hasActiveRun: true, hasActiveSubagentRun: false },
+  { hasActiveRun: false, hasActiveSubagentRun: true },
+  { hasActiveRun: false, hasActiveSubagentRun: 'unknown' },
+  {},
+])('recovered cancellation preserves the task without confirmed inactivity: %j', async activity => {
+  const f = createRecoveredCancellationFixture();
+  f.request.mockImplementation(async method => method === OpenClawGatewayMethod.SessionsAbort
+    ? { ok: true } : { sessions: [{ key: f.sessionKey, ...activity }] });
+  await expect(f.adapter.cancelSessionConfirmed(f.session.id)).resolves.toBe(false);
+  expect(f.stopped).not.toHaveBeenCalled();
+  expect(f.termination).not.toHaveBeenCalled();
+});
+
+test.each([OpenClawGatewayMethod.SessionsAbort, OpenClawGatewayMethod.SessionsList])('recovered cancellation preserves the task after %s fails', async failingMethod => {
+  const f = createRecoveredCancellationFixture();
+  f.request.mockImplementation(async method => {
+    if (method === failingMethod) throw new Error('Disconnected');
+    return { ok: true };
+  });
+  await expect(f.adapter.cancelSessionConfirmed(f.session.id)).resolves.toBe(false);
+  expect(f.stopped).not.toHaveBeenCalled();
+  expect(f.termination).not.toHaveBeenCalled();
 });
 
 test.each([undefined, false])('remote cancellation confirms a yielded stop with idle descendants reported as %s', async (hasActiveSubagentRun) => {

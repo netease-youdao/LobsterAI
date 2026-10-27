@@ -4,6 +4,7 @@ import {
   AuthLifecycleEventType,
   AuthRefreshFailureKind,
   AuthRefreshOutcome,
+  AuthRefreshReason,
   AuthSessionStatus,
 } from '../../shared/auth/constants';
 import {
@@ -11,12 +12,15 @@ import {
   AuthSessionRequestError,
   type AuthTokens,
 } from './authSessionManager';
+import { ServerRouteContextTracker } from './serverRouteContext';
 
 type TestManagerOptions = {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
   tokens?: AuthTokens | null;
   timeoutMs?: number;
   getSessionKey?: () => string | null;
+  getRefreshUrl?: () => string;
+  getRequestHeaders?: () => HeadersInit;
 };
 
 function createTestManager(options: TestManagerOptions) {
@@ -30,21 +34,25 @@ function createTestManager(options: TestManagerOptions) {
     tokens = null;
   });
   const onLifecycleEvent = vi.fn();
+  const onRefreshSuccess = vi.fn();
   const manager = new AuthSessionManager({
     getTokens: () => tokens,
     getSessionKey: options.getSessionKey,
     saveTokens,
     fetch: options.fetch,
-    getRefreshUrl: () => 'https://server.example/api/auth/refresh',
+    getRefreshUrl: options.getRefreshUrl ?? (() => 'https://server.example/api/auth/refresh'),
+    getRequestHeaders: options.getRequestHeaders,
     buildRefreshRequestBody: refreshToken => JSON.stringify({ refreshToken }),
     onTerminalFailure,
     onLifecycleEvent,
+    onRefreshSuccess,
     timeoutMs: options.timeoutMs,
   });
 
   return {
     manager,
     onLifecycleEvent,
+    onRefreshSuccess,
     onTerminalFailure,
     saveTokens,
     setTokens(nextTokens: AuthTokens | null) {
@@ -281,11 +289,143 @@ describe('AuthSessionManager refresh', () => {
     }));
 
     await expect(refresh).resolves.toMatchObject({
-      outcome: AuthRefreshOutcome.Success,
-      accessToken: 'access-enterprise-b',
+      outcome: AuthRefreshOutcome.TransientFailure,
+      failureKind: AuthRefreshFailureKind.ContextChanged,
     });
     expect(testManager.onTerminalFailure).not.toHaveBeenCalled();
     expect(testManager.saveTokens).not.toHaveBeenCalled();
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
+
+const refreshResponse = (accessToken: string) => new Response(JSON.stringify({ code: 0,
+  data: { accessToken, refreshToken: `refresh-${accessToken}` } }), { headers: { 'Content-Type': 'application/json' } });
+
+describe('authenticated route transitions', () => {
+  function routes() {
+    const tracker = new ServerRouteContextTracker();
+    let url = 'https://a.example';
+    let owner = 'owner:1';
+    const current = () => tracker.capture(url, owner);
+    return {
+      getSessionKey: () => `${current().authSessionKey}:${current().routeEpoch}`,
+      getRefreshUrl: () => `${url}/api/auth/refresh`,
+      switchTo(nextUrl: string, nextOwner = owner) { url = nextUrl; owner = nextOwner; current(); },
+    };
+  }
+
+  test('cancels an A request before a late 401 can refresh against B', async () => {
+    const route = routes();
+    const response = deferred<Response>();
+    const authFetch = vi.fn();
+    const transport = vi.fn((_url: string, _init?: RequestInit) => response.promise);
+    const { manager, saveTokens, onTerminalFailure, onLifecycleEvent } = createTestManager({ fetch: authFetch, ...route });
+    const request = manager.fetchWithAuth('https://a.example/api/remote/poll', {}, transport);
+    const rejected = expect(request).rejects.toMatchObject({ failureKind: AuthRefreshFailureKind.ContextChanged });
+    route.switchTo('https://b.example');
+    manager.invalidateContext();
+    expect(transport.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    response.resolve(new Response(null, { status: 401 }));
+    await rejected;
+    expect(authFetch).not.toHaveBeenCalled();
+    expect(saveTokens).not.toHaveBeenCalled();
+    expect(onTerminalFailure).not.toHaveBeenCalled();
+    expect(onLifecycleEvent).not.toHaveBeenCalled();
+  });
+
+  test('does not join the first A refresh or let its finally clear the second A refresh', async () => {
+    const route = routes();
+    const oldResponse = deferred<Response>(), nextResponse = deferred<Response>();
+    const fetch = vi.fn().mockImplementationOnce(() => oldResponse.promise).mockImplementationOnce(() => nextResponse.promise);
+    const { manager, saveTokens, onLifecycleEvent, onRefreshSuccess } = createTestManager({ fetch, ...route });
+    const old = manager.refresh(AuthRefreshReason.Passive);
+    route.switchTo('https://b.example'); manager.invalidateContext();
+    route.switchTo('https://a.example'); manager.invalidateContext();
+    const next = manager.refresh(AuthRefreshReason.Passive);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    oldResponse.resolve(refreshResponse('stale'));
+    await expect(old).resolves.toMatchObject({ outcome: AuthRefreshOutcome.TransientFailure, failureKind: AuthRefreshFailureKind.ContextChanged });
+    expect(saveTokens).not.toHaveBeenCalled();
+    expect(onLifecycleEvent).not.toHaveBeenCalled();
+    const joined = manager.refresh(AuthRefreshReason.Manual);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    nextResponse.resolve(refreshResponse('current'));
+    const results = await Promise.all([next, joined]);
+    expect(results[0]).toMatchObject({ outcome: AuthRefreshOutcome.Success, accessToken: 'current', joinedRequests: 1 });
+    expect(results[1]).toEqual(results[0]);
+    expect(saveTokens).toHaveBeenCalledExactlyOnceWith({ accessToken: 'current', refreshToken: 'refresh-current' });
+    expect(onLifecycleEvent).toHaveBeenCalledOnce();
+    expect(onRefreshSuccess).toHaveBeenCalledOnce();
+  });
+
+  test.each([200, 401])('ignores a refresh body completed after A → B → A (HTTP %s)', async status => {
+    const route = routes();
+    const body = deferred<unknown>(), reading = deferred<void>();
+    const response = new Response(null, { status });
+    response.json = () => { reading.resolve(); return body.promise; };
+    const { manager, saveTokens, onLifecycleEvent, onTerminalFailure, onRefreshSuccess } = createTestManager({
+      fetch: vi.fn(async () => response), ...route,
+    });
+    const refresh = manager.refresh(AuthRefreshReason.Passive);
+    await reading.promise;
+    route.switchTo('https://b.example'); manager.invalidateContext();
+    route.switchTo('https://a.example'); manager.invalidateContext();
+    body.resolve(status === 200 ? { code: 0, data: { accessToken: 'stale', refreshToken: 'stale' } } : { code: 40101 });
+    const result = await refresh;
+    expect(result).toMatchObject({ outcome: AuthRefreshOutcome.TransientFailure, failureKind: AuthRefreshFailureKind.ContextChanged });
+    expect(result).not.toHaveProperty('accessToken');
+    expect(saveTokens).not.toHaveBeenCalled();
+    expect(onTerminalFailure).not.toHaveBeenCalled();
+    expect(onRefreshSuccess).not.toHaveBeenCalled();
+    expect(onLifecycleEvent).not.toHaveBeenCalled();
+  });
+
+  test('does not turn an obsolete refresh transport failure into a current lifecycle event', async () => {
+    const route = routes(), response = deferred<Response>();
+    const { manager, onLifecycleEvent, onTerminalFailure } = createTestManager({ fetch: () => response.promise, ...route });
+    const refresh = manager.refresh(AuthRefreshReason.Proactive);
+    route.switchTo('https://b.example'); manager.invalidateContext();
+    await manager.waitForPendingRefresh();
+    response.reject(new Error('old network failure'));
+    await expect(refresh).resolves.toMatchObject({ failureKind: AuthRefreshFailureKind.ContextChanged });
+    expect(onLifecycleEvent).not.toHaveBeenCalled();
+    expect(onTerminalFailure).not.toHaveBeenCalled();
+  });
+
+  test('checks the effective route even before a route-change notification', async () => {
+    let url = 'https://a.example';
+    const response = deferred<Response>();
+    const { manager, saveTokens } = createTestManager({ fetch: () => response.promise,
+      getSessionKey: () => 'same-owner', getRefreshUrl: () => `${url}/api/auth/refresh` });
+    const refresh = manager.refresh(AuthRefreshReason.Passive);
+    url = 'https://b.example';
+    response.resolve(refreshResponse('stale'));
+    await expect(refresh).resolves.toMatchObject({ failureKind: AuthRefreshFailureKind.ContextChanged });
+    expect(saveTokens).not.toHaveBeenCalled();
+  });
+
+  test('freezes account and caller headers for the 401 refresh and retry', async () => {
+    let accountHeaders = { 'X-Account': 'first' };
+    const callerHeaders = new Headers({ 'X-Request': 'first', 'X-Account': 'caller-override' });
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/auth/refresh')) return refreshResponse('current');
+      if (new Headers(init?.headers).get('Authorization') === 'Bearer access-old') {
+        accountHeaders = { 'X-Account': 'later' }; callerHeaders.set('X-Request', 'later');
+        return new Response(null, { status: 401 });
+      }
+      return new Response(null, { status: 200 });
+    });
+    const { manager } = createTestManager({ fetch, getRequestHeaders: () => accountHeaders });
+    await manager.fetchWithAuth('https://server.example/api/remote/poll', { headers: callerHeaders });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get('X-Account'))).toEqual(['first', 'first', 'first']);
+    expect(new Headers(fetch.mock.calls[2][1]?.headers).get('X-Request')).toBe('first');
   });
 });
 

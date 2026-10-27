@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { payloadHash, sameOwner } from './canonical';
 import type { AvailabilityContext } from './remoteAvailabilityPublisher';
 import type { AvailabilityRequest, AvailabilitySession } from './remoteAvailabilityStore';
+import { reconcileRemoteDeletionSync, rememberRemoteDeletionAdoption, remoteDeletionTombstoneForBinding, writeRemoteDeletionTombstone } from './remoteDeletionSyncState';
 import { samePersistedRemoteEnvironment } from './remoteEnvironmentMigration';
 import type { Tombstone } from './remoteLocalGc';
 import type { RemoteStore } from './remoteStore';
@@ -28,6 +29,7 @@ export function rememberAvailabilityDeletionBinding(store: RemoteStore, context:
     || sync.session_id !== state.sessionId || sync.device_id !== context.deviceId || !sync.sync_environment || !context.environment
     || !samePersistedRemoteEnvironment(store, context, sync.sync_environment, context.environment)) return;
   const value = binding(context, state);
+  rememberRemoteDeletionAdoption(store, state.localId, { ...context, targetId: context.environment }, value);
   if (payloadHash(store.get(`${AvailabilityDeletion.Binding}${state.localId}`)) !== payloadHash(value))
     store.put(`${AvailabilityDeletion.Binding}${state.localId}`, value);
 }
@@ -35,7 +37,11 @@ export function rememberAvailabilityDeletionBinding(store: RemoteStore, context:
 /** Reconcile only the original lifecycle. Missing rows alone never create a deletion. */
 export function availabilityDeletion(store: RemoteStore, context: AvailabilityContext, state: AvailabilitySession,
   originalCheckpoint?: Record<string, any> | null): Tombstone | null {
-  const key = `${AvailabilityDeletion.Prefix}${state.localId}`, saved = store.get<Tombstone>(key);
+  const syncContext = { ...context, targetId: context.environment || '', adopted: true, controlBinding: binding(context, state) };
+  const global = store.get<Tombstone>(`${AvailabilityDeletion.Prefix}${state.localId}`);
+  if (!global) return null;
+  reconcileRemoteDeletionSync(store, state.localId, syncContext);
+  const saved = remoteDeletionTombstoneForBinding(store, state.localId, syncContext);
   if (!saved) return null;
   const sync = store.sync(state.localId);
   if (!sync || sync.migration_frozen || !sameOwner(saved.owner, context.owner) || !sameOwner(saved.owner, store.owner(state.localId))
@@ -67,7 +73,7 @@ export function availabilityDeletion(store: RemoteStore, context: AvailabilityCo
   if (payloadHash(saved.availabilityBinding) !== payloadHash(expected)) throw new Error('REMOTE_DELETION_BINDING_UNRESOLVED');
   if (!saved.deleteEventId) { saved.deleteEventId = randomUUID(); changed = true; }
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(saved.deleteEventId)) throw new Error('REMOTE_DELETION_EVIDENCE_INVALID');
-  if (changed) store.put(key, saved); // Synchronous core write; a retry never generates a second event identity.
+  if (changed) store.db.transaction(() => writeRemoteDeletionTombstone(store, state.localId, saved, syncContext))(); // Preserve the target's original event identity.
   return saved;
 }
 
@@ -101,6 +107,7 @@ export function acknowledgeAvailabilityDeletion(store: RemoteStore, context: Ava
   if (fact.eventType !== 'session.deleted' || fact.eventId !== saved.deleteEventId
     || fact.payload.deletedAt !== new Date(saved.deletedAt).toISOString() || !validAvailabilityDeletionAck({ ...saved, availabilityAck: ack }))
     throw new Error('REMOTE_DELETION_RECEIPT_INVALID');
-  store.put(`${AvailabilityDeletion.Prefix}${state.localId}`, { ...saved, availabilityAck: ack, ackAt: saved.ackAt ?? ack.confirmedAt });
+  store.db.transaction(() => writeRemoteDeletionTombstone(store, state.localId, { ...saved, availabilityAck: ack, ackAt: saved.ackAt ?? ack.confirmedAt },
+    { ...context, targetId: context.environment || '', adopted: true, controlBinding: binding(context, state) }))();
   // Legacy source_seq/ack_seq/ackSourceSeq are deliberately untouched.
 }

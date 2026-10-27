@@ -38,6 +38,7 @@ type AuthSessionManagerOptions = {
   saveTokens: (tokens: AuthTokens) => void;
   fetch: AuthFetch;
   getRefreshUrl: () => string;
+  getRequestHeaders?: () => HeadersInit;
   buildRefreshRequestBody: (refreshToken: string) => string;
   onTerminalFailure: (result: AuthRefreshResultWithoutTiming) => void;
   onRefreshSuccess?: (result: AuthRefreshResultWithoutTiming) => void;
@@ -53,7 +54,13 @@ type AuthSessionManagerOptions = {
 type PendingRefresh = {
   promise: Promise<AuthRefreshResult>;
   joinedRequests: number;
+  context: AuthRequestContext;
+};
+
+type AuthRequestContext = {
   sessionKey: string | null;
+  refreshUrl: string;
+  headers: Headers;
 };
 
 const DEFAULT_REFRESH_TIMEOUT_MS = 15_000;
@@ -125,6 +132,7 @@ export class AuthSessionManager {
   private readonly options: Required<Pick<AuthSessionManagerOptions, 'timeoutMs' | 'now'>> &
     Omit<AuthSessionManagerOptions, 'timeoutMs' | 'now'>;
   private pendingRefresh: PendingRefresh | null = null;
+  private readonly requests = new Map<AbortController, AuthRequestContext>();
 
   constructor(options: AuthSessionManagerOptions) {
     this.options = {
@@ -135,12 +143,24 @@ export class AuthSessionManager {
   }
 
   async waitForPendingRefresh(): Promise<void> {
-    await this.pendingRefresh?.promise;
+    if (this.pendingRefresh && this.isCurrent(this.pendingRefresh.context)) await this.pendingRefresh.promise;
   }
 
   refresh(reason: AuthRefreshReasonValue): Promise<AuthRefreshResult> {
-    const sessionKey = this.getSessionKey();
-    if (this.pendingRefresh?.sessionKey === sessionKey) {
+    return this.refreshForContext(reason, this.captureContext());
+  }
+
+  /** Retire queued/in-flight work; completed remote effects still need their original receipts. */
+  invalidateContext(): void {
+    for (const [controller, context] of this.requests) {
+      if (!this.isCurrent(context)) controller.abort();
+    }
+  }
+
+  private refreshForContext(reason: AuthRefreshReasonValue, context: AuthRequestContext): Promise<AuthRefreshResult> {
+    if (!this.isCurrent(context)) return Promise.resolve({ ...this.contextChanged(reason), durationMs: 0, joinedRequests: 0 });
+    this.invalidateContext();
+    if (this.pendingRefresh && this.sameContext(this.pendingRefresh.context, context)) {
       this.pendingRefresh.joinedRequests += 1;
       return this.pendingRefresh.promise;
     }
@@ -148,7 +168,7 @@ export class AuthSessionManager {
     const startedAt = this.options.now();
     const pending: PendingRefresh = {
       joinedRequests: 0,
-      sessionKey,
+      context,
       promise: Promise.resolve({
         outcome: AuthRefreshOutcome.NoTokens,
         reason,
@@ -157,14 +177,14 @@ export class AuthSessionManager {
       }),
     };
 
-    const promise = this.performRefresh(reason, sessionKey)
+    const promise = this.performRefresh(reason, context)
       .then(result => {
         const completed: AuthRefreshResult = {
-          ...result,
+          ...(this.isCurrent(context) ? result : this.contextChanged(reason)),
           durationMs: Math.max(0, this.options.now() - startedAt),
           joinedRequests: pending.joinedRequests,
         };
-        this.emitLifecycleEvent(completed);
+        if (this.isCurrent(context) && completed.failureKind !== AuthRefreshFailureKind.ContextChanged) this.emitLifecycleEvent(completed);
         return completed;
       })
       .finally(() => {
@@ -179,6 +199,7 @@ export class AuthSessionManager {
   }
 
   async fetchWithAuth(url: string, options?: RequestInit, transport: AuthFetch = this.options.fetch): Promise<Response> {
+    const context = this.captureContext();
     const initialTokens = this.options.getTokens();
     if (!initialTokens) {
       throw new AuthSessionRequestError(
@@ -186,33 +207,32 @@ export class AuthSessionManager {
         'No auth tokens are available',
       );
     }
-    const sessionKey = this.getSessionKey();
+    this.invalidateContext();
+    const controller = new AbortController();
+    this.requests.set(controller, context);
+    const signal = options?.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+    const requestHeaders = new Headers(options?.headers);
+    context.headers.forEach((value, name) => requestHeaders.set(name, value));
 
     const doFetch = async (accessToken: string): Promise<Response> => {
-      if (this.getSessionKey() !== sessionKey) {
-        throw new AuthSessionRequestError(
-          AuthSessionStatus.TemporarilyUnavailable,
-          'Auth session changed before the authenticated request was sent',
-        );
-      }
-      const headers = new Headers(options?.headers);
+      this.assertCurrent(context);
+      const headers = new Headers(requestHeaders);
       headers.set('Authorization', `Bearer ${accessToken}`);
       try {
         const response = await transport(url, {
           ...options,
           headers,
+          signal,
         });
-        if (this.getSessionKey() !== sessionKey) {
+        if (!this.isCurrent(context)) {
           // A streamed response may still hold a transport permit after its headers arrive.
           // Cleanup must not delay rejecting a response from an obsolete auth session.
           try { void response.body?.cancel().catch((): void => undefined); } catch { /* Preserve the auth rejection. */ }
-          throw new AuthSessionRequestError(
-            AuthSessionStatus.TemporarilyUnavailable,
-            'Auth session changed while the authenticated request was running',
-          );
+          this.assertCurrent(context);
         }
         return response;
       } catch (error) {
+        this.assertCurrent(context);
         if (error instanceof AuthSessionRequestError) {
           throw error;
         }
@@ -227,48 +247,57 @@ export class AuthSessionManager {
       }
     };
 
-    let rejectedAccessToken = initialTokens.accessToken;
-    let response = await doFetch(rejectedAccessToken);
-    if (response.status !== 401) {
-      return response;
-    }
-
-    const latestTokens = this.options.getTokens();
-    if (latestTokens?.accessToken && latestTokens.accessToken !== rejectedAccessToken) {
-      rejectedAccessToken = latestTokens.accessToken;
-      response = await doFetch(rejectedAccessToken);
+    try {
+      let rejectedAccessToken = initialTokens.accessToken;
+      let response = await doFetch(rejectedAccessToken);
+      this.assertCurrent(context);
       if (response.status !== 401) {
         return response;
       }
-    }
 
-    const refreshResult = await this.refresh(AuthRefreshReason.Passive);
-    if (refreshResult.outcome === AuthRefreshOutcome.Success && refreshResult.accessToken) {
-      return doFetch(refreshResult.accessToken);
-    }
-    if (refreshResult.outcome === AuthRefreshOutcome.TerminalFailure) {
+      const latestTokens = this.options.getTokens();
+      if (latestTokens?.accessToken && latestTokens.accessToken !== rejectedAccessToken) {
+        rejectedAccessToken = latestTokens.accessToken;
+        response = await doFetch(rejectedAccessToken);
+        this.assertCurrent(context);
+        if (response.status !== 401) {
+          return response;
+        }
+      }
+
+      const refreshResult = await this.refreshForContext(AuthRefreshReason.Passive, context);
+      this.assertCurrent(context);
+      if (refreshResult.outcome === AuthRefreshOutcome.Success && refreshResult.accessToken) {
+        response = await doFetch(refreshResult.accessToken);
+        this.assertCurrent(context);
+        return response;
+      }
+      if (refreshResult.outcome === AuthRefreshOutcome.TerminalFailure) {
+        throw new AuthSessionRequestError(
+          AuthSessionStatus.Expired,
+          'Refresh token was rejected',
+          { failureKind: refreshResult.failureKind },
+        );
+      }
+      if (refreshResult.outcome === AuthRefreshOutcome.NoTokens) {
+        throw new AuthSessionRequestError(
+          AuthSessionStatus.Unauthenticated,
+          'Auth tokens were cleared before refresh',
+        );
+      }
       throw new AuthSessionRequestError(
-        AuthSessionStatus.Expired,
-        'Refresh token was rejected',
+        AuthSessionStatus.TemporarilyUnavailable,
+        'Token refresh is temporarily unavailable',
         { failureKind: refreshResult.failureKind },
       );
+    } finally {
+      this.requests.delete(controller);
     }
-    if (refreshResult.outcome === AuthRefreshOutcome.NoTokens) {
-      throw new AuthSessionRequestError(
-        AuthSessionStatus.Unauthenticated,
-        'Auth tokens were cleared before refresh',
-      );
-    }
-    throw new AuthSessionRequestError(
-      AuthSessionStatus.TemporarilyUnavailable,
-      'Token refresh is temporarily unavailable',
-      { failureKind: refreshResult.failureKind },
-    );
   }
 
   private async performRefresh(
     reason: AuthRefreshReasonValue,
-    sessionKey: string | null,
+    context: AuthRequestContext,
   ): Promise<AuthRefreshResultWithoutTiming> {
     const tokens = this.options.getTokens();
     if (!tokens?.refreshToken) {
@@ -279,6 +308,7 @@ export class AuthSessionManager {
     }
 
     const controller = new AbortController();
+    this.requests.set(controller, context);
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
@@ -286,31 +316,31 @@ export class AuthSessionManager {
     }, this.options.timeoutMs);
 
     try {
-      const refreshUrl = this.options.getRefreshUrl();
+      if (!this.isCurrent(context)) return this.contextChanged(reason);
+      const headers = new Headers(context.headers);
+      headers.set('Content-Type', 'application/json');
       this.options.log?.info(`[Auth] requesting token refresh (reason: ${reason})`);
-      const response = await this.options.fetch(refreshUrl, {
+      const response = await this.options.fetch(context.refreshUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: this.options.buildRefreshRequestBody(tokens.refreshToken),
         signal: controller.signal,
       });
+      if (!this.isCurrent(context)) {
+        try { void response.body?.cancel().catch((): void => undefined); } catch { /* Preserve context cancellation. */ }
+        return this.contextChanged(reason);
+      }
       const body = await readRefreshResponseBody(response);
       const errorCode = readNumber(body?.code);
       const data = body?.data;
       const accessToken = readAccessToken(data);
       const currentTokens = this.options.getTokens();
 
-      if (!currentTokens || this.getSessionKey() !== sessionKey) {
+      if (!this.isCurrent(context)) return this.contextChanged(reason);
+      if (!currentTokens) {
         this.options.log?.info(
           `[Auth] ignored token refresh response after the auth session changed (reason: ${reason})`,
         );
-        if (currentTokens) {
-          return {
-            outcome: AuthRefreshOutcome.Success,
-            reason,
-            accessToken: currentTokens.accessToken,
-          };
-        }
         return {
           outcome: AuthRefreshOutcome.NoTokens,
           reason,
@@ -333,6 +363,7 @@ export class AuthSessionManager {
           refreshToken: readRefreshToken(data) ?? tokens.refreshToken,
         };
         this.options.saveTokens(nextTokens);
+        if (!this.isCurrent(context)) return this.contextChanged(reason);
         const result: AuthRefreshResultWithoutTiming = {
           outcome: AuthRefreshOutcome.Success,
           reason,
@@ -368,6 +399,7 @@ export class AuthSessionManager {
       );
       return result;
     } catch (error) {
+      if (!this.isCurrent(context)) return this.contextChanged(reason);
       const failureKind = timedOut || isAbortError(error)
         ? AuthRefreshFailureKind.Timeout
         : AuthRefreshFailureKind.Network;
@@ -382,6 +414,7 @@ export class AuthSessionManager {
       };
     } finally {
       clearTimeout(timeout);
+      this.requests.delete(controller);
     }
   }
 
@@ -400,6 +433,27 @@ export class AuthSessionManager {
 
   private getSessionKey(): string | null {
     return this.options.getSessionKey?.() ?? null;
+  }
+
+  private captureContext(): AuthRequestContext {
+    return { sessionKey: this.getSessionKey(), refreshUrl: this.options.getRefreshUrl(), headers: new Headers(this.options.getRequestHeaders?.()) };
+  }
+
+  private sameContext(left: AuthRequestContext, right: AuthRequestContext): boolean {
+    return left.sessionKey === right.sessionKey && left.refreshUrl === right.refreshUrl;
+  }
+
+  private isCurrent(context: AuthRequestContext): boolean {
+    return context.sessionKey === this.getSessionKey() && context.refreshUrl === this.options.getRefreshUrl();
+  }
+
+  private contextChanged(reason: AuthRefreshReasonValue): AuthRefreshResultWithoutTiming {
+    return { outcome: AuthRefreshOutcome.TransientFailure, reason, failureKind: AuthRefreshFailureKind.ContextChanged };
+  }
+
+  private assertCurrent(context: AuthRequestContext): void {
+    if (!this.isCurrent(context)) throw new AuthSessionRequestError(AuthSessionStatus.TemporarilyUnavailable,
+      'Auth request context changed', { failureKind: AuthRefreshFailureKind.ContextChanged });
   }
 
   private invokeSafely<T>(callback: ((value: T) => void) | undefined, value: T): void {

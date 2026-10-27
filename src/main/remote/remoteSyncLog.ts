@@ -5,6 +5,7 @@ import { RemoteInputReason } from '../../shared/remote/input';
 import { RemoteQuestion } from '../../shared/remote/questions';
 import { RemoteReply } from '../../shared/remote/reply';
 import { RemoteImportValidation } from '../../shared/remote/retention';
+import { RemoteDeletionReason } from './remoteDeletionSyncPolicy';
 import { RemoteLiveEncodingError } from './remoteLiveMetadata';
 import { enqueueRemoteLog } from './remoteLogSink';
 import { remoteTransportErrorMetadata } from './remoteNetworkError';
@@ -21,6 +22,7 @@ const eventTypes = new Set(['session.upsert', 'session.deleted', 'message.upsert
 const manifestEventTypes = [...eventTypes].filter(type => type !== RemoteReply.DeltaEvent).concat(RemoteQuestion.Event);
 const lifecycleStates = new Set(['starting', 'running', 'waiting_approval', 'waiting_local', 'cancelling', 'reconciling', 'succeeded', 'failed', 'cancelled', 'interrupted', 'pending', 'approved', 'rejected', 'expired', 'streaming', 'complete', 'error', 'queued', 'waiting_user', 'unavailable', 'uploading', 'committed', 'aborted']);
 const validationMessages = new Set([
+  ...Object.values(RemoteDeletionReason),
   ...Object.values(RemoteNetworkFailure), ...Object.values(RemoteLiveEncodingError),
   'Remote ACK outside durable local bounds', 'Remote batch ACK identity mismatch',
   'Remote import receipt identity mismatch', 'Import receipt identity mismatch', 'Import abortion is not confirmed',
@@ -32,6 +34,10 @@ const validationMessages = new Set([
   'Object version has different content', 'Message identity and ordinal cannot change',
   'Deleted message cannot be resurrected', RemoteSyncConflict.RunMapping,
   'A source sequence cannot change content', 'Event hash mismatch',
+  'REMOTE_DELETION_BINDING_UNRESOLVED',
+  'REMOTE_CONTROL_ADOPTION_EVIDENCE_MISSING',
+  'REMOTE_CONTROL_RECONCILIATION_INVALID',
+  'REMOTE_CONTROL_DELETION_EVIDENCE_MISSING',
 ]);
 const object = (value: unknown): Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const id = (value: unknown): string | null => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(value) ? value : null;
@@ -112,11 +118,32 @@ const operationRoutes: Array<[RegExp, string]> = [
   [/^\/control\/facts\/batches$/u, 'control_facts'],
   [/^\/control\/operations\/[A-Za-z0-9_-]{1,64}$/u, 'control_operation'],
   [/^\/commands(?:\/[A-Za-z0-9_-]{1,64}(?:\/(?:ack|reconcile))?)?$/u, 'command'],
-  [/^\/devices\/[A-Za-z0-9_-]{1,64}\/commands(?:\/claim)?$/u, 'command_poll'],
+  [/^\/devices\/[A-Za-z0-9_-]{1,64}\/commands(?:\/(?:claim|unresolved))?$/u, 'command_poll'],
   [/^\/sessions(?:\/[A-Za-z0-9_-]{1,64}(?:\/(?:snapshot|messages|events|tools|contents)(?:\/[A-Za-z0-9_-]{1,64})?)?)?$/u, 'session_read'],
   [/^\/(?:connection-tickets|capabilities|devices\/register)$/u, 'connection'],
   [/^\/devices\/[A-Za-z0-9_-]{1,64}\/connections(?:\/[A-Za-z0-9_-]{1,64})?$/u, 'connection'],
 ];
+const diagnosticRoutes: Array<[RegExp, string]> = [
+  [/^\/devices\/[^/]+\/commands\/unresolved$/u, '/devices/:deviceId/commands/unresolved'],
+  [/^\/devices\/[^/]+\/commands\/claim$/u, '/devices/:deviceId/commands/claim'],
+  [/^\/devices\/[^/]+\/commands$/u, '/devices/:deviceId/commands'],
+  [/^\/devices\/[^/]+\/settings$/u, '/devices/:deviceId/settings'],
+  [/^\/sync\/imports\/[^/]+\/parts\/\d+$/u, '/sync/imports/:importId/parts/:partNo'],
+  [/^\/sync\/imports\/[^/]+\/commit$/u, '/sync/imports/:importId/commit'],
+  [/^\/sync\/imports\/[^/]+\/abort$/u, '/sync/imports/:importId/abort'],
+  [/^\/sync\/imports\/[^/]+$/u, '/sync/imports/:importId'],
+  [/^\/control\/operations\/[^/]+$/u, '/control/operations/:operationId'],
+  [/^\/sync\/mode-activations\/[^/]+$/u, '/sync/mode-activations/:operationId'],
+  [/^\/sync\/live-projections\/[^/]+$/u, '/sync/live-projections/:publicationId'],
+];
+const diagnosticExactRoutes = new Set(['/capabilities', '/devices/register', '/connection-tickets', '/sync/state', '/sync/batches',
+  '/sync/imports', '/sync/mode-activations', '/sync/live-projections', '/sync/recoveries', '/control/bootstrap', '/control/facts/batches']);
+const diagnosticRouteTemplates = new Set([...diagnosticExactRoutes, ...diagnosticRoutes.map(([, template]) => template)]);
+/** Fixed route templates only: URL queries and identifiers never enter this field. */
+export function remoteDiagnosticRoute(pathname: string): string | null {
+  const path = pathname.split('?')[0];
+  return diagnosticExactRoutes.has(path) ? path : diagnosticRoutes.find(([pattern]) => pattern.test(path))?.[1] ?? null;
+}
 function remoteOperationMetadata(pathname: string, raw: unknown): Record<string, unknown> | null {
   const route = pathname.split('?')[0], operation = operationRoutes.find(([pattern]) => pattern.test(route))?.[1];
   if (!operation) return null;
@@ -135,7 +162,7 @@ export const RemoteInputDiagnostic = {
   SizeMismatch: 'CONTENT_SIZE_MISMATCH', HashMismatch: 'CONTENT_HASH_MISMATCH',
   DownloadRejected: 'ASSET_DOWNLOAD_REJECTED', ImageInvalid: 'IMAGE_DECODE_INVALID',
 } as const;
-const inputStages = new Set(['download', 'validate', 'decode', 'write', 'local_commit', 'local_ready', 'server_ready']);
+const inputStages = new Set(['download', 'validate', 'decode', 'write', 'local_commit', 'local_ready', 'server_ready', 'prepare', 'transport', 'response', 'local_classification', 'persist']);
 const diagnosticEvents = new Set([
   RemoteInputDiagnostic.Event,
   'remote.connection.changed', 'remote.request.completed', 'remote.record.quarantined', 'remote.record.probe', 'remote.record.recovered',
@@ -147,11 +174,11 @@ const diagnosticEvents = new Set([
   'desktop.message.persisted', 'desktop.message.persist_failed', 'desktop.action.decided', 'desktop.action.dispatched',
   'desktop.action.reconciled', 'desktop.account_transition.changed',
 ]);
-const diagnosticIds = new Set(['requestId','connectionId','connectionGeneration','generation','localSessionId','sessionId','commandId','runId','operationId','writerGeneration','objectId','revision','jobId','transitionId','preparationId','assetId','transportRequestId']);
+const diagnosticIds = new Set(['requestId','connectionId','connectionGeneration','generation','targetId','deviceId','localSessionId','sessionId','commandId','runId','operationId','writerGeneration','objectId','revision','jobId','transitionId','preparationId','assetId','transportRequestId']);
 const diagnosticEncodingNumbers = new Set(['encoderVersion','rawMetadataBytes','normalizedMetadataBytes']);
-const diagnosticNumbers = new Set(['durationMs','elapsedMs','count','bytes','retryAttempt','nextRetryAt','retryAfterMs','scanned','processed','isolated','firstSeenAt','lastSeenAt','actualBytes','expectedBytes']);
+const diagnosticNumbers = new Set(['routeEpoch','apiVersion','httpStatus','durationMs','elapsedMs','count','bytes','retryAttempt','nextRetryAt','retryAfterMs','scanned','processed','isolated','firstSeenAt','lastSeenAt','actualBytes','expectedBytes']);
 const diagnosticValues = new Set(['desktop','mobile','im','cron','control','live','history','files','transport','success','failed','unknown','deferred','corrupt','active','ready','blocked','fencing','stopping','validating','recovery_required','prepared','executing','applied','rejected','accepted','superseded','starting','running','waiting_approval','waiting_local','waiting_user','succeeded','cancelled','interrupted','complete','error']);
-const diagnosticReasons = new Set([...Object.values(RemoteInputReason), RemoteInputDiagnostic.SizeMismatch, RemoteInputDiagnostic.HashMismatch, RemoteInputDiagnostic.DownloadRejected, RemoteInputDiagnostic.ImageInvalid, 'LOCAL_IO_FAILED', 'FILE_OPERATION_FAILED','RECORD_INVALID','ENCODING_FAILED','STORAGE_UNAVAILABLE','REQUEST_FAILED','CONTEXT_CHANGED','EXECUTION_UNKNOWN','DEPENDENCY_UNAVAILABLE','STATE_CHANGED','REMOTE_AVAILABILITY_RECORD_INVALID']);
+const diagnosticReasons = new Set([...Object.values(RemoteDeletionReason), ...Object.values(RemoteInputReason), RemoteInputDiagnostic.SizeMismatch, RemoteInputDiagnostic.HashMismatch, RemoteInputDiagnostic.DownloadRejected, RemoteInputDiagnostic.ImageInvalid, 'LOCAL_IO_FAILED', 'FILE_OPERATION_FAILED','RECORD_INVALID','ENCODING_FAILED','STORAGE_UNAVAILABLE','REQUEST_FAILED','CONTEXT_CHANGED','EXECUTION_UNKNOWN','DEPENDENCY_UNAVAILABLE','STATE_CHANGED','REMOTE_AVAILABILITY_RECORD_INVALID']);
 const diagnosticWindows = new Map<string, { at: number; count: number }>();
 /** Never let diagnostic output or an injected logger change a committed business result. */
 export function remoteLogMessage(level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>): void {
@@ -175,10 +202,15 @@ export function remoteDiagnosticLog(event: string, fields: Record<string, unknow
     else if (['origin','lane','status','result'].includes(key) && typeof value === 'string' && diagnosticValues.has(value)) clean[key] = value;
     else if (key === 'stage' && typeof value === 'string' && inputStages.has(value)) clean[key] = value;
     else if (key === 'reason' && typeof value === 'string' && diagnosticReasons.has(value)) clean[key] = value;
+    else if (key === 'routeTemplate' && typeof value === 'string' && diagnosticRouteTemplates.has(value)) clean[key] = value;
+    else if (key === 'method' && ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(String(value))) clean[key] = value;
     else if (key === 'error') clean.error = remoteSyncErrorMetadata(value);
   }
   if (level === 'warn' || event === 'remote.record.quarantined') {
-    const key = createHash('sha256').update(JSON.stringify({ event, lane: clean.lane, sessionId: clean.localSessionId ?? clean.sessionId,
+    const key = createHash('sha256').update(JSON.stringify({ event, routeEpoch: clean.routeEpoch, targetId: clean.targetId, deviceId: clean.deviceId,
+      lane: clean.lane, routeTemplate: clean.routeTemplate, method: clean.method, apiVersion: clean.apiVersion, error: clean.error && {
+        code: object(clean.error).code, httpStatus: object(clean.error).httpStatus, validation: object(clean.error).validation,
+        reason: object(clean.error).reason, authFailureKind: object(clean.error).authFailureKind }, sessionId: clean.localSessionId ?? clean.sessionId,
       preparationId: clean.preparationId, assetId: clean.assetId, stage: clean.stage,
       objectId: clean.objectId, operationId: clean.operationId, commandId: clean.commandId, reason: clean.reason })).digest('hex');
     const previous = diagnosticWindows.get(key), now = Date.now();

@@ -4,8 +4,11 @@ import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus } from '..
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { acknowledgeAvailabilityDeletion, AvailabilityDeletion, availabilityDeletion, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
 import { availabilitySourceHealth, recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
+import { type ControlReconciliationPage,RemoteAvailabilityReconcile } from './remoteAvailabilityReconcile';
 import { availabilityControlSnapshot,type ControlSnapshot } from './remoteAvailabilitySource';
 import { AvailabilityReadState, type AvailabilityRequest, type AvailabilitySession, RemoteAvailabilityStore, ReplyModelDisplayVersion } from './remoteAvailabilityStore';
+import { RemoteDeletionSyncKind } from './remoteDeletionSyncPolicy';
+import { hasRemoteDeletionAdoption, readRemoteDeletionSync, reconcileRemoteDeletionSync, rememberRemoteDeletionAdoption, type RemoteDeletionSyncContext } from './remoteDeletionSyncState';
 import { ensureDesktopInputJobs } from './remoteDesktopInputJobs';
 import { type HistoryContext, type HistoryOperation,HistoryPreparation } from './remoteHistoryStore';
 import { recentLiveCandidates } from './remoteLiveCandidates';
@@ -21,7 +24,7 @@ import { remoteDiagnosticLog, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
-export interface AvailabilityContext { environment?: string; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
+export interface AvailabilityContext { environment?: string; targetId?: string; routeEpoch?: number; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
 export const HistoryOwnership = { Owned: 'owned', Unowned: 'unowned', Unavailable: 'unavailable' } as const;
 export type HistoryOwnershipResult = { state: typeof HistoryOwnership.Owned | typeof HistoryOwnership.Unowned }
   | { state: typeof HistoryOwnership.Unavailable; dependency: 'control_ledger' | 'context'; error: unknown };
@@ -34,6 +37,9 @@ interface Dependencies {
 const recordKey = (record: { eventType: string; payload: Record<string, any> }): string => `${record.eventType}:${record.payload.run?.runId
   || record.payload.messageId || record.payload.approval?.approvalId || record.payload.question?.questionId || record.payload.session?.sessionId || ''}`;
 const CONTROL_TURN_YIELDED = 'REMOTE_CONTROL_TURN_YIELDED';
+const CONTEXT_CHANGED = 'REMOTE_AVAILABILITY_CONTEXT_CHANGED';
+const publisherEpoch = Symbol('publisherEpoch');
+type CapturedContext = AvailabilityContext & { [publisherEpoch]?: number };
 const backoff = [1000, 3000, 10000, 30000, 60000];
 
 /** Independent control and current-content lanes. Legacy history errors never own either lane's retry clock. */
@@ -41,11 +47,17 @@ export class RemoteAvailabilityPublisher {
   readonly ledger: RemoteAvailabilityStore;
   private readonly encoder = new RemoteLiveProjectionJob();
   private readonly liveRecovery: RemoteLiveRecovery;
+  private readonly reconciliation: RemoteAvailabilityReconcile;
+  private readonly reconciliationId = randomUUID();
   private controlWork: Promise<void> | null = null;
   private liveWork: Promise<void> | null = null;
   private historyWork: Promise<void> | null = null;
+  // Physical slots survive invalidation until the HTTP/worker operation has actually exited.
+  private controlSlot: Promise<void> | null = null;
+  private liveSlot: Promise<void> | null = null;
+  private historySlot: Promise<void> | null = null;
   private checkpointDeadline = 0;
-  private readonly controlDeadlines = new Map<string, number>();
+  private readonly controlDeadlines = new Map<string, { until: number }>();
   private readonly pendingCursors = new Map<string, string>();
   private checkpointRevision: { localId: string; revision: string } | null = null;
   private readonly historyRetry = new Map<string, number>();
@@ -60,6 +72,7 @@ export class RemoteAvailabilityPublisher {
   constructor(private readonly deps: Dependencies) {
     this.ledger = new RemoteAvailabilityStore(deps.store.db);
     this.liveRecovery = new RemoteLiveRecovery(this.ledger);
+    this.reconciliation = new RemoteAvailabilityReconcile(this.ledger);
   }
   retryLive(localId?: string): boolean {
     const context = this.deps.context();
@@ -79,7 +92,17 @@ export class RemoteAvailabilityPublisher {
     this.historyRetry.set(key, until);
   }
   start(): void { this.stopped = false; this.wake(); }
-  stop(): void { this.stopped = true; this.timerEpoch++; if (this.timer) clearTimeout(this.timer); this.timer = null; this.encoder.cancel(); this.contentRepresentations.clear(); this.historyRetry.clear(); this.pendingCursors.clear(); this.liveScan.clear(); this.scanOffsets.clear(); this.liveRecovery.reset(); this.failures.clear(); }
+  stop(): void { this.stopped = true; this.invalidateContext(); }
+  invalidateContext(): void {
+    this.timerEpoch++;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null; this.encoder.cancel();
+    this.controlWork = null; this.liveWork = null; this.historyWork = null;
+    this.checkpointDeadline = 0; this.checkpointRevision = null; this.controlDeadlines.clear();
+    this.contentRepresentations.clear(); this.historyRetry.clear(); this.pendingCursors.clear(); this.liveScan.clear();
+    this.scanOffsets.clear(); this.liveRecovery.reset(); this.failures.clear();
+    this.wake();
+  }
   dispose(): void { this.stop(); this.ledger.close(); }
   ownsHistory(localId: string): boolean {
     const context = this.deps.context();
@@ -88,11 +111,20 @@ export class RemoteAvailabilityPublisher {
   historyOwnership(localId: string): HistoryOwnershipResult {
     const context = this.deps.context();
     if (!context) return { state: HistoryOwnership.Unavailable, dependency: 'context', error: new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED') };
-    try { return { state: this.ledger.hasSession(context.scope,localId) ? HistoryOwnership.Owned : HistoryOwnership.Unowned }; }
+    try {
+      if (this.ledger.hasSession(context.scope, localId)) return { state: HistoryOwnership.Owned };
+      const row = this.deps.store.controlBinding(localId);
+      if (row && hasRemoteDeletionAdoption(this.deps.store, localId, this.deletionContext(context, row, null)))
+        return { state: HistoryOwnership.Unavailable, dependency: 'control_ledger', error: new Error('REMOTE_CONTROL_ADOPTION_EVIDENCE_MISSING') };
+      return { state: HistoryOwnership.Unowned };
+    }
     catch (error) { return { state: HistoryOwnership.Unavailable, dependency: 'control_ledger', error }; }
   }
   legacyHistoryAllowed(localId: string): boolean {
-    return this.historyOwnership(localId).state === HistoryOwnership.Unowned;
+    if (this.historyOwnership(localId).state !== HistoryOwnership.Unowned) return false;
+    if (!this.deps.store.get(`${AvailabilityDeletion.Prefix}${localId}`)) return true;
+    const context = this.deps.context(), row = this.deps.store.controlBinding(localId);
+    return !!context && !!row && readRemoteDeletionSync(this.deps.store, localId, this.deletionContext(context, row, null)).kind === RemoteDeletionSyncKind.LegacyDelete;
   }
   controlReady(localId: string): boolean {
     const context = this.deps.context();
@@ -149,8 +181,8 @@ export class RemoteAvailabilityPublisher {
         .all(context.scope, localId) as Array<{ lane: string; oldest: number | null }>;
       const deletion = this.deps.store.get<{ ackAt: number | null; deletedAt: number }>(`${AvailabilityDeletion.Prefix}${localId}`);
       const source = deletion ? { pending: 0, oldest: null, unavailable: false, desktopOnly: false } : availabilitySourceHealth(this.deps.store, context.scope, localId);
-      const backoff = [...this.failures.keys()].some(key => key.startsWith(`${context.scope}:control:${localId}`)
-        || key.startsWith(`${context.scope}:live:${localId}`));
+      const taskKeys = [`${context.scope}:control:${localId}`, `${context.scope}:live:${localId}`];
+      const backoff = [...this.failures.keys()].some(key => taskKeys.some(taskKey => key === taskKey || key.startsWith(`${taskKey}:`)));
       const faults = !!this.ledger.db.prepare('SELECT 1 FROM availability_faults WHERE scope=? AND local_id=? LIMIT 1').get(context.scope, localId);
       const controlPending = !deletion && (state.phase !== 'active' || state.controlRevision !== String(revision?.revision || 1)) || requests.some(row => row.lane === 'control');
       const lanes: RemoteSyncLanes = {
@@ -188,38 +220,52 @@ export class RemoteAvailabilityPublisher {
     this.timer = timer; timer.unref?.();
   }
   private current(context: AvailabilityContext): boolean {
-    const next = this.deps.context();
-    return !this.stopped && next?.scope === context.scope && next.deviceId === context.deviceId && next.generation === context.generation;
+    if (this.stopped || ((context as CapturedContext)[publisherEpoch] ?? this.timerEpoch) !== this.timerEpoch) return false;
+    let next: AvailabilityContext | null;
+    try { next = this.deps.context(); } catch { return false; }
+    return next?.routeEpoch === context.routeEpoch && next?.scope === context.scope && next.deviceId === context.deviceId
+      && next.environment === context.environment && sameOwner(next.owner, context.owner) && next.generation === context.generation;
+  }
+  private capture(context: AvailabilityContext): CapturedContext {
+    return (context as CapturedContext)[publisherEpoch] === undefined ? { ...context, owner: { ...context.owner }, [publisherEpoch]: this.timerEpoch } : context;
+  }
+  private assertCurrent(context: AvailabilityContext): void {
+    if (!this.current(context)) throw new Error(CONTEXT_CHANGED);
   }
   private tick(): void {
     return remotePerformance.sync(RemotePerformanceStage.Availability, () => {
       let context: AvailabilityContext | null;
       try { context = this.deps.context(); } catch (error) { this.fail('context', error); this.wake(); return; }
       if (this.stopped || !context || !context.generation) return;
+      context = this.capture(context);
       // Reserve the next turn before any lane can synchronously wake the publisher.
       // Local scheduling only. Idle sessions generate no periodic HTTP traffic.
       this.schedule(1000);
-      if (!this.controlWork && this.eligible(`${context.scope}:control`)) {
-        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityControl, () => this.controls(context)).then(() => { this.failures.delete(`${context.scope}:control`); }).catch(error => this.fail(`${context.scope}:control`, error)).finally(() => {
+      if (!this.controlWork && !this.controlSlot && this.eligible(`${context.scope}:control`)) {
+        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityControl, () => this.controls(context)).then(() => { if (this.current(context)) this.failures.delete(`${context.scope}:control`); }).catch(error => { if (this.current(context)) this.fail(`${context.scope}:control`, error, context); }).finally(() => {
           if (this.controlWork === work) this.controlWork = null;
+          if (this.controlSlot === work) this.controlSlot = null;
         });
-        this.controlWork = work;
+        this.controlWork = work; this.controlSlot = work;
       }
-      if (!this.liveWork && this.eligible(`${context.scope}:live`)) {
-        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityLive, () => this.live(context)).then(() => { this.failures.delete(`${context.scope}:live`); }).catch(error => this.fail(`${context.scope}:live`, error)).finally(() => {
+      if (!this.liveWork && !this.liveSlot && this.eligible(`${context.scope}:live`)) {
+        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityLive, () => this.live(context)).then(() => { if (this.current(context)) this.failures.delete(`${context.scope}:live`); }).catch(error => { if (this.current(context)) this.fail(`${context.scope}:live`, error, context); }).finally(() => {
           if (this.liveWork === work) this.liveWork = null;
+          if (this.liveSlot === work) this.liveSlot = null;
         });
-        this.liveWork = work;
+        this.liveWork = work; this.liveSlot = work;
       }
-      if (!this.historyWork) {
-        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityHistory, () => this.history(context)).catch(error => this.fail(`${context.scope}:history`, error)).finally(() => {
+      if (!this.historyWork && !this.historySlot) {
+        const work = remotePerformance.async(RemotePerformanceStage.AvailabilityHistory, () => this.history(context)).catch(error => { if (this.current(context)) this.fail(`${context.scope}:history`, error, context); }).finally(() => {
           if (this.historyWork === work) this.historyWork = null;
-        }); this.historyWork = work;
+          if (this.historySlot === work) this.historySlot = null;
+        }); this.historyWork = work; this.historySlot = work;
       }
     });
   }
   private eligible(key: string): boolean { return (this.failures.get(key)?.retryAt || 0) <= Date.now(); }
-  private fail(key: string, error: unknown): void {
+  private fail(key: string, error: unknown, context?: AvailabilityContext, localSessionId?: string, operationLane?: 'control' | 'live' | 'history', stage?: 'local_classification'): void {
+    if (context && !this.current(context)) return;
     const previous = this.failures.get(key), count = (previous?.count || 0) + 1;
     const retryAfter = Number((error as { retryAfterMs?: number })?.retryAfterMs);
     const delay = Math.max(backoff[Math.min(count - 1, backoff.length - 1)], Number.isFinite(retryAfter) ? retryAfter : 0);
@@ -229,7 +275,10 @@ export class RemoteAvailabilityPublisher {
       outcome: SyncTelemetry.Outcome.Deferred, retryAfterMs: delay, failureCount: count,
       reason: error instanceof Error && /RECEIPT_INVALID$/u.test(error.message) ? SyncTelemetry.Reason.InvalidReceipt
         : error instanceof Error && /BUDGET$/u.test(error.message) ? SyncTelemetry.Reason.Budget : SyncTelemetry.Reason.RequestFailed });
-    if (!previous || count === 3) remoteDiagnosticLog('remote.sync.task_deferred', { operationId: /^[A-Za-z0-9_-]{1,64}$/u.test(key) ? key : undefined, error, retryAfterMs: delay, reason: 'REQUEST_FAILED' }, 'warn');
+    const lane = operationLane || context && ['control', 'live', 'history'].find(value => key === `${context.scope}:${value}` || key.startsWith(`${context.scope}:${value}:`));
+    if (!previous || count === 3) remoteDiagnosticLog('remote.sync.task_deferred', { operationId: /^[A-Za-z0-9_-]{1,64}$/u.test(key) ? key : undefined,
+      ...(context ? { routeEpoch: context.routeEpoch, targetId: context.targetId || payloadHash(context.scope), lane: lane || undefined, localSessionId } : {}),
+      stage, error, retryAfterMs: delay, reason: 'REQUEST_FAILED' }, 'warn');
   }
   private body(context: AvailabilityContext, state: AvailabilitySession): Record<string, any> {
     return { owner: context.owner, deviceId: context.deviceId, sessionId: state.sessionId, localSessionId: state.localId,
@@ -237,14 +286,16 @@ export class RemoteAvailabilityPublisher {
   }
   private save(context: AvailabilityContext, state: AvailabilitySession, key: string, lane: 'control' | 'live', path: string,
     body: Record<string, any>, version: number, lookup: string | null, lookupVersion = version, method = 'POST', liveEncoderVersion?: number): AvailabilityRequest {
+    this.assertCurrent(context);
     return this.ledger.saveRequest({ key, lane, scope: context.scope, localId: state.localId, method, pathname: path, version,
       body: { ...this.body(context, state), ...body }, lookup, lookupVersion, attempted: false, createdAt: Date.now(),
       ...(liveEncoderVersion === undefined ? {} : { liveEncoderVersion }) });
   }
   private async send(context: AvailabilityContext, request: AvailabilityRequest): Promise<any> {
+    context = this.capture(context);
     const epoch = this.timerEpoch;
     const assertCurrent = (): void => {
-      if (epoch !== this.timerEpoch || !this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
+      if (epoch !== this.timerEpoch || !this.current(context)) throw new Error(CONTEXT_CHANGED);
     };
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: request.localId, sessionId: request.body.sessionId, lane: request.lane,
@@ -253,7 +304,7 @@ export class RemoteAvailabilityPublisher {
         ? SyncTelemetry.Kind.Activation : request.pathname === '/control/facts/batches' ? SyncTelemetry.Kind.Facts : SyncTelemetry.Kind.Bootstrap });
     assertCurrent();
     const turn = this.controlDeadlines.get(`${context.scope}:control:${request.localId}`);
-    if (request.lane === 'control' && turn && Date.now() >= turn) throw new Error(CONTROL_TURN_YIELDED);
+    if (request.lane === 'control' && turn && Date.now() >= turn.until) throw new Error(CONTROL_TURN_YIELDED);
     const guard = (): void => { assertCurrent(); if (request.lane === 'control' && !turn) this.checkpointGuard(); };
     const timeout = request.lane === 'control' && !turn ? this.checkpointTimeout() : undefined;
     guard();
@@ -283,7 +334,7 @@ export class RemoteAvailabilityPublisher {
     }
     guard();
     this.ledger.attempted(request);
-    const { coreRevision: _coreRevision, ackCoreRevision: _ackCoreRevision, knownCheckpointId: _knownCheckpointId, ...body } = request.body;
+    const { coreRevision: _coreRevision, ackCoreRevision: _ackCoreRevision, knownCheckpointId: _knownCheckpointId, controlReconciliation: _reconciliation, ...body } = request.body;
     if (request.pathname.startsWith('/control/') && Buffer.byteLength(stableJson({ ...body, connectionGeneration: context.generation })) > 64 * 1024)
       throw new Error('REMOTE_CONTROL_REQUEST_BUDGET');
     guard();
@@ -295,7 +346,33 @@ export class RemoteAvailabilityPublisher {
     guard();
     return result;
   }
+  private deletionContext(context: AvailabilityContext, row: CoreRemoteBinding, state: AvailabilitySession | null): RemoteDeletionSyncContext {
+    const suffix = `:${context.owner.userId}:${context.owner.scopeKey}:${context.deviceId}`;
+    return { owner: context.owner, deviceId: context.deviceId,
+      targetId: context.targetId || row.sync_environment || (context.scope.endsWith(suffix) ? context.scope.slice(0, -suffix.length) : context.scope),
+      scope: context.scope, adopted: !!state,
+      ...(state ? { controlBinding: { scope: context.scope, sessionId: state.sessionId, deviceId: context.deviceId,
+        writerGeneration: state.writerGeneration, controlEpoch: state.controlEpoch } } : {}) };
+  }
+  private deletionCandidate(context: AvailabilityContext, row: CoreRemoteBinding, lane: string): boolean {
+    if (!this.deps.store.get(`${AvailabilityDeletion.Prefix}${row.local_id}`)) return !this.deps.store.isSyncClosed(row.local_id);
+    if (lane !== 'control') return false;
+    const state = this.ledger.session(context.scope, row.local_id);
+    const classification = reconcileRemoteDeletionSync(this.deps.store, row.local_id, this.deletionContext(context, row, state));
+    if (classification.kind === RemoteDeletionSyncKind.Blocked) throw new Error(classification.reason);
+    if (classification.kind === RemoteDeletionSyncKind.ControlDelete) return true;
+    if (classification.kind === RemoteDeletionSyncKind.Settled || classification.kind === RemoteDeletionSyncKind.LegacyDelete) {
+      this.failures.delete(`${context.scope}:control:${row.local_id}`);
+      if (classification.kind === RemoteDeletionSyncKind.Settled) {
+        // Core ACK can commit before sidecar cleanup. Finish that exact sealed operation after a restart.
+        return !!state && this.ledger.pending(context.scope, 'control', row.local_id).some(request => request.pathname === '/control/facts/batches'
+          && request.body.facts.some((fact: { eventType: string }) => fact.eventType === 'session.deleted'));
+      }
+    }
+    return false;
+  }
   private candidates(context: AvailabilityContext, lane: string): CoreRemoteBinding[] {
+    this.assertCurrent(context);
     const key = `${context.scope}:${lane}`,offset = this.scanOffsets.get(key) || 0;
     const rows = this.deps.store.controlBindings(context.owner,32,offset);
     this.scanOffsets.set(key,rows.length < 32 ? 0 : offset + rows.length);
@@ -304,12 +381,14 @@ export class RemoteAvailabilityPublisher {
     const recent = lane === 'history' ? [] : this.deps.store.controlBindings(context.owner,8,0,'recent');
     const priority = lane !== 'history' ? recent.slice(turn % Math.max(1,recent.length), turn % Math.max(1,recent.length) + 1) : recent;
     return [...new Map([...priority,...ordered].map(row => [row.local_id,row])).values()].filter(row => {
-      try { return !row.migration_frozen && !this.deps.store.isSyncClosed(row.local_id)
-        && this.deps.admitted(row.local_id) && (!row.device_id || row.device_id === context.deviceId); }
-      catch (error) { this.fail(`${context.scope}:${lane}:${row.local_id}`, error); return false; }
+      try { return !row.migration_frozen && this.deps.admitted(row.local_id)
+        && (!row.device_id || row.device_id === context.deviceId) && this.deletionCandidate(context, row, lane); }
+      catch (error) { this.fail(`${context.scope}:${lane}:${row.local_id}`, error, context, row.local_id, undefined, 'local_classification'); return false; }
     });
   }
   private async controls(context: AvailabilityContext): Promise<void> {
+    context = this.capture(context);
+    if (!this.current(context)) return;
     if (!this.eligible(`${context.scope}:control`)) return;
     const roundDeadline = Date.now() + 2000, rows = this.candidates(context, 'control');
     let cursor = 0;
@@ -318,22 +397,28 @@ export class RemoteAvailabilityPublisher {
       while (cursor < rows.length && this.current(context) && Date.now() < roundDeadline) {
         const row = rows[cursor++], key = `${context.scope}:control:${row.local_id}`;
         if (!this.eligible(key) || this.controlDeadlines.has(key)) continue;
-        this.controlDeadlines.set(key, Date.now() + 1000);
-        try { await this.controlSession(context, row); this.failures.delete(key); }
+        const deadline = { until: Date.now() + 1000 };
+        this.controlDeadlines.set(key, deadline);
+        try { await this.controlSession(context, row); if (this.current(context)) this.failures.delete(key); }
         catch (error) {
-          if (error instanceof Error && error.message === CONTROL_TURN_YIELDED) this.failures.delete(key);
-          else if (this.current(context)) this.fail(key, error);
-        } finally { this.controlDeadlines.delete(key); }
+          if (this.current(context)) {
+            if (error instanceof Error && error.message === CONTROL_TURN_YIELDED) this.failures.delete(key);
+            else this.fail(key, error, context, row.local_id);
+          }
+        } finally { if (this.controlDeadlines.get(key) === deadline) this.controlDeadlines.delete(key); }
       }
     };
     await Promise.all([worker(), worker()]);
   }
 
   private async controlSession(context: AvailabilityContext, row: CoreRemoteBinding): Promise<void> {
+    context = this.capture(context); this.assertCurrent(context);
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: row.local_id, sessionId: row.session_id, lane: 'control' });
     let state = this.ledger.session(context.scope, row.local_id);
     if (!state) {
+      if (hasRemoteDeletionAdoption(this.deps.store, row.local_id, this.deletionContext(context, row, null)))
+        throw new Error('REMOTE_CONTROL_ADOPTION_EVIDENCE_MISSING');
       if (this.deps.store.get(`${AvailabilityDeletion.Prefix}${row.local_id}`)) throw new Error('REMOTE_DELETION_BINDING_UNRESOLVED');
       if (!context.supported) return;
       // Fence locally BEFORE the uncertain activation request. Never resume a legacy writer after this point.
@@ -342,12 +427,17 @@ export class RemoteAvailabilityPublisher {
         controlRevision: '0', factSeq: '0', records: {} };
       this.ledger.saveSession(state);
     }
+    if (context.targetId || row.sync_environment) {
+      const deletionContext = this.deletionContext(context, row, state);
+      rememberRemoteDeletionAdoption(this.deps.store, row.local_id, deletionContext, deletionContext.controlBinding!);
+    }
     if (state.phase === 'activating') {
       if (this.deps.store.get(`${AvailabilityDeletion.Prefix}${row.local_id}`) && !this.ledger.request(`${state.operationId}:activation`))
         throw new Error('REMOTE_DELETION_BINDING_UNRESOLVED');
       const request = this.save(context, state, `${state.operationId}:activation`, 'control', '/sync/mode-activations',
         { operationId: state.operationId }, 3, `/sync/mode-activations/${state.operationId}`);
       const result = await this.send(context, request);
+      this.assertCurrent(context);
       if (result.writerGeneration !== state.writerGeneration || !['fenced', 'active'].includes(result.state)) throw new Error('REMOTE_ACTIVATION_RECEIPT_INVALID');
       state.pendingCommandIds = result.pendingCommandIds || [];
       state.requiredRunIds = result.pendingRunIds || [];
@@ -369,6 +459,7 @@ export class RemoteAvailabilityPublisher {
     if (state.phase === 'bootstrap') {
       try { await this.bootstrap(context, state); }
       catch (error) {
+        this.assertCurrent(context);
         if (!(error instanceof Error && error.message === CONTROL_TURN_YIELDED))
           this.ledger.db.prepare('INSERT OR IGNORE INTO availability_bootstrap_rechecks VALUES(?)').run(state.operationId);
         const terminalReceipt = (error as { bootstrapReceipt?: { state?: string } }).bootstrapReceipt;
@@ -388,6 +479,7 @@ export class RemoteAvailabilityPublisher {
           const abort = this.save(context, state, `${originalId}:abort`, 'control', `/control/bootstrap/${originalId}/abort`,
             { controlEpoch: state.controlEpoch, beginRequestHash: payloadHash(beginBusiness) }, 1, null);
           const result = await this.send(context, abort);
+          this.assertCurrent(context);
           if (result.state === 'committed') { await this.bootstrap(context, state); return; }
           if (!['aborted', 'expired', 'superseded'].includes(result.state)) throw new Error('REMOTE_BOOTSTRAP_ABORT_UNRESOLVED');
           this.ledger.db.transaction(() => {
@@ -417,6 +509,7 @@ export class RemoteAvailabilityPublisher {
     if (committed && receipt.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
   }
   private async bootstrap(context: AvailabilityContext, state: AvailabilitySession, options?: { snapshot: ControlSnapshot; extra: Record<string, unknown> }): Promise<void> {
+    context = this.capture(context); this.assertCurrent(context);
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: state.localId, sessionId: state.sessionId, operationId: state.operationId,
       operationKind: SyncTelemetry.Kind.Bootstrap, publicationKind: SyncTelemetry.Kind.Bootstrap, lane: 'control',
@@ -470,6 +563,7 @@ export class RemoteAvailabilityPublisher {
     const begin = this.save(context, state, `${state.operationId}:begin`, 'control', checkpoint.pagedManifest ? '/control/bootstrap/paged' : '/control/bootstrap', beginBody, 1, `/control/operations/${state.operationId}`);
     const recheck = this.ledger.db.prepare('SELECT 1 FROM availability_bootstrap_rechecks WHERE operation_id=?').get(state.operationId);
     const began = (!recheck && this.ledger.stepReceipt(begin)) || await this.send(context, begin);
+    this.assertCurrent(context);
     this.validateBootstrapReceipt(began, begin);
     this.ledger.db.prepare('DELETE FROM availability_bootstrap_rechecks WHERE operation_id=?').run(state.operationId);
     if (['uploading', 'receiving', 'committed'].includes(began.state)) this.ledger.confirmStep(begin, began);
@@ -483,6 +577,7 @@ export class RemoteAvailabilityPublisher {
           .get(state.operationId, partNo, part.body.payloadHash)) continue;
         if (this.ledger.stepReceipt(part)) continue;
         const result = await this.send(context, part); // Preserve original request bytes until baseline commit.
+        this.assertCurrent(context);
         if (!result || typeof result !== 'object'
           || result.partNo !== undefined && result.partNo !== partNo
           || result.payloadHash !== undefined && result.payloadHash !== part.body.payloadHash
@@ -499,6 +594,7 @@ export class RemoteAvailabilityPublisher {
       // A nonterminal operation query cannot substitute for the commit itself.
       commit.lookup = null;
       const result = await this.send(context, commit);
+      this.assertCurrent(context);
       this.validateBootstrapReceipt(result, begin);
       if (['aborted','expired','superseded'].includes(result.state)) throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'), { httpStatus: 409, bootstrapReceipt: result });
       if (result.state !== 'committed' || result.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
@@ -524,6 +620,7 @@ export class RemoteAvailabilityPublisher {
     }
   }
   private async facts(context: AvailabilityContext, state: AvailabilitySession): Promise<void> {
+    context = this.capture(context); this.assertCurrent(context);
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: state.localId, sessionId: state.sessionId, lane: 'control',
       operationKind: SyncTelemetry.Kind.Facts, publicationKind: SyncTelemetry.Kind.Facts, writerGeneration: state.writerGeneration,
@@ -544,9 +641,14 @@ export class RemoteAvailabilityPublisher {
     }
     if (!request) {
       const coreRevision = (this.deps.store.db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get(state.localId) as { revision: number } | undefined)?.revision || 1;
-      if (String(coreRevision) === state.controlRevision) return;
-      const snapshot = availabilityControlSnapshot(this.deps.store, state.localId, [], true, {}, { incremental: true });
-      const changed = snapshot.records.filter(record => state.records[recordKey(record)] !== payloadHash(record));
+      const reconciliation = this.reconciliation.next(this.deps.store, state, `${this.reconciliationId}:${context.routeEpoch ?? 0}:${this.timerEpoch}`);
+      if (!reconciliation && String(coreRevision) === state.controlRevision) return;
+      const snapshot = availabilityControlSnapshot(this.deps.store, state.localId, reconciliation?.runIds || [], true,
+        { approvalIds: reconciliation?.approvalIds, questionIds: reconciliation?.questionIds, deletedMessageIds: reconciliation?.deletedMessageIds }, { incremental: true });
+      this.reconciliation.pruneForeignPending(this.deps.store, state.localId, snapshot.revision);
+      const changed = snapshot.records.filter(record => state.records[recordKey(record)] !== payloadHash(record)
+        // Message preview changes belong to the live lane; a scan alone must not invent a new control revision.
+        && (record.eventType !== 'session.upsert' || String(coreRevision) !== state.controlRevision));
       // Identical objects already have durable server receipts. Clear only the captured revisions,
       // including when this bounded page contains no new facts, so later dirty objects can progress.
       this.deps.store.db.transaction(() => {
@@ -561,8 +663,12 @@ export class RemoteAvailabilityPublisher {
       }
       if (!records.length) {
         if (changed.length) throw new Error('REMOTE_CONTROL_FACT_OBJECT_BUDGET');
-        state.controlRevision = this.deps.store.db.prepare('SELECT 1 FROM remote_control_pending WHERE session_id=? LIMIT 1').get(state.localId) ? '0' : snapshot.revision;
-        this.ledger.saveSession(state); return;
+        this.ledger.db.transaction(() => {
+          const reconciled = !reconciliation || this.reconciliation.advance(this.deps.store, state, reconciliation.page);
+          state.controlRevision = reconciled && !this.deps.store.db.prepare('SELECT 1 FROM remote_control_pending WHERE session_id=? LIMIT 1').get(state.localId) ? snapshot.revision : state.controlRevision;
+          this.ledger.saveSession(state);
+        })();
+        return;
       }
       if (records.length > 16 || Buffer.byteLength(stableJson(records)) > 60 * 1024) throw new Error('REMOTE_CONTROL_FACT_BATCH_BUDGET');
       const batchId = randomUUID();
@@ -572,13 +678,16 @@ export class RemoteAvailabilityPublisher {
         batchId, controlEpoch: state.controlEpoch, firstFactSeq: facts[0].factSeq, lastFactSeq: facts.at(-1)!.factSeq, facts,
       }, 1, `/control/operations/${batchId}`);
       // Keep source revision in a separate immutable local field, not the public hash.
-      request.body.coreRevision = records.length === changed.length ? snapshot.revision : state.controlRevision;
+      request.body.coreRevision = !reconciliation && records.length === changed.length ? snapshot.revision : state.controlRevision;
       request.body.ackCoreRevision = snapshot.revision;
       request.body.knownCheckpointId = state.operationId;
+      if (reconciliation && records.length === changed.length && reconciliation.page.revision === snapshot.revision)
+        request.body.controlReconciliation = reconciliation.page;
       this.ledger.updateRequest(request);
     }
     const deletes = request.body.facts.some((fact: any) => fact.eventType === 'session.deleted');
     const result = (deletes && this.ledger.stepReceipt(request)) || await this.send(context, request);
+    this.assertCurrent(context);
     if (deletes) {
       // The core ACK retains the validated response; the sealed sidecar request survives either commit failing.
       acknowledgeAvailabilityDeletion(this.deps.store, context, state, request, result);
@@ -594,6 +703,8 @@ export class RemoteAvailabilityPublisher {
       if (!newerCheckpoint) {
         state.controlRevision = request!.body.coreRevision;
         for (const fact of request!.body.facts) state.records[recordKey(fact)] = payloadHash({ eventType: fact.eventType, payload: fact.payload });
+        if (request!.body.controlReconciliation && this.reconciliation.advance(this.deps.store, state, request!.body.controlReconciliation as ControlReconciliationPage))
+          state.controlRevision = request!.body.controlReconciliation.revision;
       }
       this.ledger.saveSession(state); this.ledger.complete(request!.key);
       this.ledger.recordProgress(context.scope, state.localId, 'control');
@@ -610,6 +721,8 @@ export class RemoteAvailabilityPublisher {
   }
   /** History reconciliation is optional and independently scheduled; it never owns command or live retries. */
   private async history(context: AvailabilityContext): Promise<void> {
+    context = this.capture(context);
+    if (!this.current(context)) return;
     if (!this.eligible(`${context.scope}:history`)) return;
     for (const row of this.candidates(context, 'history')) {
       if (this.deps.store.db.prepare('SELECT 1 FROM remote_state WHERE key=?').get(`${AvailabilityDeletion.Prefix}${row.local_id}`)) continue;
@@ -669,6 +782,7 @@ export class RemoteAvailabilityPublisher {
             const refresh = this.save(context,latest,refreshKey,'control','/sync/mode-activations',
               { operationId: refreshId },3,`/sync/mode-activations/${refreshId}`);
             const current = await this.send(context,refresh);
+            this.assertCurrent(context);
             if (current.writerGeneration !== latest.writerGeneration || current.state !== 'active') throw new Error('REMOTE_RECOVERY_CONTROL_NOT_READY');
             const required = recoveryRequired(events);
             const checkpointState: AvailabilitySession = { ...latest, operationId: checkpointId,
@@ -702,12 +816,15 @@ export class RemoteAvailabilityPublisher {
             await this.bootstrap(context,checkpointState,{ snapshot: operation!.request.snapshot as ControlSnapshot,extra: operation!.request.extra as Record<string,unknown> });
         });
         await this.recoverHistory(context,operation);
+        this.assertCurrent(context);
         this.releaseHistoryPayload(context,history.operation(historyContext,operation.id)!);
         this.historyRetry.delete(key);
       } catch (error) {
+        if (!this.current(context)) return;
         const status = (error as { httpStatus?: number }).httpStatus;
         if (operation && (status === 400 || status === 409)) {
           try { await this.abortRecovery(context,operation); } catch { /* Unknown abort stays durable for reconciliation. */ }
+          if (!this.current(context)) return;
         }
         telemetry.emit(operation ? SyncTelemetry.Event.HistoryDeferred : SyncTelemetry.Event.Stage, { operationId: operation?.id,
           publicationKind: SyncTelemetry.Kind.History, phase: SyncTelemetry.Stage.HistoryRecovery, businessStatus: 'pending',
@@ -730,6 +847,7 @@ export class RemoteAvailabilityPublisher {
         const abort = this.save(context,state,`${state.operationId}:abort`,'control',`/control/bootstrap/${state.operationId}/abort`,
           { controlEpoch: state.controlEpoch,beginRequestHash: payloadHash(business) },1,null);
         const receipt = await this.send(context,abort);
+        this.assertCurrent(context);
         if (receipt.state === 'committed') await this.bootstrap(context,state);
         else if (['aborted','expired','superseded'].includes(receipt.state)) this.ledger.archiveBootstrap(context.scope,state.localId,state.operationId,receipt);
         else throw new Error('REMOTE_HISTORY_CHECKPOINT_ABORT_UNKNOWN');
@@ -758,12 +876,16 @@ export class RemoteAvailabilityPublisher {
       throw new Error('REMOTE_HISTORY_CHECKPOINT_YIELDED');
   }
   private async serialControl<T>(context: AvailabilityContext, action: () => Promise<T>): Promise<T> {
-    while (this.controlWork) await this.controlWork;
-    if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
+    context = this.capture(context);
+    while (this.controlSlot) { await this.controlSlot; this.assertCurrent(context); }
+    this.assertCurrent(context);
     this.checkpointDeadline = Date.now() + 3000;
     const operation = action(), lock = operation.then(() => {},() => {});
-    this.controlWork = lock;
-    try { return await operation; } finally { if (this.controlWork === lock) this.controlWork = null; this.checkpointDeadline = 0; this.checkpointRevision = null; }
+    this.controlWork = lock; this.controlSlot = lock;
+    try { const result = await operation; this.assertCurrent(context); return result; } finally {
+      if (this.controlWork === lock) this.controlWork = null;
+      if (this.controlSlot === lock) { this.controlSlot = null; this.checkpointDeadline = 0; this.checkpointRevision = null; }
+    }
   }
   private releaseHistoryPayload(context: AvailabilityContext, operation: HistoryOperation): void {
     if (operation.state !== 'complete') return;
@@ -782,6 +904,7 @@ export class RemoteAvailabilityPublisher {
     this.deps.store.history.compactCompletedOperation(operation.context,operation.id);
   }
   private async recoverHistory(context: AvailabilityContext, operation: HistoryOperation): Promise<void> {
+    context = this.capture(context); this.assertCurrent(context);
     if (operation.state === 'complete') return;
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: operation.context.localId, sessionId: operation.context.sessionId,
@@ -817,6 +940,8 @@ export class RemoteAvailabilityPublisher {
     this.ledger.recordProgress(context.scope, operation.context.localId, 'history');
   }
   private async live(context: AvailabilityContext): Promise<void> {
+    context = this.capture(context);
+    if (!this.current(context)) return;
     if (!this.eligible(`${context.scope}:live`)) return;
     const recoveryFirst = (this.recoveryFirst = !this.recoveryFirst);
     const epoch = this.timerEpoch, current = (): boolean => epoch === this.timerEpoch && this.current(context);
@@ -891,8 +1016,8 @@ export class RemoteAvailabilityPublisher {
           if (item.state === AvailabilityReadState.Corrupt) {
             if (context.publicationResolutionSupported && this.eligible(item.key)) {
               sent++;
-              try { await this.resolveLive(context, state, item.key); this.failures.delete(item.key); }
-              catch (error) { if (current()) this.fail(item.key, error); }
+              try { await this.resolveLive(context, state, item.key); if (current()) this.failures.delete(item.key); }
+              catch (error) { if (current()) this.fail(item.key, error, context, row.local_id, 'live'); }
             }
             telemetry.emit(SyncTelemetry.Event.Quarantined, { operationId: item.key, objectId: item.objectId,
               stage: SyncTelemetry.Stage.Reconcile, phase: SyncTelemetry.Stage.Reconcile, outcome: SyncTelemetry.Outcome.Blocked, failureScope: 'object',
@@ -906,8 +1031,8 @@ export class RemoteAvailabilityPublisher {
           sent++;
           try {
             await this.publishLive(context, request);
-            this.failures.delete(key); this.failures.delete(request.key);
-          } catch (error) { if (current()) this.fail(key, error); }
+            if (current()) { this.failures.delete(key); this.failures.delete(request.key); }
+          } catch (error) { if (current()) this.fail(key, error, context, row.local_id); }
         }
         for (const candidate of candidates) {
           if (sent > rowStart || sent >= 2 || encoded >= 4 || !current()) break;
@@ -999,7 +1124,7 @@ export class RemoteAvailabilityPublisher {
               body: { ...this.body(context, state), publicationId, ...wireProjection, policyVersion: '1',
                 ...(repairModelLabel || repairTool ? { representation: 'repair', expectedProjectionRevision: acknowledged.result.projectionRevision } : {}) } });
             remoteDiagnosticLog('remote.publication.sealed', { operationId: publicationId, localSessionId: row.local_id, objectId: candidate.object_id, lane: 'live' });
-            sent++; await this.publishLive(context, request); this.failures.delete(key);
+            sent++; await this.publishLive(context, request); if (current()) this.failures.delete(key);
           } catch (error) {
             if (!current()) return;
             const transientEncoding = error instanceof Error && (/^REMOTE_LIVE_ENCODER_(?:BUSY|BUDGET|TIMEOUT|CONTEXT_CHANGED|WORKER_EXIT)$/u.test(error.message)
@@ -1009,20 +1134,21 @@ export class RemoteAvailabilityPublisher {
                 outcome: SyncTelemetry.Outcome.Failed, phase: SyncTelemetry.Stage.Projection, failureScope: 'object', objectId: candidate.object_id,
                 objectRevision: String(candidate.revision), reason: SyncTelemetry.Reason.EncodingFailed });
               try { this.liveRecovery.fault(context.scope, row.local_id, objectKey, fingerprint); }
-              catch (recordError) { this.fail(taskKey, recordError); }
+              catch (recordError) { this.fail(taskKey, recordError, context, row.local_id); }
               remoteDiagnosticLog('remote.record.quarantined', { localSessionId: row.local_id, objectId: candidate.object_id,
                 revision: String(candidate.revision), encoderVersion: RemoteLiveEncoderVersion, lane: 'live', reason: 'ENCODING_FAILED', error }, 'warn');
             }
-            this.fail(key, error);
+            this.fail(key, error, context, row.local_id);
           }
         }
-      } catch (error) { if (current()) this.fail(taskKey, error); }
+      } catch (error) { if (current()) this.fail(taskKey, error, context, row.local_id); }
     }
   }
   private async resolveLive(context: AvailabilityContext, state: AvailabilitySession, publicationId: string): Promise<void> {
+    context = this.capture(context);
     const epoch = this.timerEpoch;
     const guard = (): void => {
-      if (epoch !== this.timerEpoch || !this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
+      if (epoch !== this.timerEpoch || !this.current(context)) throw new Error(CONTEXT_CHANGED);
     };
     if (!context.publicationResolutionSupported || !/^[A-Za-z0-9_-]{1,64}$/u.test(publicationId)) throw new Error('REMOTE_LIVE_RESOLUTION_IDENTITY_INVALID');
     guard();
@@ -1052,19 +1178,22 @@ export class RemoteAvailabilityPublisher {
     this.ledger.completeResolution(context.scope, state.localId, publicationId, body, receipt);
   }
   private async publishLive(context: AvailabilityContext, request: AvailabilityRequest): Promise<void> {
+    context = this.capture(context); this.assertCurrent(context);
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: request.localId, sessionId: request.body.sessionId, lane: 'live',
       operationId: request.body.publicationId, operationKind: SyncTelemetry.Kind.Live, objectId: request.body.objectId,
       objectRevision: request.body.sourceObjectRevision });
     let result: any;
-    try { result = await this.send(context, request); }
+    try { result = await this.send(context, request); this.assertCurrent(context); }
     catch (error) {
+      this.assertCurrent(context);
       if (request.body.representation !== 'repair' || !context.publicationResolutionSupported || (error as { httpStatus?: number }).httpStatus !== 409) throw error;
       const state = this.ledger.session(context.scope, request.localId);
       if (!state) throw new Error('REMOTE_AVAILABILITY_STATE_MISSING');
       // A changed cloud head cannot justify rewriting this CAS request. Seal its original ID,
       // retain the bytes, and let a later source revision publish normally.
       await this.resolveLive(context, state, request.key);
+      this.assertCurrent(context);
       if (request.body.objectKind === 'tool') {
         this.liveRecovery.fault(context.scope, request.localId, `tool:${request.body.objectId}`,
           payloadHash({ kind: 'tool', objectId: request.body.objectId, revision: request.body.sourceObjectRevision }));

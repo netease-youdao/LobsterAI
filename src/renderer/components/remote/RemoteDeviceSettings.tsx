@@ -63,6 +63,8 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const [activeAction, setActiveAction] = useState<DeviceAction | null>(null);
   const [feedback, setFeedback] = useState('');
   const [actionError, setActionError] = useState('');
+  const [logsOpening, setLogsOpening] = useState(false);
+  const [logsError, setLogsError] = useState(false);
   const identity = JSON.stringify([accountGeneration, state?.accountEpoch, state?.owner?.userId, state?.owner?.scopeKey]);
   const online = isRemoteOnline(state);
   const signInRequired = needsRemoteSignIn(state);
@@ -70,6 +72,8 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
   const admissionDeferred = Boolean(!initializationFailed && state?.owner && state.enabled && !signInRequired && state.syncHealth?.admissionDeferred);
   const connectionFailure = remoteConnectionFailure(state);
   const contentSummary = remoteTaskContentSummary(state);
+  const pendingDeletions = Boolean(!initializationFailed && state?.owner && state.accountEpoch && state.enabled && !signInRequired
+    && !state.syncHealth?.statisticsUnavailable && (state.syncHealth?.pendingDeletions ?? 0) > 0);
   const displayName = state?.owner ? state.name || state.hostName : state?.hostName;
   const connections = !initializationFailed && state?.accountEpoch === management.accountEpoch ? management.data : null;
   const showConnections = Boolean(!initializationFailed && state?.owner && !signInRequired && (state.deviceConnectionManagementSupported || connections?.supported) && management.accountEpoch === state.accountEpoch);
@@ -94,6 +98,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
     requestGeneration.current++;
     setRenameOpen(false); setNameDraft(''); setNameError('');
     setFeedback(''); setActionError(''); setActiveAction(null);
+    setLogsOpening(false); setLogsError(false);
     clearTimeout(retryTimer.current); setRetryCooldown(false);
   }, [identity]);
 
@@ -177,6 +182,24 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
     if (mounted.current && epoch === remoteSettingsService.getSnapshot().state?.accountEpoch && saved) setFeedback('remoteResumeRequested');
   };
 
+  const openDiagnostics = async () => {
+    const current = remoteSettingsService.getSnapshot().state;
+    if (logsOpening || !pendingDeletions || !state?.accountEpoch || state.accountEpoch !== current?.accountEpoch
+      || remoteOwnerKey(state) !== remoteOwnerKey(current) || !current?.enabled || needsRemoteSignIn(current)) return;
+    const generation = requestGeneration.current;
+    const epoch = state.accountEpoch;
+    const stillCurrent = () => mounted.current && generation === requestGeneration.current
+      && epoch === remoteSettingsService.getSnapshot().state?.accountEpoch;
+    setLogsOpening(true); setLogsError(false);
+    try {
+      await window.electron.log.openFolder();
+    } catch {
+      if (stillCurrent()) setLogsError(true);
+    } finally {
+      if (stillCurrent()) setLogsOpening(false);
+    }
+  };
+
   return <div className="space-y-6">
     <div className="flex min-h-[116px] items-center gap-4 rounded-xl border border-border bg-surface px-4 py-[7px]">
       <div className="shrink-0 text-center">
@@ -234,6 +257,12 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         </div>}
         {removed && <p className="text-secondary">{t('remoteRemovedCompactHelp')}</p>}
         {admissionDeferred && <p role="status" className="text-amber-700 dark:text-amber-400">{t('remoteHistoryAdmissionDeferred')}</p>}
+        {pendingDeletions && <div className="space-y-1">
+          <p role="status" className="text-amber-700 dark:text-amber-400">{t('remoteDeletedTasksSyncPending')}</p>
+          <button type="button" disabled={logsOpening} aria-busy={logsOpening} className={ACTION_CLASS}
+            onClick={() => { void openDiagnostics(); }}>{t('remoteOpenDiagnostics')}</button>
+          {logsError && <p role="alert" className="text-red-600 dark:text-red-400">{t('remoteDiagnosticsOpenFailed')}</p>}
+        </div>}
         {!removed && !quotaBlocked && currentConnection?.slotOccupied && currentConnection.admissionState === RemoteDeviceAdmissionState.Reconnecting && <p className="text-secondary">{t('remoteReconnectSlotRetained')}</p>}
         {!removed && !quotaBlocked && connectionFailure && connectionFailure !== statusKey && <p role="alert" className="text-red-600 dark:text-red-400">{t(connectionFailure)}</p>}
         {online && state?.connectionReason === RemoteConnectionReason.WorkspaceUnavailable && <p className="text-secondary">{t('remoteWorkspaceUnavailable')}</p>}

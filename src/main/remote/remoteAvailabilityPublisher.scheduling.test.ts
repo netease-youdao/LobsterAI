@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { payloadHash } from './canonical';
 import { type AvailabilityContext, RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
+import { availabilityControlSnapshot } from './remoteAvailabilitySource';
 import { ReplyModelDisplayVersion } from './remoteAvailabilityStore';
 import type { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { RemoteStore } from './remoteStore';
@@ -14,8 +16,11 @@ vi.mock('./remoteTelemetry', () => ({
 
 interface SchedulingAccess {
   tick(): void;
+  controls(context: AvailabilityContext): Promise<void>;
+  history(context: AvailabilityContext): Promise<void>;
   live(context: AvailabilityContext): Promise<void>;
   encoder: RemoteLiveProjectionJob;
+  failures: Map<string, { count: number; retryAt: number }>;
 }
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -23,9 +28,9 @@ afterEach(() => {
   vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks();
 });
 function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
+  let resolve!: (value: T) => void, reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 function fixture() {
@@ -44,7 +49,7 @@ function fixture() {
   });
   const sessionId = store.sync('local')!.session_id;
   store.bindRemote('local', sessionId, 'desktop');
-  const context: AvailabilityContext = { scope: 'target:1:personal:desktop', owner, deviceId: 'desktop', generation: '1', supported: true, historySupported: false };
+  let context: AvailabilityContext = { scope: 'target:1:personal:desktop', routeEpoch: 1, owner, deviceId: 'desktop', generation: '1', supported: true, historySupported: false };
   const request = vi.fn(async (pathname: string, _method: string, body: any) => {
     if (pathname === '/sync/live-projections') return { publicationId: body.publicationId, state: 'accepted', projectionRevision: '10', committedSeq: '10' };
     if (pathname === '/control/facts/batches') return { state: 'committed', lastFactSeq: body.lastFactSeq };
@@ -53,9 +58,10 @@ function fixture() {
   const publisher = new RemoteAvailabilityPublisher({ store, context: () => context, admitted: () => true, request });
   cleanup.push(() => publisher.dispose());
   store.setIndependentControlReady(id => publisher.controlReady(id));
-  const revision = db.prepare('SELECT revision FROM remote_control_revisions WHERE session_id=?').get('local') as { revision: number };
+  const baseline = availabilityControlSnapshot(store, 'local', [], false);
   publisher.ledger.saveSession({ scope: context.scope, localId: 'local', sessionId, writerGeneration: 'writer', controlEpoch: 'epoch',
-    phase: 'active', operationId: 'operation', pendingCommandIds: [], pendingRunIds: [], controlRevision: String(revision.revision), factSeq: '0', records: {} });
+    phase: 'active', operationId: 'operation', pendingCommandIds: [], pendingRunIds: [], controlRevision: baseline.revision, factSeq: '0',
+    records: { [`session.upsert:${sessionId}`]: payloadHash(baseline.records[0]) } });
   const acknowledged = publisher.ledger.saveRequest({ key: 'acknowledged', scope: context.scope, localId: 'local', lane: 'live',
     method: 'POST', pathname: '/sync/live-projections', version: 3, lookup: null, lookupVersion: 3, createdAt: 1, attempted: true,
     replyModelDisplayVersion: ReplyModelDisplayVersion,
@@ -78,7 +84,7 @@ function fixture() {
     db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run('Updated local content', 'message');
   });
   return { db, store, publisher, access, request, wake, prepare, ledgerPrepare, changeMessage,
-    ticks: () => ticks, context: () => context };
+    ticks: () => ticks, context: () => context, setContext: (value: AvailabilityContext) => { context = value; } };
 }
 
 async function advanceBounded(milliseconds: number, maximumTimers = 1): Promise<void> {
@@ -89,6 +95,30 @@ async function advanceBounded(milliseconds: number, maximumTimers = 1): Promise<
 }
 
 describe('availability scheduling with the real SQLite Store wake circuit', () => {
+  it.each(['success', 'failure'] as const)('bounds physical work through 40 ABA switches and ignores a stale %s', async outcome => {
+    const f = fixture(), pending = deferred<void>();
+    const controls = vi.spyOn(f.access, 'controls').mockImplementationOnce(() => pending.promise).mockResolvedValue(undefined);
+    vi.spyOn(f.access, 'live').mockResolvedValue(undefined);
+    vi.spyOn(f.access, 'history').mockResolvedValue(undefined);
+    f.publisher.start(); await advanceBounded(200);
+    for (let epoch = 2; epoch <= 41; epoch++) {
+      f.setContext({ ...f.context(), scope: epoch % 2 ? 'target:1:personal:desktop' : 'other:1:personal:desktop', routeEpoch: epoch });
+      f.publisher.invalidateContext(); await advanceBounded(200);
+      expect(controls).toHaveBeenCalledTimes(1);
+    }
+    const failureKey = `${f.context().scope}:control`;
+    f.access.failures.set(failureKey, { count: 1, retryAt: Date.now() + 5000 });
+    if (outcome === 'success') pending.resolve(); else pending.reject(new Error('Old target failure'));
+    await vi.advanceTimersByTimeAsync(0);
+    // The old then/catch cannot clear or overwrite the current target's new failure.
+    expect(f.access.failures.get(failureKey)).toEqual({ count: 1, retryAt: Date.now() + 5000 });
+    f.access.failures.delete(failureKey);
+    await advanceBounded(1000);
+    expect(controls).toHaveBeenCalledTimes(2);
+    expect(controls.mock.calls[1][0]).toMatchObject({ routeEpoch: 41, generation: '1', scope: 'target:1:personal:desktop' });
+    expect(f.publisher.displayTransientHealth(f.context().scope).degraded).toBe(false);
+  });
+
   it('keeps an acknowledged idle task at one timer for 60 seconds, stops completely and restarts once', async () => {
     const f = fixture();
     expect(f.publisher.ledger.object(f.context().scope, 'local', 'message:message')).toMatchObject({

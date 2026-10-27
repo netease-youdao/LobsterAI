@@ -421,6 +421,18 @@ describe('availability-first control and current messages', () => {
     await f.controls(); expect(f.publisher.ownsHistory('local')).toBe(true);
     expect(f.publisher.ledger.session(f.context.scope, 'local')?.phase).toBe('activating');
   });
+  it('does not replace a missing sidecar writer or fall back to legacy after core adoption', async () => {
+    const f = fixture(); f.context.targetId = 'target'; f.context.environment = 'target';
+    f.db.prepare("UPDATE remote_sync SET sync_environment='target' WHERE local_id='local'").run();
+    await f.controls();
+    f.publisher.ledger.db.prepare('DELETE FROM availability_sessions WHERE scope=? AND local_id=?').run(f.context.scope, 'local');
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unavailable', dependency: 'control_ledger' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(false);
+    f.request.mockClear(); await f.controls();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.hasSession(f.context.scope, 'local')).toBe(false);
+    expect(f.publisher.displayTransientHealth(f.context.scope).controlBackoff).toBe(true);
+  });
   it('publishes a deletion as a protected source revision rather than reviving its old live body', async () => {
     const f = fixture(); await f.controls(); await f.live(); f.request.mockClear();
     f.store.transaction(() => f.db.prepare('DELETE FROM cowork_messages WHERE id=?').run('message'));
@@ -432,6 +444,112 @@ describe('availability-first control and current messages', () => {
 });
 
 describe('durable control transitions and capability retirement', () => {
+  it('does not advance past required deletions omitted from the first bounded wire batch', async () => {
+    const f = fixture(); await f.controls();
+    const pending = Array.from({ length: 16 }, (_, index) => `a-${String(index).padStart(2, '0')}`);
+    const required = Array.from({ length: 4 }, (_, index) => `z-${index}`);
+    for (const id of [...pending, ...required]) f.db.prepare("INSERT INTO remote_live_revisions VALUES('local',?,7,1)").run(id);
+    f.db.prepare("UPDATE remote_control_revisions SET revision=revision+1 WHERE session_id='local'").run();
+    const revision = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    for (const id of pending) f.db.prepare("INSERT INTO remote_control_pending VALUES('local',?,?)").run(`message.deleted:${id}`, revision);
+    const publisher: any = f.publisher, state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    publisher.reconciliation.next(f.store, state, `${publisher.reconciliationId}:0:${publisher.timerEpoch}`);
+    // Earlier pages were already scanned, but another target left smaller IDs in the shared queue.
+    f.publisher.ledger.db.prepare("UPDATE availability_control_reconcile SET phase='deleted_message',cursor='m' WHERE scope=? AND local_id='local'")
+      .run(f.context.scope);
+    const cursor = () => f.publisher.ledger.db.prepare("SELECT phase,cursor FROM availability_control_reconcile WHERE scope=? AND local_id='local'").get(f.context.scope);
+    f.request.mockClear(); await f.controls();
+    expect(f.request.mock.calls[0][2].facts).toHaveLength(16);
+    expect(cursor()).toEqual({ phase: 'deleted_message', cursor: 'm' });
+    expect(required.every(id => !Object.hasOwn(f.publisher.ledger.session(f.context.scope, 'local')!.records, `message.deleted:${id}`))).toBe(true);
+    await f.controls();
+    expect(cursor()).toEqual({ phase: 'deleted_message', cursor: 'z-3' });
+    expect(required.every(id => Object.hasOwn(f.publisher.ledger.session(f.context.scope, 'local')!.records, `message.deleted:${id}`))).toBe(true);
+    await f.controls(); expect(cursor()).toEqual({ phase: 'complete', cursor: '' });
+    expect(f.publisher.ledger.session(f.context.scope, 'local')!.controlRevision).toBe(String(revision));
+    const deleted = f.request.mock.calls.flatMap(call => call[2].facts).filter(fact => fact.eventType === 'message.deleted').map(fact => fact.payload.messageId);
+    expect(deleted).toEqual([...pending, ...required]);
+  });
+
+  it('drains only proven foreign control hints and finishes reconciliation with more than one foreign page', async () => {
+    const f = fixture(); f.store.beginRun('local', 'run-a'); await f.controls();
+    f.store.updateRun('local', 'succeeded'); f.store.beginRun('local', 'run-b');
+    for (let index = 0; index < 20; index++) f.store.put(`approval:local:foreign-${index}`, {
+      approvalId: `foreign-${index}`, runId: 'run-b', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    f.store.put('question:local:foreign-question', { questionId: 'foreign-question', runId: 'run-b', questionVersion: '2', status: 'cancelled' });
+    f.store.put('syncTargetHistory:local', { targetId: 'target', runIds: ['run-b'] });
+    f.request.mockClear();
+    for (let turn = 0; turn < 24; turn++) await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-b' || fact.payload.approval?.runId === 'run-b'
+      || fact.payload.question?.runId === 'run-b')).toBe(false);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-a' && fact.payload.run.status === 'succeeded')).toBe(true);
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 0 });
+    const revision = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    expect(f.publisher.ledger.session(f.context.scope, 'local')!.controlRevision).toBe(String(revision));
+    f.request.mockClear(); await f.controls(); await f.controls(); expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('preserves foreign-looking pending objects when their original evidence is missing', async () => {
+    const f = fixture(); await f.controls();
+    f.store.put('syncTargetHistory:local', { targetId: 'target', runIds: ['missing-run'] });
+    f.store.put('control:local', '2');
+    f.db.prepare("INSERT INTO remote_control_pending VALUES('local','run.updated:missing-run',1)").run();
+    f.db.prepare("INSERT INTO remote_control_pending VALUES('local','approval.updated:missing-decision',1)").run();
+    for (let turn = 0; turn < 12; turn++) await f.controls();
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 2 });
+    expect(f.publisher.ledger.session(f.context.scope, 'local')!.controlRevision).toBe('0');
+  });
+
+  it('reconciles the original target after another target consumed every shared control pending entry', async () => {
+    const f = fixture();
+    f.store.beginRun('local', 'run-a'); f.store.updateRun('local', 'running');
+    f.store.put('approval:local:decision-a', { approvalId: 'decision-a', runId: 'run-a', approvalVersion: '1', status: 'pending', operationDigest: 'digest' });
+    await f.controls();
+    const original = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const other = { ...f.context, scope: 'other:1:personal:desktop', routeEpoch: 2 };
+    f.setContext(other); f.publisher.invalidateContext();
+    f.store.updateRun('local', 'succeeded');
+    f.store.put('approval:local:decision-a', { approvalId: 'decision-a', runId: 'run-a', approvalVersion: '2', status: 'approved', operationDigest: 'digest' });
+    f.store.beginRun('local', 'run-b'); f.store.updateRun('local', 'running');
+    f.store.put('syncTargetHistory:local', { targetId: 'other', runIds: ['run-a'] });
+    // Another target can consume this derived queue. The original target's receipt baseline is untouched.
+    f.db.prepare('DELETE FROM remote_control_pending WHERE session_id=?').run('local');
+    f.publisher.ledger.saveSession({ ...original, scope: other.scope, writerGeneration: 'other-writer', controlEpoch: 'other-epoch', records: {} });
+    f.setContext({ ...f.context, routeEpoch: 3 }); f.publisher.invalidateContext();
+    f.store.put('syncTargetHistory:local', { targetId: 'target', runIds: ['run-b'] });
+    f.request.mockClear();
+    for (let turn = 0; turn < 16; turn++) await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-a' && fact.payload.run.status === 'succeeded')).toBe(true);
+    expect(facts.some(fact => fact.payload.approval?.approvalId === 'decision-a' && fact.payload.approval.status === 'approved')).toBe(true);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-b')).toBe(false);
+    expect(f.publisher.ledger.session(other.scope, 'local')!.factSeq).toBe(original.factSeq);
+    expect(f.request.mock.calls.every(call => call[0] === '/control/facts/batches')).toBe(true);
+    expect(f.request.mock.calls.every(call => !Object.hasOwn(call[2], 'controlReconciliation'))).toBe(true);
+    expect(f.publisher.ledger.db.prepare('SELECT phase FROM availability_control_reconcile WHERE scope=? AND local_id=?')
+      .get(f.context.scope, 'local')).toEqual({ phase: 'complete' });
+  });
+
+  it('scans closed decisions beyond the bounded receipt hash cache even when the global queue is empty', async () => {
+    const f = fixture(); f.store.beginRun('local', 'run'); await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    for (let index = 0; index < 18; index++) f.store.put(`approval:local:closed-${String(index).padStart(2, '0')}`, {
+      approvalId: `closed-${String(index).padStart(2, '0')}`, runId: 'run', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    f.db.prepare('DELETE FROM remote_control_pending WHERE session_id=?').run('local');
+    // None of these historical decisions is in this target's suppression cache.
+    expect(Object.keys(state.records).some(key => key.startsWith('approval.updated:'))).toBe(false);
+    f.request.mockClear();
+    for (let turn = 0; turn < 24; turn++) await f.controls();
+    const approvals = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches')
+      .flatMap(call => call[2].facts).flatMap(fact => fact.payload.approval ? [fact.payload.approval.approvalId] : []);
+    expect(new Set(approvals).size).toBe(18);
+    expect(f.request.mock.calls.every(call => call[2].facts.length <= 16)).toBe(true);
+    f.request.mockClear(); await f.controls(); expect(f.request).not.toHaveBeenCalled();
+  });
+
   it('publishes the previous terminal run even if another run started before the next scan', async () => {
     const f = fixture(); f.store.beginRun('local', 'first'); f.store.updateRun('local', 'running'); await f.controls();
     f.store.updateRun('local', 'succeeded'); f.store.beginRun('local', 'second'); f.store.updateRun('local', 'running');
@@ -751,6 +869,28 @@ it('rebuilds optional tool membership from recent core messages without resettin
 
 
 describe('persistent control progress and desktop deletions', () => {
+  it('settles a verified legacy tombstone before activation and clears only its own control retry', async () => {
+    const f = fixture(); f.context.environment = 'test'; f.context.targetId = 'test'; f.context.scope = 'test:1:personal:desktop';
+    f.db.prepare("UPDATE remote_sync SET sync_environment='test' WHERE local_id='local'").run();
+    f.store.transaction(() => {
+      recordRemoteSessionDeletion(f.store, 'local');
+      f.db.prepare("DELETE FROM cowork_sessions WHERE id='local'").run();
+      f.store.project('local');
+    });
+    const sync = f.store.sync('local')!;
+    f.store.acknowledge('local', 'desktop', sync.session_id, String(sync.source_seq), '1', true);
+    f.db.prepare("UPDATE remote_sync SET needs_snapshot=1 WHERE local_id='local'").run();
+    const failures: Map<string, { count: number; retryAt: number }> = (f.publisher as any).failures;
+    const key = `${f.context.scope}:control:local`, otherKey = `${f.context.scope}:control:local-other`;
+    failures.set(key, { count: 3, retryAt: Date.now() + 60_000 }); failures.set(otherKey, { count: 3, retryAt: Date.now() + 60_000 });
+    await f.controls();
+    expect(f.request).not.toHaveBeenCalled(); expect(f.publisher.ownsHistory('local')).toBe(false);
+    expect(failures.has(key)).toBe(false); expect(failures.has(otherKey)).toBe(true);
+    expect(f.store.sync('local')).toMatchObject({ source_seq: sync.source_seq, ack_seq: sync.source_seq });
+    expect(f.store.get('deletionClosed:local')).toBeNull();
+    expect(f.db.prepare('SELECT state FROM remote_session_deletion_sync WHERE local_session_id=?').get('local')).toEqual({ state: 'acknowledged' });
+  });
+
   it('finishes a nonpaged bootstrap across 600ms round trips without restarting confirmed parts', async () => {
     const f = fixture(), ordinary = f.request.getMockImplementation()!;
     let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -782,7 +922,7 @@ describe('persistent control progress and desktop deletions', () => {
   });
   async function deletionFixture() {
     const f = fixture(), ordinary = f.request.getMockImplementation()!;
-    f.context.environment = 'test';
+    f.context.environment = 'test'; f.context.targetId = 'test'; f.context.scope = 'test:1:personal:desktop';
     f.db.prepare("UPDATE remote_sync SET sync_environment='test' WHERE local_id='local'").run();
     const receipts = new Map<string, any>();
     f.request.mockImplementation(async (...args) => {
@@ -835,6 +975,20 @@ describe('persistent control progress and desktop deletions', () => {
     expect(f.store.get<any>('localGcDeleted:local').availabilityAck).toBeDefined();
     expect(f.receipts.size).toBe(1);
     expect(f.request.mock.calls.filter(call => call[0] === '/control/facts/batches')).toHaveLength(1);
+  });
+  it('finishes the sealed deletion request when its core ACK committed before sidecar cleanup failed', async () => {
+    const f = await deletionFixture(); f.remove();
+    const complete = vi.spyOn(f.publisher.ledger, 'complete').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
+    await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').availabilityAck).toBeDefined();
+    expect(f.store.isSyncClosed('local')).toBe(true);
+    const request = f.publisher.ledger.pending(f.context.scope, 'control', 'local')[0];
+    expect(f.publisher.ledger.stepReceipt(request)?.state).toBe('committed');
+    complete.mockRestore(); f.request.mockClear();
+    await f.controls();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.pending(f.context.scope, 'control', 'local')).toEqual([]);
+    expect(f.publisher.displayTransientHealth(f.context.scope).controlBackoff).toBe(false);
   });
   it('repairs an old tombstone only from its frozen writer manifest and original checkpoint', async () => {
     const f = await deletionFixture(), state = f.publisher.ledger.session(f.context.scope, 'local')!;

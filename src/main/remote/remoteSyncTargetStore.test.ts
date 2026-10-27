@@ -7,6 +7,7 @@ import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteRetention, type RetentionState } from '../../shared/remote/retention';
 import { RemoteSyncTarget, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { stableJson } from './canonical';
+import { RemoteDeletionSyncKind } from './remoteDeletionSyncPolicy';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncAdmissionBudgetError, RemoteSyncAdmissionStore } from './remoteSyncAdmission';
 import { archivedRemoteSyncReferences, RemoteSyncTargetActivationKind, remoteSyncTargetId, RemoteSyncTargetStore } from './remoteSyncTargetStore';
@@ -74,6 +75,34 @@ describe('durable incremental admission', () => {
 });
 
 describe('active synchronization target working sets', () => {
+  test('preserves a legacy deletion ACK through repeated target and capability changes', () => {
+    const f = fixture(); f.add(); const first = f.activate(); f.bind('s', first.targetId);
+    f.db.prepare("UPDATE remote_sync SET source_seq=117,ack_seq=117,needs_snapshot=1 WHERE local_id='s'").run();
+    const binding = f.store.sync('s')!;
+    const tombstone = { owner, localSessionId: 's', sessionId: binding.session_id, deviceId: binding.device_id,
+      environment: binding.sync_environment, streamEpoch: binding.stream_epoch, deletedAt: 1000, deleteRevision: 287,
+      sourceHighWatermark: 116, ackAt: 2000, ackSourceSeq: 117, phase: 'eligible' };
+    const projection = stableJson({ eventType: 'session.deleted', payload: { deletedAt: new Date(1406).toISOString() } });
+    f.store.put('localGcDeleted:s', tombstone);
+    f.db.prepare("INSERT OR REPLACE INTO remote_projection VALUES('s','deleted','original',1,?)").run(projection);
+    f.store.transaction(() => f.db.prepare("DELETE FROM cowork_sessions WHERE id='s'").run());
+    expect(f.store.reconcileDeletionSync('s')).toMatchObject({ kind: RemoteDeletionSyncKind.Settled });
+    expect(f.store.isSyncClosed('s')).toBe(true);
+    for (let cycle = 0; cycle < 100; cycle++) {
+      f.activate(spaceB, { bootstrap: true });
+      expect(f.store.sync('s')).toBeNull();
+      f.activate(spaceA);
+      f.store.setQuestionProjectionSupported(cycle % 2 === 0);
+      f.store.requireSnapshot('s'); f.store.project('s');
+      expect(f.store.sync('s')).toMatchObject({ source_seq: 117, ack_seq: 117, needs_snapshot: 0, session_id: binding.session_id });
+    }
+    expect(f.db.prepare("SELECT record_json FROM remote_projection WHERE session_id='s' AND object_key='deleted'").get()).toEqual({ record_json: projection });
+    expect(f.store.get('localGcDeleted:s')).toEqual(tombstone);
+    expect(f.store.get('deletionClosed:s')).toBeNull();
+    expect(f.db.prepare('SELECT count(*) AS count FROM remote_session_deletion_sync WHERE target_id=?').get(first.targetId)).toEqual({ count: 1 });
+    expect(f.db.prepare('SELECT count(*) AS count FROM remote_sync_targets').get()).toEqual({ count: 2 });
+    expect(f.db.prepare("SELECT 1 FROM remote_dirty WHERE session_id='s'").get()).toBeUndefined();
+  });
   test('claims published legacy state only after continuity proof and never turns GET state into an ACK', () => {
     const f = fixture(); f.add(); f.bind();
     f.store.put('import:s', { importId: 'immutable-import', environment: 'https://former.example', owner, manifest: { manifestHash: 'immutable' } });
@@ -323,7 +352,8 @@ describe('active synchronization target working sets', () => {
     const closed = { receiptId: 'b-receipt', receiptDigest: 'b-hash', ackSourceSeq: 0 };
     f.store.put('deletionClosed:s', closed);
     f.store.put('localGcDeleted:s', { owner, localSessionId: 's', sessionId: second.session_id, deviceId: second.device_id,
-      environment: second.sync_environment, streamEpoch: second.stream_epoch, completionReceipt: { receiptDigest: 'b-hash' } });
+      environment: second.sync_environment, streamEpoch: second.stream_epoch, completionReceipt: { receiptDigest: 'b-hash' },
+      deletedAt: 1000, deleteRevision: 287, sourceHighWatermark: second.source_seq, ackAt: null, ackSourceSeq: null, phase: 'eligible' });
     f.store.transaction(() => f.db.prepare("DELETE FROM cowork_sessions WHERE id='s'").run());
     expect(f.store.isSyncClosed('s')).toBe(true);
     f.activate(spaceA);

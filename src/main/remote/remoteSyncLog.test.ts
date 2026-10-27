@@ -8,6 +8,7 @@ import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import {
   remoteDiagnosticLog,
+  remoteDiagnosticRoute,
   RemoteInputDiagnostic,
   remoteSyncErrorMetadata,
   remoteSyncEventMetadata,
@@ -30,6 +31,24 @@ function messageEvent() {
 }
 
 describe('remote sync diagnostic metadata', () => {
+  it('separates endpoint, route epoch and local classification failures without logging URLs', () => {
+    const route = remoteDiagnosticRoute('/devices/private-host/commands/unresolved?cursor=secret');
+    expect(route).toBe('/devices/:deviceId/commands/unresolved');
+    expect(remoteSyncRequestMetadata('/devices/desktop/commands/unresolved?cursor=secret', {})).toMatchObject({ operation: 'command_poll' });
+    expect(remoteDiagnosticRoute('/private/secret')).toBeNull();
+    const fields = { routeEpoch: 1234, targetId: 'target-a', lane: 'control', method: 'GET', apiVersion: 4,
+      routeTemplate: route, error: Object.assign(new Error('request failed'), { httpStatus: 500, code: 500 }) };
+    remoteDiagnosticLog('remote.request.completed', fields, 'warn');
+    remoteDiagnosticLog('remote.request.completed', fields, 'warn');
+    remoteDiagnosticLog('remote.request.completed', { ...fields, routeEpoch: 1235 }, 'warn');
+    remoteDiagnosticLog('remote.request.completed', { ...fields, routeTemplate: '/control/facts/batches' }, 'warn');
+    remoteDiagnosticLog('remote.request.completed', { ...fields, stage: 'local_classification', localSessionId: 'deleted-task',
+      error: new Error('REMOTE_DELETION_BINDING_UNRESOLVED') }, 'warn');
+    expect(logged).toHaveLength(4);
+    expect(logged[0]).toMatchObject({ routeEpoch: 1234, targetId: 'target-a', routeTemplate: route, method: 'GET', apiVersion: 4 });
+    expect(logged[3]).toMatchObject({ stage: 'local_classification', localSessionId: 'deleted-task', error: { validation: 'REMOTE_DELETION_BINDING_UNRESOLVED' } });
+    expect(JSON.stringify(logged)).not.toMatch(/private-host|cursor|secret/);
+  });
   it('keeps event identities and versions while excluding conversation and tool contents', () => {
     expect(remoteSyncEventMetadata(messageEvent(), 0)).toEqual({ index: 0, eventType: 'message.upsert', eventId: 'event-1',
       sourceSeq: '17', objectId: 'message-1', revision: '3', runId: 'run-2', runStatusVersion: null,

@@ -2,6 +2,8 @@
 
 日期：2026-09-23。此次修改服务端和 Electron；没有修改 iOS。
 
+2026-10-27 频繁切换服务的删除兼容与上下文隔离**已在客户端实现，待真实跨服务联合验收**；见文末链接。本文既有测试记录不计入该增量。
+
 ## 改动及消费方行为
 
 桌面接管原会话后，控制事实和当前消息通过独立协议发布，不再排在历史 outbox 后面。一条坏的旧 artifact/message 不会阻止后续真实运行状态、新消息或手机命令领取。原会话身份、核心命令幂等、审批、问题决定、删除保护继续使用已有真实核心状态。取消旧 run 时只有真实本地终态历史可返回 already_terminal；不存在的 run 不会被当作已结束，也不会误停新的 run。
@@ -97,3 +99,15 @@
 新增可选 `OwnershipDetail.contentSync` 是 Electron 本地 IPC 字段，缺失/未知时保守显示，不开放任务重试。按 ID 的状态证据在后台只读 worker 采样，不向 UI/getDetail 同步扫描消息表；真实控制/认证/连接错误保留独立设备提示。HTTP API、认证、错误码、服务端配置及 MySQL DDL 均无变化，手机、Portal、Admin 无新接入要求。
 
 完整方案、状态矩阵和本轮验证记录见[任务内容同步提示 Spec](../../specs/bugfixes/task-sync-status-placement/2026-10-27-task-content-sync-status.md)。
+
+## 2026-10-27 实现补充：切换服务与删除通道分流
+
+频繁测试／线上切换的完整设计见[同步目标 Spec 第 8 节](../../specs/bugfixes/remote-sync-target/2026-09-22-effective-server-sync-design.md#frequent-service-switching)。本节没有对应的新实现或测试通过记录。
+
+- control/live 调度前核对当前目标删除分类：已验证终态不再接管，未接管的 legacy 删除交回原协议，已有 writer fence 的删除继续沿原 controlEpoch 核对。不能因 tombstone 存在就要求它具备 availability binding。
+- 旧 legacy ACK、水位和删除事件可在完整身份及原语义校验后迁移为本地兼容证明；普通 needs_snapshot/capability 重投影不撤销已确认删除。不得伪造 control 回执、绑定或专用执行删除凭证。
+- availability 上下文必须携带客户端 routeEpoch；scope/device/server connectionGeneration 相同不足以识别 A→B→A。失效包括成功、错误、finally、checkpoint 和 worker；保留持久请求，清除旧代次瞬时调度。
+- sidecar 按 target/owner/device scope 保留；切回后按该目标原回执对账核心控制事实，不依赖在另一目标已经消费的全局 pending 索引。各 SQLite 文件按可重入步骤恢复，不假定跨库事务。
+- 仅在对应证明落盘／分流完成后清该任务旧 control backoff；其他真实故障、未知回执、缺失 sidecar 和权限问题继续保留。
+
+本增量代码改动为桌面及本地 SQLite，复用既有服务端协议，无服务端业务代码、HTTP API 或 MySQL 变更。Publisher 已按 scope 分页对账，避免全局 pending 被另一个目标消费后遗漏终态；核心 ACK 与 sidecar 完成之间失败时按原操作收尾，恢复材料不提前 GC。定向测试、基线对比、实际数据库副本和隔离 Electron 检查见 [Spec 第 8.14 节](../../specs/bugfixes/remote-sync-target/2026-09-22-effective-server-sync-design.md#814-2026-10-27-实现与验证记录)。旧 `385/564` 项不累计到本轮。真实部署核验、手机／删除回执联调及 HTTP 500 根因排查尚未执行，不能将本地验证视为 E01–E34 全部验收通过。

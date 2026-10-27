@@ -62,6 +62,7 @@ export type AuthTokenRefreshResult = {
 };
 
 export const AuthRefreshFailureKind = {
+  ContextChanged: 'context_changed',
   Http: 'http_error',
   InvalidResponse: 'invalid_response',
   Network: 'network',

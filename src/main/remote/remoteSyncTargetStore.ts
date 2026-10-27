@@ -5,13 +5,14 @@ import type { RemoteOwner } from '../../shared/remote/constants';
 import type { RetentionState } from '../../shared/remote/retention';
 import { parseRemoteSyncTarget, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { payloadHash, sameOwner, stableJson } from './canonical';
+import { RemoteDeletionSyncKind } from './remoteDeletionSyncPolicy';
 import { migrateVerifiedRemoteTargetCatalogRouting, migrateVerifiedRemoteTargetFileRouting } from './remoteEnvironmentMigration';
 import { materializeRemotePreparedInputSources } from './remotePreparedInputSnapshots';
 import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
 import type { RemoteStore, SyncRow } from './remoteStore';
 import { AdmissionJobPhase, RemoteSessionAdmission, RemoteSyncAdmissionBudgetError, RemoteSyncAdmissionStore } from './remoteSyncAdmission';
 
-type Store = Pick<RemoteStore, 'db'>;
+type Store = Pick<RemoteStore, 'db'> & Partial<Pick<RemoteStore, 'reconcileDeletionSync'>>;
 type Row = Record<string, string | number | null>;
 interface StateRow { key: string; value: string }
 export const RemoteSyncTargetActivationKind = { Unchanged: 'unchanged', Claimed: 'claimed', Created: 'created', Restored: 'restored' } as const;
@@ -439,7 +440,7 @@ export class RemoteSyncTargetStore {
     }
     checkBudget();
     const verified = rows.filter(row => this.admissions.admitted(input.owner, input.deviceId, input.targetId, row.local_id));
-    for (const row of verified) for (const table of ['remote_dirty', 'remote_content_dirty']) this.store.db.prepare(`INSERT OR IGNORE INTO ${table} VALUES (?)`).run(row.local_id);
+    for (const row of verified) this.restoreScheduling(row.local_id, input);
     if (verified.length === rows.length && !this.admissions.controlBlocked(input.targetId)) {
       // Account-wide protocol state can move only after every task and unscoped execution dependency is verified.
       const environments = this.store.db.prepare('SELECT environment FROM remote_sync_target_aliases WHERE target_id=?').all(input.targetId) as Array<{ environment: string }>;
@@ -498,14 +499,24 @@ export class RemoteSyncTargetStore {
           AND NOT EXISTS(SELECT 1 FROM remote_state WHERE key='localGcDeleted:'||o.session_id OR key='deletionClosed:'||o.session_id)`).all(input.owner.userId, input.owner.scopeKey) as Array<{ session_id: string }>;
         for (const row of available) this.store.db.prepare('INSERT OR IGNORE INTO remote_sync(local_id,session_id,device_id,sync_environment) VALUES (?,?,?,?)')
           .run(row.session_id, randomUUID(), input.deviceId, input.targetId);
-        this.store.db.prepare(`UPDATE remote_sync SET needs_snapshot=1 WHERE local_id IN (${ownSessions})`).run(input.owner.userId, input.owner.scopeKey);
+        this.store.db.prepare(`UPDATE remote_sync SET needs_snapshot=1 WHERE local_id IN (${ownSessions})
+          AND local_id IN (SELECT id FROM cowork_sessions)`).run(input.owner.userId, input.owner.scopeKey);
       }
       this.history(input.owner, input.targetId);
       materializeRemotePreparedInputSources(this.store, input.owner, input.deviceId);
-      for (const row of this.rows(input.owner)) for (const table of ['remote_dirty', 'remote_content_dirty']) this.store.db.prepare(`INSERT OR IGNORE INTO ${table} VALUES (?)`).run(row.local_id);
+      for (const row of this.rows(input.owner)) this.restoreScheduling(row.local_id, input);
       const epoch = (active?.epoch || 0) + 1;
       this.store.db.prepare('INSERT OR REPLACE INTO remote_sync_target_active VALUES (?,?,?,?)').run(input.owner.userId, input.owner.scopeKey, input.targetId, epoch);
       return { owner: { ...input.owner }, deviceId: input.deviceId, targetId: input.targetId, syncTarget: input.syncTarget, epoch, kind };
     })();
+  }
+  private restoreScheduling(localId: string, context: { owner: RemoteOwner; targetId: string; deviceId: string }): void {
+    if (this.store.db.prepare("SELECT 1 FROM remote_state WHERE key='localGcDeleted:'||?").get(localId)) {
+      const result = this.store.reconcileDeletionSync?.(localId, context);
+      // The original legacy delete can resume; control deletes retain their sidecar operation.
+      // Missing evidence must never produce a new projection or activation.
+      if (!result || result.kind !== RemoteDeletionSyncKind.LegacyDelete) return;
+    }
+    for (const table of ['remote_dirty', 'remote_content_dirty']) this.store.db.prepare(`INSERT OR IGNORE INTO ${table} VALUES (?)`).run(localId);
   }
 }

@@ -47,7 +47,7 @@ import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
 import { RemoteSessionDeletionClient, type SessionDeletionDependencies } from './remoteSessionDeletionClient';
 import { type ProjectionRecord, RemoteStore, type SyncRow } from './remoteStore';
 import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
-import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteDiagnosticLog, RemoteInputDiagnostic, remoteLogMessage, remoteSyncErrorMetadata, remoteSyncRequestId, remoteSyncRequestMetadata, remoteSyncResultMetadata } from './remoteSyncLog';
+import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteDiagnosticLog, remoteDiagnosticRoute, RemoteInputDiagnostic, remoteLogMessage, remoteSyncErrorMetadata, remoteSyncRequestId, remoteSyncRequestMetadata, remoteSyncResultMetadata } from './remoteSyncLog';
 import { RemoteSyncTargetActivationKind, RemoteSyncTargetStore } from './remoteSyncTargetStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { classifyTaskSyncFailure, isSharedSyncFailure } from './remoteTaskSyncPolicy';
@@ -103,6 +103,8 @@ export interface BridgeDependencies {
   /** Legacy compatibility only; client mode never decides synchronization admission. */
   getEnvironment?(): RemoteEnvironment;
   getApiBaseUrl(): string;
+  /** Monotonic local routing/auth context; independent of server connection generation. */
+  getRouteEpoch?(): number;
   request(owner: RemoteOwner, pathname: string, init: RequestInit): Promise<Response>;
   metadata: { name: string; hostName: string; instanceLabel: string; platform: string; appVersion: string };
   prepare(command: RemoteCommand, owner: RemoteOwner, workspacePath: string | null): { localSessionId: string; remoteSessionId: string; runId: string | null };
@@ -127,6 +129,7 @@ export class RemoteBridge {
   private deletionAvailable = false;
   private owner: RemoteOwner | null = null;
   private accountGeneration = 0;
+  private accountRouteEpoch = 0;
   private accountRoute: string;
   private targetId: string | null = null;
   private admissionDeferred = false;
@@ -244,6 +247,7 @@ export class RemoteBridge {
   private fileTimer: ReturnType<typeof setInterval> | null = null;
   constructor(private readonly deps: BridgeDependencies) {
     this.accountRoute = deps.getApiBaseUrl();
+    this.accountRouteEpoch = deps.getRouteEpoch?.() ?? 0;
     this.displaySnapshot = new RemoteDisplaySnapshot({
       produce: async (key, signal) => {
         const input = this.displayInput();
@@ -283,8 +287,8 @@ export class RemoteBridge {
       store: deps.store,
       context: () => this.owner && this.targetId && this.registration && this.settings().enabled && !this.stopped
         && !this.syncPaused() && !deps.store.needsSecurityRecovery() ? {
-        environment: this.remoteEnvironment(), scope: `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}`,
-        owner: this.owner, deviceId: this.registration.deviceId, generation: this.generation || '',
+        environment: this.remoteEnvironment(), targetId: this.targetId, scope: `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}`,
+        owner: this.owner, deviceId: this.registration.deviceId, generation: this.generation || '', routeEpoch: this.accountGeneration,
         historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
         checkpointPagesSupported: this.capabilitySnapshot?.capabilities?.includes('control_checkpoint_pages_v1') === true,
         publicationResolutionSupported: this.capabilitySnapshot?.capabilities?.includes('live_publication_resolution_v1') === true,
@@ -305,7 +309,7 @@ export class RemoteBridge {
     this.deletions = deps.deletion ? new RemoteSessionDeletionClient({ ...deps.deletion, store: deps.store, security: deps.security,
       controlsAdmitted: () => deps.store.areControlsAdmitted(),
       context: () => this.owner && this.registration && this.targetId && sameOwner(this.owner, deps.getOwner()) ? {
-        owner: this.owner, environment: this.remoteEnvironment(), deviceId: this.registration.deviceId, generation: this.generation,
+        owner: this.owner, environment: this.remoteEnvironment(), deviceId: this.registration.deviceId, generation: this.generation, routeEpoch: this.accountGeneration,
         enabled: this.settings().enabled && !this.stopped && !this.syncPaused(),
       } : null,
       request: (path, method, body) => this.api(path, method, body),
@@ -373,7 +377,7 @@ export class RemoteBridge {
   }
   private syncFiles(): void {
     if (!this.deps.store.needsSecurityRecovery() && !this.syncPaused() && this.owner && this.registration && this.generation && this.projectionVersion >= 3) this.files?.tick({ owner: this.owner,
-      deviceId: this.registration.deviceId, generation: this.generation, environment: this.remoteEnvironment() });
+      deviceId: this.registration.deviceId, generation: this.generation, environment: this.remoteEnvironment(), routeEpoch: this.accountGeneration });
   }
   async prepareFileRun(sessionId: string, roots: string[]): Promise<void> {
     if (!this.canCaptureRemoteFiles()) return;
@@ -403,7 +407,8 @@ export class RemoteBridge {
   private displaySettingsKey(): string { return JSON.stringify([this.accountGeneration, this.accountRoute, this.settingsKey()]); }
   private displayKey(): string | null {
     try {
-      if (this.stopped || !this.owner || !sameOwner(this.owner, this.displayOwner()) || this.accountRoute !== this.deps.getApiBaseUrl()) return null;
+      if (this.stopped || !this.owner || !sameOwner(this.owner, this.displayOwner()) || this.accountRoute !== this.deps.getApiBaseUrl()
+        || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return null;
     } catch { return null; }
     if (this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled) return null;
     return JSON.stringify([this.accountGeneration, this.accountRoute, this.owner, this.targetId, this.registration?.deviceId,
@@ -425,7 +430,8 @@ export class RemoteBridge {
     return remotePerformance.sync(RemotePerformanceStage.RemoteState, () => {
       // Display and diagnostic reads are memory-only. No SQLite, payload hashing or worker startup on the caller's stack.
       let currentOwner: RemoteOwner | null = null, current = false;
-      try { currentOwner = this.displayOwner(); current = sameOwner(this.owner, currentOwner) && this.accountRoute === this.deps.getApiBaseUrl(); }
+      try { currentOwner = this.displayOwner(); current = sameOwner(this.owner, currentOwner) && this.accountRoute === this.deps.getApiBaseUrl()
+        && this.accountRouteEpoch === (this.deps.getRouteEpoch?.() ?? 0); }
       catch { /* Unknown account context cannot expose an earlier account's display data. */ }
       const snapshot = this.displaySnapshot.read(this.displayKey());
       const health = snapshot?.status === 'known' ? snapshot : null;
@@ -436,11 +442,12 @@ export class RemoteBridge {
       const taskHealth = health?.taskHealth;
       const transient = this.availability.displayTransientHealth(current ? this.displayInput()?.availabilityScope ?? null : null);
       const lanes = { ...availabilityHealth?.lanes };
+      if (health?.pendingDeletions && (!lanes.deletion || lanes.deletion === RemoteSyncLaneStatus.Idle)) lanes.deletion = RemoteSyncLaneStatus.Pending;
       if (transient.controlInFlight && (!lanes.control || lanes.control === RemoteSyncLaneStatus.Idle || lanes.control === RemoteSyncLaneStatus.Pending)) lanes.control = RemoteSyncLaneStatus.InFlight;
       if (transient.controlBackoff && lanes.control !== RemoteSyncLaneStatus.Degraded && lanes.control !== RemoteSyncLaneStatus.Unknown) lanes.control = RemoteSyncLaneStatus.Backoff;
       if (transient.liveBackoff && lanes.live !== RemoteSyncLaneStatus.Degraded && lanes.live !== RemoteSyncLaneStatus.Unknown) lanes.live = RemoteSyncLaneStatus.Backoff;
       const oldestTimes = [health?.legacy.oldest, availabilityHealth?.oldest].filter((value): value is number => typeof value === 'number');
-      const pending = health ? Math.max(health.legacy.pendingSessions + (availabilityHealth?.pendingSessions ?? 0), transient.pending ? 1 : 0) : null;
+      const pending = health ? Math.max(health.legacy.pendingSessions + (availabilityHealth?.pendingSessions ?? 0), health.pendingDeletions ?? 0, transient.pending ? 1 : 0) : null;
       const recoveryRequired = this.deps.store.needsSecurityRecovery();
       const filesHealth = current ? this.files?.health() : undefined;
       const filesDegraded = filesHealth?.degraded === true;
@@ -454,6 +461,7 @@ export class RemoteBridge {
         ...taskHealth, lanes, countsTruncated: taskHealth?.countsTruncated || availabilityHealth?.countsTruncated,
         statisticsUnavailable: !health, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: current && this.admissionDeferred,
         desktopOnlySessions: availabilityHealth?.desktopOnlySessions,
+        pendingDeletions: health?.pendingDeletions,
         status: recoveryRequired || !currentOwner || !settings.enabled || current && (this.connectionRemoved || this.quotaBlocked) ? RemoteSyncHealthStatus.Paused
           : syncFailed || filesDegraded || !health ? RemoteSyncHealthStatus.Degraded : (pending ?? 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
         ...(reason ? { reason } : {}), pendingSessions: pending, oldestPendingAt: oldestTimes.length ? new Date(Math.min(...oldestTimes)).toISOString() : null,
@@ -494,7 +502,7 @@ export class RemoteBridge {
       }
       if (!this.owner || !sameOwner(this.owner, currentOwner)) return OwnershipSyncState.Pending;
       // A route switch invalidates the old admission even before the next bridge tick.
-      if (this.accountRoute !== this.deps.getApiBaseUrl()) return OwnershipSyncState.Pending;
+      if (this.accountRoute !== this.deps.getApiBaseUrl() || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return OwnershipSyncState.Pending;
       const pending = this.settings().enabled && (this.connectionReason === RemoteConnectionReason.ServerUnavailable
         || this.connectionReason === RemoteConnectionReason.ServerUpgradeRequired) ? OwnershipSyncState.WaitingService : OwnershipSyncState.Pending;
       if (!this.registration || !this.targetId) return pending;
@@ -627,8 +635,11 @@ export class RemoteBridge {
     return remotePerformance.sync(RemotePerformanceStage.BridgeAccount, () => {
       const current = this.deps.getOwner();
       const route = this.deps.getApiBaseUrl();
-      if (route === this.accountRoute && ((current === null && this.owner === null) || sameOwner(current, this.owner))) return;
+      const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
+      if (route === this.accountRoute && routeEpoch === this.accountRouteEpoch && ((current === null && this.owner === null) || sameOwner(current, this.owner))) return;
       const previous = this.owner;
+      this.accountRouteEpoch = routeEpoch;
+      this.availability.invalidateContext();
       this.accountGeneration++; this.commandTaskRetryAt.clear(); this.reconcileRetryAt = 0; this.runEvidenceScans.clear(); this.unresolvedCursor = null; this.receiptCursor = undefined; this.activityCursor = undefined; this.activityOffset = 0; this.importSnapshots.cancel(); this.verifiedImports.clear(); this.sessionChecks.clear(); this.taskMemoryBlocks.clear();
       this.admissionDeferred = false;
       this.historyTransportFailures = []; this.historyCircuitProbe = false; this.historyCircuitDelay = 30000; this.historyRetryAt = 0;
@@ -969,7 +980,8 @@ export class RemoteBridge {
     const accountGeneration = this.accountGeneration;
     const environment = this.remoteEnvironment();
     const route = this.deps.getApiBaseUrl();
-    if (route !== this.accountRoute) { this.ensureAccount(); throw new Error('Remote route changed before request'); }
+    const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
+    if (route !== this.accountRoute || routeEpoch !== this.accountRouteEpoch) { this.ensureAccount(); throw new Error('Remote route changed before request'); }
     const requestKey = `${version}:${method}:${pathname.split('?')[0]}`;
     if (this.syncPaused() && (pathname.startsWith('/sync/') || /\/(?:agents|models|input-preparations)(?:\/|$)/u.test(pathname)
       || pathname.includes('/reply-content/') || /\/sessions\/[^/]+\/contents(?:\/|$)/u.test(pathname) || pathname.endsWith('/commands/claim'))) throw new RemoteApiError(
@@ -981,6 +993,8 @@ export class RemoteBridge {
     let stage = 'prepare', httpStatus: number | null = null, responseRequestId: string | null = null;
     let transportRequestedAt: string | null = null;
     const context = { ...sync, requestId, requestStartedAt: new Date().toISOString(), deviceId: this.registration?.deviceId ?? null };
+    const diagnostic = { ...remoteRequestTelemetryFields(pathname, method, body, version), routeTemplate: remoteDiagnosticRoute(pathname),
+      routeEpoch: accountGeneration, targetId: this.targetId, deviceId: this.registration?.deviceId, apiVersion: version };
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json',
         ...remoteSyncTargetHeaders(pathname === '/capabilities' ? null : this.registration?.syncTarget ?? this.discoveredTarget) };
@@ -1006,10 +1020,10 @@ export class RemoteBridge {
       const retryAfterMs = retryHeader === null ? undefined : /^\d+$/u.test(retryHeader.trim()) ? Number(retryHeader) * 1000
         : Number.isFinite(Date.parse(retryHeader)) ? Math.max(0, Date.parse(retryHeader) - Date.now()) : Number.NaN;
       responseRequestId = remoteSyncRequestId(response.headers.get(REMOTE_SYNC_REQUEST_ID_HEADER));
-      if (accountGeneration !== this.accountGeneration || route !== this.deps.getApiBaseUrl() || environment !== this.remoteEnvironment() || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote request');
+      if (accountGeneration !== this.accountGeneration || routeEpoch !== (this.deps.getRouteEpoch?.() ?? 0) || route !== this.deps.getApiBaseUrl() || environment !== this.remoteEnvironment() || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote request');
       stage = 'response';
       const text = await response.text();
-      if (accountGeneration !== this.accountGeneration || route !== this.deps.getApiBaseUrl() || environment !== this.remoteEnvironment() || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote response');
+      if (accountGeneration !== this.accountGeneration || routeEpoch !== (this.deps.getRouteEpoch?.() ?? 0) || route !== this.deps.getApiBaseUrl() || environment !== this.remoteEnvironment() || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote response');
       if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('Remote response is too large');
       let result: any;
       try { result = remoteResponseJson(response, text); } catch { throw new RemoteApiError(response.status, 'Invalid remote response', null, response.status, responseRequestId ?? requestId, retryAfterMs); }
@@ -1026,21 +1040,24 @@ export class RemoteBridge {
         if (this.connectionReason === RemoteConnectionReason.ServerUnavailable) this.connectionReason = RemoteConnectionReason.Connecting;
       }
       telemetry.finish('api_ok', { requestId, httpStatus, businessCode: 0, responseBytes: Buffer.byteLength(text), failureStage: 'none' });
-      remoteDiagnosticLog('remote.request.completed', { requestId, durationMs: performance.now() - startedAt, result: 'success' });
+      remoteDiagnosticLog('remote.request.completed', { ...diagnostic, requestId, httpStatus, durationMs: performance.now() - startedAt, result: 'success' });
       if (result.data && typeof result.data === 'object') this.telemetryRequestIds.set(result.data, requestId);
       return result.data;
     } catch (error) {
-      if (error instanceof RemoteApiError && error.code === RemoteSyncTarget.ChangedCode && accountGeneration === this.accountGeneration) {
+      const current = (): boolean => accountGeneration === this.accountGeneration && routeEpoch === (this.deps.getRouteEpoch?.() ?? 0)
+        && route === this.deps.getApiBaseUrl() && environment === this.remoteEnvironment()
+        && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner());
+      if (current() && error instanceof RemoteApiError && error.code === RemoteSyncTarget.ChangedCode) {
         this.accountRoute = '';
         this.ensureAccount();
       }
       const addressedDevice = /^\/devices\/([^/]+)\//u.exec(pathname)?.[1];
       if ((!addressedDevice || addressedDevice === encodeURIComponent(this.registration?.deviceId ?? ''))
-        && accountGeneration === this.accountGeneration && environment === this.remoteEnvironment() && sameOwner(owner, this.owner)
+        && current()
         && error instanceof RemoteApiError && error.code === REMOTE_DEVICE_RETIRED_CODE) {
         this.recordConnectionFailure(error); this.disconnect(); this.changed();
       }
-      if (accountGeneration === this.accountGeneration && environment === this.remoteEnvironment() && sameOwner(owner, this.owner) && error instanceof RemoteApiError
+      if (current() && error instanceof RemoteApiError
         && (error.code === CONNECTION_REMOVED_CODE || error.data?.reason === RemoteConnectionReasonCode.Removed)) {
         this.connectionRemoved = true; this.connectionReason = RemoteConnectionReason.Removed;
         const rejectedVersion = error.data?.connectionVersion;
@@ -1049,7 +1066,7 @@ export class RemoteBridge {
         this.files?.pause(); this.disconnect();
       }
       telemetry.finish(remoteRequestTelemetryOutcome(error, stage), { requestId, httpStatus, ...remoteSyncErrorMetadata(error), failureStage: remoteRequestTelemetryFailureStage(error, stage) });
-      remoteDiagnosticLog('remote.request.completed', { requestId, durationMs: performance.now() - startedAt, result: 'failed', error }, 'warn');
+      remoteDiagnosticLog('remote.request.completed', { ...diagnostic, requestId, httpStatus, stage, durationMs: performance.now() - startedAt, result: 'failed', error }, 'warn');
       if (error !== null && typeof error === 'object') this.requestErrorKeys.set(error, requestKey);
       if (sync) remoteLogMessage('debug', '[RemoteSync] Request failed', { ...context, transportRequestedAt, stage, responseRequestId, httpStatus,
         elapsedMs: performance.now() - startedAt, error: remoteSyncErrorMetadata(error) });
@@ -1814,9 +1831,10 @@ export class RemoteBridge {
   private syncContext(): () => boolean {
     const owner = this.owner, deviceId = this.registration?.deviceId, generation = this.accountGeneration;
     const route = this.deps.getApiBaseUrl();
+    const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
     const environment = this.remoteEnvironment(), projection = this.projectionVersion, replyProjection = this.replySupported;
     return () => !this.admissionDeferred && !this.deps.store.needsSecurityRecovery() && !this.stopped && generation === this.accountGeneration && sameOwner(owner, this.owner)
-      && sameOwner(owner, this.deps.getOwner()) && route === this.deps.getApiBaseUrl() && deviceId === this.registration?.deviceId
+      && sameOwner(owner, this.deps.getOwner()) && routeEpoch === (this.deps.getRouteEpoch?.() ?? 0) && route === this.deps.getApiBaseUrl() && deviceId === this.registration?.deviceId
       && environment === this.remoteEnvironment() && projection === this.projectionVersion && replyProjection === this.replySupported && this.settings().enabled && !this.syncPaused()
       && (!this.connectionManagementKnown || this.generation !== null);
   }

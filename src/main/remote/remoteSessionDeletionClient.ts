@@ -15,7 +15,7 @@ import { isSharedSyncFailure } from './remoteTaskSyncPolicy';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 import type { SessionDeletionService } from './sessionDeletionService';
 
-interface Context { owner: RemoteOwner; environment: string; deviceId: string; generation: string | null; enabled: boolean }
+interface Context { owner: RemoteOwner; environment: string; deviceId: string; generation: string | null; enabled: boolean; routeEpoch?: number }
 interface Report { reportId: string; result: Record<string, unknown> }
 interface DeletionInbox extends DeletionClaim {
   phase: string; localFenceId: string; requestHash: string; permit?: DeletionPermit; permitRequest?: Record<string, unknown>; permitRequestPending?: boolean;
@@ -40,6 +40,8 @@ export class RemoteSessionDeletionClient {
   private busy = false;
   private nextPoll = 0;
   private cursor = '';
+  private pollContext: Context | null = null;
+  private lastContext: Context | null = null;
   constructor(private readonly deps: SessionDeletionDependencies) {}
   private telemetry(entry: DeletionInbox) {
     return captureRemoteTelemetry({ lane: 'control', operation_kind: 'deletion', operation_id: entry.operation.operationId,
@@ -48,6 +50,19 @@ export class RemoteSessionDeletionClient {
   }
   wake(): void { this.nextPoll = 0; }
   retryDelay(): number { return Math.max(1000, this.nextPoll - Date.now()); }
+  private sameContext(left: Context | null, right: Context | null): boolean {
+    return !!left && !!right && sameOwner(left.owner, right.owner) && left.environment === right.environment
+      && left.deviceId === right.deviceId && left.generation === right.generation && left.enabled === right.enabled
+      && left.routeEpoch === right.routeEpoch;
+  }
+  private current(context = this.pollContext): boolean { return this.sameContext(context, this.deps.context()); }
+  private async request(path: string, method?: string, body?: unknown): Promise<any> {
+    const context = this.pollContext;
+    if (!this.current(context)) throw new Error('REMOTE_DELETION_CONTEXT_CHANGED');
+    const result = await this.deps.request(path, method, body);
+    if (!this.current(context)) throw new Error('REMOTE_DELETION_CONTEXT_CHANGED');
+    return result;
+  }
   private key(entry: DeletionInbox): string { return `${RemoteDeletion.Inbox}${entry.operation.operationId}:${entry.operation.deletionVersion}:${entry.claim.claimId}`; }
   private save(entry: DeletionInbox): void {
     this.deps.store.transaction(() => {
@@ -98,8 +113,12 @@ export class RemoteSessionDeletionClient {
     if (this.deps.store.get<{ localFenceId: string }>(key)?.localFenceId === entry.localFenceId) this.deps.store.remove(key);
   }
   async poll(supported: boolean, available: boolean): Promise<void> {
-    if (this.busy || !supported || Date.now() < this.nextPoll) return;
-    const context = this.deps.context(); if (!context) return;
+    if (this.busy || !supported) return;
+    const next = this.deps.context(); if (!next) return;
+    const context = { ...next, owner: { ...next.owner } };
+    if (!this.sameContext(this.lastContext, context)) { this.nextPoll = 0; this.cursor = ''; this.lastContext = context; }
+    if (Date.now() < this.nextPoll) return;
+    this.pollContext = context;
     const telemetry = captureRemoteTelemetry({ lane: 'control', operation_kind: 'deletion', remote_owner_id: context.owner.userId, owner_scope_id: context.owner.scopeKey });
     this.busy = true; this.nextPoll = Date.now() + 30000;
     try {
@@ -122,20 +141,24 @@ export class RemoteSessionDeletionClient {
           if (!this.matching(value, context) || terminalOperations.has(value.phase)) continue;
           this.nextPoll = Math.min(this.nextPoll, Date.now() + 5000);
           await this.recover(value, available);
+          if (!this.current(context)) return;
           this.deps.store.remove(faultKey);
         } catch (error) {
+          if (!this.current(context)) return;
           if (isSharedSyncFailure(error) || /^SQLITE_/u.test(String((error as { code?: unknown } | null)?.code || ''))) throw error;
           // Preserve original pending/inbox bytes and fences. A failure grants no deletion permission.
           this.deps.store.put(faultKey, { retryAt: Date.now() + 30000, reason: 'DELETION_RECONCILE_DEFERRED' });
           telemetry.emit(TelemetryEvent.SyncStage, { stage: 'reconcile', outcome: 'deferred', reason: remoteFileTelemetryReason(error) });
         }
       }
+      if (!this.current(context)) return;
       this.cursor = entries.nextCursor || '';
       this.deps.store.put(cursorKey, this.cursor);
       const current = this.deps.context();
       if (!available || !this.controlsAdmitted() || !current?.enabled || !current.generation || !sameOwner(context.owner, current.owner)
         || !samePersistedRemoteEnvironment(this.deps.store, current, context.environment, current.environment)) return;
-      const response = await this.deps.request(`/devices/${encodeURIComponent(context.deviceId)}/session-deletions/claim`, 'POST', { connectionGeneration: current.generation, limit: 1 });
+      const response = await this.request(`/devices/${encodeURIComponent(context.deviceId)}/session-deletions/claim`, 'POST', { connectionGeneration: current.generation, limit: 1 });
+      if (!this.current(context)) return;
       for (const item of (response.items || []).slice(0, 1) as DeletionClaim[]) {
         if (!item.operation || !item.target || !item.claim || !this.matching({ ...item } as DeletionInbox, current)) continue;
         const entry: DeletionInbox = { ...item, phase: Received, localFenceId: randomUUID(), requestHash: payloadHash(item.target) };
@@ -163,22 +186,25 @@ export class RemoteSessionDeletionClient {
         this.save(entry);
         this.telemetry(entry).emit(TelemetryEvent.SyncStage, { stage: 'received', outcome: 'succeeded' });
         await this.execute(entry, !!resume);
+        if (!this.current(context)) return;
         this.nextPoll = Math.min(this.nextPoll, Date.now() + 5000);
       }
     } catch (error) {
+      if (!this.current(context)) return;
       telemetry.emit(TelemetryEvent.SyncStage, { stage: 'reconcile', outcome: 'deferred', reason: remoteFileTelemetryReason(error) });
       // Credentials/results remain in the private SQLite inbox; never log tokens or task bodies.
       this.nextPoll = Date.now() + 5000;
-    } finally { this.busy = false; }
+    } finally { if (!this.current(context)) this.nextPoll = 0; this.pollContext = null; this.busy = false; }
   }
   private async sendReport(entry: DeletionInbox, result?: Record<string, unknown>): Promise<void> {
     const telemetry = this.telemetry(entry);
     if (result) { entry.report = { reportId: randomUUID(), result }; this.save(entry); }
-    if (!entry.report || !this.matching(entry, this.deps.context())) return;
-    const response = await this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/reports`, 'POST', {
+    if (!entry.report || !this.current() || !this.matching(entry, this.deps.context())) return;
+    const response = await this.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/reports`, 'POST', {
       ...entry.report, claimId: entry.claim.claimId, claimToken: entry.claim.claimToken,
       deletionVersion: entry.operation.deletionVersion, expectedStateVersion: entry.operation.stateVersion, mode: 'recovery',
     });
+    if (!this.current()) return;
     const operation = (response.operation || response) as DeletionOperation & { completionReceipt?: DeletionCompletion };
     if (operation.operationId !== entry.operation.operationId) throw new Error('Deletion report identity changed');
     entry.operation = operation;
@@ -199,7 +225,8 @@ export class RemoteSessionDeletionClient {
   }
   private async recover(entry: DeletionInbox, available: boolean): Promise<void> {
     const telemetry = this.telemetry(entry);
-    const remote = await this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}`) as DeletionOperation & { completionReceipt?: DeletionCompletion };
+    const remote = await this.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}`) as DeletionOperation & { completionReceipt?: DeletionCompletion };
+    if (!this.current()) return;
     if (remote.operationId !== entry.operation.operationId) throw new Error('Deletion recovery identity changed');
     if (remote.state === RemoteDeletion.Completed && remote.completionReceipt) {
       const proof = remote.completionReceipt;
@@ -223,7 +250,8 @@ export class RemoteSessionDeletionClient {
     if (entry.phase === Settled) return;
     if (entry.permitRequestPending && entry.permitRequest) {
       // Replay the exact persisted request: changed generations/versions must not mint another permit.
-      const recovered = await this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/permit`, 'POST', entry.permitRequest);
+      const recovered = await this.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/permit`, 'POST', entry.permitRequest);
+      if (!this.current()) return;
       if (this.notIssued(entry, recovered)) return;
       entry.permit = recovered as DeletionPermit;
       if (!entry.permit.permitId || !entry.permit.permitToken) throw new Error('Invalid recovered deletion permit');
@@ -232,6 +260,7 @@ export class RemoteSessionDeletionClient {
       if (entry.permitRequest.phase === RemoteDeletion.DeleteOnly) await this.reportStopped(entry); else await this.notStarted(entry); return;
     }
     if (entry.report) { await this.sendReport(entry); if (entry.report) return; }
+    if (!this.current()) return;
     if (entry.receipt) {
       if (entry.phase !== RemoteDeletion.Completed) await this.sendReport(entry, entry.receipt as unknown as Record<string, unknown>);
       return;
@@ -244,6 +273,7 @@ export class RemoteSessionDeletionClient {
     if (!this.identity(entry)) return;
     if (entry.phase === RemoteDeletion.EffectStarted || entry.phase === RemoteDeletion.Reconciling) {
       await this.deps.reconcileStop(entry.target.localSessionId);
+      if (!this.current()) return;
       const run = this.deps.store.run(entry.target.localSessionId);
       if (!run || !terminal.has(run.status) || run.runId !== entry.operation.approvedGuard.runId || !this.guardMatches(entry)) return;
       entry.stopStatus = run.status;
@@ -268,6 +298,7 @@ export class RemoteSessionDeletionClient {
       localFenceId: entry.localFenceId, guard: entry.operation.approvedGuard, evidence: this.evidence(entry, true) });
   }
   private async execute(entry: DeletionInbox, deleteOnly = false): Promise<void> {
+    if (!this.current()) return;
     const telemetry = this.telemetry(entry);
     const id = entry.target.localSessionId;
     if (!this.identity(entry)) { await this.sendReport(entry, { kind: 'blocked', reason: 'LOCAL_IDENTITY_MISSING' }); return; }
@@ -286,7 +317,7 @@ export class RemoteSessionDeletionClient {
       if (store.get(`inputFence:${id}`) || store.projectionPublishing(id) || store.get(`import:${id}`)) {
         await this.sendReport(entry, { kind: 'blocked', reason: 'LOCAL_RECOVERY_REQUIRED' }); return;
       }
-      const context = this.deps.context();
+      const context = this.pollContext;
       if (!context?.enabled || !context.generation) return;
       const generation = context.generation;
       const phase = deleteOnly ? RemoteDeletion.DeleteOnly : RemoteDeletion.Execute;
@@ -297,7 +328,7 @@ export class RemoteSessionDeletionClient {
       if (this.deps.security) await this.deps.security.commit(entry.operation.operationId, { target: entry.target, localFenceId: entry.localFenceId, phase: RemoteDeletion.Prepared }, prepare);
       else store.transaction(prepare);
       telemetry.emit(TelemetryEvent.SyncStage, { stage: 'prepared', outcome: 'succeeded' });
-      if (!this.executionAdmitted(entry)) return;
+      if (!this.current(context) || !this.executionAdmitted(entry)) return;
       const started = performance.now();
       const permitRequest = {
         claimId: entry.claim.claimId, claimToken: entry.claim.claimToken, connectionGeneration: generation,
@@ -306,7 +337,8 @@ export class RemoteSessionDeletionClient {
         ...(deleteOnly ? { previousPermitId: entry.permit!.permitId, settlementReportId: entry.settlementReportId } : {}),
       };
       entry.permitRequest = permitRequest; entry.permitRequestPending = true; this.save(entry);
-      const permit = await this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/permit`, 'POST', permitRequest) as DeletionPermit;
+      const permit = await this.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/permit`, 'POST', permitRequest) as DeletionPermit;
+      if (!this.current(context)) return;
       if (this.notIssued(entry, permit)) return;
       if (!permit.permitId || !permit.permitToken || !Number.isFinite(Date.parse(permit.permitUntil)) || !Number.isFinite(Date.parse(permit.serverTime))) throw new Error('Invalid deletion permit');
       entry.permit = permit; entry.permitRequestPending = false; delete entry.settlementReportId;
@@ -317,7 +349,7 @@ export class RemoteSessionDeletionClient {
       let deadline = started + Math.min(30000, Math.max(0, Date.parse(permit.permitUntil) - serverTime));
       const permitted = (): boolean => permit.executionAllowed === true && (!permit.connectionGeneration || permit.connectionGeneration === generation) && this.identity(entry) && this.guardMatches(entry)
         && this.executionAdmitted(entry)
-        && this.deps.context()?.enabled === true && this.deps.context()?.generation === generation && performance.now() + 1000 < deadline;
+        && this.current(context) && performance.now() + 1000 < deadline;
       if (!permitted()) { if (deleteOnly) await this.reportStopped(entry); else await this.notStarted(entry); return; }
       const recordEffect = (): void => {
         entry.journalRevision = String(BigInt(entry.journalRevision || '0') + 1n);
@@ -331,10 +363,11 @@ export class RemoteSessionDeletionClient {
         if (!permitted()) { deadline = 0; return; }
         if (renewing) return; renewing = true;
         const began = performance.now();
-        void this.deps.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/lease/renew`, 'POST', {
+        void this.request(`/session-deletions/${encodeURIComponent(entry.operation.operationId)}/lease/renew`, 'POST', {
           claimId: entry.claim.claimId, claimToken: entry.claim.claimToken, permitId: permit.permitId, permitToken: permit.permitToken,
           deletionVersion: entry.operation.deletionVersion, connectionGeneration: generation, localPhase: RemoteDeletion.EffectStarted,
         }).then((result: DeletionPermit) => {
+          if (!this.current(context)) return;
           if (result.permitId === permit.permitId && Number.isFinite(Date.parse(result.permitUntil)) && Number.isFinite(Date.parse(result.serverTime))) {
             serverTime = Date.parse(result.serverTime); serverObservedAt = performance.now();
             deadline = began + Math.min(30000, Math.max(0, Date.parse(result.permitUntil) - serverTime));
@@ -342,15 +375,18 @@ export class RemoteSessionDeletionClient {
         }).catch(() => { deadline = 0; }).finally(() => { renewing = false; });
       }, 10000);
       renewal.unref?.();
+      let confirmedStop = false;
       if (active && !deleteOnly) {
         const confirmed = await this.deps.runtime.cancelSessionConfirmed?.(id);
         if (!confirmed) {
           this.deps.store.transaction(() => this.fence(entry, RemoteDeletion.Reconciling));
           await this.sendReport(entry, { kind: 'stop_unknown', permitId: permit.permitId, permitToken: permit.permitToken, localFenceId: entry.localFenceId, guard: observedGuard }); return;
         }
-        if (this.identity(entry) && this.guardMatches(entry) && store.run(id)?.runId === observedGuard.runId) store.updateRun(id, 'cancelled');
+        confirmedStop = true;
+        // A confirmed stop is a local fact even after routing changes; it grants no new delete/ACK permission.
+        if (sameOwner(entry.target, store.owner(id)) && this.guardMatches(entry) && store.run(id)?.runId === observedGuard.runId) store.updateRun(id, 'cancelled');
       }
-      entry.stopStatus = store.run(id)?.status || 'succeeded';
+      entry.stopStatus = confirmedStop ? 'cancelled' : store.run(id)?.status || 'succeeded';
       this.deps.store.transaction(() => this.fence(entry, RemoteDeletion.Stopped));
       if (!permitted() || store.run(id) && !terminal.has(store.run(id)!.status) || this.deps.runtime.isSessionActive?.(id) === true) {
         await this.reportStopped(entry); return;

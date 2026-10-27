@@ -57,6 +57,7 @@ import {
   AuthIpcChannel,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  AuthRefreshFailureKind,
   AuthRefreshOutcome,
   AuthRefreshReason,
   type AuthSessionChangedEvent,
@@ -344,6 +345,7 @@ import {
 import {
   type AuthFetch,
   AuthSessionManager,
+  AuthSessionRequestError,
   resolveAuthSessionStatusFromError,
 } from './libs/authSessionManager';
 import type { BrowserAnnotationAssetIdentity, SaveBrowserAnnotationAssetInput } from './libs/browserAnnotationAssetStore';
@@ -582,6 +584,7 @@ import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { collectOpenWithArgv, OpenWithPathQueue } from './libs/openWithPathQueue';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
+import { ServerRouteContextTracker } from './libs/serverRouteContext';
 import { recordSessionModelChange } from './libs/sessionModelChange';
 import { SessionTitleGenerator } from './libs/sessionTitleGenerator';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
@@ -5735,6 +5738,8 @@ if (!gotTheLock) {
       refreshEndpointsTestMode(getStore());
       if (previousServerBaseUrl !== getServerApiBaseUrl()) {
         ownershipAccountEpoch++;
+        captureRemoteRouteContext();
+        authSessionManager.invalidateContext();
         desktopCompanionManager?.resetForAccountChange();
         revalidateArtifactPreviews();
         remoteBridge?.accountChanged();
@@ -6281,10 +6286,16 @@ if (!gotTheLock) {
     }
   };
 
-  const getAuthSessionKey = (): string | null => {
-    if (!getAuthTokens()) return null;
+  const serverRouteContexts = new ServerRouteContextTracker();
+  const captureRemoteRouteContext = () => {
     const scope = getCurrentMediaAccountScope();
-    return `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}`;
+    return serverRouteContexts.capture(getServerApiBaseUrl(),
+      `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}:${ownershipAccountEpoch}`);
+  };
+  const getRemoteRouteEpoch = (): number => serverRouteContexts.peekEpoch();
+  const getAuthSessionKey = (): string | null => {
+    const context = captureRemoteRouteContext();
+    return getAuthTokens() ? `${context.authSessionKey}:${context.routeEpoch}` : null;
   };
 
   resolveAppUpdateGraySession = () => {
@@ -6298,16 +6309,8 @@ if (!gotTheLock) {
     getTokens: getAuthTokens,
     getSessionKey: getAuthSessionKey,
     saveTokens: tokens => saveAuthTokens(tokens.accessToken, tokens.refreshToken),
-    fetch: (url, options) => {
-      const headers = new Headers(options?.headers);
-      for (const [name, value] of Object.entries(getEnterpriseAccountHeaders())) {
-        headers.set(name, value);
-      }
-      return net.fetch(url, {
-        ...options,
-        headers,
-      });
-    },
+    fetch: (url, options) => net.fetch(url, options),
+    getRequestHeaders: getEnterpriseAccountHeaders,
     getRefreshUrl: () => `${getServerApiBaseUrl()}/api/auth/refresh`,
     buildRefreshRequestBody: refreshToken => JSON.stringify(withKeyfromBody({ refreshToken })),
     onTerminalFailure: (result) => {
@@ -6347,6 +6350,7 @@ if (!gotTheLock) {
   waitForPendingTokenRefresh = () => authSessionManager.waitForPendingRefresh();
 
   const fetchWithAuth = async (url: string, options?: RequestInit, transport?: AuthFetch): Promise<Response> => {
+    const requestAuthSessionKey = getAuthSessionKey();
     const requestEnterpriseSession = captureEnterpriseAuthSessionSnapshot();
     const response = await authSessionManager.fetchWithAuth(url, options, transport);
     if (
@@ -6357,7 +6361,7 @@ if (!gotTheLock) {
     ) {
       try {
         const code = readEnterpriseApiErrorCode(await response.clone().json());
-        if (code === EnterpriseApiErrorCode.NotMember) {
+        if (getAuthSessionKey() === requestAuthSessionKey && code === EnterpriseApiErrorCode.NotMember) {
           handleEnterpriseMembershipRevocation({
             code,
             source: resolveEnterpriseMembershipRevocationSource(url),
@@ -6367,6 +6371,11 @@ if (!gotTheLock) {
       } catch {
         // The original response remains available to the endpoint-specific parser.
       }
+    }
+    if (getAuthSessionKey() !== requestAuthSessionKey) {
+      try { void response.body?.cancel().catch((): void => undefined); } catch { /* Preserve context cancellation. */ }
+      throw new AuthSessionRequestError(AuthSessionStatus.TemporarilyUnavailable, 'Auth response context changed',
+        { failureKind: AuthRefreshFailureKind.ContextChanged });
     }
     return response;
   };
@@ -6407,7 +6416,7 @@ if (!gotTheLock) {
         }
       }
       if (cleanupFailed) throw new Error('Session runtime cleanup is pending');
-    }, getCurrentRemoteOwner);
+    }, getCurrentRemoteOwner, () => getRemoteAccountEpoch());
     return sessionDeletionService;
   };
 
@@ -6473,6 +6482,7 @@ if (!gotTheLock) {
       agentOwnership: getCoworkStore().agentOwnership,
       registrationIdentities: new RemoteRegistrationIdentityStore(app.getPath('appData'), app.getPath('userData'), safeStorage, identity),
       store: getCoworkStore().remote, identity, getOwner: getCurrentRemoteOwner, getDisplayOwner: () => remoteDisplayOwner, getApiBaseUrl: getServerApiBaseUrl,
+      getRouteEpoch: getRemoteRouteEpoch,
       metadata: { name: os.hostname(), hostName: os.hostname(), instanceLabel: path.basename(app.getPath('userData')),
         platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', appVersion: app.getVersion() },
       request: async (owner, pathname, init) => {
@@ -6775,6 +6785,8 @@ if (!gotTheLock) {
           ownershipAccountEpoch++;
           desktopCompanionManager?.resetForAccountChange();
         }
+        captureRemoteRouteContext();
+        authSessionManager.invalidateContext();
         const previous = previousRemoteOwner;
         const changed = !(previous === null && next === null) && !sameOwner(previous, next);
         const nextIdentity = recoveryIdentity();
@@ -12140,6 +12152,7 @@ if (!gotTheLock) {
       await getSessionDeletionService().deleteLocal(sessionId);
       return { success: true };
     } catch (error) {
+      console.warn('[SessionDeletion] Local task deletion failed', { sessionId }, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete session',
@@ -12158,6 +12171,7 @@ if (!gotTheLock) {
       await getSessionDeletionService().deleteLocalBatch(sessionIds);
       return { success: true };
     } catch (error) {
+      console.warn('[SessionDeletion] Local batch deletion failed', { count: sessionIds.length }, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to batch delete sessions',
@@ -16715,6 +16729,7 @@ if (!gotTheLock) {
 
     initializeKeyfromAttribution(store);
     refreshEndpointsTestMode(store);
+    captureRemoteRouteContext();
     initializeSessionExecutionCore();
     initializeRemoteControl();
 

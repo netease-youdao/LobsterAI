@@ -1,4 +1,4 @@
-import type { RemoteOwner } from '../../shared/remote/constants';
+import { type RemoteOwner, RemoteRunStatus, type RemoteRunStatusValue } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
 import { RemoteTelemetryEvent as TelemetryEvent } from '../../shared/remote/telemetry';
 import type { CoworkStore } from '../coworkStore';
@@ -9,11 +9,14 @@ import { captureRemoteTelemetry } from './remoteTelemetry';
 
 /** Shared local record deletion; remote authorization belongs to the deletion control lane. */
 const CleanupPrefix = 'deletionCleanup:';
-const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
+const terminal = new Set<RemoteRunStatusValue>([
+  RemoteRunStatus.Succeeded, RemoteRunStatus.Failed, RemoteRunStatus.Cancelled, RemoteRunStatus.Interrupted,
+]);
 export class SessionDeletionService {
   private cleanupCursor = '';
   constructor(private readonly store: CoworkStore, private readonly runtime: CoworkRuntime,
-    private readonly cleanup: (sessionId: string) => void, private readonly getOwner: () => RemoteOwner | null) {
+    private readonly cleanup: (sessionId: string) => void, private readonly getOwner: () => RemoteOwner | null,
+    private readonly getAccountEpoch?: () => string | number) {
     const timer = setInterval(() => {
       try {
         const rows = this.store.remote.entries<{ sessionId: string }>(CleanupPrefix, this.cleanupCursor, 10);
@@ -29,23 +32,35 @@ export class SessionDeletionService {
 
   async deleteLocalBatch(sessionIds: string[]): Promise<void> {
     const ids = [...new Set(sessionIds)], actor = this.getOwner();
+    const accountEpoch = this.getAccountEpoch?.();
     const telemetry = captureRemoteTelemetry({ lane: 'control', operation_kind: 'deletion', remote_owner_id: actor?.userId, owner_scope_id: actor?.scopeKey });
-    const guards = new Map(ids.map(id => {
+    const targets = new Map(ids.map(id => {
       this.store.remote.assertActor(id, actor);
-      return [id, this.store.remote.deletionGuard(id).version];
+      return [id, { guardVersion: this.store.remote.deletionGuard(id).version, runId: this.store.remote.run(id)?.runId ?? null }];
     }));
+    const assertCurrentTargets = (): void => {
+      const currentActor = this.getOwner();
+      if (accountEpoch !== this.getAccountEpoch?.()
+        || (actor ? !sameOwner(actor, currentActor) : currentActor !== null)) throw new Error(t('sessionDeletionTargetChanged'));
+      for (const [id, target] of targets) {
+        this.store.remote.assertActor(id, currentActor);
+        if (this.store.remote.deletionGuard(id).version !== target.guardVersion
+          || (this.store.remote.run(id)?.runId ?? null) !== target.runId) throw new Error(t('sessionDeletionTargetChanged'));
+      }
+    };
     for (const sessionId of ids) {
+      assertCurrentTargets();
       const run = this.store.remote.run(sessionId);
       if (this.runtime.isSessionActive?.(sessionId) === true || run && !terminal.has(run.status)) {
-        if (!await this.runtime.cancelSessionConfirmed?.(sessionId)) throw new Error(t('sessionDeletionStopUnconfirmed'));
-        if (run && this.store.remote.run(sessionId)?.runId !== run.runId) throw new Error(t('sessionDeletionStopUnconfirmed'));
-        if (run) this.store.remote.updateRun(sessionId, 'cancelled');
+        const confirmed = await this.runtime.cancelSessionConfirmed?.(sessionId);
+        // A stop response must not mutate a replaced run or a later account generation.
+        assertCurrentTargets();
+        if (!confirmed) throw new Error(t('sessionDeletionStopUnconfirmed'));
+        const currentRun = this.store.remote.run(sessionId);
+        if (currentRun && !terminal.has(currentRun.status)) this.store.remote.updateRun(sessionId, RemoteRunStatus.Cancelled);
       }
     }
-    for (const id of ids) {
-      this.store.remote.assertActor(id, this.getOwner());
-      if ((actor ? !sameOwner(actor, this.getOwner()) : this.getOwner() !== null) || this.store.remote.deletionGuard(id).version !== guards.get(id)) throw new Error(t('sessionDeletionTargetChanged'));
-    }
+    assertCurrentTargets();
     this.commit(ids);
     for (const localSessionId of ids) telemetry.emit(TelemetryEvent.SyncStage, { stage: 'local_commit', outcome: 'succeeded', local_session_id: localSessionId, origin: 'desktop' });
   }
