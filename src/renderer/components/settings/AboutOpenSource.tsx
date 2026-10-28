@@ -9,6 +9,7 @@ import {
 import { i18nService } from '../../services/i18n';
 import GitHubMarkIcon from '../icons/GitHubMarkIcon';
 import RepoForkedIcon from '../icons/RepoForkedIcon';
+import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT } from './settingsTypography';
 
 export const AboutOpenSourceAction = {
   OpenRepo: 'open_source_repo',
@@ -22,8 +23,8 @@ interface AboutOpenSourceProps {
   onAction: (action: AboutOpenSourceAction) => void;
 }
 
-const infoRowClassName = 'flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 border-b border-border';
-const infoRowLinkClassName = 'min-w-0 break-all text-right text-sm text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors';
+const infoRowClassName = 'flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3';
+const infoRowLinkClassName = `min-w-0 break-all text-right ${SETTINGS_DESCRIPTION_TEXT} text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors`;
 const promptButtonClassName = 'inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary dark:hover:border-primary dark:hover:text-primary';
 
 const openExternalLink = (url: string): void => {
@@ -34,7 +35,7 @@ const openExternalLink = (url: string): void => {
 export const AboutOpenSourceRows: React.FC<AboutOpenSourceProps> = ({ onAction }) => (
   <>
     <div className={infoRowClassName}>
-      <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutSourceCode')}</span>
+      <span className={`shrink-0 ${SETTINGS_ITEM_TITLE_TEXT} text-foreground`}>{i18nService.t('aboutSourceCode')}</span>
       <button
         type="button"
         onClick={(e) => {
@@ -48,7 +49,7 @@ export const AboutOpenSourceRows: React.FC<AboutOpenSourceProps> = ({ onAction }
       </button>
     </div>
     <div className={infoRowClassName}>
-      <span className="shrink-0 text-sm text-foreground">{i18nService.t('aboutLicense')}</span>
+      <span className={`shrink-0 ${SETTINGS_ITEM_TITLE_TEXT} text-foreground`}>{i18nService.t('aboutLicense')}</span>
       <button
         type="button"
         onClick={(e) => {
@@ -70,10 +71,10 @@ export const AboutOpenSourceStarPrompt: React.FC<AboutOpenSourceProps> = ({ onAc
     <div className="flex min-w-0 grow basis-72 items-center gap-3">
       <GitHubMarkIcon className="h-6 w-6 shrink-0 text-foreground" />
       <div className="min-w-0">
-        <p className="text-sm font-medium leading-5 text-foreground">
+        <p className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
           {i18nService.t('aboutOpenSourceStarPromptTitle')}
         </p>
-        <p className="mt-0.5 text-xs leading-4 text-secondary">
+        <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
           {i18nService.t('aboutOpenSourceStarPrompt')}
         </p>
       </div>

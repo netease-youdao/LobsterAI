@@ -6,6 +6,8 @@ import { expect, test, vi } from 'vitest';
 
 import { MediaBillingStatus, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus } from '../../../shared/media/constants';
 import type { CoworkMessage } from '../../types/cowork';
+import { ActivityEntryVariant } from './constants';
+import MediaPollingIndicator from './MediaPollingIndicator';
 import { mediaTaskLabelKey } from './MediaTaskCard';
 import { buildMediaTaskPresentations } from './mediaTaskPresentation';
 import { type AssistantTurnItem, buildConversationTurns, buildDisplayItems, consolidateMediaPolling } from './messageDisplayUtils';
@@ -97,6 +99,22 @@ test('generation elapsed time excludes time spent awaiting video confirmation', 
   } finally {
     clock.mockRestore();
   }
+});
+
+test('local submission time wins over a skewed server clock and survives later polls', () => {
+  const now = Date.parse('2026-10-21T08:30:00Z');
+  const messages = mediaCall('generate-local', '308', {
+    clientStartedAt: now, createdAt: new Date(now - 27_000).toISOString(),
+  });
+  messages[0].timestamp = now - 60_000;
+  messages[1].timestamp = now;
+  messages.push(...mediaCall('query-local', '308', { createdAt: new Date(now - 27_000).toISOString() }, true));
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+  try {
+    expect(buildMediaTaskPresentations(turnsOf(messages)).get('generate-local')?.startedAt).toBe(now);
+    expect(renderCalls(messages)).toContain('已等待 0 秒');
+    expect(renderCalls(messages)).not.toContain('已等待 27 秒');
+  } finally { clock.mockRestore(); }
 });
 
 test.each([
@@ -229,4 +247,32 @@ test('legacy polling remains consolidated and unrelated status tools remain unto
   other.metadata!.toolName = 'unrelated_status_tool';
   expect(buildMediaTaskPresentations(turnsOf([...mediaCall('generate', '293'), other])).has('other-tool'))
     .toBe(false);
+});
+
+test('submitted tasks never expose a cancel action, including stale queued and legacy snapshots', () => {
+  const html = renderCalls(mediaCall('queued', '293', { phase: MediaTaskPhase.Queued, canCancel: true }));
+  expect(html).toContain('已提交，排队中');
+  expect(html).not.toContain('<button');
+  const legacy = renderToStaticMarkup(React.createElement(MediaPollingIndicator, { group: {
+    type: 'media_polling_group', toolName: 'lobsterai_video_generate', taskId: '293',
+    pollCount: 1, polls: [], isComplete: false,
+  } }));
+  expect(legacy).not.toContain('<button');
+});
+
+test.each(Object.values(ActivityEntryVariant))('media steps do not time confirmation or status calls (%s)', variant => {
+  const store = configureStore({ reducer: { cowork: () => ({ isStreaming: true }) } });
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+  const render = (toolName: string) => renderToStaticMarkup(React.createElement(Provider, { store, children:
+    React.createElement(ToolCallGroup, { variant, group: { type: 'tool_group', toolUse: {
+      id: 'step', type: 'tool_use', timestamp: 73_000, content: '', metadata: { toolName, toolInput: {} },
+    } } }),
+  }));
+  try {
+    expect(render('exec')).toContain('27s');
+    for (const name of ['lobsterai_image_generate', 'lobsterai_video_generate']) {
+      expect(render(name)).not.toContain('27s');
+      expect(render(name)).not.toContain('视频生成中');
+    }
+  } finally { clock.mockRestore(); }
 });

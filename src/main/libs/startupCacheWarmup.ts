@@ -5,11 +5,11 @@ import {
 } from '../../shared/providers/modelRuntimeProfiles';
 import { authQuotaGateStateFromQuota, normalizeAuthQuota } from '../authQuota';
 import {
-  type ServerModelMetadataInput,
-  updateServerModelMetadata,
+  type ServerModelResponseEntry,
+  updateServerModelMetadataFromResponse,
 } from './claudeSettings';
 
-export type ServerModelEntry = ServerModelMetadataInput;
+export type ServerModelEntry = ServerModelResponseEntry;
 
 export type StartupCacheWarmupDeps = {
   serverBaseUrl: string;
@@ -89,7 +89,7 @@ export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promi
         if (!resp.ok) return;
         const data = (await resp.json()) as { code: number; data: ServerModelEntry[] };
         if (data.code !== 0 || !data.data) return;
-        updateServerModelMetadata(data.data);
+        updateServerModelMetadataFromResponse(data.data);
         console.log(`[Main] startup cache warmup: loaded ${data.data.length} server models`);
       } catch (err) {
         console.debug('[Main] startup cache warmup: models fetch failed (non-fatal):', err);

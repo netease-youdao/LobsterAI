@@ -15,6 +15,7 @@ type PluginConfig = {
   callbackUrl: string;
   secret: string;
   requestTimeoutMs: number;
+  confirmationTimeoutMs: number;
 };
 
 type MediaToolRequest = {
@@ -118,6 +119,8 @@ const parsePluginConfig = (value: unknown): PluginConfig => {
   return {
     callbackUrl: typeof raw.callbackUrl === 'string' ? raw.callbackUrl.trim() : '',
     secret: typeof raw.secret === 'string' ? raw.secret.trim() : '',
+    confirmationTimeoutMs: typeof raw.confirmationTimeoutMs === 'number' && Number.isFinite(raw.confirmationTimeoutMs)
+      && raw.confirmationTimeoutMs >= 1000 ? raw.confirmationTimeoutMs : 120_000,
     requestTimeoutMs: typeof raw.requestTimeoutMs === 'number' ? raw.requestTimeoutMs : DEFAULT_TIMEOUT_MS,
   };
 };
@@ -125,11 +128,12 @@ const parsePluginConfig = (value: unknown): PluginConfig => {
 async function callMediaBridge(
   config: PluginConfig,
   request: MediaToolRequest,
+  signal?: AbortSignal,
 ): Promise<MediaToolResponse> {
   const controller = new AbortController();
   // Reserve a separate confirmation budget; it must not consume the submission budget.
   const confirmationBudget = request.tool === MediaToolName.VideoGenerate
-    && (request.args.action == null || request.args.action === MediaToolAction.Generate) ? 120_000 : 0;
+    && (request.args.action == null || request.args.action === MediaToolAction.Generate) ? config.confirmationTimeoutMs : 0;
   const timer = setTimeout(() => controller.abort(), config.requestTimeoutMs + confirmationBudget);
 
   try {
@@ -140,7 +144,7 @@ async function callMediaBridge(
         'x-lobster-media-secret': config.secret,
       },
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
     });
 
     const text = await response.text();
@@ -163,6 +167,9 @@ async function callMediaBridge(
       details: isRecord(parsed) ? parsed as Record<string, unknown> : undefined,
     };
   } catch (error) {
+    if (signal?.aborted) {
+      return { content: [{ type: 'text', text: 'Media generation request interrupted.' }], isError: true };
+    }
     if (error instanceof Error && error.name === 'AbortError') {
       return { content: [{ type: 'text', text: 'Media generation request timed out.' }], isError: true };
     }
@@ -501,7 +508,7 @@ const plugin = {
               tool: MediaToolName.VideoGenerate,
               args,
               context: { sessionKey, toolCallId: id, ...runs.forTool(sessionKey, id) },
-            });
+            }, signal);
             api.logger.info(`[lobster-media-generation] video tool (${action}) completed: toolCallId=${id} elapsedMs=${Date.now() - startedAt} isError=${result.isError === true}`);
             return result;
           } catch (error) {

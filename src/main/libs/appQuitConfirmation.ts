@@ -5,6 +5,8 @@
  * the user triggers (Cmd+Q, app menu, Dock, tray "Quit") pauses at a native
  * confirmation first. Programmatic quits — update install, relaunch, OS
  * logout/shutdown — arm a one-shot bypass so the prompt never gets in the way.
+ * Users can turn the prompt off in Settings; it still appears while document
+ * edits have neither been saved nor backed up.
  *
  * The alert is shown without an owner window. On macOS that runs a nested
  * native loop which still services main-process timers and IPC (verified on
@@ -15,8 +17,14 @@ import { app, dialog, type MessageBoxOptions } from 'electron';
 import { APP_NAME } from '../appConstants';
 import { t } from '../i18n';
 
+/** kv store key for the Settings switch; missing means enabled. */
+export const APP_QUIT_CONFIRMATION_STORE_KEY = 'app_quit_confirmation_enabled';
+
 export const AppQuitRequestVerdict = {
-  /** Skip the prompt: a programmatic quit or OS shutdown already decided. */
+  /**
+   * Skip the prompt: a programmatic quit or OS shutdown already decided, or
+   * the user turned the prompt off and no document edits are at risk.
+   */
   Bypass: 'bypass',
   /** Ask the user before quitting. */
   Prompt: 'prompt',
@@ -47,14 +55,17 @@ export class AppQuitConfirmationGate {
    * rather than acted on: on macOS the open alert runs a nested native loop in
    * which `app.exit()` only stops the modal session and the process lives on.
    * Otherwise an armed bypass is consumed by this one request, and a plain
-   * user quit opens the prompt.
+   * user quit opens the prompt unless `promptRequired` is false.
    */
-  resolveQuitRequest(): AppQuitRequestVerdict {
+  resolveQuitRequest(promptRequired = true): AppQuitRequestVerdict {
     if (this.promptOpen) {
       return AppQuitRequestVerdict.Ignore;
     }
     if (this.bypassArmed) {
       this.bypassArmed = false;
+      return AppQuitRequestVerdict.Bypass;
+    }
+    if (!promptRequired) {
       return AppQuitRequestVerdict.Bypass;
     }
     this.promptOpen = true;

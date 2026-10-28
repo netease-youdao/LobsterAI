@@ -24,6 +24,8 @@ export const OPENCLAW_PLUGIN_SKILLS_DIRECTORY = 'plugin-skills';
 export interface OpenClawRepairSnapshotManifest {
   version: 1;
   generatedPluginSkillLinks: Array<{ path: string; target: string }>;
+  /** State-relative cache directories deliberately left out of the snapshot. */
+  skippedRegenerablePaths: string[];
   restoreInstructions: string;
 }
 

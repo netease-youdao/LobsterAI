@@ -619,7 +619,6 @@ test('channel sync treats stale agent ids as non-current after platform binding 
     },
     imStore: {
       getIMSettings: () => ({
-        skillsEnabled: true,
         platformAgentBindings: {
           weixin: 'agent-2',
         },
@@ -669,7 +668,7 @@ test('channel sync stores the real OpenClaw session key when creating a mapping'
       createSession,
     },
     imStore: {
-      getIMSettings: () => ({ skillsEnabled: true }),
+      getIMSettings: () => ({}),
       getSessionMapping: () => null,
       updateSessionLastActive: () => {},
       deleteSessionMapping: () => {},
@@ -727,7 +726,7 @@ test('channel sync backfills the real OpenClaw session key for existing mappings
       },
     },
     imStore: {
-      getIMSettings: () => ({ skillsEnabled: true }),
+      getIMSettings: () => ({}),
       getSessionMapping: () => ({
         imConversationId: 'dm:ou_123',
         platform: 'feishu',
@@ -778,7 +777,6 @@ test('channel sync corrects existing mapping cwd from the current bound agent', 
     },
     imStore: {
       getIMSettings: () => ({
-        skillsEnabled: true,
         platformAgentBindings: {
           feishu: 'writer',
         },
@@ -880,7 +878,6 @@ test('channel sync creates separate local sessions for the same group under diff
     },
     imStore: {
       getIMSettings: () => ({
-        skillsEnabled: true,
         platformAgentBindings: {
           feishu: 'main',
         },

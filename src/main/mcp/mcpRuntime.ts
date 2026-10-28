@@ -3,14 +3,17 @@ import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
 import { ASK_USER_QUESTION_TOOL_NAME, CoworkIpcChannel, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
+import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpIpcChannel } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
+import { type MediaConfirmationCommand, MediaConfirmationReason, type MediaConfirmationResponse } from '../../shared/media/confirmation';
 import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import {
+  type AskUserOptions,
   type AskUserRequest,
   type AskUserResponse,
   AskUserResponseReason,
@@ -22,6 +25,7 @@ import {
   type MediaGenerationRequest,
   type MediaGenerationResponse,
 } from '../libs/mcpBridgeServer';
+import { applyNodeSystemCaDefault } from '../libs/nodeSystemCaEnv';
 import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey } from '../libs/openclawLocalSessionResolver';
@@ -67,6 +71,7 @@ function buildMcpShimEnv(...overrides: (Record<string, string> | undefined)[]): 
     shimEnv = { ...shimEnv, ...override };
   }
   applyPythonEncodingDefaults(shimEnv, { sources: [process.env, ...overrides] });
+  applyNodeSystemCaDefault(shimEnv);
   return shimEnv;
 }
 
@@ -241,6 +246,7 @@ export class McpRuntime {
       this.deps.permissionSessions.set(request.requestId, sessionId);
       this.registerQuestion(sessionId, request);
       const windows = BrowserWindow.getAllWindows();
+      let delivered = false;
       windows.forEach(win => {
         if (win.isDestroyed()) return;
         try {
@@ -251,15 +257,21 @@ export class McpRuntime {
               toolName: ASK_USER_QUESTION_TOOL_NAME,
               toolInput: {
                 questions: request.questions,
+                ...(request.mediaConfirmation ? { mediaConfirmation: request.mediaConfirmation } : {}),
                 ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
               },
             },
           });
+          delivered = true;
         } catch (error) {
           console.error('[AskUser] failed to send permission request to window:', error);
         }
       });
-      this.deps.onAskUserRequested?.(sessionId, {
+      if (request.mediaConfirmation && !delivered) {
+        this.resolveAskUser(request.requestId, { behavior: 'deny', reason: MediaConfirmationReason.NoRoute });
+        return;
+      }
+      if (!request.mediaConfirmation || request.mediaConfirmation.sequence === 1) this.deps.onAskUserRequested?.(sessionId, {
         requestId: request.requestId,
         toolName: ASK_USER_QUESTION_TOOL_NAME,
       });
@@ -320,7 +332,9 @@ export class McpRuntime {
 
   /** Only a verified desktop session may publish a legacy form to remote control. */
   private registerQuestion(sessionId: string, request: AskUserRequest): void {
-    if (!this.deps.registerQuestion || !request.sessionKey || sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID) return;
+    // Recoverable paid-media consent requires its revision-aware desktop protocol.
+    if (request.mediaConfirmation || !this.deps.registerQuestion || !request.sessionKey
+      || sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID) return;
     try {
       // Do not discard a secret marker while adapting the ordinary form contract.
       if (request.questions.some(question => {
@@ -367,11 +381,36 @@ export class McpRuntime {
 
   async askUserInternal(
     questions: AskUserRequest['questions'],
+    timeoutMs: number,
+    options: AskUserOptions & { recoverableMedia: NonNullable<AskUserOptions['recoverableMedia']> },
+  ): Promise<MediaConfirmationResponse | null>;
+  async askUserInternal(
+    questions: AskUserRequest['questions'],
     timeoutMs?: number,
-    options?: { sessionKey?: string },
+    options?: AskUserOptions,
+  ): Promise<AskUserResponse | null>;
+  async askUserInternal(
+    questions: AskUserRequest['questions'],
+    timeoutMs?: number,
+    options?: AskUserOptions,
   ): Promise<AskUserResponse | null> {
     if (!this.bridgeServer) return null;
     return await this.bridgeServer.askUserInternal(questions, timeoutMs, options);
+  }
+
+  getPendingMediaConfirmations() {
+    return (this.bridgeServer?.getPendingMediaConfirmations() ?? []).flatMap(request => {
+      const sessionId = request.sessionKey ? resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey(
+        this.deps.getStore().getDatabase(), request.sessionKey,
+      ) : null;
+      if (!sessionId) { this.bridgeServer?.resolveAskUser(request.requestId, { behavior: 'deny' }); return []; }
+      return [{ sessionId, requestId: request.requestId, toolName: ASK_USER_QUESTION_TOOL_NAME,
+        toolInput: { questions: request.questions, mediaConfirmation: request.mediaConfirmation } }];
+    });
+  }
+
+  actOnMediaConfirmation(command: MediaConfirmationCommand): Promise<boolean> {
+    return this.bridgeServer?.actOnMediaConfirmation(command) ?? Promise.resolve(false);
   }
 
   resolveAskUser(requestId: string, response: AskUserResponse): boolean {
@@ -457,12 +496,14 @@ export class McpRuntime {
     let builtInCount = 0;
 
     const electronPath = getElectronNodeRuntimePath();
-    // toolFilter / supportsParallelToolCalls ride along to openclaw.json regardless of transport.
+    // toolFilter / supportsParallelToolCalls / timeouts ride along to openclaw.json regardless of transport.
     const passthroughFields = (server: typeof enabledServers[number]) => ({
       ...(server.toolFilter ? { toolFilter: server.toolFilter } : {}),
       ...(typeof server.supportsParallelToolCalls === 'boolean'
         ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
         : {}),
+      ...(server.requestTimeoutMs ? { requestTimeoutMs: server.requestTimeoutMs } : {}),
+      ...(server.connectionTimeoutMs ? { connectionTimeoutMs: server.connectionTimeoutMs } : {}),
     });
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
       const r = await resolveStdioCommand(server);
@@ -541,6 +582,7 @@ export class McpRuntime {
           transportType: server.transportType,
           url: server.url,
           headers: server.headers,
+          ...(server.auth === McpAuthMode.OAuth ? { auth: McpAuthMode.OAuth } : {}),
           ...passthroughFields(server),
         });
       }

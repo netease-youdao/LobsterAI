@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 
+import type { ImageEditRequest } from '../../shared/imageEditing/types';
 import { MEDIA_INTENT_STORE_KEY, MEDIA_TASK_STORE_KEY, MediaProtocol } from '../../shared/media/constants';
 import type { PersistedGeneratedImageAsset } from './mediaAssetPersistence';
 
 export interface MediaTaskTracker {
+  imageEdit?: ImageEditRequest;
   taskId: string;
   sessionId: string;
   mediaType: 'image' | 'video';
@@ -23,6 +25,7 @@ export interface MediaTaskTracker {
 }
 
 export interface MediaGenerationIntent {
+  imageEdit?: ImageEditRequest;
   key: string;
   callKey: string;
   ownerAccountKey: string;

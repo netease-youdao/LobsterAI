@@ -102,11 +102,17 @@ test('defaultConfig puts Kimi K3 first for Moonshot', () => {
   });
 });
 
-test('defaultConfig limits Xiaomi models to V2.5 with 1M context', () => {
+test('defaultConfig puts MiMo V2.6 Pro first for Xiaomi with 1M context', () => {
   expect(defaultConfig.providers?.[ProviderName.Xiaomi]?.models).toEqual([
-    { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+    { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
     { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
   ]);
+});
+
+test('defaultConfig defaults to DeepSeek V4 Flash instead of the retired deepseek-reasoner', () => {
+  expect(defaultConfig.model.defaultModel).toBe('deepseek-v4-flash');
+  expect(defaultConfig.model.defaultModelProvider).toBe(ProviderName.DeepSeek);
+  expect(defaultConfig.providers?.[ProviderName.DeepSeek]?.models?.map(model => model.id)).not.toContain('deepseek-reasoner');
 });
 
 test('defaultConfig puts MiniMax M3 first with 1M context', () => {

@@ -13,7 +13,7 @@ import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/ty
 import { setEnterpriseAccountContext } from '../features/enterpriseAccount/enterpriseAccountSlice';
 import { store } from '../store';
 import { setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
-import { clearServerModels } from '../store/slices/modelSlice';
+import { clearServerModels, ServerModelLoadStatus, setServerModels } from '../store/slices/modelSlice';
 import {
   authService,
   isAuthAccountRequestCurrent,
@@ -620,11 +620,45 @@ describe('server model loading', () => {
     // The first attempt settles immediately so startup never waits on backoff.
     await expect(authService.refreshServerModels()).resolves.toBe(false);
     expect(planModelIds()).toEqual([]);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Error);
 
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(getModels).toHaveBeenCalledTimes(2);
     expect(planModelIds()).toEqual(['qwen3.7-plus']);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
+  });
+
+  test('reports loading while a request is pending and ready for a confirmed empty response', async () => {
+    let resolveModels!: (value: { success: boolean; models: never[] }) => void;
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels: vi.fn(() => new Promise(resolve => { resolveModels = resolve; })) },
+      },
+    });
+    signIn();
+    const request = authService.refreshServerModels();
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Loading);
+    resolveModels({ success: true, models: [] });
+    await expect(request).resolves.toBe(true);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
+    expect(planModelIds()).toEqual([]);
+  });
+
+  test('a late rejected request cannot replace the next account model status with an error', async () => {
+    let rejectModels!: (reason: Error) => void;
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels: vi.fn(() => new Promise((_resolve, reject) => { rejectModels = reject; })) },
+      },
+    });
+    signIn('personal:first');
+    const request = authService.refreshServerModels();
+    signIn('personal:second');
+    store.dispatch(setServerModels([]));
+    rejectModels(new Error('offline'));
+    await expect(request).resolves.toBe(false);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
   });
 
   test('gives up after the configured attempts and warns once', async () => {
@@ -928,6 +962,43 @@ describe('auth state restoration', () => {
     creditsUsed: 100,
     creditsRemaining: 900,
   };
+
+  test('an offline cold start recovers the account and models on retry without another login', async () => {
+    vi.useFakeTimers();
+    store.dispatch(setLoggedOut());
+    store.dispatch(clearServerModels());
+    const getModels = vi.fn().mockResolvedValue({
+      success: true,
+      models: [{ modelId: 'recovered-model', modelName: 'Recovered Model', accessible: true }],
+    });
+    const getUser = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        status: AuthSessionStatus.TemporarilyUnavailable,
+        hasCredentials: true,
+        cachedUser: user,
+      })
+      .mockResolvedValueOnce({ success: true, user, quota, enterpriseContext: null });
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', { electron: { auth: { getUser, getModels } } });
+
+    await authService.refreshAuthState({ clearOnFailure: true });
+    expect(store.getState().auth).toMatchObject({
+      isLoading: false,
+      isLoggedIn: true,
+      sessionStatus: AuthSessionStatus.TemporarilyUnavailable,
+      ownerAccountKey: null,
+      user,
+    });
+    expect(getModels).not.toHaveBeenCalled();
+
+    await authService.recoverAccount();
+    expect(getUser).toHaveBeenCalledTimes(2);
+    expect(store.getState().auth.sessionStatus).toBe(AuthSessionStatus.Authenticated);
+    expect(store.getState().auth.ownerAccountKey).toBe('personal:user@example.com');
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
+    expect(store.getState().model.availableModels.some(model => model.id === 'recovered-model')).toBe(true);
+  });
 
   test('restores a secondary window after another window signs in without exchanging the code again', async () => {
     const exchange = vi.fn();

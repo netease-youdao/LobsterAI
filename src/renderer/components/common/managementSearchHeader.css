@@ -1,0 +1,32 @@
+.management-search-header {
+  container: management-search-header / inline-size;
+}
+
+.management-search-header__search {
+  width: 280px;
+  max-width: 100%;
+}
+
+/* Use the available panel width, including the space taken by the sidebar. */
+@container management-search-header (max-width: 720px) {
+  .management-search-header__row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .management-search-header__controls {
+    width: 100%;
+  }
+
+  .management-search-header__search {
+    flex: 1 1 240px;
+    width: auto;
+  }
+}
+
+/* Keep the search usable when it cannot share a row with the add action. */
+@container management-search-header (max-width: 380px) {
+  .management-search-header__search {
+    flex-basis: 100%;
+  }
+}

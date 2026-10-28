@@ -2658,6 +2658,9 @@ export class SkillManager {
       }
     });
     this.watchSnapshot = snapshot;
+    // Native watchers may miss writes between the initial snapshot and attachment.
+    // One debounced rescan closes that gap without introducing recurring polling.
+    this.scheduleNotify(SkillWatchScope.Root, 'change');
   }
 
   stopWatching(): void {
@@ -2690,7 +2693,9 @@ export class SkillManager {
         const previous = this.watchSnapshot;
         this.watchSnapshot = snapshot;
         if (snapshot.watchFingerprint !== previous?.watchFingerprint) this.startWatching();
-        if (snapshot.contentFingerprint !== previous?.contentFingerprint) this.notifySkillsChanged(batch);
+        // Reattachment reads a newer snapshot; do not silently adopt an intervening edit.
+        const current = this.watchSnapshot ?? snapshot;
+        if (!current.readError && current.contentFingerprint !== previous?.contentFingerprint) this.notifySkillsChanged(batch);
       } catch (error) {
         // Retain the last readable snapshot; a transient read failure is not a deletion.
         console.warn('[skills] Failed to compare skill definitions:', error);

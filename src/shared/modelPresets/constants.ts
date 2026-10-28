@@ -53,7 +53,9 @@ export function parseModelPresetPreference(value: unknown): ModelPresetPreferenc
 }
 
 export function isChatPresetSession(session: { scheduledTaskId?: string | null; claudeSessionId?: string | null }): boolean {
-  if (session.scheduledTaskId) return false;
+  // Manual replies in scheduled-task conversations use a managed chat session,
+  // so they support the same preset selection and binding as ordinary chats.
+  if (session.scheduledTaskId?.trim()) return true;
   const key = session.claudeSessionId?.trim();
   return !key || key.startsWith('lobsterai:') || /^agent:[^:]+:lobsterai:.+/.test(key);
 }

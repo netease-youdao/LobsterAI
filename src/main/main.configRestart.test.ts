@@ -172,6 +172,7 @@ function fixture(realDelivery = false) {
     ConfigDiagnosticOutcome, ConfigDiagnosticStage, ConfigWorkloadState, observeConfigRecovery,
     app: { getPath: () => '/fixture' }, gwDiagTs: () => '', t: (key: string) => key,
     getOpenClawEngineManager: () => manager, getOpenClawConfigSync: () => configSync,
+    getOpenClawUserConfigOverlay: () => ({ prepare: (raw: string) => raw, handleConfigAccepted: noop, handleConfigFailure: noop }),
     getCoworkStore: () => ({ listUserPlugins: () => [] }),
     patchEnabledNspClawguard: () => false,
     getElectronNodeRuntimePath: () => '/fixture/node',

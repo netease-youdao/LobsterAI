@@ -234,17 +234,19 @@ describe('remote background polling', () => {
     expect(count('/input-preparations/claim')).toBe(2);
     expect(count('/commands/claim')).toBe(1);
   });
-  it('backs off failed command reconciliation without blocking reply synchronization', async () => {
+  it('backs off failed command reconciliation without blocking independent claims or reply synchronization', async () => {
     const { bridge, request, count, sync } = await fixture();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    request.mockRejectedValueOnce(new Error('database unavailable'));
+    const usual = request.getMockImplementation()!;
+    request.mockImplementation((actor, path, init) => path.includes('/commands?')
+      ? Promise.reject(new Error('reconciliation unavailable')) : usual(actor, path, init));
     Socket.latest.frame({ type: 'commands.available' });
     await vi.advanceTimersByTimeAsync(0);
     for (let i = 0; i < 10; i++) {
       Socket.latest.frame({ type: 'commands.available' }); bridge.schedule(0);
       await vi.advanceTimersByTimeAsync(1000);
     }
-    expect(count('/commands/claim')).toBe(1);
+    expect(count('/commands/claim')).toBeGreaterThan(1);
     expect(request.mock.calls.filter(([, path]) => path.includes('/commands?'))).toHaveLength(2);
     expect(sync.mock.calls.length).toBeGreaterThan(5);
   });

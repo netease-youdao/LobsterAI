@@ -9,6 +9,7 @@ import {
   type UsageContext,
   UsageEntry,
   usageFailureCode,
+  usageFailureDetails,
   UsageOrigin,
   UsageOutcome,
   type UsageParams,
@@ -341,7 +342,7 @@ export class TaskUsageAnalytics {
         callId: tool.id,
         ...tool.fields,
         outcome: metadata.isError === true ? UsageOutcome.Failed : UsageOutcome.Succeeded,
-        failureCode: metadata.isError === true ? usageFailureCode(metadata.error ?? metadata.toolResult) : undefined,
+        ...(metadata.isError === true ? usageFailureDetails(metadata.error ?? metadata.toolResult) : {}),
         durationMs: Math.max(0, this.now() - tool.startedAt),
       });
     }

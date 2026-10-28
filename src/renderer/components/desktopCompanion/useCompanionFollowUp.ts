@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { CompanionAnalyticsSource } from '../../../shared/desktopCompanion/analytics';
+import { CompanionAnalyticsSource, companionTaskFailure, CompanionTaskFailureStage } from '../../../shared/desktopCompanion/analytics';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 import { beginCompanionTask } from './analytics';
 import { type FollowUpResponse, submitCompanionFollowUp } from './companionFollowUp';
@@ -30,6 +30,7 @@ export function useCompanionFollowUp(sessionId: string, onRefresh: () => void) {
     if (!prompt || submitting.current) return { success: false };
     submitting.current = true;
     const finishSubmission = beginCompanionTask(CompanionAnalyticsSource.Result, true);
+    let failureStage: CompanionTaskFailureStage = CompanionTaskFailureStage.SessionLookup;
     cleanup.current();
     setActivity({ prompt, phase: CompanionFollowUpPhase.Steering });
     let finished = false;
@@ -53,12 +54,13 @@ export function useCompanionFollowUp(sessionId: string, onRefresh: () => void) {
           }),
         ];
         cleanup.current = () => { stops.forEach(stop => stop()); cleanup.current = () => {}; };
-      });
+      }, stage => { failureStage = stage; });
       if (!result.success) finish();
       else if (!finished && mounted.current) setActivity({ prompt, phase: CompanionFollowUpPhase.Thinking });
-      finishSubmission(result.success);
+      finishSubmission(result.success, companionTaskFailure(result, failureStage));
       return result;
     } catch (error) {
+      finishSubmission(false, companionTaskFailure(error, failureStage));
       finish();
       throw error;
     } finally {

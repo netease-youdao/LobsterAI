@@ -27,6 +27,26 @@ afterEach(async () => {
 });
 
 describe('display-only remote snapshots', () => {
+  it('retains quiescent state without polling or expiry until a write or scope change invalidates it', async () => {
+    const produce = vi.fn().mockResolvedValue('disabled');
+    const onChanged = vi.fn();
+    const cache = new RemoteDisplaySnapshot<string>({ produce, onChanged, retainUntilInvalidated: value => value === 'disabled' });
+    caches.push(cache);
+    cache.read('owner-A'); await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(cache.read('owner-A')).toBe('disabled');
+    expect(produce).toHaveBeenCalledOnce(); expect(onChanged).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    produce.mockResolvedValue('pending'); cache.invalidate();
+    expect(cache.read('owner-A')).toBeNull();
+    await vi.advanceTimersByTimeAsync(0); expect(produce).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(Timing.refreshMs); expect(produce).toHaveBeenCalledTimes(3);
+    produce.mockResolvedValue('disabled'); cache.read('owner-B');
+    await vi.advanceTimersByTimeAsync(0); expect(produce).toHaveBeenCalledTimes(4);
+    expect(cache.read('owner-A')).toBeNull();
+    cache.stop(); await vi.advanceTimersByTimeAsync(Timing.ttlMs);
+    expect(produce).toHaveBeenCalledTimes(4);
+  });
   it('only schedules timers from read and shares one producer across repeated reads', async () => {
     const { cache, produce, onChanged, jobs } = fixture();
     expect(cache.read('owner-A')).toBeNull(); expect(cache.read('owner-A')).toBeNull();

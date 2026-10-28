@@ -9,7 +9,9 @@ import {
   UsageOutcome,
   UsageStage,
 } from '../../shared/analytics/usage';
+import type { MediaConfirmationEvent } from '../../shared/media/confirmation';
 import { MediaProtocol, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../shared/media/constants';
+import { mediaFailureFields } from '../../shared/media/usage';
 import type { MainLogEventParams } from './mainLogReporter';
 import type { MediaUsageRecord, MediaUsageStore } from './mediaUsageStore';
 
@@ -20,6 +22,7 @@ interface MediaJob extends MediaUsageRecord {
   epoch: number;
   confirmationStartedAt?: number;
   confirmationResolved?: boolean;
+  confirmationEvents?: Set<string>;
 }
 
 interface MediaResult {
@@ -104,7 +107,7 @@ export class MediaUsageAnalytics {
             ]
               .filter(item => typeof item === 'string')
               .join(' ');
-            this.failure(job, reason, status);
+            this.failure(job, reason, status, mediaFailureFields(details));
             return;
           }
           this.accept(info.callId, details);
@@ -195,6 +198,22 @@ export class MediaUsageAnalytics {
     });
   }
 
+  confirmationEvent(callId: string, event: MediaConfirmationEvent, modelId: string): void {
+    this.safe(() => {
+      const job = this.find(callId);
+      if (!job || !this.current(job) || job.accepted || job.terminal) return;
+      const key = event.outcome + ':' + event.count;
+      job.confirmationEvents ??= new Set();
+      if (job.confirmationEvents.has(key)) return;
+      job.confirmationEvents.add(key);
+      job.modelId = catalogAnalyticsId(modelId);
+      this.emit(job, UsageStage.Confirmation, event.outcome, {
+        durationMs: event.durationMs, count: event.count, failureCode: event.failureCode,
+        ...(event.failureCode ? { failureStage: UsageStage.Confirmation } : {}),
+      });
+    });
+  }
+
   save(taskId: string, savedCount: number, outputCount: number): void {
     this.safe(() => {
       const job = this.find(taskId);
@@ -212,8 +231,8 @@ export class MediaUsageAnalytics {
     });
   }
 
-  reject(callId: string, error: unknown): void {
-    this.safe(() => { const job = this.find(callId); if (job) this.failure(job, error); });
+  reject(callId: string, error: unknown, fields: Record<string, string> = {}): void {
+    this.safe(() => { const job = this.find(callId); if (job) this.failure(job, error, undefined, mediaFailureFields(fields)); });
   }
 
   clear(): void {
@@ -270,7 +289,7 @@ export class MediaUsageAnalytics {
   private emit(
     job: MediaJob,
     stage: UsageStage,
-    outcome: UsageOutcome,
+    outcome: UsageOutcome | MediaConfirmationEvent['outcome'],
     fields: Record<string, string | number | boolean | undefined> = {},
   ): void {
     if (!this.current(job)) return;
@@ -296,7 +315,7 @@ export class MediaUsageAnalytics {
     return this.deps.now?.() ?? Date.now();
   }
 
-  private failure(job: MediaJob, error: unknown, status?: string): void {
+  private failure(job: MediaJob, error: unknown, status?: string, fields: Record<string, string> = {}): void {
     if (!this.current(job)) return;
     const stage = !job.accepted
       ? UsageStage.Accepted
@@ -316,8 +335,10 @@ export class MediaUsageAnalytics {
     this.emit(
       job,
       stage,
-      status === UsageOutcome.Cancelled ? UsageOutcome.Cancelled : UsageOutcome.Failed,
-      { failureCode: usageFailureCode(error) },
+      status === UsageOutcome.Cancelled ? UsageOutcome.Cancelled
+        : status === UsageOutcome.Timeout ? UsageOutcome.Timeout
+          : status === UsageOutcome.Interrupted ? UsageOutcome.Interrupted : UsageOutcome.Failed,
+      { failureCode: usageFailureCode(error), ...fields },
     );
   }
 

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +37,7 @@ beforeEach(() => {
 
 afterEach(() => {
   manager.stopWatching();
+  vi.restoreAllMocks();
   if (!path.resolve(fixture.root).startsWith(path.resolve(os.tmpdir()) + path.sep)) {
     throw new Error('Refusing to remove a non-fixture directory');
   }
@@ -93,4 +95,20 @@ test('reattaches watchers when an identical directory replaces the previous one'
 
   fs.writeFileSync(definition, content.replace('First', 'Other'));
   await vi.waitFor(() => expect(notified).toHaveBeenCalledTimes(1), { timeout: 4000 });
+});
+
+test('rescans definitions created during native watcher attachment even when no event arrives', async () => {
+  manager.stopWatching();
+  const directory = path.join(root, 'installing');
+  fs.mkdirSync(directory);
+  vi.spyOn(fs, 'watch').mockImplementation((filename) => {
+    if (String(filename) === directory) {
+      fs.writeFileSync(path.join(directory, 'SKILL.md'), '---\nname: installing\ndescription: installed\n---\nBody');
+    }
+    return Object.assign(new EventEmitter(), { close: vi.fn(), ref: vi.fn(), unref: vi.fn() }) as fs.FSWatcher;
+  });
+  manager.startWatching();
+  await vi.waitFor(() => expect(notified).toHaveBeenCalledTimes(1), { timeout: 2000 });
+  await pause(400);
+  expect(notified).toHaveBeenCalledTimes(1);
 });

@@ -8,10 +8,12 @@ import {
   ProviderName,
   ProviderRegistry,
   resolveModelRuntimeProfile,
+  usesCustomGeminiApiFormat,
 } from '@shared/providers';
 
 import { normalizeBrowserWebAccessConfig } from '../../shared/browserWebAccess/constants';
 import { normalizeNotificationSettings } from '../../shared/notifications/constants';
+import { isUrlOnDomain } from '../../shared/url/hostname';
 import {
   AppConfig,
   CODE_FONT_SIZE_MIGRATION_VERSION,
@@ -65,7 +67,7 @@ const normalizeProviderBaseUrl = (providerKey: string, baseUrl: unknown): string
     return normalized;
   }
 
-  if (!normalized || !normalized.includes('generativelanguage.googleapis.com')) {
+  if (!normalized || !isUrlOnDomain(normalized, 'generativelanguage.googleapis.com')) {
     return normalized;
   }
 
@@ -93,6 +95,9 @@ const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'a
   }
   if (apiFormat === ApiFormat.OpenAI) {
     return ApiFormat.OpenAI;
+  }
+  if (usesCustomGeminiApiFormat(providerKey, apiFormat)) {
+    return ApiFormat.Gemini;
   }
   return ApiFormat.Anthropic;
 };

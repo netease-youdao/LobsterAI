@@ -118,6 +118,12 @@ export const OpenClawLoopbackRepairOutcome = {
 export type OpenClawLoopbackRepairOutcome =
   typeof OpenClawLoopbackRepairOutcome[keyof typeof OpenClawLoopbackRepairOutcome];
 
+/**
+ * OpenClaw lets workspaces below this root follow their current link target
+ * instead of failing closed (openclaw-managed-workspace-alias-follow.patch).
+ */
+export const OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV = 'LOBSTERAI_MANAGED_WORKSPACE_ROOT';
+
 export const OpenClawGatewayFailureKind = {
   HeapOutOfMemory: 'heap_out_of_memory',
 } as const;

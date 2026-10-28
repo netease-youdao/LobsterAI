@@ -69,6 +69,7 @@ vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>();
   return { ...actual, useState: hooks.useState, useRef: hooks.useRef, useEffect: hooks.useEffect };
 });
+vi.mock('react-dom', () => ({ createPortal: (children: ReactNode) => children }));
 vi.mock('../../services/i18n', () => ({ i18nService: { t: (key: string) => key } }));
 
 type ReadResult = { success: boolean; dataUrl?: string; error?: string };
@@ -119,6 +120,8 @@ const settle = async () => {
 beforeEach(() => {
   hooks.reset(); vi.clearAllMocks(); image = null; tree = null;
   readFile.mockResolvedValue({ success: false });
+  vi.stubGlobal('document', { activeElement: null, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal('HTMLElement', class {});
   vi.stubGlobal('window', {
     electron: { dialog: { readFileAsDataUrl: readFile } },
     addEventListener: vi.fn(), removeEventListener: vi.fn(),

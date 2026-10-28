@@ -7,7 +7,11 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { OPENCLAW_REPAIR_ENTRY, OPENCLAW_REPAIR_RESULT_PREFIX, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST, OpenClawRepairPhase, OpenClawRepairStage } from '../../shared/openclawEngine/repair';
 import { OPENCLAW_STARTUP_COMPATIBILITY_ENTRY, OPENCLAW_STARTUP_COMPATIBILITY_RESULT_PREFIX, OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
-import { createOpenClawRepairBackupDirectory, OPENCLAW_DOCTOR_REPAIR_ARGS, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair } from './openclawCompatibilityRepair';
+import {
+  createOpenClawRepairBackupDirectory, OPENCLAW_DOCTOR_REPAIR_ARGS, OPENCLAW_REPAIR_BACKUP_MAX_AGE_MS,
+  OPENCLAW_REPAIR_BACKUP_RETENTION, pruneOpenClawRepairBackups, runOpenClawCompatibilityRepair, runOpenClawDoctorRepair,
+} from './openclawCompatibilityRepair';
+import { DiskCleanupStoppedError,DiskCleanupStopReason } from './openclawDiskCleanupThrottle';
 import type { StartupMigrationRunner } from './openclawStartupStateMigration';
 
 const directories: string[] = [];
@@ -36,6 +40,7 @@ function completeSnapshot(params: { stateDir: string; backupDir: string }) {
   }));
 }
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -98,6 +103,142 @@ test('an interrupted Doctor retains its own stage', async () => {
 test('backup directories do not collide on repeated repair requests', () => {
   const params = fixture();
   expect(createOpenClawRepairBackupDirectory(path.dirname(params.stateDir))).not.toBe(params.backupDir);
+});
+
+const NOW = Date.parse('2026-10-17T12:00:00.000Z');
+const DAY_MS = 24 * 60 * 60 * 1000;
+const runName = (iso: string, suffix = 'aaaaaa') => `${iso.replace(/[:.]/g, '-')}-${suffix}`;
+// Runs a pre-fix snapshot would contain: real state plus regenerable caches.
+const OLD_SNAPSHOT_FILES = [
+  'openclaw.json', 'state/openclaw.sqlite', '.compile-cache/v24.11.1-arm64-e4fd8016-501/data',
+  'browser/openclaw/user-data/Default/Cookies', 'browser/openclaw/user-data/Default/IndexedDB/x/CURRENT',
+  'browser/openclaw/user-data/Default/Service Worker/CacheStorage/abc/index.txt',
+  'browser/openclaw/user-data/Default/Service Worker/Database/CURRENT',
+  'browser/openclaw/user-data/Default/GPUCache/data_0', 'browser/openclaw/user-data/GraphiteDawnCache/data_0',
+];
+
+function backupRuns(runs: Array<{ name: string; modifiedAt?: number }>) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-repair-prune-'));
+  directories.push(base);
+  const root = path.join(base, 'repair-backups');
+  const paths = runs.map(({ name }) => path.join(root, name));
+  for (const run of paths) {
+    for (const file of OLD_SNAPSHOT_FILES) {
+      const target = path.join(run, 'original', ...file.split('/'));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file);
+    }
+  }
+  // Set mtimes last: populating a run updates its directory mtime.
+  runs.forEach(({ name, modifiedAt }, index) => {
+    const time = new Date(modifiedAt ?? Date.parse(name.slice(0, 24).replace(/T(\d{2})-(\d{2})-(\d{2})-/, 'T$1:$2:$3.')));
+    fs.utimesSync(paths[index], time, time);
+  });
+  return { base, root, runs: paths };
+}
+const existsIn = (run: string, file: string) => fs.existsSync(path.join(run, 'original', ...file.split('/')));
+
+test('pruning keeps the current and newest previous run, ignores foreign entries, and never follows links', async () => {
+  const { base, root, runs } = backupRuns(['2026-10-01T00:00:00.000Z', '2026-10-05T00:00:00.000Z', '2026-10-10T00:00:00.000Z', '2026-10-15T00:00:00.000Z']
+    .map(iso => ({ name: runName(iso) })));
+  fs.mkdirSync(path.join(root, 'user-notes'));
+  fs.writeFileSync(path.join(root, 'keep.txt'), '');
+  const external = path.join(base, 'external');
+  fs.mkdirSync(external);
+  fs.writeFileSync(path.join(external, 'keep.txt'), 'external');
+  fs.symlinkSync(external, path.join(runs[0], 'original', 'link'), 'junction');
+  const current = createOpenClawRepairBackupDirectory(base);
+
+  const result = await pruneOpenClawRepairBackups(base, { currentBackupDir: current, now: NOW });
+
+  expect(OPENCLAW_REPAIR_BACKUP_RETENTION).toBe(2);
+  expect([...result.removedRuns].sort()).toEqual(runs.slice(0, 3));
+  expect(fs.readdirSync(root).sort()).toEqual([path.basename(current), path.basename(runs[3]), 'keep.txt', 'user-notes'].sort());
+  expect(fs.readFileSync(path.join(external, 'keep.txt'), 'utf8')).toBe('external');
+});
+
+test('pruning removes runs past the age limit, falling back to mtime when the name has no valid time', async () => {
+  const { root, base, runs } = backupRuns([
+    { name: runName('2026-09-01T00:00:00.000Z') },
+    { name: runName('2026-10-15T00:00:00.000Z') },
+    { name: '2026-13-01T00-00-00-000Z-oldmtm', modifiedAt: NOW - 40 * DAY_MS },
+  ]);
+  expect(OPENCLAW_REPAIR_BACKUP_MAX_AGE_MS).toBe(14 * DAY_MS);
+
+  const result = await pruneOpenClawRepairBackups(base, { now: NOW });
+
+  expect([...result.removedRuns].sort()).toEqual([runs[2], runs[0]].sort());
+  expect(fs.readdirSync(root)).toEqual([path.basename(runs[1])]);
+});
+
+test('pruning keeps a current run whose clock-based name sorts older than the others', async () => {
+  const { root, base, runs } = backupRuns(['2026-10-01T00:00:00.000Z', '2026-10-05T00:00:00.000Z', '2026-10-10T00:00:00.000Z', '2026-10-15T00:00:00.000Z']
+    .map(iso => ({ name: runName(iso) })));
+  const result = await pruneOpenClawRepairBackups(base, { currentBackupDir: runs[0], now: NOW });
+  expect([...result.removedRuns].sort()).toEqual(runs.slice(1, 3));
+  expect(fs.readdirSync(root).sort()).toEqual([runs[0], runs[3]].map(run => path.basename(run)));
+});
+
+test.each([
+  ['newest', '2026-10-17T11:55:00.000Z'],
+  // A run named before the others (clock moved back) is still recognized as in progress by its mtime.
+  ['oldest-named', '2026-01-01T00:00:00.000Z'],
+])('a startup prune without a current run never touches an in-progress %s run', async (_name, iso) => {
+  const inProgress = { name: runName(iso, 'inprog'), modifiedAt: NOW - 5 * 60 * 1000 };
+  const { base, runs } = backupRuns([
+    inProgress,
+    ...['2026-10-05T00:00:00.000Z', '2026-10-10T00:00:00.000Z', '2026-10-15T00:00:00.000Z'].map(value => ({ name: runName(value) })),
+  ]);
+
+  const result = await pruneOpenClawRepairBackups(base, { now: NOW });
+
+  expect([...result.removedRuns].sort()).toEqual(runs.slice(1, 3));
+  for (const file of OLD_SNAPSHOT_FILES) expect(existsIn(runs[0], file)).toBe(true);
+  expect(existsIn(runs[3], 'openclaw.json')).toBe(true);
+});
+
+test('retained runs lose regenerable caches but keep state and site data, and the manifest records it', async () => {
+  const { base, runs } = backupRuns([
+    { name: runName('2026-10-06T04:42:33.345Z', '4W3ZYj') }, { name: runName('2026-10-04T06:43:26.330Z', 'vRNFCI') },
+  ]);
+  // Writing the manifest bumps the run's mtime to the real clock, which reads as in progress at NOW; restore it.
+  const { mtime } = fs.statSync(runs[0]);
+  fs.writeFileSync(path.join(runs[0], OPENCLAW_REPAIR_SNAPSHOT_MANIFEST), JSON.stringify({ version: 1, generatedPluginSkillLinks: [] }));
+  fs.utimesSync(runs[0], mtime, mtime);
+
+  const result = await pruneOpenClawRepairBackups(base, { now: NOW });
+
+  expect(result.removedRuns).toEqual([]);
+  const regenerable = ['.compile-cache', 'browser/openclaw/user-data/Default/Service Worker/CacheStorage',
+    'browser/openclaw/user-data/Default/GPUCache', 'browser/openclaw/user-data/GraphiteDawnCache'];
+  expect([...result.strippedPaths].sort()).toEqual(runs.flatMap(run => regenerable.map(item => path.join(run, 'original', ...item.split('/')))).sort());
+  for (const run of runs) {
+    for (const item of regenerable) expect(existsIn(run, item)).toBe(false);
+    for (const file of ['openclaw.json', 'state/openclaw.sqlite', 'browser/openclaw/user-data/Default/Cookies',
+      'browser/openclaw/user-data/Default/IndexedDB/x/CURRENT', 'browser/openclaw/user-data/Default/Service Worker/Database/CURRENT']) {
+      expect(existsIn(run, file)).toBe(true);
+    }
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(runs[0], OPENCLAW_REPAIR_SNAPSHOT_MANIFEST), 'utf8'));
+  expect([...manifest.skippedRegenerablePaths].sort()).toEqual(regenerable.map(item => path.join(...item.split('/'))).sort());
+  expect((await pruneOpenClawRepairBackups(base, { now: NOW })).strippedPaths).toEqual([]);
+});
+
+test('pruning tolerates a missing root and keeps going when one backup cannot be removed', async () => {
+  expect(await pruneOpenClawRepairBackups(path.join(os.tmpdir(), 'lobster-absent-repair-base'), { now: NOW }))
+    .toEqual({ removedRuns: [], strippedPaths: [] });
+  const { base, runs } = backupRuns(['2026-10-01T00:00:00.000Z', '2026-10-05T00:00:00.000Z', '2026-10-10T00:00:00.000Z', '2026-10-15T00:00:00.000Z']
+    .map(iso => ({ name: runName(iso) })));
+  // A run that is locked (e.g. open in Explorer on Windows) fails at the rename that stages it.
+  const rename = fs.promises.rename;
+  vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+    if (from === runs[1]) throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' });
+    return rename(from, to);
+  });
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect((await pruneOpenClawRepairBackups(base, { currentBackupDir: runs[3], now: NOW })).removedRuns).toEqual([runs[0]]);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(runs[1]), expect.objectContaining({ code: 'EBUSY' }));
+  expect(fs.existsSync(runs[1])).toBe(true);
 });
 
 function bindingFailure(stateDir: string): string {
@@ -233,4 +374,27 @@ test.each([
   await expect(runOpenClawCompatibilityRepair({ ...params, phase: OpenClawRepairPhase.Recovery, runner }))
     .rejects.toThrow(helperError ?? error);
   expect(runner).toHaveBeenCalledTimes(repeat ? 3 : helperError ? 2 : 1);
+});
+
+test('a prune stopped mid-removal resumes later without the partial run taking a retention slot', async () => {
+  const { root, base, runs } = backupRuns(['2026-10-15T00:00:00.000Z', '2026-10-10T00:00:00.000Z', '2026-10-05T00:00:00.000Z']
+    .map(iso => ({ name: runName(iso) })));
+  let steps = 0;
+  const stopping = {
+    step: async () => {
+      steps += 1;
+      if (steps === 3) throw new DiskCleanupStoppedError(DiskCleanupStopReason.Budget);
+    },
+  };
+
+  await expect(pruneOpenClawRepairBackups(base, { now: NOW, throttle: stopping })).rejects.toBeInstanceOf(DiskCleanupStoppedError);
+  // The oldest run was renamed aside before removal started, so it no longer looks like a fresh run.
+  const staged = `.lobsterai-stale-${path.basename(runs[2])}`;
+  expect(fs.readdirSync(root).sort()).toEqual([path.basename(runs[0]), path.basename(runs[1]), staged].sort());
+
+  const resumed = await pruneOpenClawRepairBackups(base, { now: NOW });
+
+  expect(resumed.removedRuns).toEqual([]);
+  expect(fs.readdirSync(root).sort()).toEqual([path.basename(runs[0]), path.basename(runs[1])].sort());
+  for (const run of runs.slice(0, 2)) expect(existsIn(run, 'state/openclaw.sqlite')).toBe(true);
 });

@@ -46,17 +46,7 @@ function fixture() {
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const store = new RemoteStore(db);
-  store.setEnabledOwner(owner);
-  store.transaction(() => {
-    db.prepare("INSERT INTO cowork_sessions VALUES ('task','Conversation',1,1,'idle')").run();
-    store.assignNew('task', owner, 'local_create');
-  });
-  store.beginRun('task', 'first-run'); store.updateRun('task', 'running'); store.updateRun('task', 'succeeded');
-  const baseline = store.snapshot('task');
-  const sessionId = store.sync('task')!.session_id;
-  store.bindRemote('task', sessionId, 'desktop');
-  store.acknowledge('task', 'desktop', sessionId, baseline.baseSourceSeq, '1', true, baseline.snapshotEpoch);
-  const server: ServerState = { control: 3n, runId: 'first-run', source: Number(baseline.baseSourceSeq), seq: 1, messages: new Set() };
+  const server: ServerState = { control: 3n, runId: 'first-run', source: 0, seq: 1, messages: new Set() };
   let loggedIn: RemoteOwner = owner;
   let importRequest: any;
   const options: { requestError?: Error; commitError?: Error; onRequest?: () => void; onCommit?: () => void } = {};
@@ -101,6 +91,20 @@ function fixture() {
     metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
     prepare: vi.fn(), execute: vi.fn(), onAccountChange: vi.fn() });
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' }; bridge.generation = '1'; bridge.sameAccountAccess = true;
+  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  bridge.targetId = target.targetId;
+  store.setProjectionIdentity(target.targetId, owner, 'desktop');
+  store.setEnabledOwner(owner);
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES ('task','Conversation',1,1,'idle')").run();
+    store.assignNew('task', owner, 'local_create');
+  });
+  store.beginRun('task', 'first-run'); store.updateRun('task', 'running'); store.updateRun('task', 'succeeded');
+  const baseline = store.snapshot('task');
+  const sessionId = store.sync('task')!.session_id;
+  store.bindRemote('task', sessionId, 'desktop');
+  store.acknowledge('task', 'desktop', sessionId, baseline.baseSourceSeq, '1', true, baseline.snapshotEpoch);
+  server.source = Number(baseline.baseSourceSeq);
   store.setWake(() => {});
   fixtures.push({ store, bridge });
   return { store, bridge, server, request, options, imports, changeOwner: () => { loggedIn = { ...owner, userId: 'other' }; } };

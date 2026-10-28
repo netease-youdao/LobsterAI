@@ -1,0 +1,452 @@
+diff --git a/src/agents/workspace-state-store.test.ts b/src/agents/workspace-state-store.test.ts
+index d18fc5cc2a2..fdab100e346 100644
+--- a/src/agents/workspace-state-store.test.ts
++++ b/src/agents/workspace-state-store.test.ts
+@@ -517,3 +517,136 @@ describe("workspace state store", () => {
+     expect(readWorkspaceStateSnapshot(dir).setupExists).toBe(true);
+   });
+ });
++
++describe("workspace state store under a LobsterAI managed root", () => {
++  const managedRootEnv = "LOBSTERAI_MANAGED_WORKSPACE_ROOT";
++  const linkType = process.platform === "win32" ? "junction" : "dir";
++
++  beforeEach(() => {
++    process.env[managedRootEnv] = testState!.path("managed");
++  });
++
++  afterEach(() => {
++    delete process.env[managedRootEnv];
++  });
++
++  function managedWorkspace(): string {
++    const dir = testState!.path("managed", "workspace-main");
++    fs.mkdirSync(dir, { recursive: true });
++    return dir;
++  }
++
++  function syncedWorkspace(): string {
++    const dir = testState!.path("synced", "workspace");
++    fs.mkdirSync(dir, { recursive: true });
++    return dir;
++  }
++
++  // Mirrors a user replacing the managed folder with a link to a synced copy.
++  function relink(managed: string, target: string): void {
++    fs.renameSync(managed, testState!.path("managed", "workspace-main.template"));
++    fs.symlinkSync(target, managed, linkType);
++  }
++
++  function storedAliasTarget(aliasPath: string): string | undefined {
++    const row = openOpenClawStateDatabase()
++      .db.prepare("SELECT workspace_path FROM workspace_path_aliases WHERE alias_path = ?")
++      .get(aliasPath) as { workspace_path: string } | undefined;
++    return row?.workspace_path;
++  }
++
++  it("follows a relinked managed workspace to its current target", () => {
++    const managed = managedWorkspace();
++    const synced = syncedWorkspace();
++    const original = resolveWorkspaceStateIdentity(managed);
++    mergeWorkspaceSetupState(managed, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
++    relink(managed, synced);
++
++    const snapshot = readWorkspaceStateSnapshot(managed);
++    expect(snapshot.identity).toStrictEqual(resolveWorkspaceStateIdentity(synced));
++    expect(snapshot.setupExists).toBe(false);
++
++    mergeWorkspaceSetupState(managed, { setupCompletedAt: "2026-07-16T02:00:00.000Z" }, 2_000);
++    expect(storedAliasTarget(managed)).toBe(resolveWorkspaceStateIdentity(synced).workspacePath);
++    expect(readWorkspaceStateSnapshot(managed).setup.setupCompletedAt).toBe(
++      "2026-07-16T02:00:00.000Z",
++    );
++    const previousRecord = openOpenClawStateDatabase()
++      .db.prepare("SELECT bootstrap_seeded_at FROM workspace_setup_state WHERE workspace_key = ?")
++      .get(original.workspaceKey);
++    expect(previousRecord).toMatchObject({ bootstrap_seeded_at: "2026-07-16T01:00:00.000Z" });
++  });
++
++  it("uses the current target's own records after a relink", () => {
++    const managed = managedWorkspace();
++    const synced = syncedWorkspace();
++    mergeWorkspaceSetupState(managed, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
++    mergeWorkspaceSetupState(synced, { setupCompletedAt: "2026-07-16T02:00:00.000Z" }, 2_000);
++    relink(managed, synced);
++
++    expect(readWorkspaceStateSnapshot(managed).setup).toStrictEqual({
++      version: 1,
++      setupCompletedAt: "2026-07-16T02:00:00.000Z",
++    });
++    expect(storedAliasTarget(managed)).toBe(resolveWorkspaceStateIdentity(synced).workspacePath);
++  });
++
++  it("accepts an attestation refresh after a relink", () => {
++    const managed = managedWorkspace();
++    const synced = syncedWorkspace();
++    replaceWorkspaceAttestation({
++      workspaceDir: managed,
++      attestedAtMs: 1_000,
++      generatedHashes: new Map(),
++      nowMs: 1_000,
++    });
++    relink(managed, synced);
++
++    replaceWorkspaceAttestation({
++      workspaceDir: managed,
++      attestedAtMs: 2_000,
++      generatedHashes: new Map(),
++      nowMs: 2_000,
++    });
++    expect(readWorkspaceStateSnapshot(managed).attestation?.attestedAtMs).toBe(2_000);
++    expect(storedAliasTarget(managed)).toBe(resolveWorkspaceStateIdentity(synced).workspacePath);
++  });
++
++  it("keeps the stored owner while a managed path is missing", () => {
++    const managed = managedWorkspace();
++    const synced = syncedWorkspace();
++    fs.rmSync(managed, { recursive: true });
++    fs.symlinkSync(synced, managed, linkType);
++    mergeWorkspaceSetupState(managed, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
++    fs.unlinkSync(managed);
++
++    expect(readWorkspaceStateSnapshot(managed).identity).toStrictEqual(
++      resolveWorkspaceStateIdentity(synced),
++    );
++    expect(clearExpiredWorkspaceStateForVanishedWorkspace(managed, 2_000)).toBe(false);
++  });
++
++  it("still fails closed for a relinked workspace outside the managed root", () => {
++    process.env[managedRootEnv] = testState!.path("other-root");
++    const managed = managedWorkspace();
++    const synced = syncedWorkspace();
++    mergeWorkspaceSetupState(managed, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
++    relink(managed, synced);
++
++    expect(() => readWorkspaceStateSnapshot(managed)).toThrow(/different current target/u);
++    expect(() =>
++      mergeWorkspaceSetupState(managed, { setupCompletedAt: "2026-07-16T02:00:00.000Z" }, 2_000),
++    ).toThrow(/different current target/u);
++  });
++
++  it("does not treat the managed root itself as a managed workspace", () => {
++    const root = testState!.path("managed");
++    const synced = syncedWorkspace();
++    fs.mkdirSync(root, { recursive: true });
++    mergeWorkspaceSetupState(root, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
++    fs.renameSync(root, testState!.path("managed.template"));
++    fs.symlinkSync(synced, root, linkType);
++
++    expect(() => readWorkspaceStateSnapshot(root)).toThrow(/different current target/u);
++  });
++});
+diff --git a/src/agents/workspace-state-store.ts b/src/agents/workspace-state-store.ts
+index c62b4dba009..abd391df279 100644
+--- a/src/agents/workspace-state-store.ts
++++ b/src/agents/workspace-state-store.ts
+@@ -6,6 +6,7 @@ import {
+   getNodeSqliteKysely,
+ } from "../infra/kysely-sync.js";
+ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
++import { createSubsystemLogger } from "../logging/subsystem.js";
+ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+ import {
+@@ -35,6 +36,28 @@ const SAFE_ATTESTATION_BASENAME = /^[A-Za-z0-9._-]+\.md$/u;
+ // Win32 keeps these stems special even with an extension, so `NUL.md` names a
+ // device rather than a workspace file; the charset above cannot catch them.
+ const WINDOWS_RESERVED_DEVICE_STEMS = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/iu;
++// LobsterAI owns every workspace below this root. A configured path there that
++// now resolves elsewhere was relinked on purpose (for example to a synced
++// folder), so its current target owns the state instead of failing closed.
++const MANAGED_WORKSPACE_ROOT_ENV = "LOBSTERAI_MANAGED_WORKSPACE_ROOT";
++const workspaceStateLogger = createSubsystemLogger("workspace");
++
++function followsCurrentWorkspaceTarget(workspaceDir: string): boolean {
++  const root = process.env[MANAGED_WORKSPACE_ROOT_ENV]?.trim();
++  if (!root) {
++    return false;
++  }
++  const relative = path.relative(
++    path.resolve(resolveUserPath(root)),
++    path.resolve(resolveUserPath(workspaceDir)),
++  );
++  return (
++    relative !== "" &&
++    relative !== ".." &&
++    !relative.startsWith(`..${path.sep}`) &&
++    !path.isAbsolute(relative)
++  );
++}
+ 
+ export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
+   return (
+@@ -111,6 +134,8 @@ type WorkspaceIdentityResolution = {
+   identity: WorkspaceStateIdentity;
+   aliases: WorkspaceStateIdentity[];
+   missingAliasKeys: string[];
++  staleAliasKeys: string[];
++  followCurrentTarget: boolean;
+ };
+ 
+ function resolveWorkspaceIdentityFromDatabase(params: {
+@@ -132,6 +157,10 @@ function resolveWorkspaceIdentityFromDatabase(params: {
+       ),
+   ).rows;
+   const aliasesByKey = new Map(aliases.map((alias) => [alias.workspaceKey, alias]));
++  const followCurrentTarget = followsCurrentWorkspaceTarget(params.workspaceDir);
++  // A vanished path keeps its stored owner so reseeding protection still applies.
++  const followExistingTarget = followCurrentTarget && workspacePathEntryExists(params.workspaceDir);
++  const staleAliasKeys: string[] = [];
+   let storedIdentity: WorkspaceStateIdentity | undefined;
+   for (const row of rows) {
+     const alias = aliasesByKey.get(row.alias_key);
+@@ -142,6 +171,10 @@ function resolveWorkspaceIdentityFromDatabase(params: {
+     if (rowIdentity.workspaceKey !== row.workspace_key) {
+       throw new Error("workspace path alias target is invalid");
+     }
++    if (followExistingTarget && rowIdentity.workspaceKey !== canonicalIdentity.workspaceKey) {
++      staleAliasKeys.push(row.alias_key);
++      continue;
++    }
+     if (storedIdentity && storedIdentity.workspaceKey !== rowIdentity.workspaceKey) {
+       throw new Error("workspace path aliases resolve to conflicting state");
+     }
+@@ -161,6 +194,8 @@ function resolveWorkspaceIdentityFromDatabase(params: {
+     missingAliasKeys: aliases
+       .map((alias) => alias.workspaceKey)
+       .filter((aliasKey) => !existingAliasKeys.has(aliasKey)),
++    staleAliasKeys,
++    followCurrentTarget: followExistingTarget,
+   };
+ }
+ 
+@@ -169,6 +204,7 @@ function registerWorkspacePathAliases(params: {
+   identity: WorkspaceStateIdentity;
+   aliases: readonly WorkspaceStateIdentity[];
+   updatedAtMs: number;
++  followCurrentTarget?: boolean;
+ }): void {
+   assertCanonicalIntegerTimestamp(params.updatedAtMs, "path alias update");
+   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
+@@ -182,12 +218,32 @@ function registerWorkspacePathAliases(params: {
+     );
+     if (existing) {
+       if (
+-        existing.alias_path !== alias.workspacePath ||
+-        existing.workspace_key !== params.identity.workspaceKey ||
+-        existing.workspace_path !== params.identity.workspacePath
++        existing.alias_path === alias.workspacePath &&
++        existing.workspace_key === params.identity.workspaceKey &&
++        existing.workspace_path === params.identity.workspacePath
+       ) {
++        continue;
++      }
++      if (!params.followCurrentTarget || existing.alias_path !== alias.workspacePath) {
+         throw new Error("workspace path alias conflicts with canonical state");
+       }
++      // The previous target's own records stay keyed to it; only the link moves.
++      executeSqliteQuerySync(
++        params.database.db,
++        kysely
++          .updateTable("workspace_path_aliases")
++          .set({
++            workspace_key: params.identity.workspaceKey,
++            workspace_path: params.identity.workspacePath,
++            updated_at_ms: params.updatedAtMs,
++          })
++          .where("alias_key", "=", alias.workspaceKey),
++      );
++      workspaceStateLogger.warn("Workspace path alias now follows its current target.", {
++        aliasPath: alias.workspacePath,
++        previousWorkspacePath: existing.workspace_path,
++        currentWorkspacePath: params.identity.workspacePath,
++      });
+       continue;
+     }
+     executeSqliteQuerySync(
+@@ -220,6 +276,10 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
+     identity: params.identity,
+     aliases: [...aliases.values()],
+     updatedAtMs: params.updatedAtMs,
++    followCurrentTarget: params.workspaceDirs.some(
++      (workspaceDir) =>
++        followsCurrentWorkspaceTarget(workspaceDir) && workspacePathEntryExists(workspaceDir),
++    ),
+   });
+ }
+ 
+@@ -329,7 +389,8 @@ export function readWorkspaceStateSnapshot(
+     };
+   });
+   if (
+-    initial.resolution.missingAliasKeys.length === 0 ||
++    (initial.resolution.missingAliasKeys.length === 0 &&
++      initial.resolution.staleAliasKeys.length === 0) ||
+     options.readOnly ||
+     (!initial.snapshot.setupExists && !initial.snapshot.attestation)
+   ) {
+@@ -338,30 +399,32 @@ export function readWorkspaceStateSnapshot(
+   // Register a newly observed configured spelling once state proves the target
+   // identity. Later disappearance must still find the same safety evidence.
+   return runOpenClawStateWriteTransaction((writeDatabase) => {
++    // A followed link can move again before the write lock; resolve under it.
++    const resolution = initial.resolution.followCurrentTarget
++      ? resolveWorkspaceIdentityFromDatabase({ workspaceDir, database: writeDatabase })
++      : initial.resolution;
+     const currentAliases = resolveWorkspaceStateAliases(workspaceDir);
+     const currentCanonicalIdentity = currentAliases.at(-1)!;
+     if (
+       workspacePathEntryExists(workspaceDir) &&
+-      currentCanonicalIdentity.workspaceKey !== initial.resolution.identity.workspaceKey
++      currentCanonicalIdentity.workspaceKey !== resolution.identity.workspaceKey
+     ) {
+       throw new Error("workspace path alias points to a different current target");
+     }
+     const snapshot = readSnapshotFromDatabase({
+-      identity: initial.resolution.identity,
++      identity: resolution.identity,
+       database: writeDatabase,
+     });
+     if (snapshot.setupExists || snapshot.attestation) {
+       const aliases = new Map(
+-        [...initial.resolution.aliases, ...currentAliases].map((alias) => [
+-          alias.workspaceKey,
+-          alias,
+-        ]),
++        [...resolution.aliases, ...currentAliases].map((alias) => [alias.workspaceKey, alias]),
+       );
+       registerWorkspacePathAliases({
+         database: writeDatabase,
+-        identity: initial.resolution.identity,
++        identity: resolution.identity,
+         aliases: [...aliases.values()],
+         updatedAtMs: Date.now(),
++        followCurrentTarget: resolution.followCurrentTarget,
+       });
+     }
+     return snapshot;
+@@ -419,6 +482,7 @@ export function mergeWorkspaceSetupState(
+       database,
+       identity,
+       aliases: resolution.aliases,
++      followCurrentTarget: resolution.followCurrentTarget,
+       updatedAtMs: nowMs,
+     });
+     return merged;
+@@ -463,6 +527,7 @@ export function replaceWorkspaceAttestation(params: {
+         database,
+         identity,
+         aliases: resolution.aliases,
++        followCurrentTarget: resolution.followCurrentTarget,
+         updatedAtMs,
+       });
+       return snapshot.attestation;
+@@ -509,6 +574,7 @@ export function replaceWorkspaceAttestation(params: {
+       database,
+       identity,
+       aliases: resolution.aliases,
++      followCurrentTarget: resolution.followCurrentTarget,
+       updatedAtMs,
+     });
+     return {
+@@ -592,6 +658,7 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
+         database,
+         identity,
+         aliases: resolution.aliases,
++        followCurrentTarget: resolution.followCurrentTarget,
+         updatedAtMs: nowMs,
+       });
+       return false;
+diff --git a/src/agents/workspace.managed-relink.test.ts b/src/agents/workspace.managed-relink.test.ts
+new file mode 100644
+index 00000000000..6377926712c
+--- /dev/null
++++ b/src/agents/workspace.managed-relink.test.ts
+@@ -0,0 +1,87 @@
++// A LobsterAI-managed workspace replaced by a link to a synced folder must keep
++// serving messages instead of failing closed on the stale path alias.
++import fs from "node:fs/promises";
++import path from "node:path";
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import {
++  createOpenClawTestState,
++  type OpenClawTestState,
++} from "../test-utils/openclaw-test-state.js";
++import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
++import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
++import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
++import {
++  DEFAULT_AGENTS_FILENAME,
++  DEFAULT_BOOTSTRAP_FILENAME,
++  DEFAULT_IDENTITY_FILENAME,
++  DEFAULT_SOUL_FILENAME,
++  DEFAULT_USER_FILENAME,
++  ensureAgentWorkspace,
++} from "./workspace.js";
++
++const MANAGED_ROOT_ENV = "LOBSTERAI_MANAGED_WORKSPACE_ROOT";
++
++let testState: OpenClawTestState | undefined;
++
++beforeEach(async () => {
++  resetLegacyWorkspaceStateCheckForTest();
++  testState = await createOpenClawTestState({
++    layout: "state-only",
++    prefix: "openclaw-workspace-managed-relink-",
++  });
++});
++
++afterEach(async () => {
++  delete process.env[MANAGED_ROOT_ENV];
++  closeOpenClawStateDatabaseForTest();
++  resetLegacyWorkspaceStateCheckForTest();
++  await testState?.cleanup();
++  testState = undefined;
++});
++
++async function createSyncedWorkspace(): Promise<string> {
++  const dir = testState!.path("onedrive", "workspace");
++  await fs.mkdir(path.join(dir, "memory"), { recursive: true });
++  await fs.writeFile(path.join(dir, DEFAULT_AGENTS_FILENAME), "# Synced agent rules\n");
++  await fs.writeFile(path.join(dir, DEFAULT_SOUL_FILENAME), "# Synced soul\n");
++  await fs.writeFile(path.join(dir, DEFAULT_IDENTITY_FILENAME), "- Name: Synced Assistant\n");
++  await fs.writeFile(path.join(dir, DEFAULT_USER_FILENAME), "- Name: Synced User\n");
++  await fs.writeFile(path.join(dir, "memory", "2026-10-17.md"), "Moved to a new machine.\n");
++  return dir;
++}
++
++async function seedAndRelinkManagedWorkspace(): Promise<{ managed: string; synced: string }> {
++  const managed = testState!.path("lobsterai-state", "workspace-main");
++  await ensureAgentWorkspace({ dir: managed, ensureBootstrapFiles: true });
++  const synced = await createSyncedWorkspace();
++  await fs.rename(managed, `${managed}.template`);
++  await fs.symlink(synced, managed, process.platform === "win32" ? "junction" : "dir");
++  return { managed, synced };
++}
++
++describe("managed workspace relinked to a synced folder", () => {
++  it("serves the synced workspace without reseeding bootstrap", async () => {
++    process.env[MANAGED_ROOT_ENV] = testState!.path("lobsterai-state");
++    const { managed, synced } = await seedAndRelinkManagedWorkspace();
++
++    const result = await ensureAgentWorkspace({ dir: managed, ensureBootstrapFiles: true });
++
++    expect(result.bootstrapPending).toBe(false);
++    await expect(fs.access(path.join(synced, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toThrow();
++    const snapshot = readWorkspaceStateSnapshot(managed);
++    expect(snapshot.identity).toStrictEqual(resolveWorkspaceStateIdentity(synced));
++    expect(snapshot.setup.setupCompletedAt).toEqual(expect.any(String));
++    await expect(
++      fs.readFile(path.join(synced, DEFAULT_IDENTITY_FILENAME), "utf8"),
++    ).resolves.toBe("- Name: Synced Assistant\n");
++  });
++
++  it("keeps failing closed when LobsterAI has not claimed the workspace root", async () => {
++    const { managed } = await seedAndRelinkManagedWorkspace();
++
++    await expect(ensureAgentWorkspace({ dir: managed, ensureBootstrapFiles: true })).rejects.toThrow(
++      /different current target/u,
++    );
++  });
++});

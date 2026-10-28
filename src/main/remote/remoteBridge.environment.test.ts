@@ -378,7 +378,9 @@ describe('remote synchronization follows the effective service', () => {
     expect(activate).toHaveBeenCalledOnce();
     expect(f.request.mock.calls.filter(([, path]) => path.endsWith('/devices/register'))).toHaveLength(1);
   });
-  it('retries deferred admission only after explicit reconnect and preserves its original ACK', async () => {
+  it('resumes bounded admission after reconnect and preserves its original ACK', async () => {
+    let now = Date.now(); const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    disposables.push(() => clock.mockRestore());
     const f = fixture(); f.seed();
     const candidate = remoteSyncTargetId(targetA, owner);
     const activate = vi.spyOn(f.bridge.targets, 'activate').mockImplementationOnce(() => { throw new RemoteSyncAdmissionBudgetError(candidate); });
@@ -386,6 +388,10 @@ describe('remote synchronization follows the effective service', () => {
     expect(f.bridge.state().syncHealth.admissionDeferred).toBe(true);
     await f.bridge.configure({ retry: true }); await f.bridge.ensureRegistration();
     expect(activate).toHaveBeenCalledTimes(2);
+    // Archiving and validation commit one bounded page per turn, including after reconnect.
+    for (let page = 0; page < 50 && f.bridge.admissionDeferred; page++) {
+      now += 100; await f.bridge.resumeAdmission();
+    }
     expect(f.bridge.registration.deviceId).toBe('desktop');
     expect(f.bridge.state().syncHealth.admissionDeferred).toBe(false);
     expect(f.bridge.targets.active(owner)?.targetId).toBe(candidate);

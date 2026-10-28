@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 
+import { CompanionTaskFailureStage } from '../../../shared/desktopCompanion/analytics';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 import { submitCompanionFollowUp } from './companionFollowUp';
 
@@ -58,6 +59,18 @@ describe('companion task follow-up', () => {
     expect(await submitCompanionFollowUp(api, 'task', '继续', onContinuing)).toEqual({ success: false, error: 'stop failed' });
     expect(api.continueSession).not.toHaveBeenCalled();
     expect(onContinuing).not.toHaveBeenCalled();
+  });
+
+  test('identifies which follow-up step threw without losing the original error', async () => {
+    const api = client(CoworkSessionStatusValue.Running);
+    const error = new Error('IPC disconnected');
+    const onStage = vi.fn();
+    api.stopSession.mockRejectedValue(error);
+    await expect(submitCompanionFollowUp(api, 'task', 'continue', undefined, onStage)).rejects.toBe(error);
+    expect(onStage.mock.calls.map(([stage]) => stage)).toEqual([
+      CompanionTaskFailureStage.SessionLookup, CompanionTaskFailureStage.SessionStop,
+    ]);
+    expect(api.continueSession).not.toHaveBeenCalled();
   });
 
   test('returns continuation failures without resubmitting', async () => {

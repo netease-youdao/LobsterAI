@@ -125,24 +125,25 @@ export const hasRuntimeBundledOpenClawExtension = (extensionId: string): boolean
 };
 
 /**
- * Copy only files whose bytes differ. OpenClaw folds each plugin manifest's
- * size, mtime and ctime into the fingerprint of its startup-migration
- * checkpoint, so rewriting identical files would rerun its migrations on every
- * dev launch.
+ * Copy only files whose bytes differ and return their relative paths. OpenClaw
+ * folds each plugin manifest's size, mtime and ctime into the fingerprint of
+ * its startup-migration checkpoint, so rewriting identical files would rerun
+ * its migrations on every dev launch.
  */
-const copyChangedFiles = (sourceDir: string, targetDir: string): boolean => {
-  let changed = false;
+const copyChangedFiles = (sourceDir: string, targetDir: string, relativeDir = ''): string[] => {
+  const changed: string[] = [];
   fs.mkdirSync(targetDir, { recursive: true });
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
     const source = path.join(sourceDir, entry.name);
     const target = path.join(targetDir, entry.name);
+    const relativePath = path.join(relativeDir, entry.name);
     if (entry.isDirectory()) {
-      changed = copyChangedFiles(source, target) || changed;
+      changed.push(...copyChangedFiles(source, target, relativePath));
       continue;
     }
     if (!entry.isFile()) {
       fs.cpSync(source, target, { recursive: true, force: true });
-      changed = true;
+      changed.push(relativePath);
       continue;
     }
     let current: Buffer | null = null;
@@ -153,10 +154,34 @@ const copyChangedFiles = (sourceDir: string, targetDir: string): boolean => {
     }
     if (!current || !current.equals(fs.readFileSync(source))) {
       fs.copyFileSync(source, target);
-      changed = true;
+      changed.push(relativePath);
     }
   }
   return changed;
+};
+
+const TYPESCRIPT_SOURCE_RE = /(?<!\.d)\.tsx?$/;
+
+/**
+ * `openclaw:precompile` bundles each extension into a .js file next to its
+ * TypeScript entry, and OpenClaw prefers that file. After a source change the
+ * bundle is stale; remove it so OpenClaw loads the synced sources instead.
+ */
+const removeStalePrecompiledEntries = (sourceDir: string, targetDir: string, relativeDir = ''): string[] => {
+  const removed: string[] = [];
+  for (const entry of fs.readdirSync(path.join(sourceDir, relativeDir), { withFileTypes: true })) {
+    const relativePath = path.join(relativeDir, entry.name);
+    if (entry.isDirectory()) {
+      removed.push(...removeStalePrecompiledEntries(sourceDir, targetDir, relativePath));
+      continue;
+    }
+    if (!entry.isFile() || !TYPESCRIPT_SOURCE_RE.test(entry.name)) continue;
+    const bundle = relativePath.replace(TYPESCRIPT_SOURCE_RE, '.js');
+    if (fs.existsSync(path.join(sourceDir, bundle)) || !fs.existsSync(path.join(targetDir, bundle))) continue;
+    fs.rmSync(path.join(targetDir, bundle), { force: true });
+    removed.push(bundle);
+  }
+  return removed;
 };
 
 export const syncLocalOpenClawExtensionsIntoRuntime = (
@@ -181,8 +206,19 @@ export const syncLocalOpenClawExtensionsIntoRuntime = (
     if (!entry.isDirectory()) {
       continue;
     }
-    if (copyChangedFiles(path.join(sourceDir, entry.name), path.join(targetExtensionsDir, entry.name))) {
-      copied.push(entry.name);
+    const extensionSourceDir = path.join(sourceDir, entry.name);
+    const extensionTargetDir = path.join(targetExtensionsDir, entry.name);
+    const changedFiles = copyChangedFiles(extensionSourceDir, extensionTargetDir);
+    if (changedFiles.length === 0) {
+      continue;
+    }
+    copied.push(entry.name);
+    // package.json alone differs after every precompile run; only code changes stale the bundle.
+    if (changedFiles.some(file => TYPESCRIPT_SOURCE_RE.test(file))) {
+      const removed = removeStalePrecompiledEntries(extensionSourceDir, extensionTargetDir);
+      if (removed.length > 0) {
+        console.log(`[OpenClaw] removed stale precompiled ${entry.name} entries: ${removed.join(', ')}`);
+      }
     }
   }
 

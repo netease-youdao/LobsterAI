@@ -6,12 +6,12 @@ import {
   LOBSTERAI_CLIENT_VERSION_HEADER,
 } from '../../shared/providers/modelRuntimeProfiles';
 
-const { updateServerModelMetadata } = vi.hoisted(() => ({
-  updateServerModelMetadata: vi.fn(),
+const { updateServerModelMetadataFromResponse } = vi.hoisted(() => ({
+  updateServerModelMetadataFromResponse: vi.fn(),
 }));
 
 vi.mock('./claudeSettings', () => ({
-  updateServerModelMetadata,
+  updateServerModelMetadataFromResponse,
 }));
 
 import {
@@ -20,7 +20,7 @@ import {
 } from './startupCacheWarmup';
 
 beforeEach(() => {
-  updateServerModelMetadata.mockReset();
+  updateServerModelMetadataFromResponse.mockReset();
 });
 
 describe('startup server model warmup', () => {
@@ -70,7 +70,7 @@ describe('startup server model warmup', () => {
       t: key => key,
     });
 
-    expect(updateServerModelMetadata).toHaveBeenCalledWith(serverModels);
+    expect(updateServerModelMetadataFromResponse).toHaveBeenCalledWith(serverModels);
     expect(fetchWithAuth).toHaveBeenCalledWith(
       'https://lobster.test/api/models/available',
       expect.objectContaining({

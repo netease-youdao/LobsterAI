@@ -97,6 +97,46 @@ export const applyLocalTimestampsToEntries = (
 };
 
 /**
+ * Turn usage (credits and the selected model preset) exists only in local
+ * metadata; gateway history cannot restore it.
+ */
+const LOCAL_TURN_USAGE_METADATA_KEYS = [
+  'llmTrace', 'turnUsage', 'turnMediaTaskIds', 'modelPresetId', 'resolvedModelId',
+] as const;
+
+/**
+ * Carries the turn usage of local user messages over to the entries that
+ * replace them, matched in order by text in the same way as timestamps.
+ */
+export const applyLocalTurnUsageToEntries = (
+  entries: ReconciledConversationEntry[],
+  localEntries: ReadonlyArray<{ role: 'user' | 'assistant'; text: string; metadata?: Record<string, unknown> }>,
+): ReconciledConversationEntry[] => {
+  const localUsage = new Map<string, Array<Record<string, unknown>>>();
+  for (const entry of localEntries) {
+    if (entry.role !== 'user') continue;
+    const usage = Object.fromEntries(
+      LOCAL_TURN_USAGE_METADATA_KEYS
+        .filter(key => entry.metadata?.[key] !== undefined)
+        .map(key => [key, entry.metadata?.[key]]),
+    );
+    const key = historyEntryKey(entry);
+    const queue = localUsage.get(key) ?? [];
+    queue.push(usage);
+    localUsage.set(key, queue);
+  }
+
+  return entries.map((entry) => {
+    if (entry.role !== 'user') return entry;
+    const usage = localUsage.get(historyEntryKey(entry))?.shift();
+    // A preserved local entry already has its own, consistent usage.
+    const hasUsage = LOCAL_TURN_USAGE_METADATA_KEYS.some(key => entry.metadata?.[key] !== undefined);
+    if (!usage || Object.keys(usage).length === 0 || hasUsage) return entry;
+    return { ...entry, metadata: { ...(entry.metadata ?? {}), ...usage } };
+  });
+};
+
+/**
  * Find the tail-alignment point between local and authoritative entries.
  *
  * `chat.history` can return a bounded tail window that starts in the middle of

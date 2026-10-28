@@ -27,7 +27,7 @@ import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
 import { RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { RemoteConnectionClient } from './remoteConnectionClient';
 import { remoteDiagnostics } from './remoteDiagnostics';
-import type { RemoteDisplayHealthInput, RemoteDisplayHealthResult } from './remoteDisplayHealth';
+import { type RemoteDisplayHealthInput, type RemoteDisplayHealthResult, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { RemoteDisplaySnapshot } from './remoteDisplaySnapshot';
 import { RemoteFileSync, type RemoteFileSyncDependencies } from './remoteFileSync';
 import { RemoteHistoryJob } from './remoteHistoryJob';
@@ -249,6 +249,9 @@ export class RemoteBridge {
     this.accountRoute = deps.getApiBaseUrl();
     this.accountRouteEpoch = deps.getRouteEpoch?.() ?? 0;
     this.displaySnapshot = new RemoteDisplaySnapshot({
+      retainUntilInvalidated: value => this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled
+        && value.status === RemoteDisplayHealthStatus.Known && value.settings?.enabled === false
+        && !value.pendingSettings && !value.pendingName,
       produce: async (key, signal) => {
         const input = this.displayInput();
         if (!input || key !== this.displayKey() || signal.aborted || input.database === ':memory:') return null;
@@ -410,7 +413,6 @@ export class RemoteBridge {
       if (this.stopped || !this.owner || !sameOwner(this.owner, this.displayOwner()) || this.accountRoute !== this.deps.getApiBaseUrl()
         || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return null;
     } catch { return null; }
-    if (this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled) return null;
     return JSON.stringify([this.accountGeneration, this.accountRoute, this.owner, this.targetId, this.registration?.deviceId,
       this.remoteEnvironment(), this.syncPaused(), this.deps.store.needsSecurityRecovery(),
       this.displaySettings?.key === this.displaySettingsKey() ? this.displaySettings.value.enabled : null,
@@ -485,7 +487,8 @@ export class RemoteBridge {
   /** Task detail reads only the current readonly-worker snapshot; it never runs sessionHealth or grants admission. */
   associationTaskSync(target: OwnershipTarget): OwnershipTaskSync {
     if (target.kind !== OwnershipTargetKind.Task || typeof target.id !== 'string' || !target.id || target.id.length > 256) return unknownOwnershipContentSync();
-    const key = this.displayKey(), snapshot = this.contentSnapshot.read(key, target.id);
+    const disabled = this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled;
+    const key = disabled ? null : this.displayKey(), snapshot = this.contentSnapshot.read(key, target.id);
     if (!key || !snapshot || !Number.isSafeInteger(snapshot.observedAt) || Date.now() - snapshot.observedAt > 15000 || snapshot.observedAt > Date.now()) return unknownOwnershipContentSync();
     return { syncState: snapshot.syncState, contentSync: { ...snapshot.contentSync,
       retryable: snapshot.contentSync.retryable && !!this.generation && !this.syncPaused() && !this.connectionRemoved && !this.quotaBlocked } };
@@ -701,6 +704,7 @@ export class RemoteBridge {
     if (pending.length && stableJson({ createSessionAvailable: pending.at(-1)!.createSessionAvailable !== false, enabled: pending.at(-1)!.enabled, workspaces: pending.at(-1)!.workspaces }) === stableJson(value)) return;
     pending.push({ id: randomUUID(), ...value });
     this.deps.store.put(this.controlKey(), pending);
+    this.displaySnapshot.invalidate();
   }
   private async ensureDefaultWorkspace(): Promise<void> {
     if (!this.deps.getDefaultWorkspace) return;
@@ -719,6 +723,7 @@ export class RemoteBridge {
         if (couldCreate) {
           settings.createSessionAvailable = false;
           this.deps.store.transaction(() => { this.deps.store.put(this.settingsKey(), settings); this.queueControl(settings); });
+          this.settings();
         }
         return;
       }
@@ -733,9 +738,10 @@ export class RemoteBridge {
     this.workspaceUnavailable = !workspace.available;
     workspace.name = directory.name;
     settings.workspaces = [workspace, ...settings.workspaces.filter(w => w !== workspace)];
-    if (!couldCreate || stableJson(settings.workspaces) !== previous) this.deps.store.transaction(() => {
-      this.deps.store.put(this.settingsKey(), settings); this.queueControl(settings);
-    });
+    if (!couldCreate || stableJson(settings.workspaces) !== previous) {
+      this.deps.store.transaction(() => { this.deps.store.put(this.settingsKey(), settings); this.queueControl(settings); });
+      this.settings();
+    }
   }
   private schedule(delay: number): void {
     if (this.stopped) return;

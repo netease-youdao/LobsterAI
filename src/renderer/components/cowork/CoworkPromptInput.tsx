@@ -44,6 +44,7 @@ import {
   type CoworkPendingSteer,
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
+import { hasImageEditModel } from '../../../shared/imageEditing/availability';
 import { isChatPresetSession } from '../../../shared/modelPresets/constants';
 import { agentService } from '../../services/agent';
 import { authService } from '../../services/auth';
@@ -58,6 +59,7 @@ import {
 import { getPortalPricingUrl } from '../../services/endpoints';
 import { switchExpertInDraft } from '../../services/expertOnboarding';
 import { i18nService } from '../../services/i18n';
+import { imageEditUserPrompt } from '../../services/imageEditingPrompt';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
 import {
   LogReporterAction,
@@ -113,6 +115,8 @@ import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getCompactFolderName } from '../../utils/path';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
+import { ImageEditDraftCard } from '../artifacts/imageEditor/ImageEditDraftCard';
+import { useImageEditSubmission } from '../artifacts/imageEditor/useImageEditSubmission';
 import {
   ACTIVE_CONTEXT_BADGE_BUTTON_CLASS,
   ACTIVE_CONTEXT_BADGE_ICON_CLASS,
@@ -1454,6 +1458,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   ]);
 
   const handleSubmit = useCallback(async (submitMethod: 'button' | 'keyboard' | 'voice' = 'button') => {
+    if (attachments.some(attachment => attachment.imageEdit) && !hasImageEditModel(queuedMediaSelection)) {
+      showToast(i18nService.t('imageEditSelectModel'));
+      return;
+    }
     let effectiveSubmitMethod = submitMethod;
     if (submitDisabled) {
       reportPromptControl('submit_blocked', {
@@ -1542,7 +1550,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         return;
       }
 
-      const clientSteerId = `steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const clientSteerId = `steer-${crypto.randomUUID()}`;
       console.debug(
         `[CoworkSteer] submitting steer from prompt input for session ${sessionId}; `
         + `id=${clientSteerId}; chars=${steerText.length}; `
@@ -1628,6 +1636,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         name: attachment.name,
         isImage: attachment.isImage,
         isDirectory: attachment.isDirectory,
+        ...(attachment.imageEdit ? { imageEdit: attachment.imageEdit } : {}),
         ...(attachment.path.startsWith('inline:') && attachment.dataUrl
           ? { dataUrl: attachment.dataUrl }
           : {}),
@@ -1650,7 +1659,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         buildSelectedSkillRoutingPrompt(queuedSkills),
       ].filter(Boolean).join('\n\n') || undefined;
 
-      const queuedSteerId = `steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const queuedSteerId = `steer-${crypto.randomUUID()}`;
       const now = Date.now();
       logCoworkSteer(
         'debug',
@@ -2048,6 +2057,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     inputSourceOverrideRef.current = null;
   }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, narrow, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
   handleSubmitRef.current = handleSubmit;
+  useImageEditSubmission({ sessionId, onSubmit, isStreaming, modelSupportsImage,
+    blocked: disabled || submitDisabled || isPatchingModel || remoteManaged || isVoiceRecording
+      || modelSelectionRefreshPending || !effectiveModelIsAvailable || !isLoggedIn,
+    ownerAccountKey: authOwnerAccountKey, accountGeneration: authAccountGeneration,
+    mediaSelection: queuedMediaSelection, queueLimit: COWORK_STEER_QUEUE_LIMIT });
 
   const handleSelectSkill = useCallback((skill: Skill) => {
     const willSelect = !activeSkillIds.includes(skill.id);
@@ -3008,6 +3022,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         alignDropdownToTriggerEnd={useHomeContextLayout}
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
+        hideCustomProviderName={useLargeToolbarCompactLayout}
         disabled={isPatchingModel || isPersistingAgentModel || modelSelectionRefreshPending}
         thinkingLevel={effectiveThinkingLevel ?? null}
         value={selectedModelUnavailable && unavailableModelRef
@@ -3367,6 +3382,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const attachmentPreviewContent = hasAttachments ? (
     <div className="flex flex-wrap gap-2">
       {attachments.map((attachment) => {
+        if (attachment.imageEdit) return <ImageEditDraftCard key={attachment.path} request={attachment.imageEdit}
+          onRemove={() => handleRemoveAttachment(attachment.path)} />;
         const ml = mediaLabels.find(m => m.attachment.path === attachment.path);
         return (
           <AttachmentCard
@@ -3464,7 +3481,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     options: { external?: boolean; separated?: boolean } = {},
   ) => {
     const isRejected = source === 'rejected';
-    const displayText = steer.text || steer.attachments?.map(attachment => attachment.name).join(', ') || '';
+    const displayText = steer.text || steer.attachments?.map(attachment => attachment.imageEdit ? imageEditUserPrompt(attachment.imageEdit) : attachment.name).join(', ') || '';
     const title = isRejected && steer.error
       ? `${i18nService.t('coworkSteerRejected')}: ${steer.error}`
       : `${i18nService.t('coworkSteerQueued')}: ${displayText}`;

@@ -157,6 +157,7 @@ import OwnershipTaskSyncButton from '../ownership/OwnershipTaskSyncButton';
 import { type ToastEventDetail } from '../Toast';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
+import { type ArtifactTabActionTarget, artifactTabMenuActions } from './artifactTabActions';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import type { BrowserAnnotationAttachmentOpenPayload } from './BrowserAnnotationMessageAttachments';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
@@ -3558,6 +3559,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       && !isBrowserPreviewTabOpen
       && !isAgentBrowserPreviewTabOpen
       && !isSubagentPreviewTabOpen
+      && !isUserAttachmentPreviewTabOpen
     ) {
       dispatch(closePanel({ sessionId }));
     }
@@ -3568,8 +3570,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
     isSubagentPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
     sessionId,
   ]);
+
+  const artifactTabActionTargets: ArtifactTabActionTarget[] = [
+    ...([
+      [ArtifactSpecialTab.FileList, isFileListPreviewTabOpen, handleActivateArtifactFileListTab, handleCloseArtifactFileListTab],
+      [ArtifactSpecialTab.Browser, isBrowserPreviewTabOpen, handleActivateArtifactBrowserTab, handleCloseArtifactBrowserTab],
+      [ArtifactSpecialTab.AgentBrowser, isAgentBrowserPreviewTabOpen, handleActivateArtifactAgentBrowserTab, handleCloseArtifactAgentBrowserTab],
+      [ArtifactSpecialTab.Subagents, isSubagentPreviewTabOpen, handleActivateArtifactSubagentTab, handleCloseArtifactSubagentTab],
+      [ArtifactSpecialTab.UserAttachment, isUserAttachmentPreviewTabOpen, handleActivateArtifactUserAttachmentTab, handleCloseArtifactUserAttachmentTab],
+    ] as const).filter(([, open]) => open).map(([id, , activate, close]) => ({
+      id, active: !activeArtifactPreviewTab && activeSpecialPreviewTab === id, activate, close,
+    })),
+    ...artifactTabsWithArtifacts.map(({ tab }) => ({
+      id: tab.id, active: tab.id === activeArtifactPreviewTab?.id,
+      activate: () => handleActivateArtifactTab(tab.id), close: () => handleCloseArtifactTab(tab.id),
+    })),
+  ];
 
   const handleToggleArtifactPanel = useCallback(() => {
     reportArtifactPreviewAction({
@@ -6223,6 +6242,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactFileListTab}
                       onClose={handleCloseArtifactFileListTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.FileList)}
                     />
                   )}
                   {isBrowserPreviewTabOpen && (
@@ -6233,6 +6253,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactBrowserTab}
                       onClose={handleCloseArtifactBrowserTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.Browser)}
                     />
                   )}
                   {isAgentBrowserPreviewTabOpen && (
@@ -6249,6 +6270,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       ) : undefined}
                       onActivate={handleActivateArtifactAgentBrowserTab}
                       onClose={handleCloseArtifactAgentBrowserTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.AgentBrowser)}
                     />
                   )}
                   {isSubagentPreviewTabOpen && (
@@ -6259,6 +6281,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactSubagentTab}
                       onClose={handleCloseArtifactSubagentTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.Subagents)}
                     />
                   )}
                   {isUserAttachmentPreviewTabOpen && (
@@ -6269,6 +6292,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactUserAttachmentTab}
                       onClose={handleCloseArtifactUserAttachmentTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.UserAttachment)}
                     />
                   )}
                   {artifactTabsWithArtifacts.map(({ tab, artifact }) => {
@@ -6282,6 +6306,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                         closeLabel={i18nService.t('artifactCloseTab')}
                         onActivate={() => handleActivateArtifactTab(tab.id)}
                         onClose={() => handleCloseArtifactTab(tab.id)}
+                        {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
                       />
                     );
                   })}

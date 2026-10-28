@@ -6,15 +6,16 @@ const contexts = new Map<string, {
   headers: Record<string, string>;
   modelPresetId: ModelPresetId | null;
   resolvedModelId: string | null;
+  owner?: string;
 }>();
-let titleReporter: ((sessionId: string) => void) | undefined;
+let titleReporter: ((sessionId: string, title?: string) => void) | undefined;
 
-export function configureUsageTitleReporter(reporter: (sessionId: string) => void): void {
+export function configureUsageTitleReporter(reporter: (sessionId: string, title?: string) => void): void {
   titleReporter = reporter;
 }
 
-export function reportUsageSessionTitle(sessionId: string): void {
-  titleReporter?.(sessionId);
+export function reportUsageSessionTitle(sessionId: string, title?: string): void {
+  titleReporter?.(sessionId, title);
 }
 
 export const LlmUsageHeader = {
@@ -29,7 +30,7 @@ export function registerLlmUsageContext(
   traceId: string,
   sessionId: string,
   userMessage: string,
-  selection?: { modelPresetId?: unknown; resolvedModelId?: unknown },
+  selection?: { modelPresetId?: unknown; resolvedModelId?: unknown; title?: string; owner?: string },
 ): void {
   if (!isValidLlmTraceId(traceId) || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(sessionId)) return;
   contexts.delete(traceId);
@@ -41,16 +42,23 @@ export function registerLlmUsageContext(
     },
     modelPresetId: parseModelPresetId(selection?.modelPresetId),
     resolvedModelId: typeof selection?.resolvedModelId === 'string' ? selection.resolvedModelId.trim() : null,
+    owner: selection?.owner,
   });
   while (contexts.size > MAX_CONTEXTS) contexts.delete(contexts.keys().next().value!);
-  reportUsageSessionTitle(sessionId);
+  reportUsageSessionTitle(sessionId, selection?.title);
+}
+
+/** Whether the client registered this trace for a turn it started. */
+export function hasLlmUsageContext(traceId: string): boolean {
+  return contexts.has(traceId);
 }
 
 /** A proxy-generated request trace has no registered user turn and stays ungrouped. */
-export function getLlmUsageHeaders(traceparent?: string, requestModel?: unknown): Record<string, string> {
+export function getLlmUsageHeaders(traceparent?: string, requestModel?: unknown, owner?: string | null): Record<string, string> {
   const trace = traceparent ? parseLlmTraceparent(traceparent) : null;
   const context = trace ? contexts.get(trace.traceId) : undefined;
   if (!trace || !context) return {};
+  if (context.owner && context.owner !== owner) return {};
   contexts.delete(trace.traceId);
   contexts.set(trace.traceId, context);
   // Only the model resolved for this turn carries the selected mode. Tool models,

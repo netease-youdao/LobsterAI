@@ -14,6 +14,7 @@ import { configureRemoteSettings } from './remote/configureRemoteSettings';
 import { createRemoteDatabaseFence, loadRemoteIdentity, type RemoteIdentity } from './remote/installationIdentity';
 import { type BridgeDependencies, RemoteBridge } from './remote/remoteBridge';
 import { RemoteInitializationError, RemoteInitializationRecovery } from './remote/remoteInitialization';
+import { RemotePerformanceStage, RemotePerformanceTracker } from './remote/remotePerformanceLog';
 import { RemoteRegistrationIdentityStore } from './remote/remoteRegistrationIdentity';
 import { RemoteSettingsController } from './remote/remoteSettingsController';
 import { RemoteStore } from './remote/remoteStore';
@@ -24,6 +25,7 @@ const ast = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true)
 const declarations = new Set([
   'remoteInitializationCleanup', 'buildRemoteBridge', 'initializeRemoteBridgeOnce',
   'remoteInitialization', 'initializeRemoteBridge', 'readRemoteState', 'getRemoteAccountEpoch',
+  'remoteInitializationIntent', 'remoteIntentKey',
 ]);
 const selected: string[] = [];
 const channels = new Set(['RemoteIpc.State', 'RemoteIpc.Configure']);
@@ -113,6 +115,8 @@ function fixture(options: { createIdentity?: boolean; realBridge?: boolean } = {
   const globals = {
     remoteBridge: null as RemoteBridge | null, remoteSettingsController: null as RemoteSettingsController | null,
     ownershipBootId: 'boot', ownershipAccountEpoch: 1, authAccountGeneration: 1,
+    remoteDisplayOwner: owner, getRemoteRouteEpoch: () => 1,
+    remotePerformance: new RemotePerformanceTracker({ enqueue: () => {} }), RemotePerformanceStage,
     getCoworkStore: () => ({ remote: store, agentOwnership: undefined, runSessionTransaction: <T>(operation: () => T) => store.transaction(operation) }),
     getCurrentRemoteOwner: () => owner, loadRemoteIdentity: readIdentity, createRemoteDatabaseFence,
     safeStorage, crypto, fs, path, os: { hostname: () => 'test-host', homedir: () => directory },

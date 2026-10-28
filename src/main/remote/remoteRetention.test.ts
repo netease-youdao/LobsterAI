@@ -40,7 +40,7 @@ function activated(store: RemoteStore) {
 }
 function update(store: RemoteStore, title = 'Changed') { store.transaction(() => store.db.prepare('UPDATE cowork_sessions SET title=? WHERE id=?').run(title, 'local')); }
 function bridgeFixture() {
-  const store = fixture(); create(store);
+  const store = fixture();
   const execute = vi.fn();
   const request = vi.fn();
   const bridge: any = new RemoteBridge({ store, identity: { installationId: 'i', deviceKey: 'secret', databaseId: 'db' },
@@ -50,6 +50,10 @@ function bridgeFixture() {
   });
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
   bridge.generation = '1'; bridge.retentionSupported = true; bridge.fenceCheckedAt = Date.now();
+  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  bridge.targetId = target.targetId;
+  store.setProjectionIdentity(target.targetId, owner, 'desktop');
+  store.setEnabledOwner(owner); create(store);
   store.setWake(() => {}); bridges.push(bridge);
   return { store, bridge, request, execute };
 }

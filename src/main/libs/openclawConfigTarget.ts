@@ -27,17 +27,40 @@ function parseConfig(raw: string): Record<string, unknown> {
   return value;
 }
 
+// Gateway/plugin subtrees include runtime-owned fields and use a three-way merge.
+const SHARED_SECTIONS = new Set(['gateway', 'plugins', 'meta']);
+
+/** Top-level sections a rendered config replaces outright, including removals. */
+export function resolveOpenClawOwnedSections(
+  generated: Record<string, unknown>,
+  ownedSections?: string[],
+): string[] {
+  return ownedSections ?? [...Object.keys(generated), 'bindings', 'mcp', 'channels']
+    .filter(key => !SHARED_SECTIONS.has(key));
+}
+
+export type OpenClawConfigTargetOptions = {
+  /** Content to merge unowned sections from, when it differs from `baseRaw`. */
+  mergeBaseRaw?: string;
+  /** Further top-level sections to own, e.g. ones user overrides set or remove. */
+  extraOwnedSections?: readonly string[];
+};
+
 export function createOpenClawConfigTarget(
   baseRaw: string,
   generatedRaw: string,
   ownedSections?: string[],
+  options: OpenClawConfigTargetOptions = {},
 ): OpenClawConfigTarget {
   const generated = parseConfig(generatedRaw);
-  // Gateway/plugin subtrees include runtime-owned fields and use a three-way merge.
-  const sharedSections = new Set(['gateway', 'plugins', 'meta']);
-  const sections = ownedSections ?? [...Object.keys(generated), 'bindings', 'mcp', 'channels']
-    .filter(key => !sharedSections.has(key));
-  const config = { ...parseConfig(baseRaw), ...generated };
+  const extraSections = (options.extraOwnedSections ?? [])
+    .filter(key => !SHARED_SECTIONS.has(key));
+  const resolvedSections = resolveOpenClawOwnedSections(generated, ownedSections);
+  const sections = extraSections.length > 0
+    ? [...new Set([...resolvedSections, ...extraSections])]
+    : resolvedSections;
+  // `baseRaw` stays the file as read, so a rebase propagates every removal.
+  const config = { ...parseConfig(options.mergeBaseRaw ?? baseRaw), ...generated };
   for (const section of sections) {
     if (!Object.hasOwn(generated, section)) delete config[section];
   }

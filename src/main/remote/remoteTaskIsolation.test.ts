@@ -1,4 +1,7 @@
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
@@ -6,6 +9,7 @@ import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteInputReason } from '../../shared/remote/input';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
+import { collectRemoteDisplayHealth, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { RemoteNetworkError } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
 import { RemoteStore } from './remoteStore';
@@ -15,7 +19,9 @@ const dispose: Array<() => void> = [];
 afterEach(() => { dispose.splice(0).reverse().forEach(fn => fn()); vi.restoreAllMocks(); vi.useRealTimers(); });
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
 function fixture() {
-  const db = new Database(':memory:'); dispose.push(() => db.close());
+  const directory = mkdtempSync(join(tmpdir(), 'remote-task-isolation-'));
+  dispose.push(() => rmSync(directory, { recursive: true, force: true }));
+  const db = new Database(join(directory, 'core.sqlite')); dispose.push(() => db.close());
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const store = new RemoteStore(db);
@@ -32,6 +38,7 @@ function fixture() {
     execute: vi.fn(), prepare: vi.fn(), onAccountChange: vi.fn(),
   });
   dispose.push(() => bridge.stop());
+  vi.spyOn(bridge.displaySnapshot, 'read').mockReturnValue(null);
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
   bridge.generation = '1'; bridge.sameAccountAccess = true;
   store.put(`settings:${owner.userId}:${owner.scopeKey}`, { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
@@ -55,8 +62,15 @@ function fixture() {
       store.project(id);
     });
   };
+  const refreshDisplay = (): void => {
+    // Registration normally opens the lazy control ledger before display sampling.
+    expect(bridge.availability.ledger.db.open).toBe(true);
+    const snapshot = collectRemoteDisplayHealth(bridge.displayInput());
+    expect(snapshot.status).toBe(RemoteDisplayHealthStatus.Known);
+    vi.mocked(bridge.displaySnapshot.read).mockReturnValue(snapshot);
+  };
   const acknowledged = (id: string): boolean => store.sync(id)!.source_seq === store.sync(id)!.ack_seq;
-  return { db, store, bridge, request, add, acknowledged };
+  return { db, store, bridge, request, add, acknowledged, refreshDisplay };
 }
 
 describe('history wake deadlines', () => {
@@ -170,6 +184,7 @@ describe('task synchronization isolation', () => {
       expect(f.bridge.taskSync.get(f.bridge.taskContext(), id)).toMatchObject({ phase: 'ready', failure_count: 0, next_retry_at: now + 500 });
       expect(f.store.get(`syncFailure:${id}`)).toBeNull(); expect(f.acknowledged(id)).toBe(false);
     }
+    f.refreshDisplay();
     expect(f.bridge.state().syncHealth.failedSessions).toBe(0);
     now += 501; f.request.mockImplementation(usual);
     await f.bridge.syncSessions(true);
@@ -214,13 +229,16 @@ describe('task synchronization isolation', () => {
   it('reports a projection-only failure consistently before a network turn and deduplicates its later task ledger', () => {
     const f = fixture(); f.add('a-bad'); f.add('b-good');
     f.store.recordProjectionFailure('a-bad', 'REMOTE_PROJECTION_BUDGET');
+    f.refreshDisplay();
     const before = f.bridge.state();
     expect(before.syncHealth).toMatchObject({ status: 'degraded', failedSessions: 1, isolatedSessions: 1, retryingSessions: 0 });
     expect(before.syncHealth.taskIssues.map((issue: { localSessionId: string }) => issue.localSessionId)).toEqual(['a-bad']);
     expect(before.sessionSyncStatus).toBe('error');
     f.bridge.taskSync.fail(f.bridge.taskContext(), 'a-bad', { phase: 'isolated', scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+    f.refreshDisplay();
     expect(f.bridge.state().syncHealth).toMatchObject({ failedSessions: 1, isolatedSessions: 1 });
     f.bridge.taskSync.fail(f.bridge.taskContext(), 'a-bad', { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' });
+    f.refreshDisplay();
     expect(f.bridge.state().syncHealth).toMatchObject({ failedSessions: 0, taskIssues: [] });
   });
   it('isolates a failed interrupted publication instead of deferring it forever', async () => {
@@ -232,6 +250,7 @@ describe('task synchronization isolation', () => {
     expect(f.acknowledged('b-good')).toBe(true);
     expect(f.store.sync('a-bad')!.ack_seq).toBe(before.ack_seq);
     expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'a-bad').phase).toBe('isolated');
+    f.refreshDisplay();
     expect(f.bridge.state().syncHealth.failedSessions).toBe(1);
   });
   it('does not permanently isolate a task after shared authentication fails and later recovers', async () => {

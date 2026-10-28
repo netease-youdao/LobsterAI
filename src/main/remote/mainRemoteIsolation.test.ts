@@ -8,6 +8,7 @@ import vm from 'vm';
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { CoworkIpcChannel } from '../../shared/cowork/constants';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
+import { OpenClawAccountRecovery } from '../libs/openclawAccountRecovery';
 import { remoteNetworkBinaryDownload } from './remoteNetworkProtocol';
 import { currentRemoteExecution, SessionCommandService } from './sessionCommandService';
 
@@ -33,7 +34,8 @@ it('wires the real desktop IPC through its actor-aware service when every option
     getSessionDeletionService: vi.fn(), SessionCommandService,
     OwnershipAssociationService: class { constructor(_options: unknown) {} },
     ownershipOperationGate: undefined, ownershipAccountEpoch: 0, ownershipBootId: 'boot', authAccountGeneration: 0,
-    getStore: () => ({ get: () => null, onCriticalChange: (key: string, callback: () => void) => authObservers.set(key, callback) }),
+    getStore: () => ({ get: () => null, onDidChange: vi.fn(), onCriticalChange: (key: string, callback: () => void) => authObservers.set(key, callback) }),
+    OpenClawAccountRecovery, remotePerformance: { start: vi.fn() }, PREVENT_SLEEP_STORE_KEY: 'prevent_sleep_enabled',
     LogReporterStoreKey: { AuthUser: 'auth_user' }, app: { getPath: () => '/tmp', getVersion: () => 'test' },
     getMainLogReporter: () => ({}), getServerApiBaseUrl: () => 'https://example.invalid',
     initializeRemoteTelemetry: failures[0], RemoteLocalGc: class { constructor() { failures[1](); } },

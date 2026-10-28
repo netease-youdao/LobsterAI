@@ -1,6 +1,7 @@
 import { type ProviderConfig, ProviderRegistry } from '@shared/providers';
 
 import {
+  BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
   type BrowserWebAccessConfig,
   defaultBrowserWebAccessConfig,
 } from '../shared/browserWebAccess/constants';
@@ -144,6 +145,8 @@ export interface AppConfig {
   notificationSettings?: NotificationSettings;
   // 浏览器与网页访问配置
   browserWebAccess: BrowserWebAccessConfig;
+  // 已应用的内置浏览器默认切换版本(见 BROWSER_DISPLAY_MODE_MIGRATION_VERSION，由主进程执行)
+  browserDisplayModeMigrationVersion?: number;
   // 语言初始化标记 (用于判断是否是首次启动)
   language_initialized?: boolean;
   // 应用配置
@@ -182,9 +185,9 @@ export const defaultConfig: AppConfig = {
   },
   model: {
     availableModels: [
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
     ],
-    defaultModel: 'deepseek-reasoner',
+    defaultModel: 'deepseek-v4-flash',
     defaultModelProvider: 'deepseek',
   },
   providers: buildDefaultProviders(),
@@ -201,6 +204,7 @@ export const defaultConfig: AppConfig = {
   remoteTelemetryEnabled: true,
   notificationSettings: defaultNotificationSettings,
   browserWebAccess: defaultBrowserWebAccessConfig,
+  browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',

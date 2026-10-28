@@ -9,7 +9,6 @@ import {
   getOpenClawGatewayRepairBusyError,
   OPENCLAW_GATEWAY_REPAIR_BUSY_ERROR,
   preserveOpenClawConfigForStartupRecovery,
-  resolveOpenClawConfigBackupPath,
 } from './openclawGatewayRepair';
 
 const tempDirs: string[] = [];
@@ -44,13 +43,14 @@ afterEach(() => {
   }
 });
 
-test('backupOpenClawConfig renames openclaw.json to the preferred backup path', () => {
+test('backupOpenClawConfig moves openclaw.json into the repair backup directory', () => {
   const dir = makeTempDir();
   const configPath = path.join(dir, 'openclaw.json');
-  const backupPath = path.join(dir, 'openclaw-bak.json');
+  const backupDir = makeTempDir();
+  const backupPath = path.join(backupDir, 'openclaw.json');
   fs.writeFileSync(configPath, '{"gateway":{"mode":"local"}}\n', 'utf8');
 
-  const result = backupOpenClawConfig(configPath);
+  const result = backupOpenClawConfig(configPath, backupDir);
 
   expect(result).toEqual({
     originalPath: configPath,
@@ -58,49 +58,31 @@ test('backupOpenClawConfig renames openclaw.json to the preferred backup path', 
   });
   expect(fs.existsSync(configPath)).toBe(false);
   expect(fs.readFileSync(backupPath, 'utf8')).toBe('{"gateway":{"mode":"local"}}\n');
+  // Nothing is left beside the config for startup cleanup to find.
+  expect(fs.readdirSync(dir)).toEqual([]);
 });
 
-test('resolveOpenClawConfigBackupPath uses a timestamped path when the preferred backup exists', () => {
-  const dir = makeTempDir();
-  const configPath = path.join(dir, 'openclaw.json');
-  const existing = new Set([
-    path.join(dir, 'openclaw-bak.json'),
-  ]);
+test('backupOpenClawConfig never overwrites an existing backup', () => {
+  const configPath = path.join(makeTempDir(), 'openclaw.json');
+  const backupDir = makeTempDir();
+  fs.writeFileSync(configPath, '{"current":true}', 'utf8');
+  fs.writeFileSync(path.join(backupDir, 'openclaw.json'), '{"earlier":true}', 'utf8');
 
-  const backupPath = resolveOpenClawConfigBackupPath(
-    configPath,
-    (filePath) => existing.has(filePath),
-    new Date('2026-06-05T09:08:07'),
-  );
-
-  expect(backupPath).toBe(path.join(dir, 'openclaw-bak-20260605-090807.json'));
-});
-
-test('resolveOpenClawConfigBackupPath never overwrites timestamped backups', () => {
-  const dir = makeTempDir();
-  const configPath = path.join(dir, 'openclaw.json');
-  const existing = new Set([
-    path.join(dir, 'openclaw-bak.json'),
-    path.join(dir, 'openclaw-bak-20260605-090807.json'),
-  ]);
-
-  const backupPath = resolveOpenClawConfigBackupPath(
-    configPath,
-    (filePath) => existing.has(filePath),
-    new Date('2026-06-05T09:08:07'),
-  );
-
-  expect(backupPath).toBe(path.join(dir, 'openclaw-bak-20260605-090807-2.json'));
+  expect(() => backupOpenClawConfig(configPath, backupDir)).toThrow('OpenClaw config backup already exists');
+  expect(fs.readFileSync(configPath, 'utf8')).toBe('{"current":true}');
+  expect(fs.readFileSync(path.join(backupDir, 'openclaw.json'), 'utf8')).toBe('{"earlier":true}');
 });
 
 test('backupOpenClawConfig returns the original path when openclaw.json is missing', () => {
   const dir = makeTempDir();
   const configPath = path.join(dir, 'openclaw.json');
+  const backupDir = makeTempDir();
 
-  const result = backupOpenClawConfig(configPath);
+  const result = backupOpenClawConfig(configPath, backupDir);
 
   expect(result).toEqual({ originalPath: configPath });
   expect(fs.existsSync(configPath)).toBe(false);
+  expect(fs.readdirSync(backupDir)).toEqual([]);
 });
 
 test('getOpenClawGatewayRepairBusyError rejects active gateway workloads', () => {

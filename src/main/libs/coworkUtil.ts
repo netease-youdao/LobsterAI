@@ -4,15 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync, 
 import { delimiter, dirname, join } from 'path';
 
 import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
-import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig, resolveRawApiConfig } from './claudeSettings';
 import { coworkLog } from './coworkLogger';
-import {
-  buildAnthropicMessagesUrl,
-  buildGeminiGenerateContentUrl,
-  CoworkModelProtocol,
-  extractApiErrorSnippet,
-} from './coworkModelApi';
-import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrlForTargets } from './systemProxy';
 
@@ -1363,31 +1355,6 @@ export async function getNodeToolEnv(): Promise<Record<string, string | undefine
 }
 
 /**
- * Get enhanced environment variables (including proxy configuration)
- * Async function to fetch system proxy and inject into environment variables
- */
-export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'): Promise<Record<string, string | undefined>> {
-  const config = getCurrentApiConfig(target);
-  const env = config
-    ? buildEnvForConfig(config)
-    : { ...process.env };
-
-  applyPackagedEnvOverrides(env);
-
-  // Inject SKILLs directory path for skill scripts.
-  // On Windows, normalise backslashes to forward slashes so the value is usable
-  // in both Node.js (which accepts forward slashes) and bash (which treats
-  // backslashes as escape characters).
-  const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
-  env.SKILLS_ROOT = skillsRoot;
-  env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
-  finalizeNodeToolEnv(env);
-  await injectSystemProxyForSubprocess(env);
-
-  return env;
-}
-
-/**
  * Ensure the cowork temp directory exists in the given working directory
  * @param cwd Working directory path
  * @returns Path to the temp directory
@@ -1407,129 +1374,3 @@ export function ensureCoworkTempDir(cwd: string): string {
   return tempDir;
 }
 
-const COWORK_MODEL_PROBE_TIMEOUT_MS = 20000;
-
-type SessionTitleApiConfig =
-  | {
-      protocol: typeof CoworkModelProtocol.Anthropic;
-      apiKey: string;
-      baseURL: string;
-      model: string;
-    }
-  | {
-      protocol: typeof CoworkModelProtocol.GeminiNative;
-      apiKey: string;
-      baseURL: string;
-      model: string;
-    };
-
-function resolveSessionTitleApiConfig(): { config: SessionTitleApiConfig | null; error?: string } {
-  const rawResolution = resolveRawApiConfig();
-  if (rawResolution.config && rawResolution.providerMetadata?.providerName === 'gemini') {
-    return {
-      config: {
-        protocol: CoworkModelProtocol.GeminiNative,
-        apiKey: rawResolution.config.apiKey,
-        baseURL: rawResolution.config.baseURL,
-        model: rawResolution.config.model,
-      },
-    };
-  }
-
-  const resolution = resolveCurrentApiConfig();
-  if (!resolution.config) {
-    return {
-      config: null,
-      error: resolution.error ?? rawResolution.error,
-    };
-  }
-
-  return {
-    config: {
-      protocol: CoworkModelProtocol.Anthropic,
-      apiKey: resolution.config.apiKey,
-      baseURL: resolution.config.baseURL,
-      model: resolution.config.model,
-    },
-  };
-}
-
-export async function probeCoworkModelReadiness(
-  timeoutMs = COWORK_MODEL_PROBE_TIMEOUT_MS
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { config, error } = resolveSessionTitleApiConfig();
-  if (!config) {
-    return {
-      ok: false,
-      error: error || 'API configuration not found.',
-    };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(
-      config.protocol === CoworkModelProtocol.GeminiNative
-        ? buildGeminiGenerateContentUrl(config.baseURL, config.model)
-        : buildAnthropicMessagesUrl(config.baseURL),
-      {
-        method: 'POST',
-        headers: config.protocol === CoworkModelProtocol.GeminiNative
-          ? {
-              'Content-Type': 'application/json',
-              'x-goog-api-key': config.apiKey,
-            }
-          : {
-              'Content-Type': 'application/json',
-              'x-api-key': config.apiKey,
-              'anthropic-version': '2023-06-01',
-            },
-        body: JSON.stringify(
-          config.protocol === CoworkModelProtocol.GeminiNative
-            ? {
-                contents: [{ role: 'user', parts: [{ text: 'Reply with "ok".' }] }],
-                generationConfig: {
-                  maxOutputTokens: 1,
-                  temperature: 0,
-                },
-              }
-            : {
-                model: config.model,
-                max_tokens: 1,
-                temperature: 0,
-                messages: [{ role: 'user', content: 'Reply with "ok".' }],
-              }
-        ),
-        signal: controller.signal,
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      const errorSnippet = extractApiErrorSnippet(errorText);
-      return {
-        ok: false,
-        error: errorSnippet
-          ? `Model validation failed (${response.status}): ${errorSnippet}`
-          : `Model validation failed with status ${response.status}.`,
-      };
-    }
-
-    return { ok: true };
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      const timeoutSeconds = Math.ceil(timeoutMs / 1000);
-      return {
-        ok: false,
-        error: `Model validation timed out after ${timeoutSeconds}s.`,
-      };
-    }
-    return {
-      ok: false,
-      error: `Model validation failed: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}

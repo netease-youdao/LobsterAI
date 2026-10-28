@@ -83,12 +83,30 @@ test('clear removes the marker and a missing marker is never valid', () => {
   expect(marker.check(identity)).toEqual({ valid: false, reason: 'unreadable-marker' });
 });
 
+const writeNspClawguardPayload = (version: string, manifestVersion = version) => {
+  const pluginDir = path.join(root, 'third-party-extensions', 'nsp-clawguard');
+  fs.mkdirSync(path.join(pluginDir, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
+    name: 'nsp-clawguard', version, main: './dist/index.mjs', openclaw: { extensions: ['./dist/index.mjs'] },
+  }));
+  fs.writeFileSync(path.join(pluginDir, 'openclaw.plugin.json'), JSON.stringify({ id: 'nsp-clawguard', version: manifestVersion }));
+  fs.writeFileSync(path.join(pluginDir, 'dist', 'index.mjs'), 'export default {};');
+};
+
 test('config states handled by the compatibility helper always require it', () => {
-  expect(configRequiresStartupCompatibility({ plugins: { entries: {} }, gateway: { reload: { mode: 'hybrid' } } })).toBe(false);
-  expect(configRequiresStartupCompatibility(null)).toBe(false);
-  expect(configRequiresStartupCompatibility({ plugins: { bundledDiscovery: 'compat' } })).toBe(true);
-  expect(configRequiresStartupCompatibility({ gateway: { reload: { mode: 'hot' } } })).toBe(true);
-  expect(configRequiresStartupCompatibility({ gateway: { reload: { mode: 'hybrid', debounceMs: 300 } } })).toBe(true);
-  expect(configRequiresStartupCompatibility({ plugins: { entries: { 'nsp-clawguard': { enabled: true } } } })).toBe(true);
-  expect(configRequiresStartupCompatibility({ plugins: { entries: { 'nsp-clawguard': { enabled: false } } } })).toBe(false);
+  expect(configRequiresStartupCompatibility({ plugins: { entries: {} }, gateway: { reload: { mode: 'hybrid' } } }, stateDir)).toBe(false);
+  expect(configRequiresStartupCompatibility(null, stateDir)).toBe(false);
+  expect(configRequiresStartupCompatibility({ plugins: { bundledDiscovery: 'compat' } }, stateDir)).toBe(true);
+  expect(configRequiresStartupCompatibility({ gateway: { reload: { mode: 'hot' } } }, stateDir)).toBe(true);
+  expect(configRequiresStartupCompatibility({ gateway: { reload: { mode: 'hybrid', debounceMs: 300 } } }, stateDir)).toBe(true);
+  writeNspClawguardPayload('2.5.0');
+  expect(configRequiresStartupCompatibility({ plugins: { entries: { 'nsp-clawguard': { enabled: true } } } }, stateDir)).toBe(true);
+  expect(configRequiresStartupCompatibility({ plugins: { entries: { 'nsp-clawguard': { enabled: false } } } }, stateDir)).toBe(false);
+});
+
+test('an enabled nsp-clawguard without a repairable payload leaves startup to the marker', () => {
+  const config = { plugins: { entries: { 'nsp-clawguard': { enabled: true } } } };
+  expect(configRequiresStartupCompatibility(config, stateDir)).toBe(false);
+  writeNspClawguardPayload('2.5.8');
+  expect(configRequiresStartupCompatibility(config, stateDir)).toBe(false);
 });

@@ -1,4 +1,4 @@
-import { ArrowPathIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ChevronRightIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline';
 import { getAppleSubscriptionManagementUrl, hasAppleSubscription } from '@shared/auth/subscription';
 import React, {
   useCallback,
@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import { useSelector } from 'react-redux';
 
+import { FeedbackUiEvent } from '../../shared/feedback/constants';
 import inviteCreditsIconUrl from '../assets/icons/invite-credits.svg';
 import logoutIconUrl from '../assets/icons/logout.svg';
 import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
@@ -31,6 +32,8 @@ import { i18nService } from '../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { RootState } from '../store';
 import type { FreeCreditsReward } from '../store/slices/authSlice';
+import { AccountConnectionNotice } from './AccountConnectionNotice';
+import { AccountConnectionState, getAccountConnectionState } from './accountConnectionState';
 import {
   type AccountPlanAnalyticsContext,
   getAccountMenuDisplayName,
@@ -163,7 +166,7 @@ const AccountMenuAction: React.FC<AccountMenuActionProps> = ({
     type="button"
     title={title}
     onClick={() => void onClick()}
-    className={`flex w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-[13px] transition-colors hover:bg-surface-raised ${
+    className={`mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] transition-colors hover:bg-surface-raised ${
       danger ? 'text-red-500' : 'text-foreground'
     }`}
   >
@@ -171,6 +174,10 @@ const AccountMenuAction: React.FC<AccountMenuActionProps> = ({
     <span className="min-w-0 flex-1 truncate">{label}</span>
     {trailing}
   </button>
+);
+
+const AccountMenuSeparator: React.FC = () => (
+  <div role="separator" className="mx-4 h-px bg-border" />
 );
 
 const DiamondSparkleIcon: React.FC = () => (
@@ -297,23 +304,24 @@ const UserMenu: React.FC<UserMenuProps> = ({
     ? profileSummary
     : quota;
   const appleSubscription = user?.accountMode !== 'enterprise' && hasAppleSubscription(subscriptionManagement);
+  const connectionState = useSelector((state: RootState) => getAccountConnectionState(state.auth));
   const isEn = i18nService.getLanguage() === 'en';
   // The menu fetches on mount, so start in the loading state to avoid a
   // one-frame "--" flash before the mount effect runs.
-  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryLoading, setSummaryLoading] = useState(!connectionState);
 
   const refreshProfileSummary = useCallback(async () => {
     setSummaryLoading(true);
     try {
-      await authService.fetchProfileSummary();
+      await authService.recoverAccount();
     } finally {
       setSummaryLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void refreshProfileSummary();
-  }, [refreshProfileSummary]);
+    if (!connectionState) void refreshProfileSummary();
+  }, [connectionState, refreshProfileSummary]);
 
   const openPortalUrl = async (url: string) => {
     await window.electron.shell.openExternal(url);
@@ -533,7 +541,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
   };
 
   const totalCredits = profileSummary?.totalCreditsRemaining ?? 0;
-  const creditsUnavailable = !profileSummary && !summaryLoading;
+  const creditsUnavailable = !profileSummary && (!summaryLoading || Boolean(connectionState));
   let creditsTrailingContent: React.ReactNode;
   if (profileSummary) {
     creditsTrailingContent = (
@@ -542,7 +550,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
         <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
       </>
     );
-  } else if (summaryLoading) {
+  } else if (summaryLoading && !connectionState) {
     creditsTrailingContent = (
       <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-secondary" />
     );
@@ -585,10 +593,13 @@ const UserMenu: React.FC<UserMenuProps> = ({
         <div className="truncate text-sm font-medium text-foreground">
           {accountName}
         </div>
+        {connectionState && (
+          <AccountConnectionNotice state={connectionState} className="mt-2 w-full text-xs" />
+        )}
       </div>
 
       {/* Account destinations */}
-      <div className="border-b border-border py-1">
+      <div className="py-1">
         {visibleAccountPlan && (
           <AccountPlanAction
             label={visibleAccountPlan.label}
@@ -636,8 +647,10 @@ const UserMenu: React.FC<UserMenuProps> = ({
         />
       </div>
 
-      {/* Campaigns and invitations */}
-      <div className="border-b border-border py-1">
+      <AccountMenuSeparator />
+
+      {/* Campaigns, invitations and feedback */}
+      <div className="py-1">
         {campaignActionLabel && (
           <AccountMenuAction
             icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}
@@ -661,9 +674,19 @@ const UserMenu: React.FC<UserMenuProps> = ({
           label={i18nService.t('authInviteFriendsForCredits')}
           onClick={handleInvite}
         />
+        <AccountMenuAction
+          icon={<QuestionMarkCircleIcon className="h-4 w-4 shrink-0 text-[#111111] dark:text-white" aria-hidden="true" />}
+          label={i18nService.t('feedbackTitle')}
+          onClick={() => {
+            onClose();
+            window.dispatchEvent(new Event(FeedbackUiEvent.Open));
+          }}
+        />
       </div>
 
-      {/* Session action */}
+      <AccountMenuSeparator />
+
+      {/* Session actions */}
       <div className="py-1">
         <AccountMenuAction
           icon={<PortalMenuIcon src={logoutIconUrl} darkInvert />}
@@ -697,10 +720,12 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     accountGeneration,
     isLoggedIn,
     isLoading,
+    sessionStatus,
     ownerAccountKey,
     profileSummary,
     user,
   } = useSelector((state: RootState) => state.auth);
+  const connectionState = getAccountConnectionState({ isLoading, isLoggedIn, sessionStatus });
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const startupCreditEntry = useStartupCreditCampaignEntry();
   const [showMenu, setShowMenu] = useState(false);
@@ -787,12 +812,13 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     setMenuDailyCheckInSnapshot(null);
   }, [isLoggedIn]);
 
-  if (isLoading) {
-    return null;
-  }
-
   const handleClick = async () => {
+    if (isLoading) return;
     onActivate?.();
+    if (connectionState) {
+      setShowMenu(current => !current);
+      return;
+    }
     if (isLoggedIn) {
       const creditItemCount = profileSummary?.creditItems?.length ?? 0;
       if (showMenu) {
@@ -898,20 +924,23 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     }
   };
 
-  const useSidebarPromoLogin = !isLoggedIn && loggedOutVariant === 'sidebarPromo';
+  const useSidebarPromoLogin = !isLoggedIn && !connectionState && loggedOutVariant === 'sidebarPromo';
 
   return (
     <div ref={containerRef} className="relative">
       <button
         type="button"
         onClick={handleClick}
+        disabled={isLoading}
+        aria-busy={isLoading}
+        title={connectionState ? i18nService.t(isLoading ? 'authRestoringSession' : 'authConnectionUnavailable') : undefined}
         className={
           useSidebarPromoLogin
             ? 'sidebar-login-rainbow inline-flex h-7 w-[5.75rem] shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform]'
             : 'inline-flex h-7 items-center justify-start gap-2 rounded-md px-1.5 text-sm font-normal text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] cursor-pointer'
         }
       >
-        {isLoggedIn ? (
+        {isLoggedIn || connectionState ? (
           <>
             {user?.avatarUrl ? (
               <img src={user.avatarUrl} alt="" className="h-4 w-4 shrink-0 rounded-full" />
@@ -919,6 +948,9 @@ const LoginButton: React.FC<LoginButtonProps> = ({
               <UserAvatarIcon className="h-4 w-4 shrink-0" />
             )}
             <span className="truncate max-w-[80px]">{i18nService.t('myAccount')}</span>
+            {connectionState === AccountConnectionState.Restoring && (
+              <ArrowPathIcon className="h-3.5 w-3.5 shrink-0 animate-spin text-secondary" />
+            )}
           </>
         ) : (
           useSidebarPromoLogin ? (
@@ -931,6 +963,11 @@ const LoginButton: React.FC<LoginButtonProps> = ({
           )
         )}
       </button>
+      {showMenu && !isLoggedIn && connectionState && (
+        <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-xl border border-border bg-surface p-3 shadow-popover">
+          <AccountConnectionNotice state={connectionState} className="w-full text-xs" />
+        </div>
+      )}
       {showMenu && isLoggedIn && (
         enterpriseAccountContext
           ? (

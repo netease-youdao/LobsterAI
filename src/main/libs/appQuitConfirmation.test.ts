@@ -52,6 +52,31 @@ describe('AppQuitConfirmationGate', () => {
     expect(gate.resolveQuitRequest()).toBe(AppQuitRequestVerdict.Prompt);
   });
 
+  test('skips the prompt when it is not required, without opening it', () => {
+    const gate = new AppQuitConfirmationGate();
+
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Bypass);
+    expect(gate.isPromptOpen()).toBe(false);
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Bypass);
+    expect(gate.resolveQuitRequest(true)).toBe(AppQuitRequestVerdict.Prompt);
+  });
+
+  test('ignores a quit that needs no prompt while an earlier prompt is open', () => {
+    const gate = new AppQuitConfirmationGate();
+    expect(gate.resolveQuitRequest(true)).toBe(AppQuitRequestVerdict.Prompt);
+
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Ignore);
+    expect(gate.isPromptOpen()).toBe(true);
+  });
+
+  test('a quit that needs no prompt still consumes an armed bypass', () => {
+    const gate = new AppQuitConfirmationGate();
+    gate.armBypass();
+
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Bypass);
+    expect(gate.isBypassArmed()).toBe(false);
+  });
+
   test('a programmatic quit during an open prompt is deferred until the prompt closes', () => {
     const gate = new AppQuitConfirmationGate();
     expect(gate.resolveQuitRequest()).toBe(AppQuitRequestVerdict.Prompt);

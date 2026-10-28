@@ -9,6 +9,7 @@ import {
   type DecisionModelTestResult,
 } from '../../shared/decisionModel/constants';
 import { i18nService } from '../services/i18n';
+import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_META_TEXT, SETTINGS_SECTION_TITLE_TEXT } from './settings/settingsTypography';
 
 const PROVIDER_OPTIONS: Array<{ value: DecisionModelProvider; labelKey: string }> = [
   { value: DecisionModelProvider.TypeSafe, labelKey: 'decisionModelProviderTypeSafe' },
@@ -44,7 +45,7 @@ const FIELD_CLASS =
 const ICON_BUTTON_CLASS = 'p-0.5 rounded text-secondary hover:text-primary transition-colors';
 const SECONDARY_BUTTON_CLASS =
   'rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50';
-const NOTE_CLASS = 'rounded-lg border px-3 py-2 text-[11px] leading-4';
+const NOTE_CLASS = `rounded-lg border px-3 py-2 ${SETTINGS_META_TEXT}`;
 
 interface DecisionModelDraft {
   enabled: boolean;
@@ -150,8 +151,8 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
     <div className="rounded-xl border border-border bg-card p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h4 className="text-sm font-semibold text-foreground">{i18nService.t('decisionModelSettingsTitle')}</h4>
-          <p className="mt-2 text-xs leading-5 text-muted-foreground">{i18nService.t('decisionModelSettingsDesc')}</p>
+          <h4 className={`${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>{i18nService.t('decisionModelSettingsTitle')}</h4>
+          <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-muted-foreground`}>{i18nService.t('decisionModelSettingsDesc')}</p>
         </div>
         <button
           type="button"
@@ -202,7 +203,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
                 placeholder="https://example.com/v1/systemone"
                 className={FIELD_CLASS}
               />
-              <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{i18nService.t('decisionModelEndpointHint')}</p>
+              <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted-foreground`}>{i18nService.t('decisionModelEndpointHint')}</p>
             </div>
           )}
 
@@ -215,7 +216,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
                 <button
                   type="button"
                   onClick={() => void window.electron.shell.openExternal(apiKeyUrl)}
-                  className="text-[11px] text-claude-accent hover:underline transition-colors"
+                  className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
                 >
                   {i18nService.t('getApiKey')} →
                 </button>
@@ -291,7 +292,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
             </ul>
           </div>
 
-          <p className="text-[11px] leading-4 text-muted-foreground">{i18nService.t('decisionModelDataNote')}</p>
+          <p className={`${SETTINGS_META_TEXT} text-muted-foreground`}>{i18nService.t('decisionModelDataNote')}</p>
         </div>
       )}
 

@@ -31,6 +31,7 @@ import {
   getActivityStepKind,
   getLiveActivityWindow,
   getLiveEditDiff,
+  getMessageModelLabel,
   getShellCommandDescription,
   getStreamingTextSignature,
   getThinkingPhaseLabels,
@@ -53,6 +54,7 @@ import {
   STRUCTURED_TEXT_FORMAT_MAX_CHARS,
   TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS,
   turnHasSelfIndicatingActivity,
+  withTurnModelPreset,
 } from './messageDisplayUtils';
 
 const createToolResultMessage = (content: string): CoworkMessage => ({
@@ -1123,4 +1125,21 @@ test('plans also come from update_plan and TodoWrite; an empty card clears the p
   })?.steps[0]).toMatchObject({ primaryText: 'Writing tests', status: 'in_progress' });
   expect(parseActivityPlan('progress_card', {})).toBeNull();
   expect(parseActivityPlan('exec', { plan: [{ step: 'x', status: 'pending' }] })).toBeNull();
+});
+
+test('IM/cron replies take the preset recorded on their user message', () => {
+  const desktopLabel = getMessageModelLabel({ modelPresetId: 'balanced', resolvedModelId: 'deepseek-flash-YoudaoInner' });
+  const user = { modelPresetId: 'balanced' as const, resolvedModelId: 'deepseek-flash-YoudaoInner' };
+
+  expect(getMessageModelLabel(withTurnModelPreset({ model: 'deepseek-flash-YoudaoInner' }, user))).toBe(desktopLabel);
+  expect(getMessageModelLabel(withTurnModelPreset({}, user))).toBe(desktopLabel);
+  expect(desktopLabel).not.toBe(getMessageModelLabel({ model: 'deepseek-flash-YoudaoInner' }));
+});
+
+test('a reply keeps its own preset and gets none without one on the user message', () => {
+  const assistant = { modelPresetId: 'ultimate' as const, resolvedModelId: 'glm-5' };
+
+  expect(withTurnModelPreset(assistant, { modelPresetId: 'balanced' })).toBe(assistant);
+  expect(withTurnModelPreset({ model: 'glm-5' }, {})).toEqual({ model: 'glm-5' });
+  expect(withTurnModelPreset(undefined, { modelPresetId: 'balanced' })).toBeUndefined();
 });

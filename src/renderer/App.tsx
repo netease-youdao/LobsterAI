@@ -16,6 +16,7 @@ import { BrowserPasskeyUiEvent } from '../shared/browserWebAccess/passkeys';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { DesktopCompanionMainPage } from '../shared/desktopCompanion/constants';
 import { ENABLE_EXPERT_PLAZA_UI } from '../shared/featureFlags';
+import { FeedbackUiEvent } from '../shared/feedback/constants';
 import {
   LibraryNavigationEvent,
   LibrarySourceFilter,
@@ -41,6 +42,7 @@ import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import ExpertPlazaView from './components/experts/ExpertPlazaView';
+import FeedbackDialog from './components/feedback/FeedbackDialog';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import NewUserOnboardingOverlay, {
@@ -240,6 +242,7 @@ const App: React.FC = () => {
   const [settingsOptions, setSettingsOptions] = useState<Omit<SettingsOpenOptions, 'initialTab'> & { initialTab?: Exclude<SettingsOpenOptions['initialTab'], 'remoteControl'>; requestId: number }>({ requestId: 0 });
   const [remoteControlGeneration, setRemoteControlGeneration] = useState<number | null>(null);
   const [pendingRemoteControlGeneration, setPendingRemoteControlGeneration] = useState<number | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [mainView, setMainView] = useState<MainView>(MainView.Cowork);
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
@@ -706,8 +709,7 @@ const App: React.FC = () => {
     const handleOnline = () => {
       console.log('[Renderer] Network online');
       window.electron.networkStatus.send('online');
-      // A startup load that failed while offline has no other retry trigger.
-      void authService.refreshServerModels();
+      void authService.recoverAccount();
     };
 
     const handleOffline = () => {
@@ -1614,7 +1616,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat || event.defaultPrevented || isShortcutInputActive()) return;
+      if (event.repeat || event.defaultPrevented || showFeedback || isShortcutInputActive()) return;
 
       const { shortcuts } = configService.getConfig();
       const activeShortcuts = {
@@ -1813,6 +1815,7 @@ const App: React.FC = () => {
     isUpdateInteractionBlocked,
     mainView,
     isPermissionModalOpen,
+    showFeedback,
     showSettings,
     showUpdateModal,
   ]);
@@ -1896,6 +1899,12 @@ const App: React.FC = () => {
     window.addEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
     return () => window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
   }, [handleShowSettings]);
+
+  useEffect(() => {
+    const openFeedback = () => setShowFeedback(true);
+    window.addEventListener(FeedbackUiEvent.Open, openFeedback);
+    return () => window.removeEventListener(FeedbackUiEvent.Open, openFeedback);
+  }, []);
 
   // 监听托盘菜单、桌面悬浮球打开设置的 IPC 事件
   useEffect(() => {
@@ -2097,6 +2106,7 @@ const App: React.FC = () => {
   }, [pendingPermission, handlePermissionResponse, handleMinimizePermission, isPendingPermissionMinimized]);
 
   const isOverlayActive = showSettings
+    || showFeedback
     || showUpdateModal
     || showUpdateInstallConfirm
     || isPermissionModalOpen
@@ -2367,7 +2377,7 @@ const App: React.FC = () => {
 
       <EngineFailureOverlay
         onRequestAppSettings={handleShowSettings}
-        suspended={showSettings || showUpdateModal || showUpdateInstallConfirm || isPermissionModalOpen}
+        suspended={showSettings || showFeedback || showUpdateModal || showUpdateInstallConfirm || isPermissionModalOpen}
       />
 
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
@@ -2383,6 +2393,7 @@ const App: React.FC = () => {
           enterpriseConfig={enterpriseConfig}
         />
       )}
+      {showFeedback && <FeedbackDialog onClose={() => setShowFeedback(false)} />}
       {showUpdateModal && updateInfo && (
         <AppUpdateModal
           updateState={appUpdateState}

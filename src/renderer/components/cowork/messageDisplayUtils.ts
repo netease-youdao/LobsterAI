@@ -11,6 +11,7 @@ import {
 import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
 import { getMessageModelLabel as getSharedMessageModelLabel } from '../../../shared/cowork/messageModelLabel';
 import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
+import { parseModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
 import { modelPresetName } from '../../services/modelPresets';
@@ -932,6 +933,26 @@ export const buildConversationTurns = (
 
 export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null =>
   getSharedMessageModelLabel(metadata, modelPresetName);
+
+/**
+ * Desktop turns stamp the selected preset on every message. IM and cron runs
+ * resolve the preset inside OpenClaw, so only their user message records it.
+ */
+export const withTurnModelPreset = (
+  assistant: CoworkMessageMetadata | undefined,
+  user: CoworkMessageMetadata | null | undefined,
+): CoworkMessageMetadata | undefined => {
+  const modelPresetId = parseModelPresetId(user?.modelPresetId);
+  if (!assistant || !modelPresetId || parseModelPresetId(assistant.modelPresetId)) return assistant;
+  const hasActualModel = [assistant.model, assistant.resolvedModelId].some(value => (
+    typeof value === 'string' && value.trim() && !parseModelPresetModelId(value)
+  ));
+  return {
+    ...assistant,
+    modelPresetId,
+    ...(hasActualModel ? {} : { resolvedModelId: user?.resolvedModelId }),
+  };
+};
 
 export const messageMetaClassName = (visible: boolean, align: 'left' | 'right' = 'left'): string => [
   'flex items-center gap-2 mt-1 text-[11px] text-zinc-400 dark:text-zinc-500 select-none transition-opacity duration-200',
@@ -1974,10 +1995,10 @@ export const getActivityLiveStatusText = (item: ConsolidatedItem): string => {
   const toolName = typeof rawName === 'string' ? rawName : undefined;
   const normalized = toolName ? normalizeToolName(toolName) : '';
   if (normalized === 'lobsteraivideogenerate') {
-    return i18nService.t('mediaGeneratingVideo');
+    return i18nService.t(parseMediaStreamingInfo(item.group).taskId ? 'mediaGeneratingVideo' : 'mediaTaskPreparing');
   }
   if (normalized === 'lobsteraiimagegenerate') {
-    return i18nService.t('mediaGeneratingImage');
+    return i18nService.t(parseMediaStreamingInfo(item.group).taskId ? 'mediaGeneratingImage' : 'mediaTaskPreparing');
   }
   const toolInput = item.group.toolUse.metadata?.toolInput;
   if (item.group.toolUse.metadata?.isGenerating) {

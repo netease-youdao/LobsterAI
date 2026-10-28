@@ -272,26 +272,6 @@ export class IMStore {
       }
     }
 
-    const settingsRow = this.db
-      .prepare('SELECT value FROM im_config WHERE key = ?')
-      .get('settings') as { value: string } | undefined;
-    if (settingsRow) {
-      try {
-        const settings = JSON.parse(settingsRow.value) as Partial<IMSettings>;
-        // Keep IM and desktop behavior aligned: skills auto-routing should be on by default.
-        // Historical renderer default could persist `skillsEnabled: false` unintentionally.
-        if (settings.skillsEnabled !== true) {
-          settings.skillsEnabled = true;
-          const now = Date.now();
-          this.db
-            .prepare('UPDATE im_config SET value = ?, updated_at = ? WHERE key = ?')
-            .run(JSON.stringify(settings), now, 'settings');
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-
     // Migrate feishu renderMode from 'text' to 'card' (previous renderer default was incorrect)
     const feishuRow = this.db.prepare('SELECT value FROM im_config WHERE key = ?').get('feishu') as
       | { value: string }

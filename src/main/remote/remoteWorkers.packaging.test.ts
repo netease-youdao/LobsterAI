@@ -15,6 +15,7 @@ import { RemoteHistoryJob } from './remoteHistoryJob';
 import { RemoteLiveProjectionJob } from './remoteLiveProjectionJob';
 import { RemoteNetworkBodyEncoding, RemoteNetworkFailure, RemoteNetworkLimit as NetworkLimit,RemoteNetworkMessage } from './remoteNetworkProtocol';
 import { RemoteNetworkTransport } from './remoteNetworkTransport';
+import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
 import { RemoteStore } from './remoteStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
@@ -309,7 +310,14 @@ describe('independent packaged remote workers', () => {
       expect(live?.payload.preview).toBe('Worker output'); expect(live?.objectId).toBe('message');
       const projected = await invoke(RemoteWorkerFile.Projection, { database, target, sessionId: 'session', owner, deviceId: 'device', environment: 'test', agent: null, approval: false, input: false, files: false, reply: false });
       expect(projected.error).toBeUndefined(); expect(projected.result.targetSourceSeq).toBeGreaterThan(0);
-      const snapshot = new Database(target);
+      // A staging projection is not an importable core snapshot until publication commits.
+      store.setEnabledOwner(owner); store.setProjectionIdentity('test', owner, 'device');
+      const coordinator = new RemoteProjectionCoordinator(store, remoteWorkerPath(RemoteWorkerFile.Projection, archived));
+      store.refreshProjectionHints();
+      await coordinator.flush();
+      expect(store.db.prepare('SELECT reason FROM remote_projection_failures').all()).toEqual([]);
+      expect(store.sync('session')!.source_seq).toBe(projected.result.targetSourceSeq);
+      const snapshot = new Database(database, { readonly: true });
       let identity;
       try {
         const sync = snapshot.prepare("SELECT * FROM remote_sync WHERE local_id='session'").get() as any;
@@ -319,7 +327,7 @@ describe('independent packaged remote workers', () => {
           sourceSeq: String(sync.source_seq), snapshotEpoch: epoch ? JSON.parse(epoch.value) : 0, revision: revision?.revision || 0 };
       } finally { snapshot.close(); }
       const directory = path.join(root, 'immutable-import');
-      const imported = await invoke(RemoteWorkerFile.ImportSnapshot, { operation: 'build', database: target, directory, fileSet: 'sealed-files', identity });
+      const imported = await invoke(RemoteWorkerFile.ImportSnapshot, { operation: 'build', database, directory, fileSet: 'sealed-files', identity });
       expect(imported.error).toBeUndefined(); expect(imported.result.parts.length).toBeGreaterThan(0);
       const read = await invoke(RemoteWorkerFile.ImportSnapshot, { operation: 'read', directory, part: imported.result.parts[0] });
       expect(read.error).toBeUndefined(); expect(JSON.parse(read.result).records.length).toBeGreaterThan(0);

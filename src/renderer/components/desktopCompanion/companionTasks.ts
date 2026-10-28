@@ -1,4 +1,5 @@
 import { AgentId } from '../../../shared/agent/constants';
+import { type CompanionTaskFailure, companionTaskFailure, CompanionTaskFailureCode, CompanionTaskFailureStage } from '../../../shared/desktopCompanion/analytics';
 import type { DesktopCompanionAttachment } from '../../../shared/desktopCompanion/constants';
 import { type CompanionFileKind, companionFileKindFromMime } from '../../../shared/desktopCompanion/fileKinds';
 import { prepareCoworkPromptPayload } from '../../services/coworkPromptPayload';
@@ -66,11 +67,13 @@ export interface CompanionTaskRequest {
  * Starts a Cowork task through the existing session API. The working folder is
  * the explicit one, else the app default, else the folder of the first file.
  */
-export async function startCompanionTask(request: CompanionTaskRequest): Promise<{ sessionId: string } | { error: string }> {
+export async function startCompanionTask(request: CompanionTaskRequest, onStage?: (stage: CompanionTaskFailureStage) => void): Promise<{ sessionId: string } | { error: string; failure: CompanionTaskFailure }> {
+  onStage?.(CompanionTaskFailureStage.Prepare);
   const t = (key: string) => i18nService.t(key);
   const firstFile = request.attachments[0]?.path;
   const cwd = request.workingDirectory || await defaultWorkingDirectory() || (firstFile ? parentDirectory(firstFile) : '');
-  if (!cwd) return { error: t('desktopCompanionRequestFailed') };
+  if (!cwd) return { error: t('desktopCompanionRequestFailed'),
+    failure: { failureCode: CompanionTaskFailureCode.WorkingDirectory, failureStage: CompanionTaskFailureStage.Prepare } };
   const prepared = await prepareCoworkPromptPayload({
     basePrompt: request.prompt.trim(),
     attachments: request.attachments,
@@ -80,7 +83,9 @@ export async function startCompanionTask(request: CompanionTaskRequest): Promise
     fileLabel: t('file'),
     folderLabel: t('folder'),
   });
-  if (!prepared.success) return { error: t('desktopCompanionImageFailed') };
+  if (!prepared.success) return { error: t('desktopCompanionImageFailed'),
+    failure: { failureCode: CompanionTaskFailureCode.PayloadPreparation, failureStage: CompanionTaskFailureStage.Prepare } };
+  onStage?.(CompanionTaskFailureStage.SessionStart);
   const result = await window.electron.cowork.startSession({
     prompt: prepared.payload.finalPrompt,
     cwd,
@@ -88,6 +93,7 @@ export async function startCompanionTask(request: CompanionTaskRequest): Promise
     imageAttachments: prepared.payload.imageAttachments,
     mediaReferences: prepared.payload.mediaReferences,
   });
-  if (!result.success || !result.session) return { error: result.error || t('desktopCompanionRequestFailed') };
+  if (!result.success || !result.session) return { error: result.error || t('desktopCompanionRequestFailed'),
+    failure: companionTaskFailure(result, CompanionTaskFailureStage.SessionStart) };
   return { sessionId: result.session.id };
 }

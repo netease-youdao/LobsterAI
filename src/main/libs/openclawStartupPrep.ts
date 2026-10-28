@@ -8,7 +8,7 @@ import {
   OpenClawGatewayReloadMode,
 } from '../../shared/openclawEngine/startupCompatibility';
 import { OPENCLAW_STARTUP_MIGRATION_ENTRY } from '../../shared/openclawEngine/startupMigration';
-import { NSP_CLAWGUARD } from '../plugins/nspClawguardCompatibility';
+import { NSP_CLAWGUARD, readSupportedNspClawguardPackage } from '../plugins/nspClawguardCompatibility';
 
 export const OPENCLAW_STARTUP_PREP_MARKER_FILE = 'startup-prep-marker.json';
 // Revalidate periodically: some legacy inputs (workspace setup files) have no
@@ -71,15 +71,32 @@ export function resolveStartupPrepIdentity(runtimeRoot: string, appVersion: stri
   ]);
 }
 
+/**
+ * Whether the helper's nsp-clawguard install repair has a payload to act on.
+ * It repairs only a supported release under `third-party-extensions` and
+ * returns early otherwise, e.g. for an unsupported or removed package.
+ */
+function hasRepairableNspClawguard(stateDir: string): boolean {
+  const userDataDir = path.dirname(path.dirname(stateDir));
+  const pluginDir = path.join(userDataDir, 'third-party-extensions', NSP_CLAWGUARD.Id);
+  try {
+    return readSupportedNspClawguardPackage(pluginDir) !== undefined;
+  } catch (error) {
+    // Same as the repair: a missing or malformed payload has nothing to repair.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError);
+  }
+}
+
 /** Config states that the compatibility helper must handle on every start. */
-export function configRequiresStartupCompatibility(config: unknown): boolean {
+export function configRequiresStartupCompatibility(config: unknown, stateDir: string): boolean {
   if (!config || typeof config !== 'object') return false;
   const { plugins, gateway } = config as {
     plugins?: { entries?: Record<string, { enabled?: unknown } | undefined> } & Record<string, unknown>;
     gateway?: { reload?: Record<string, unknown> };
   };
   if (plugins && Object.hasOwn(plugins, OPENCLAW_LEGACY_DISCOVERY_KEY)) return true;
-  if (plugins?.entries?.[NSP_CLAWGUARD.Id]?.enabled === true) return true;
+  // An enabled entry alone would rerun both helpers on every start for nothing.
+  if (plugins?.entries?.[NSP_CLAWGUARD.Id]?.enabled === true && hasRepairableNspClawguard(stateDir)) return true;
   const reload = gateway?.reload;
   if (!reload || typeof reload !== 'object') return false;
   return (typeof reload.mode === 'string' && LEGACY_RELOAD_MODES.has(reload.mode))

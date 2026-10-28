@@ -96,6 +96,7 @@ export type CoworkForkCompactionSummary = {
 export type CoworkImageAttachment = CoworkImageAttachmentPayload;
 
 export type CoworkMediaAttachmentRef = {
+  imageEdit?: import('../../../shared/imageEditing/types').ImageEditRequest;
   token: string;
   mediaType: 'image' | 'video' | 'audio';
   index: number;
@@ -208,6 +209,8 @@ export interface CoworkRuntime {
   reconcileQuestionSubmission?(submissionId: string): Promise<QuestionDecisionOutcome | null>;
   getPendingQuestions?(): Array<PermissionRequest & { sessionId: string }>;
   isSessionActive(sessionId: string): boolean;
+  /** OpenClaw run ids of the session's current turn; empty when no turn is active. */
+  getTurnRunIds?(sessionId: string): string[];
   getSessionConfirmationMode(sessionId: string): 'modal' | 'text' | null;
   deleteSubagentSession?(parentSessionId: string, runId: string): Promise<boolean>;
   onSessionDeleted?(sessionId: string): void;

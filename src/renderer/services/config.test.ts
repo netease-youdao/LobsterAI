@@ -392,6 +392,24 @@ describe('configService shortcut migrations', () => {
 });
 
 describe('configService provider migrations', () => {
+  test('keeps the Gemini API format only on custom providers', async () => {
+    const storedConfig = {
+      ...defaultConfig,
+      providers: {
+        ...defaultConfig.providers,
+        custom_0: { enabled: true, apiKey: '', baseUrl: 'https://relay.example.com', apiFormat: 'gemini', models: [] },
+        [ProviderName.DeepSeek]: { ...defaultConfig.providers?.[ProviderName.DeepSeek], apiFormat: 'gemini' },
+      },
+    } as unknown as AppConfig;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.init();
+
+    const savedConfig = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig | undefined) ?? configService.getConfig();
+    expect(savedConfig.providers?.custom_0?.apiFormat).toBe('gemini');
+    expect(savedConfig.providers?.[ProviderName.DeepSeek]?.apiFormat).toBe('anthropic');
+  });
+
   test('persists injected provider models during init', async () => {
     const { configService, storeData, setItem } = await loadConfigServiceWithStoredConfig(
       makeLegacyConfigWithoutMiniMaxAddedModels()
@@ -1009,5 +1027,71 @@ describe('configService provider migrations', () => {
     const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
     expect(savedConfig.uiFontSize).toBe(FontPreferences.UiFontSizeMax);
     expect(savedConfig.codeFontSize).toBe(FontPreferences.CodeFontSizeMin);
+  });
+});
+
+describe('configService builtin default model refresh', () => {
+  test('keeps saved provider model lists and the selected default model unchanged', async () => {
+    const savedModels: Record<string, NonNullable<AppConfig['providers']>[string]['models']> = {
+      [ProviderName.DeepSeek]: [
+        { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+        { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false, supportsThinking: true },
+      ],
+      [ProviderName.Moonshot]: [
+        { id: 'kimi-k3', name: 'Kimi K3', supportsImage: true, supportsVideo: true, supportsThinking: true, contextWindow: 1_048_576, maxTokens: 1_048_576 },
+        { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
+        { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true, supportsThinking: true, contextWindow: 262_144 },
+      ],
+      [ProviderName.Qwen]: [
+        { id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', supportsImage: true, contextWindow: 1_000_000 },
+        { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true, contextWindow: 1_000_000 },
+      ],
+      [ProviderName.Zhipu]: [
+        { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false, supportsThinking: true, contextWindow: 202_800 },
+        { id: 'glm-5', name: 'GLM 5', supportsImage: false, supportsThinking: true, contextWindow: 202_800 },
+        { id: 'glm-4.7', name: 'GLM 4.7', supportsImage: false, supportsThinking: true, contextWindow: 204_800 },
+      ],
+      [ProviderName.Minimax]: [
+        { id: 'MiniMax-M3', name: 'MiniMax M3', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false, contextWindow: 204_800 },
+        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false, contextWindow: 204_800 },
+      ],
+      [ProviderName.Xiaomi]: [
+        { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+        { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
+      ],
+    };
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      model: {
+        availableModels: [{ id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }],
+        defaultModel: 'deepseek-reasoner',
+        defaultModelProvider: ProviderName.DeepSeek,
+      },
+      providerModelMigrationVersions: {
+        [ProviderName.DeepSeek]: 1,
+        [ProviderName.Moonshot]: 2,
+        [ProviderName.Zhipu]: 1,
+        [ProviderName.Minimax]: 1,
+        [ProviderName.Xiaomi]: 1,
+      },
+      providers: {
+        ...defaultConfig.providers,
+        ...Object.fromEntries(Object.entries(savedModels).map(([providerName, models]) => [
+          providerName,
+          { ...defaultConfig.providers![providerName], enabled: true, apiKey: `sk-${providerName}`, models },
+        ])),
+      },
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.init();
+
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    for (const [providerName, models] of Object.entries(savedModels)) {
+      expect(savedConfig.providers?.[providerName].models).toEqual(models);
+    }
+    expect(savedConfig.model).toEqual(storedConfig.model);
   });
 });

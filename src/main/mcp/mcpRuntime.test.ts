@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { CoworkIpcChannel } from '../../shared/cowork/constants';
+import { ConfirmationBehavior, MediaConfirmationAction } from '../../shared/media/confirmation';
 import { submitCoworkPermission } from '../coworkPermissionIpc';
 import type { CoworkRuntime, PermissionResult } from '../libs/agentEngine/types';
 import { type AskUserResponse, AskUserResponseReason, McpBridgeServer } from '../libs/mcpBridgeServer';
@@ -274,4 +275,32 @@ describe('MCP question authority bridge', () => {
     expect(registration.resolve({ action: 'answer', answers: { q_0: ['Yes'] } })).toEqual({ kind: 'known_not_applied', status: 'expired', reason: 'QUESTION_UNAVAILABLE' });
     await expect(response).resolves.toMatchObject({ behavior: 'deny', reason: AskUserResponseReason.Timeout });
   });
+});
+
+
+test('recoverable video confirmation stays on desktop and uses revision-checked consent', async () => {
+  const { runtime, registered, settled, permissionSessions } = await fixture(true);
+  const response = runtime.askUserInternal(questions, 1_000, {
+    sessionKey,
+    recoverableMedia: { isCurrent: () => true, refresh: async () => questions, onEvent: vi.fn() },
+  });
+  const [pending] = runtime.getPendingMediaConfirmations();
+  expect(pending).toMatchObject({ sessionId: 'session-a', toolInput: { mediaConfirmation: { revision: 0 } } });
+  expect(permissionSessions.get(pending.requestId)).toBe('session-a');
+  expect(registered).not.toHaveBeenCalled();
+  expect(await runtime.actOnMediaConfirmation({
+    requestId: pending.requestId, revision: 0, action: MediaConfirmationAction.Shown,
+  })).toBe(true);
+  expect(await runtime.actOnMediaConfirmation({
+    requestId: pending.requestId, revision: 1, action: MediaConfirmationAction.Respond,
+    response: { behavior: ConfirmationBehavior.Allow, answers: { 'Continue?': 'Yes' } },
+  })).toBe(false);
+  expect(await runtime.actOnMediaConfirmation({
+    requestId: pending.requestId, revision: 0, action: MediaConfirmationAction.Respond,
+    response: { behavior: ConfirmationBehavior.Allow, answers: { 'Continue?': 'Yes' } },
+  })).toBe(true);
+  await expect(response).resolves.toMatchObject({ behavior: ConfirmationBehavior.Allow });
+  expect(runtime.getPendingMediaConfirmations()).toEqual([]);
+  expect(permissionSessions.has(pending.requestId)).toBe(false);
+  expect(settled).not.toHaveBeenCalled();
 });

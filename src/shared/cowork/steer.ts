@@ -63,6 +63,7 @@ export interface CoworkPendingSteer {
 }
 
 export interface CoworkSteerAttachment {
+  imageEdit?: import('../imageEditing/types').ImageEditRequest;
   path: string;
   name: string;
   isImage?: boolean;

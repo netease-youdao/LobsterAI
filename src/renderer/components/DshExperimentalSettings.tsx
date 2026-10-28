@@ -8,6 +8,7 @@ import {
   resolveDshOpenWorkbenchErrorCode,
 } from '../services/dshAnalytics';
 import { i18nService } from '../services/i18n';
+import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_META_TEXT, SETTINGS_SECTION_TITLE_TEXT } from './settings/settingsTypography';
 
 interface DshInstallView {
   stage: string;
@@ -177,8 +178,8 @@ export const DshExperimentalSettings: React.FC = () => {
       <div className="rounded-xl border border-border bg-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h4 className="text-sm font-semibold text-foreground">{i18nService.t('dshSettingsTitle')}</h4>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{i18nService.t('dshSettingsDesc')}</p>
+            <h4 className={`${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>{i18nService.t('dshSettingsTitle')}</h4>
+            <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-muted-foreground`}>{i18nService.t('dshSettingsDesc')}</p>
           </div>
           <button
             type="button"
@@ -199,13 +200,13 @@ export const DshExperimentalSettings: React.FC = () => {
         </div>
 
         {enabled && (
-          <p className="mt-4 border-t border-border pt-4 text-[11px] leading-4 text-muted-foreground">
+          <p className={`mt-4 border-t border-border pt-4 ${SETTINGS_META_TEXT} text-muted-foreground`}>
             {i18nService.t('dshSharedDataNote')}
           </p>
         )}
 
         {enabled && engineState.sessionStoreShared === false && (
-          <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[11px] leading-4 text-amber-700 dark:text-amber-400">
+          <p className={`mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 ${SETTINGS_META_TEXT} text-amber-700 dark:text-amber-400`}>
             {i18nService.t('dshSessionStoreIsolatedNote')}
           </p>
         )}
@@ -222,8 +223,8 @@ export const DshExperimentalSettings: React.FC = () => {
                 <div className="h-full w-full animate-pulse rounded-full bg-primary/60" />
               )}
             </div>
-            <p className="mt-2 text-[11px] leading-4 text-muted-foreground">{installLabel(install)}</p>
-            <p className="mt-1 text-[11px] leading-4 text-muted-foreground/70">
+            <p className={`mt-2 ${SETTINGS_META_TEXT} text-muted-foreground`}>{installLabel(install)}</p>
+            <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted-foreground/70`}>
               {i18nService.t('dshInstallFirstRunNote')}
             </p>
           </div>

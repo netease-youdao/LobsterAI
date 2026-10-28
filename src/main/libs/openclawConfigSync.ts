@@ -23,6 +23,7 @@ import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { DECISION_MODEL_PLUGIN_ID } from '../../shared/decisionModel/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
+import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { OFFICE_EDITORS } from '../../shared/office/editors';
 import {
   OPENCLAW_MODEL_COMPAT_PLUGIN_ID,
@@ -37,13 +38,17 @@ import {
   AuthType,
   findKimiK3ReservedCustomParamKeys,
   getModelRuntimeProfileDefinition,
+  isOpenAIApiModeAvailable,
   ModelRuntimeProfile,
   ModelRuntimeProfileSource,
+  normalizeGeminiApiBaseUrl,
+  OpenAIApiMode,
   OpenClawApi as OpenClawApiConst,
   OpenClawProviderId,
   ProviderName,
   ProviderRegistry,
   resolveModelRuntimeProfile,
+  supportsGeminiApiFormatSelection,
 } from '../../shared/providers';
 import {
   LOBSTERAI_REQUEST_OPTIONS_VERSION,
@@ -65,10 +70,7 @@ import {
   resolveAllProviderApiKeys,
   resolveRawApiConfig,
 } from './claudeSettings';
-import {
-  getCoworkOpenAICompatProxyBaseURL,
-  getCoworkOpenAICompatProxyToken,
-} from './coworkOpenAICompatProxy';
+import { getCopilotLoopbackAuthToken, getCopilotLoopbackBaseUrl } from './copilotLoopbackProxy';
 import type { LobsterBrowserMcpStdioLaunch } from './lobsterBrowserMcpServer';
 import { buildPresetContextWindows } from './modelPresetContext';
 import {
@@ -83,8 +85,14 @@ import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
 import { buildModelCompatRestartFingerprint } from './openclawConfigRestartInputs';
-import { createOpenClawConfigTarget, type OpenClawConfigTarget, readOpenClawConfigRaw } from './openclawConfigTarget';
+import {
+  createOpenClawConfigTarget,
+  type OpenClawConfigTarget,
+  readOpenClawConfigRaw,
+  resolveOpenClawOwnedSections,
+} from './openclawConfigTarget';
 import type { OpenClawEngineManager } from './openclawEngineManager';
+import { escapeOpenClawEnvTemplate, escapeOpenClawEnvTemplateRecord } from './openclawEnvTemplate';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
 import {
   withManagedOpenClawModelPolicy,
@@ -106,6 +114,7 @@ import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenCl
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 import { withRequiredOpenClawSessionStoreOwner } from './openclawSessionStoreOwner';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
+import type { OpenClawUserConfigOverlaySource } from './openclawUserConfigOverlay';
 import { getActiveSystemProxyUrl, isSystemProxyEnabled } from './systemProxy';
 
 export type AskUserCallbackConfig = {
@@ -181,6 +190,10 @@ const OPENCLAW_DEFAULT_MODEL_MAX_TOKENS = 8192;
 // generic 8192 default could end a turn before any visible answer.
 const LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS = 32_768;
 const CHROME_PROXY_SERVER_ARG_PREFIX = '--proxy-server=';
+// Caps the managed agent browser's HTTP disk cache, which Chromium otherwise
+// sizes from free disk space. Code Cache and CacheStorage are not covered;
+// openclawBrowserCachePrune reclaims those while the browser is stopped.
+export const CHROME_DISK_CACHE_SIZE_ARG = `--disk-cache-size=${256 * 1024 * 1024}`;
 
 const EXPLICIT_CONTEXT_CACHE_LOG_PREFIX = '********************';
 const CUSTOM_PROVIDER_NAME_PATTERN = /^custom_[0-9]+$/;
@@ -768,10 +781,6 @@ const normalizeBaseUrlPath = (rawBaseUrl: string, pathName: string): string => {
  * Strip the `/chat/completions` endpoint suffix from a base URL so that the
  * OpenClaw gateway can append its own path without duplication.
  *
- * Aligned with the detection logic in `buildOpenAIChatCompletionsURL`
- * (coworkFormatTransform.ts) which returns the URL as-is when it already
- * ends with `/chat/completions`.
- *
  * e.g. "https://gw.example.com/v1/chat/completions" → "https://gw.example.com/v1"
  *      "https://gw.example.com/v1"                   → "https://gw.example.com/v1"  (unchanged)
  */
@@ -782,6 +791,13 @@ const stripChatCompletionsSuffix = (rawBaseUrl: string): string => {
   }
   return normalized;
 };
+
+// OpenClaw appends `/responses` itself; drop it when the user pasted the full endpoint.
+const stripResponsesSuffix = (baseUrl: string): string => (
+  baseUrl.endsWith('/responses')
+    ? baseUrl.slice(0, -'/responses'.length).replace(/\/+$/, '')
+    : baseUrl
+);
 
 const isLoopbackProviderBaseUrl = (rawBaseUrl: string): boolean => {
   try {
@@ -1088,10 +1104,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     providerId: OpenClawProviderId.LobsteraiCopilot,
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawTransportApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
-    resolveRuntimeBaseUrl: () => {
-      const proxyBase = getCoworkOpenAICompatProxyBaseURL('local');
-      return proxyBase ? `${proxyBase}/v1/copilot` : null;
-    },
+    resolveRuntimeBaseUrl: getCopilotLoopbackBaseUrl,
     resolveApiKey: () => '${LOBSTER_PROXY_TOKEN}',
   },
 };
@@ -1136,6 +1149,9 @@ export const buildProviderSelection = (options: {
   baseURL: string;
   modelId: string;
   apiType: 'anthropic' | 'openai' | undefined;
+  openaiApiMode?: OpenAIApiMode;
+  /** Custom provider speaking native Gemini generateContent. */
+  geminiNative?: boolean;
   providerName?: string;
   authType?: 'apikey' | 'oauth';
   codingPlanEnabled?: boolean;
@@ -1153,10 +1169,30 @@ export const buildProviderSelection = (options: {
 
   let baseUrl =
     descriptor.resolveRuntimeBaseUrl?.() ?? descriptor.normalizeBaseUrl(options.baseURL);
-  const api = descriptor.resolveApi({
+  const descriptorApi = descriptor.resolveApi({
     apiType: options.apiType,
     baseURL: options.baseURL,
   });
+  // Custom providers may opt into OpenClaw's generic Google GenAI or
+  // openai-responses transports; the shared helpers keep built-in providers,
+  // whose OpenClaw plugins assume their own transport, out.
+  const usesGeminiTransport = options.geminiNative === true
+    && supportsGeminiApiFormatSelection(providerName);
+  const usesResponsesTransport = !usesGeminiTransport
+    && descriptorApi === OpenClawApiConst.OpenAICompletions
+    && options.openaiApiMode === OpenAIApiMode.Responses
+    && isOpenAIApiModeAvailable(providerName, options);
+  const api = usesGeminiTransport
+    ? (OpenClawApiConst.GoogleGenerativeAI as OpenClawTransportApi)
+    : usesResponsesTransport
+      ? (OpenClawApiConst.OpenAIResponses as OpenClawTransportApi)
+      : descriptorApi;
+  if (usesGeminiTransport) {
+    // The Google GenAI SDK appends `/models/...` to a versioned base URL.
+    baseUrl = normalizeGeminiApiBaseUrl(options.baseURL);
+  } else if (usesResponsesTransport) {
+    baseUrl = stripResponsesSuffix(baseUrl);
+  }
 
   // When DashScope Anthropic URL is forced to OpenAI format, rewrite the
   // base URL to the corresponding OpenAI-compatible endpoint.
@@ -1741,6 +1777,13 @@ export interface ResolvedMcpServer {
   // to false, which makes any tool batch containing one of this server's tools
   // run sequentially. Only set true for servers that handle concurrent requests.
   supportsParallelToolCalls?: boolean;
+  // Remote servers only -> openclaw mcp.servers.*.auth. With "oauth", OpenClaw
+  // runs MCP OAuth itself (tokens live in its state dir, `openclaw mcp login`).
+  auth?: 'oauth';
+  // -> openclaw mcp.servers.*.requestTimeoutMs / connectionTimeoutMs. Set by
+  // marketplace entries for slow remote connectors; OpenClaw defaults otherwise.
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
 }
 
 // Normalize header keys to lowercase before writing to openclaw.json.
@@ -1768,7 +1811,7 @@ function lowercaseHeaderKeys(headers: Record<string, string>): Record<string, st
  */
 const MCP_NAME_NON_ASCII_RE = /[^\x00-\x7F]/;
 
-function safeServerKey(name: string): string {
+export function safeServerKey(name: string): string {
   if (!MCP_NAME_NON_ASCII_RE.test(name)) return name;
   const hash = createHash('md5').update(name).digest('hex').slice(0, 8);
   return `mcp-${hash}`;
@@ -1777,7 +1820,9 @@ function safeServerKey(name: string): string {
 const cleanMcpToolNames = (list?: string[]): string[] =>
   (list ?? []).map(item => String(item).trim()).filter(Boolean);
 
-function buildOpenClawMcpServers(
+// Also builds the entries the MCP OAuth CLI runs against (see mcpOAuthCli.ts):
+// OpenClaw keys stored tokens by these entries' names and URLs.
+export function buildOpenClawMcpServers(
   servers: ResolvedMcpServer[],
 ): Record<string, Record<string, unknown>> {
   const result: Record<string, Record<string, unknown>> = {};
@@ -1790,33 +1835,46 @@ function buildOpenClawMcpServers(
         console.warn(`[OpenClawConfigSync] skipped MCP server "${server.name}" because its URL is invalid`);
         continue;
       }
-      normalizedRemoteUrl = normalizedUrl.url;
+      normalizedRemoteUrl = escapeOpenClawEnvTemplate(normalizedUrl.url);
     }
 
+    // Everything below is user or marketplace data: escape `${VAR}` so OpenClaw
+    // writes it verbatim instead of resolving it from the gateway env.
     switch (server.transportType) {
       case 'stdio':
-        if (server.command) entry.command = server.command;
-        if (server.args?.length) entry.args = server.args;
-        if (server.cwd) entry.cwd = server.cwd;
-        if (server.env && Object.keys(server.env).length > 0) entry.env = server.env;
+        if (server.command) entry.command = escapeOpenClawEnvTemplate(server.command);
+        if (server.args?.length) entry.args = server.args.map(escapeOpenClawEnvTemplate);
+        if (server.cwd) entry.cwd = escapeOpenClawEnvTemplate(server.cwd);
+        if (server.env && Object.keys(server.env).length > 0)
+          entry.env = escapeOpenClawEnvTemplateRecord(server.env);
         break;
       case 'sse':
         entry.url = normalizedRemoteUrl;
         if (server.headers && Object.keys(server.headers).length > 0)
-          entry.headers = lowercaseHeaderKeys(server.headers);
+          entry.headers = escapeOpenClawEnvTemplateRecord(lowercaseHeaderKeys(server.headers));
         break;
       case 'http':
         entry.url = normalizedRemoteUrl;
         if (server.headers && Object.keys(server.headers).length > 0)
-          entry.headers = lowercaseHeaderKeys(server.headers);
+          entry.headers = escapeOpenClawEnvTemplateRecord(lowercaseHeaderKeys(server.headers));
         entry.transport = 'streamable-http';
         break;
+    }
+    if (server.transportType !== 'stdio' && server.auth === 'oauth') {
+      entry.auth = 'oauth';
+      // OpenClaw ignores a static Authorization header on OAuth servers (and warns),
+      // so keep it out of openclaw.json instead of shipping a value that is never used.
+      if (entry.headers && typeof entry.headers === 'object') {
+        const { authorization: _ignored, ...rest } = entry.headers as Record<string, string>;
+        if (Object.keys(rest).length > 0) entry.headers = rest;
+        else delete entry.headers;
+      }
     }
     // Optional passthrough knobs (see ResolvedMcpServer). Omitted when unset so
     // openclaw.json stays unchanged for servers that never configured them.
     // OpenClaw's schema rejects empty include/exclude arrays, so drop them here.
-    const toolFilterInclude = cleanMcpToolNames(server.toolFilter?.include);
-    const toolFilterExclude = cleanMcpToolNames(server.toolFilter?.exclude);
+    const toolFilterInclude = cleanMcpToolNames(server.toolFilter?.include).map(escapeOpenClawEnvTemplate);
+    const toolFilterExclude = cleanMcpToolNames(server.toolFilter?.exclude).map(escapeOpenClawEnvTemplate);
     if (toolFilterInclude.length > 0 || toolFilterExclude.length > 0) {
       entry.toolFilter = {
         ...(toolFilterInclude.length > 0 ? { include: toolFilterInclude } : {}),
@@ -1825,6 +1883,11 @@ function buildOpenClawMcpServers(
     }
     if (typeof server.supportsParallelToolCalls === 'boolean') {
       entry.supportsParallelToolCalls = server.supportsParallelToolCalls;
+    }
+    // OpenClaw's schema accepts only finite positive timeouts.
+    for (const key of ['requestTimeoutMs', 'connectionTimeoutMs'] as const) {
+      const timeout = server[key];
+      if (typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0) entry[key] = timeout;
     }
     result[safeServerKey(server.name)] = entry;
   }
@@ -1903,6 +1966,8 @@ type OpenClawConfigSyncDeps = {
   getAgents?: () => Agent[];
   getUserPlugins?: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
   canUseMediaGeneration?: () => boolean;
+  /** Overrides from openclaw.user.json, merged on top of every rendered config. */
+  userConfigOverlay?: OpenClawUserConfigOverlaySource;
 };
 
 export class OpenClawConfigSync {
@@ -1939,6 +2004,7 @@ export class OpenClawConfigSync {
   private readonly getAgents?: () => Agent[];
   private readonly getUserPlugins: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
   private readonly canUseMediaGeneration: () => boolean;
+  private readonly userConfigOverlay?: OpenClawUserConfigOverlaySource;
   private previousBindingsJson?: string;
   private currentBindingsObj: { bindings?: Array<Record<string, unknown>> } = {};
 
@@ -1976,6 +2042,7 @@ export class OpenClawConfigSync {
     this.getAgents = deps.getAgents;
     this.getUserPlugins = deps.getUserPlugins ?? (() => []);
     this.canUseMediaGeneration = deps.canUseMediaGeneration ?? (() => false);
+    this.userConfigOverlay = deps.userConfigOverlay;
   }
 
   /**
@@ -2062,7 +2129,7 @@ export class OpenClawConfigSync {
       ...commonConfig,
       defaultProfile: BrowserRuntimeProfile.Managed,
       headless: false,
-      ...(extraArgs.length > 0 ? { extraArgs } : {}),
+      extraArgs: [...extraArgs, CHROME_DISK_CACHE_SIZE_ARG],
     };
   }
 
@@ -2071,6 +2138,7 @@ export class OpenClawConfigSync {
     const fetchConfig = {
       enabled: fetch.enabled,
       readability: fetch.readability,
+      useTrustedEnvProxy: isSystemProxyEnabled() && fetch.followGlobalProxy,
       ...(fetch.timeoutSeconds ? { timeoutSeconds: fetch.timeoutSeconds } : {}),
       ...(fetch.maxRedirects ? { maxRedirects: fetch.maxRedirects } : {}),
       ...(fetch.maxChars ? { maxChars: fetch.maxChars } : {}),
@@ -2170,6 +2238,8 @@ export class OpenClawConfigSync {
         baseURL,
         modelId,
         apiType,
+        openaiApiMode: apiResolution.providerMetadata?.openaiApiMode,
+        geminiNative: apiResolution.providerMetadata?.geminiNative,
         providerName: apiResolution.providerMetadata?.providerName,
         authType: apiResolution.providerMetadata?.authType,
         codingPlanEnabled: apiResolution.providerMetadata?.codingPlanEnabled,
@@ -2203,6 +2273,8 @@ export class OpenClawConfigSync {
             baseURL: p.baseURL,
             modelId: m.id,
             apiType: p.apiType,
+            openaiApiMode: p.openaiApiMode,
+            geminiNative: p.geminiNative,
             providerName: p.providerName,
             authType: p.authType,
             codingPlanEnabled: p.codingPlanEnabled,
@@ -2425,8 +2497,12 @@ export class OpenClawConfigSync {
     let existingPlugins: Record<string, unknown> = {};
     let existingConfig: Record<string, unknown> = {};
     let existingSessionStoreOwner: unknown;
+    // Render from the file minus overrides the user has since removed; the
+    // target keeps `baseRaw` so the rebase also removes them from the file.
+    const overlaySession = this.userConfigOverlay?.begin(baseRaw);
+    const generationBaseRaw = overlaySession?.generationBaseRaw ?? baseRaw;
     try {
-      const existing = JSON.parse(baseRaw);
+      const existing = JSON.parse(generationBaseRaw);
       existingConfig = asConfigRecord(existing) ?? {};
       existingGateway = (existing.gateway ?? {}) as Record<string, unknown>;
       existingSessionStoreOwner = existing.agents?.defaults?.sessionStore;
@@ -2817,6 +2893,7 @@ export class OpenClawConfigSync {
           callbackUrl: mediaCallbackUrl,
           secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
           requestTimeoutMs: 150000,
+          confirmationTimeoutMs: MediaConfirmationPolicy.RetentionMs,
         },
       };
     }
@@ -3340,7 +3417,12 @@ export class OpenClawConfigSync {
       legacyOwner: existingSessionStoreOwner,
     });
     managedConfig = withManagedOpenClawModelPolicy(managedConfig, existingConfig);
-    const target = createOpenClawConfigTarget(baseRaw, `${JSON.stringify(managedConfig, null, 2)}\n`);
+    const overlaid = overlaySession?.apply(managedConfig, resolveOpenClawOwnedSections(managedConfig));
+    if (overlaid) managedConfig = overlaid.config;
+    const target = createOpenClawConfigTarget(baseRaw, `${JSON.stringify(managedConfig, null, 2)}\n`, undefined, {
+      mergeBaseRaw: generationBaseRaw,
+      extraOwnedSections: overlaid?.ownedTopLevelKeys,
+    });
     const nextContent = target.raw;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
       providers: (managedConfig.models as Record<string, unknown>)?.providers,
@@ -3483,7 +3565,7 @@ export class OpenClawConfigSync {
     env.LOBSTER_PROVIDER_API_KEY = 'legacy-unused';
 
     // Must equal the token the loopback proxies verify, even if the compat proxy failed to start.
-    env.LOBSTER_PROXY_TOKEN = this.getProxyAuthToken?.() || getCoworkOpenAICompatProxyToken() || 'unconfigured';
+    env.LOBSTER_PROXY_TOKEN = this.getProxyAuthToken?.() || getCopilotLoopbackAuthToken() || 'unconfigured';
 
     // MCP Bridge Secret — always set so stale openclaw.json with
     // ${LOBSTER_MCP_BRIDGE_SECRET} placeholder doesn't crash the gateway.
@@ -4236,6 +4318,8 @@ export class OpenClawConfigSync {
     } catch {
       currentContent = '';
     }
+    const overlaySession = this.userConfigOverlay?.begin(currentContent);
+    const generationContent = overlaySession?.generationBaseRaw ?? currentContent;
 
     // Preserve all non-provider sections, including channel accounts, agent
     // bindings, and gateway auth. Losing them on logout tears down live IM.
@@ -4244,9 +4328,9 @@ export class OpenClawConfigSync {
     // configured, causing the gateway to fail to start because those env
     // vars are no longer injected.
     let mergedConfig: Record<string, unknown> = { ...baseMinimalConfig };
-    if (currentContent) {
+    if (generationContent) {
       try {
-        const existing = asConfigRecord(JSON.parse(currentContent));
+        const existing = asConfigRecord(JSON.parse(generationContent));
         mergedConfig = { ...baseMinimalConfig, ...existing };
         delete mergedConfig.models;
         // Preserve IM channel plugin entries — these reference their own env
@@ -4302,7 +4386,15 @@ export class OpenClawConfigSync {
     if (asConfigRecord(agentDefaults?.modelPolicy)) {
       mergedConfig = withManagedOpenClawModelPolicy(mergedConfig, mergedConfig);
     }
-    const target = createOpenClawConfigTarget(currentContent, `${JSON.stringify(mergedConfig, null, 2)}\n`, ['models']);
+    const minimalOwnedSections = ['models'];
+    const overlaid = overlaySession?.apply(mergedConfig, minimalOwnedSections);
+    if (overlaid) mergedConfig = overlaid.config;
+    const target = createOpenClawConfigTarget(
+      currentContent,
+      `${JSON.stringify(mergedConfig, null, 2)}\n`,
+      minimalOwnedSections,
+      { mergeBaseRaw: generationContent, extraOwnedSections: overlaid?.ownedTopLevelKeys },
+    );
     const nextContent = target.raw;
 
     // Preserve migration semantics while ignoring write provenance.

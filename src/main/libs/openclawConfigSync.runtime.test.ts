@@ -11,13 +11,15 @@ import {
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
+import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
-import { OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
+import { CHROME_DISK_CACHE_SIZE_ARG, OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
 import { persistOpenClawConfigTarget } from './openclawConfigTarget';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
+import { OpenClawUserConfigOverlay } from './openclawUserConfigOverlay';
 
 vi.mock('electron', () => ({
   app: {
@@ -54,6 +56,7 @@ const mockRuntimeState = vi.hoisted(() => ({
     baseURL: string;
     apiKey: string;
     apiType: 'anthropic' | 'openai';
+    openaiApiMode?: 'chat-completions' | 'responses';
     authType?: 'apikey' | 'oauth';
     codingPlanEnabled: boolean;
     models: Array<{
@@ -104,6 +107,7 @@ const mockRuntimeState = vi.hoisted(() => ({
       modelName?: string;
       contextWindow?: number;
       maxTokens?: number;
+      openaiApiMode?: 'chat-completions' | 'responses';
     };
   },
 }));
@@ -229,6 +233,65 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(prepared).toMatchObject({ ok: true, changed: true });
     expect(prepared.target?.raw).toContain('4121');
     expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
+
+  test('merges openclaw.user.json overrides into every render and removes them again', async () => {
+    const values = new Map<string, unknown>();
+    const userConfigOverlay = new OpenClawUserConfigOverlay({
+      getConfigDir: () => stateDir,
+      getStore: () => ({
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        set: (key: string, value: unknown) => { values.set(key, value); },
+      }),
+    });
+    const userConfigPath = path.join(stateDir, 'openclaw.user.json');
+    fs.writeFileSync(userConfigPath, `{
+      // Comments are allowed.
+      agents: { defaults: { blockStreamingDefault: "on" } },
+      hooks: { internal: { enabled: true } },
+      gateway: { auth: { mode: "none" } },
+      plugins: { allow: ["my-plugin"], entries: { "my-plugin": { enabled: true } } },
+    }`);
+    const sync = await createSync({ userConfigOverlay });
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    expect(sync.sync('user-overlay-apply')).toMatchObject({ ok: true, changed: true });
+    const applied = read();
+    expect(applied.agents.defaults.blockStreamingDefault).toBe('on');
+    expect(applied.agents.defaults.model).toBeTruthy();
+    expect(applied.hooks).toEqual({ internal: { enabled: true } });
+    expect(applied.gateway.auth).toEqual({ mode: 'token', token: '${OPENCLAW_GATEWAY_TOKEN}' });
+    expect(applied.plugins.allow).toEqual(expect.arrayContaining([OPENCLAW_MEMORY_CORE_PLUGIN_ID, 'my-plugin']));
+    expect(applied.plugins.entries['my-plugin']).toEqual({ enabled: true });
+    expect(sync.sync('user-overlay-steady')).toMatchObject({ ok: true, changed: false });
+
+    fs.writeFileSync(userConfigPath, '{}');
+    expect(sync.sync('user-overlay-cleared')).toMatchObject({ ok: true, changed: true });
+    const cleared = read();
+    expect(cleared.agents.defaults.blockStreamingDefault).toBeUndefined();
+    expect(cleared.hooks).toBeUndefined();
+    expect(cleared.plugins.allow).not.toContain('my-plugin');
+    expect(cleared.plugins.entries['my-plugin']).toBeUndefined();
+    expect(cleared.plugins.allow).toContain(OPENCLAW_MEMORY_CORE_PLUGIN_ID);
+    expect(sync.sync('user-overlay-cleared-steady')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('applies openclaw.user.json overrides while no model is configured', async () => {
+    const values = new Map<string, unknown>();
+    const userConfigOverlay = new OpenClawUserConfigOverlay({
+      getConfigDir: () => stateDir,
+      getStore: () => ({
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        set: (key: string, value: unknown) => { values.set(key, value); },
+      }),
+    });
+    fs.writeFileSync(path.join(stateDir, 'openclaw.user.json'), '{ hooks: { internal: { enabled: true } } }');
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync({ userConfigOverlay });
+    expect(sync.sync('user-overlay-minimal')).toMatchObject({ ok: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.hooks).toEqual({ internal: { enabled: true } });
+    expect(config.models).toBeUndefined();
   });
 
   test('activates virtual-model routing hooks and preserves the grant across config syncs', async () => {
@@ -1499,7 +1562,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toEqual(['--proxy-server=http://127.0.0.1:7890']);
+    expect(config.browser.extraArgs).toEqual(['--proxy-server=http://127.0.0.1:7890', CHROME_DISK_CACHE_SIZE_ARG]);
   });
 
   test('does not write managed browser proxy args in strict browser network mode', async () => {
@@ -1518,7 +1581,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toBeUndefined();
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
     expect(config.browser.ssrfPolicy.dangerouslyAllowPrivateNetwork).toBe(false);
   });
 
@@ -1537,7 +1600,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toBeUndefined();
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
   });
 
   test('does not create an agent model allowlist for OpenAI OAuth when system proxy is enabled', async () => {
@@ -2778,6 +2841,7 @@ describe('OpenClawConfigSync runtime config output', () => {
         callbackUrl: 'http://127.0.0.1:5175/media-callback',
         secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
         requestTimeoutMs: 150000,
+        confirmationTimeoutMs: MediaConfirmationPolicy.RetentionMs,
       },
     });
     expect(config.tools.deny).not.toContain('image_generate');
@@ -2811,6 +2875,7 @@ describe('OpenClawConfigSync runtime config output', () => {
         callbackUrl: 'http://127.0.0.1:5175/media-callback',
         secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
         requestTimeoutMs: 150000,
+        confirmationTimeoutMs: MediaConfirmationPolicy.RetentionMs,
       },
     });
     expect(config.tools.deny).not.toContain('image_generate');
@@ -3023,6 +3088,181 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(selection.providerConfig.auth).toBe(AuthType.OAuth);
     expect(selection.providerConfig).not.toHaveProperty('headers');
     expect(selection.providerConfig).not.toHaveProperty('apiKey');
+  });
+
+  test('maps custom provider Responses mode to the openai-responses transport', async () => {
+    const { OpenAIApiMode, OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://gateway.example.com/v1/responses/',
+      modelId: 'gpt-5.5',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: 'custom_0',
+    });
+
+    expect(selection.providerId).toBe('custom_0');
+    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAIResponses);
+    expect(selection.providerConfig.models[0].api).toBe(OpenClawApi.OpenAIResponses);
+    expect(selection.providerConfig.baseUrl).toBe('https://gateway.example.com/v1');
+  });
+
+  test('keeps Chat Completions for custom providers without Responses mode', async () => {
+    const { OpenAIApiMode, OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    for (const openaiApiMode of [undefined, OpenAIApiMode.ChatCompletions]) {
+      const selection = buildProviderSelection({
+        apiKey: 'sk-custom',
+        baseURL: 'https://gateway.example.com/v1',
+        modelId: 'gpt-5.5',
+        apiType: 'openai',
+        openaiApiMode,
+        providerName: 'custom_0',
+      });
+      expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+    }
+
+    const anthropicSelection = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://gateway.example.com',
+      modelId: 'claude-sonnet-4-6',
+      apiType: 'anthropic',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: 'custom_0',
+    });
+    expect(anthropicSelection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
+  });
+
+  test('ignores Responses mode for built-in providers with their own routing', async () => {
+    const { OpenAIApiMode, OpenClawApi, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-deepseek',
+      baseURL: 'https://api.deepseek.com',
+      modelId: 'deepseek-v4-flash',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: ProviderName.DeepSeek,
+    });
+
+    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+  });
+
+  test('keeps built-in providers on their own transport in Responses or Gemini mode', async () => {
+    const { OpenAIApiMode, OpenClawApi, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    for (const providerName of [ProviderName.OpenRouter, ProviderName.Volcengine, ProviderName.Minimax]) {
+      const selection = buildProviderSelection({
+        apiKey: 'sk-test',
+        baseURL: 'https://api.example.com/v1',
+        modelId: 'test-model',
+        apiType: 'openai',
+        openaiApiMode: OpenAIApiMode.Responses,
+        geminiNative: true,
+        providerName,
+      });
+      expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+    }
+  });
+
+  test('maps custom Gemini providers to the Google GenAI transport', async () => {
+    const { OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-gemini',
+      baseURL: 'https://relay.example.com/gemini',
+      modelId: 'gemini-3-pro',
+      apiType: 'openai',
+      geminiNative: true,
+      providerName: 'custom_1',
+      supportsThinking: true,
+    });
+
+    expect(selection.providerId).toBe('custom_1');
+    expect(selection.primaryModel).toBe('custom_1/gemini-3-pro');
+    expect(selection.providerConfig.api).toBe(OpenClawApi.GoogleGenerativeAI);
+    expect(selection.providerConfig.models[0].api).toBe(OpenClawApi.GoogleGenerativeAI);
+    expect(selection.providerConfig.baseUrl).toBe('https://relay.example.com/gemini/v1beta');
+    expect(selection.providerConfig.apiKey).toBe('${LOBSTER_APIKEY_CUSTOM_1}');
+  });
+
+  test('keeps Chat Completions for Responses mode on coding plan and OAuth routes', async () => {
+    const { OpenAIApiMode, OpenClawApi, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const codingPlan = buildProviderSelection({
+      apiKey: 'sk-ark',
+      baseURL: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      modelId: 'ark-code-latest',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: ProviderName.Volcengine,
+      codingPlanEnabled: true,
+    });
+    expect(codingPlan.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+
+    const oauth = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://gateway.example.com/v1',
+      modelId: 'gpt-5.5',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: 'custom_0',
+      authType: 'oauth',
+    });
+    expect(oauth.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+  });
+
+  test('writes Responses transport for custom providers during sync', async () => {
+    mockRuntimeState.rawApiConfig = {
+      config: {
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-custom',
+        model: 'gpt-5.5',
+        apiType: 'openai',
+      },
+      providerMetadata: {
+        providerName: 'custom_0',
+        codingPlanEnabled: false,
+        supportsImage: true,
+        modelName: 'GPT 5.5',
+        openaiApiMode: 'responses',
+      },
+    };
+    mockRuntimeState.enabledProviders = [
+      {
+        providerName: 'custom_0',
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-custom',
+        apiType: 'openai',
+        openaiApiMode: 'responses',
+        codingPlanEnabled: false,
+        models: [
+          { id: 'gpt-5.5', name: 'GPT 5.5', supportsImage: true },
+          { id: 'gpt-5.5-mini', name: 'GPT 5.5 Mini', supportsImage: true },
+        ],
+      },
+    ];
+
+    const sync = await createSync();
+    const result = sync.sync('custom-responses-api');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const customProvider = config.models.providers.custom_0;
+    expect(customProvider.api).toBe('openai-responses');
+    expect(customProvider.baseUrl).toBe('https://gateway.example.com/v1');
+    expect(customProvider.models.map((model: { id: string; api: string }) => [model.id, model.api])).toEqual([
+      ['gpt-5.5', 'openai-responses'],
+      ['gpt-5.5-mini', 'openai-responses'],
+    ]);
+    expect(config.agents.defaults.model.primary).toBe('custom_0/gpt-5.5');
   });
 
   test('maps MiniMax OAuth mode to the MiniMax portal provider', async () => {
@@ -4042,6 +4282,26 @@ describe('OpenClawConfigSync runtime config output', () => {
     for (const server of available) expect(withoutBridge.mcp.servers[server]).toEqual(launch(server));
   });
 
+  test.each([
+    { globalProxyEnabled: true, followGlobalProxy: true, expected: true },
+    { globalProxyEnabled: true, followGlobalProxy: false, expected: false },
+    { globalProxyEnabled: false, followGlobalProxy: true, expected: false },
+    { globalProxyEnabled: false, followGlobalProxy: false, expected: false },
+  ])('maps web fetch proxy preference with global=$globalProxyEnabled and follow=$followGlobalProxy', async ({ globalProxyEnabled, followGlobalProxy, expected }) => {
+    const { setSystemProxyEnabled } = await import('./systemProxy');
+    const { defaultBrowserWebAccessConfig } = await import('../../shared/browserWebAccess/constants');
+    setSystemProxyEnabled(globalProxyEnabled);
+    const sync = await createSync({
+      getBrowserWebAccessConfig: () => ({
+        webFetch: { ...defaultBrowserWebAccessConfig.webFetch, followGlobalProxy },
+      }),
+    });
+
+    expect(sync.sync('web-fetch-proxy').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.tools.web.fetch.useTrustedEnvProxy).toBe(expected);
+  });
+
   test('writes browser and web fetch access settings', async () => {
     const { setSystemProxyEnabled } = await import('./systemProxy');
     const {
@@ -4144,7 +4404,8 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.browser.attachOnly).toBeUndefined();
     expect(config.browser.remoteCdpTimeoutMs).toBeUndefined();
     expect(config.browser.remoteCdpHandshakeTimeoutMs).toBeUndefined();
-    expect(config.browser.extraArgs).toBeUndefined();
+    // User-provided extraArgs are not passed through; only the managed cache cap is.
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
     expect(config.browser.snapshotDefaults).toBeUndefined();
     expect(config.tools.web.fetch).toMatchObject({
       enabled: true,
@@ -4156,7 +4417,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
     expect(config.tools.web.fetch.useEnvProxy).toBeUndefined();
-    expect(config.tools.web.fetch.useTrustedEnvProxy).toBeUndefined();
+    expect(config.tools.web.fetch.useTrustedEnvProxy).toBe(true);
 
     browserDisplayMode = BrowserDisplayMode.InApp;
     let browserCallbackUrl: string | null = 'http://127.0.0.1:3210/browser/tool';
@@ -4338,6 +4599,106 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.mcp.servers['docs-server'].supportsParallelToolCalls).toBe(true);
     expect(config.mcp.servers['plain-tools']).not.toHaveProperty('toolFilter');
     expect(config.mcp.servers['plain-tools']).not.toHaveProperty('supportsParallelToolCalls');
+  });
+
+  test('writes auth: "oauth" for OAuth remote servers and drops their static Authorization header', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'oauth-remote',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          headers: { Authorization: 'Bearer stale', 'X-Tenant': 'acme' },
+          auth: 'oauth',
+        },
+        {
+          name: 'header-remote',
+          transportType: 'sse',
+          url: 'https://sse.example.com/sse',
+          headers: { Authorization: 'Bearer kept' },
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-oauth');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['oauth-remote']).toMatchObject({
+      url: 'https://mcp.example.com/mcp',
+      transport: 'streamable-http',
+      auth: 'oauth',
+      headers: { 'x-tenant': 'acme' },
+    });
+    expect(config.mcp.servers['oauth-remote'].headers).not.toHaveProperty('authorization');
+    expect(config.mcp.servers['header-remote']).not.toHaveProperty('auth');
+    expect(config.mcp.servers['header-remote'].headers).toEqual({ authorization: 'Bearer kept' });
+  });
+
+  test('escapes ${VAR} in user MCP values so OpenClaw never fills them from the gateway env', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'remote-literal',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp?key=${LOBSTER_APIKEY_SERVER}',
+          headers: { Authorization: 'Bearer ${OPENCLAW_GATEWAY_TOKEN}', 'X-Plain': 'plain ${lower} $5' },
+        },
+        {
+          name: 'stdio-literal',
+          transportType: 'stdio',
+          command: 'node',
+          args: ['server.js', '--token=${LOBSTER_PROXY_TOKEN}'],
+          env: { API_KEY: '${LOBSTER_MCP_BRIDGE_SECRET}', ALREADY: '$${KEEP}' },
+          toolFilter: { exclude: ['${WEIRD_TOOL}'] },
+        },
+      ],
+    });
+
+    expect(sync.sync('mcp-escape').ok).toBe(true);
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const config = JSON.parse(raw);
+    expect(config.mcp.servers['remote-literal']).toMatchObject({
+      url: 'https://mcp.example.com/mcp?key=$${LOBSTER_APIKEY_SERVER}',
+      headers: {
+        authorization: 'Bearer $${OPENCLAW_GATEWAY_TOKEN}',
+        'x-plain': 'plain ${lower} $5',
+      },
+    });
+    expect(config.mcp.servers['stdio-literal']).toMatchObject({
+      args: ['server.js', '--token=$${LOBSTER_PROXY_TOKEN}'],
+      env: { API_KEY: '$${LOBSTER_MCP_BRIDGE_SECRET}', ALREADY: '$$${KEEP}' },
+      toolFilter: { exclude: ['$${WEIRD_TOOL}'] },
+    });
+    // No unescaped placeholder from user data survives in the MCP section.
+    expect(JSON.stringify(config.mcp)).not.toMatch(/(^|[^$])\$\{[A-Z_][A-Z0-9_]*\}/);
+  });
+
+  test('passes positive MCP timeouts through and drops invalid ones', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'slow-remote',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          requestTimeoutMs: 60000,
+          connectionTimeoutMs: 5000,
+        },
+        {
+          name: 'bad-timeouts',
+          transportType: 'http',
+          url: 'https://mcp.example.com/other',
+          requestTimeoutMs: 0,
+          connectionTimeoutMs: Number.NaN,
+        },
+      ],
+    });
+
+    expect(sync.sync('mcp-timeouts').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['slow-remote']).toMatchObject({ requestTimeoutMs: 60000, connectionTimeoutMs: 5000 });
+    expect(config.mcp.servers['bad-timeouts']).not.toHaveProperty('requestTimeoutMs');
+    expect(config.mcp.servers['bad-timeouts']).not.toHaveProperty('connectionTimeoutMs');
   });
 });
 

@@ -1,8 +1,25 @@
 import { describe, expect, test, vi } from 'vitest';
 
+import { ImageEditOperation, type ImageEditRequest } from '../../shared/imageEditing/types';
 import { prepareCoworkPromptPayload } from './coworkPromptPayload';
 
 describe('prepareCoworkPromptPayload', () => {
+  test('queued image edits retain their exact original and structured regions without a vision model', async () => {
+    const edit: ImageEditRequest = { id: 'edit-1', operation: ImageEditOperation.Comment, createdAt: 1,
+      source: { id: 'source', rootId: 'source', sessionId: 'session', filePath: '/snapshots/frozen.png', title: 'cup.png',
+        width: 2048, height: 2048, operation: ImageEditOperation.Original, createdAt: 1 },
+      regions: [{ id: 'region', x: 0.2, y: 0.3, width: 0.3, height: 0.4, text: 'Make the cup blue' }] };
+    const result = await prepareCoworkPromptPayload({ basePrompt: 'Preserve the lighting', attachments: [
+      { path: '/notes.txt', name: 'notes.txt' },
+      { path: edit.source.filePath, name: 'cup.png', isImage: true, imageEdit: edit },
+    ], modelSupportsImage: false, selectedTextSnippets: [], fileLabel: 'File', folderLabel: 'Folder' });
+    expect(result.success).toBe(true); if (!result.success) return;
+    expect(result.payload.finalPrompt).toContain('Preserve the lighting'); expect(result.payload.finalPrompt).toContain('File: /notes.txt');
+    expect(result.payload.finalPrompt).toContain('Make the cup blue');
+    expect(result.payload.mediaReferences).toHaveLength(1);
+    expect(result.payload.mediaReferences?.[0]).toMatchObject({ localPath: '/snapshots/frozen.png', imageEdit: edit });
+    expect(result.payload.imageAttachments).toBeUndefined();
+  });
   test('preserves file and folder labels in the final prompt', async () => {
     const result = await prepareCoworkPromptPayload({
       basePrompt: 'continue',

@@ -273,6 +273,10 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     return this.runtime.isSessionActive(sessionId);
   }
 
+  getTurnRunIds(sessionId: string): string[] {
+    return this.runtime.getTurnRunIds?.(sessionId) ?? [];
+  }
+
   getPendingQuestions() {
     return this.runtime.getPendingQuestions?.() ?? [];
   }

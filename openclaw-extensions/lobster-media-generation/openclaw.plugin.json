@@ -25,6 +25,11 @@
         "type": "number",
         "minimum": 1000,
         "description": "Request timeout in milliseconds"
+      },
+      "confirmationTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "description": "Maximum video confirmation retention time, separate from the submission timeout"
       }
     }
   }

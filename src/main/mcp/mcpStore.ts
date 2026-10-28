@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
 
+import { type McpAuthMode, normalizeMcpAuthMode } from '../../shared/mcp/auth';
 import type { McpLaunchResolution } from './mcpLaunchResolution';
 
 // Per-server MCP tool selection, passed through to OpenClaw's mcp.servers.*.toolFilter.
@@ -26,6 +27,15 @@ export function normalizeMcpToolFilter(filter: McpToolFilter | undefined): McpTo
   return { ...(include ? { include } : {}), ...(exclude ? { exclude } : {}) };
 }
 
+const normalizeTimeoutMs = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+
+const normalizeTokenValues = (value: unknown): Record<string, string> | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
+
 export interface McpServerRecord {
   id: string;
   name: string;
@@ -37,8 +47,14 @@ export interface McpServerRecord {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  /** Remote servers only. `oauth` = MCP OAuth handled by OpenClaw (`openclaw mcp login`). */
+  auth?: McpAuthMode;
+  /** Remote marketplace connectors: the credential form's values, so it can be shown again on edit. */
+  tokenValues?: Record<string, string>;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
   isBuiltIn: boolean;
   githubUrl?: string;
   registryId?: string;
@@ -56,8 +72,12 @@ export interface McpServerFormData {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
+  tokenValues?: Record<string, string>;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
   isBuiltIn?: boolean;
   githubUrl?: string;
   registryId?: string;
@@ -80,8 +100,12 @@ interface McpConfigJson {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
+  tokenValues?: Record<string, string>;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
   isBuiltIn?: boolean;
   githubUrl?: string;
   registryId?: string;
@@ -226,9 +250,13 @@ export class McpStore {
       env: config.env,
       url: config.url,
       headers: config.headers,
+      auth: normalizeMcpAuthMode(config.auth),
+      tokenValues: normalizeTokenValues(config.tokenValues),
       toolFilter: normalizeMcpToolFilter(config.toolFilter),
       supportsParallelToolCalls:
         typeof config.supportsParallelToolCalls === 'boolean' ? config.supportsParallelToolCalls : undefined,
+      requestTimeoutMs: normalizeTimeoutMs(config.requestTimeoutMs),
+      connectionTimeoutMs: normalizeTimeoutMs(config.connectionTimeoutMs),
       isBuiltIn: config.isBuiltIn === true,
       githubUrl: config.githubUrl,
       registryId: config.registryId,
@@ -245,11 +273,19 @@ export class McpStore {
     if (data.env !== undefined && Object.keys(data.env).length > 0) config.env = data.env;
     if (data.url !== undefined) config.url = data.url;
     if (data.headers !== undefined && Object.keys(data.headers).length > 0) config.headers = data.headers;
+    const auth = normalizeMcpAuthMode(data.auth);
+    if (auth) config.auth = auth;
+    const tokenValues = normalizeTokenValues(data.tokenValues);
+    if (tokenValues) config.tokenValues = tokenValues;
     const toolFilter = normalizeMcpToolFilter(data.toolFilter);
     if (toolFilter) config.toolFilter = toolFilter;
     if (typeof data.supportsParallelToolCalls === 'boolean') {
       config.supportsParallelToolCalls = data.supportsParallelToolCalls;
     }
+    const requestTimeoutMs = normalizeTimeoutMs(data.requestTimeoutMs);
+    if (requestTimeoutMs) config.requestTimeoutMs = requestTimeoutMs;
+    const connectionTimeoutMs = normalizeTimeoutMs(data.connectionTimeoutMs);
+    if (connectionTimeoutMs) config.connectionTimeoutMs = connectionTimeoutMs;
     if (data.isBuiltIn) config.isBuiltIn = true;
     if (data.githubUrl) config.githubUrl = data.githubUrl;
     if (data.registryId) config.registryId = data.registryId;
@@ -262,6 +298,8 @@ export class McpStore {
         ...data,
         url: undefined,
         headers: undefined,
+        auth: undefined,
+        tokenValues: undefined,
       };
     }
 
@@ -322,11 +360,16 @@ export class McpStore {
       env: data.env !== undefined ? data.env : existing.env,
       url: data.url !== undefined ? data.url : existing.url,
       headers: data.headers !== undefined ? data.headers : existing.headers,
+      auth: data.auth !== undefined ? data.auth : existing.auth,
+      tokenValues: data.tokenValues !== undefined ? data.tokenValues : existing.tokenValues,
       toolFilter: data.toolFilter !== undefined ? data.toolFilter : existing.toolFilter,
       supportsParallelToolCalls:
         data.supportsParallelToolCalls !== undefined
           ? data.supportsParallelToolCalls
           : existing.supportsParallelToolCalls,
+      requestTimeoutMs: data.requestTimeoutMs !== undefined ? data.requestTimeoutMs : existing.requestTimeoutMs,
+      connectionTimeoutMs:
+        data.connectionTimeoutMs !== undefined ? data.connectionTimeoutMs : existing.connectionTimeoutMs,
       isBuiltIn: data.isBuiltIn !== undefined ? data.isBuiltIn : existing.isBuiltIn,
       githubUrl: data.githubUrl !== undefined ? data.githubUrl : existing.githubUrl,
       registryId: data.registryId !== undefined ? data.registryId : existing.registryId,

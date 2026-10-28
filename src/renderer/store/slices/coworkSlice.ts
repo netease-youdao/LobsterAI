@@ -29,6 +29,7 @@ import {
   type CoworkSteerStatus as CoworkSteerStatusType,
 } from '../../../shared/cowork/steer';
 import { stripNullChars } from '../../../shared/cowork/text';
+import { readMediaConfirmationState } from '../../../shared/media/confirmation';
 import {
   CoworkCollaborationMode,
   type CoworkCollaborationMode as CoworkCollaborationModeType,
@@ -46,6 +47,7 @@ import { resetAccountSessionData } from '../accountSessionBoundary';
 import { removeSessionFromState, removeSessionsFromState } from './coworkDeleteState';
 
 export interface DraftAttachment {
+  imageEdit?: import('../../../shared/imageEditing/types').ImageEditRequest;
   path: string;
   name: string;
   isImage?: boolean;
@@ -1315,7 +1317,16 @@ const coworkSlice = createSlice({
       if (action.payload.approval) mergePermissionState(state, action.payload.approval);
       const latest = state.permissionStates[action.payload.requestId];
       if (latest && (latest.status !== 'pending' || latest.sessionId !== action.payload.sessionId)) return;
-      if (state.pendingPermissions.some(item => item.requestId === action.payload.requestId)) return;
+      const index = state.pendingPermissions.findIndex(
+        permission => permission.requestId === action.payload.requestId
+      );
+      if (index >= 0) {
+        const incoming = readMediaConfirmationState(action.payload.toolInput?.mediaConfirmation);
+        const existing = readMediaConfirmationState(state.pendingPermissions[index].toolInput?.mediaConfirmation);
+        // A reload snapshot must not replace a newer confirmation state.
+        if (incoming && (!existing || incoming.sequence > existing.sequence)) state.pendingPermissions[index] = { ...action.payload, approval: latest ?? action.payload.approval };
+        return;
+      }
       state.pendingPermissions.push({ ...action.payload, approval: latest ?? action.payload.approval });
     },
 

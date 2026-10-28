@@ -20,7 +20,7 @@ import {
 import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
 import { copyTextToClipboard } from '../../services/clipboard';
 import { coworkService } from '../../services/cowork';
-import { getEnterpriseMemberProfileUrl, getPortalProfileUrl } from '../../services/endpoints';
+import { getEnterpriseMemberProfileUrl, getPortalTurnUsageUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import type { RootState } from '../../store';
 import { formatModelDisplayName } from '../../utils/modelDisplayName';
@@ -160,7 +160,7 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
   const handleOpenDetails = async () => {
     if (!canOpenDetails) return;
     const url = isEnterprise && enterpriseContext
-      ? getEnterpriseMemberProfileUrl(enterpriseContext.enterpriseId) : `${getPortalProfileUrl()}?tab=used`;
+      ? getEnterpriseMemberProfileUrl(enterpriseContext.enterpriseId) : getPortalTurnUsageUrl(turnUsage.traceId);
     try {
       await window.electron.shell.openExternal(url);
       setOpen(false);

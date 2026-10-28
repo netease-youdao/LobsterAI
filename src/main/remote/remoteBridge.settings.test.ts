@@ -7,12 +7,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_PROTOCOL_VERSION, RemoteCapability, RemoteConnectionReason, RemoteConnectionStatus, RemoteSyncStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
+import { collectRemoteDisplayHealth, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { RemoteStore } from './remoteStore';
 
 const disposables: Array<() => void> = [];
 const firstOwner = { userId: '10001', scopeKey: 'personal' };
 function fixture(registered = true) {
-  const db = new Database(':memory:');
+  const directory = mkdtempSync(join(tmpdir(), 'remote-settings-'));
+  disposables.push(() => rmSync(directory, { recursive: true, force: true }));
+  const db = new Database(join(directory, 'core.sqlite'));
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const store = new RemoteStore(db);
@@ -45,6 +48,7 @@ function fixture(registered = true) {
     onStateChange: changed, onAccountChange: accountChanged, prepare: vi.fn(), execute: vi.fn(),
   };
   const bridge: any = new RemoteBridge(deps);
+  vi.spyOn(bridge.displaySnapshot, 'read').mockReturnValue(null);
   bridge.owner = owner;
   if (registered) { bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' }; bridge.sameAccountAccess = true; }
   vi.spyOn(bridge, 'schedule').mockImplementation(() => undefined);
@@ -53,6 +57,14 @@ function fixture(registered = true) {
     switchOwner: (next: typeof owner) => { owner = next; bridge.accountChanged(); },
     legacyServer: () => { supportsAutomaticAccess = false; }, metadataConflict: () => { metadataVersion = 4; },
   };
+}
+// Sample explicitly at the worker boundary; state() must remain a memory-only read.
+function refreshDisplay(bridge: any): void {
+  const key = bridge.displayKey();
+  expect(key).not.toBeNull();
+  const snapshot = collectRemoteDisplayHealth(bridge.displayInput());
+  expect(snapshot.status).toBe(RemoteDisplayHealthStatus.Known);
+  vi.spyOn(bridge.displaySnapshot, 'read').mockImplementation(candidate => candidate === key ? snapshot : null);
 }
 const settingsPatches = (request: ReturnType<typeof vi.fn>) => request.mock.calls
   .filter(([, pathname, init]) => pathname.endsWith('/settings') && init.method === 'PATCH')
@@ -64,10 +76,12 @@ describe('remote settings persistence', () => {
     const { bridge, store, switchOwner } = fixture();
     expect(bridge.state()).toMatchObject({ enabled: true, name: 'host.local' });
     store.put('settings:10001:personal', { enabled: false, name: 'Custom', workspaces: [], settingsVersion: '1' });
+    bridge.settings(); // The initialization/write path hydrates the local settings cache.
     expect(bridge.state()).toMatchObject({ enabled: false, name: 'Custom' });
     switchOwner(null);
     expect(bridge.state()).toMatchObject({ enabled: false, owner: null, connectionReason: RemoteConnectionReason.SignedOut, name: 'host.local' });
     switchOwner(firstOwner);
+    refreshDisplay(bridge);
     expect(bridge.state()).toMatchObject({ enabled: false, name: 'Custom' });
   });
   it('stays disabled without login and only enables the default after an account is available', async () => {
@@ -95,6 +109,7 @@ describe('remote settings persistence', () => {
       await restarted.writeSettings();
       expect(settingsPatches(request).map(body => body.remoteEnabled)).toEqual([false, true]);
       expect(store.get('controlQueue:10001:personal')).toEqual([]);
+      refreshDisplay(restarted);
       expect(restarted.state().settingsSyncStatus).toBe(RemoteSyncStatus.Synced);
     } finally { restarted.stop(); }
   });
@@ -103,6 +118,7 @@ describe('remote settings persistence', () => {
     await bridge.configure({ enabled: false });
     await bridge.tick();
     expect(settingsPatches(request).map(body => body.remoteEnabled)).toEqual([false]);
+    refreshDisplay(bridge);
     expect(bridge.state()).toMatchObject({ enabled: false, connected: false, settingsSyncStatus: RemoteSyncStatus.Synced });
     expect(request.mock.calls.some(([, pathname]) => pathname.endsWith('/connection-tickets'))).toBe(false);
   });
@@ -114,6 +130,7 @@ describe('remote settings persistence', () => {
     expect(settingsPatches(request)).toHaveLength(0);
     const updates = request.mock.calls.map(([, , init]) => JSON.parse(String(init.body)));
     expect(updates).toEqual([{ name: 'Work computer', expectedMetadataVersion: '1' }, { name: 'Work computer', expectedMetadataVersion: '4' }]);
+    refreshDisplay(bridge);
     expect(bridge.state().nameSyncStatus).toBe(RemoteSyncStatus.Synced);
   });
   it('rejects invalid names without changing the saved name', async () => {
@@ -144,10 +161,11 @@ describe('remote settings persistence', () => {
     await bridge.configure({ name: 'Private computer', enabled: false });
     bridge.error = 'previous error'; bridge.errorCode = 47013; bridge.accesses = [{ requestId: 'private' }];
     switchOwner({ userId: '20002', scopeKey: 'team:20' });
-    expect(bridge.state()).toMatchObject({ name: 'host.local', enabled: true, connected: false, error: undefined, errorCode: undefined, accessRequests: [], settingsSyncStatus: RemoteSyncStatus.Synced });
+    expect(bridge.state()).toMatchObject({ name: 'host.local', enabled: true, connected: false, error: undefined, errorCode: undefined, accessRequests: [], settingsSyncStatus: RemoteSyncStatus.Pending });
     expect(accountChanged).toHaveBeenCalledWith(firstOwner, { userId: '20002', scopeKey: 'team:20' });
     expect(changed).toHaveBeenCalled();
     switchOwner(firstOwner);
+    refreshDisplay(bridge);
     expect(bridge.state()).toMatchObject({ name: 'Private computer', enabled: false, settingsSyncStatus: RemoteSyncStatus.Pending });
   });
 });
@@ -424,6 +442,7 @@ describe('remote error recovery', () => {
     const publish = vi.fn().mockRejectedValueOnce(new RemoteApiError(47029, 'Agent version conflict')).mockResolvedValue(undefined);
     bridge.agentCatalog = { publish };
     await bridge.tick();
+    refreshDisplay(bridge);
     expect(bridge.state()).toMatchObject({ connected: true, error: undefined, errorCode: undefined,
       agentCatalogSyncStatus: RemoteSyncStatus.Error });
     expect(store.get(bridge.catalogFailureKey())).toEqual({ code: 47029 });
@@ -435,6 +454,7 @@ describe('remote error recovery', () => {
     await bridge.tick();
     expect(publish).toHaveBeenCalledTimes(2);
     expect(store.get(bridge.catalogFailureKey())).toBeNull();
+    refreshDisplay(bridge);
     expect(bridge.state()).toMatchObject({ connected: true, error: undefined, errorCode: undefined,
       agentCatalogSyncStatus: RemoteSyncStatus.Synced });
   });

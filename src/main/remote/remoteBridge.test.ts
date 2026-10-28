@@ -220,6 +220,34 @@ describe('device synchronization health', () => {
       expect(read).not.toHaveBeenCalled();
     } finally { read.mockRestore(); bridge.stop(); }
   });
+  it('refreshes the settings ACK while remote access is disabled without activating availability', async () => {
+    vi.useFakeTimers();
+    const { bridge, display, requestApi } = fixture(); display.mockRestore();
+    vi.spyOn(bridge, 'schedule').mockImplementation(() => undefined);
+    const produce = vi.spyOn(bridge.displaySnapshot.options, 'produce').mockResolvedValue(knownDisplay({ settings: { enabled: false } }));
+    const content = vi.spyOn(bridge.contentSnapshot, 'read');
+    try {
+      await bridge.configure({ enabled: false });
+      expect(bridge.state().settingsSyncStatus).toBe(RemoteSyncStatus.Pending);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(produce).toHaveBeenCalledOnce();
+      expect(bridge.displayInput().availabilityScope).toBeNull();
+      bridge.associationTaskSync({ kind: OwnershipTargetKind.Task, id: 'task' });
+      expect(content).toHaveBeenCalledWith(null, 'task');
+      expect(bridge.state()).toMatchObject({ enabled: false, connected: false, settingsSyncStatus: RemoteSyncStatus.Synced });
+      expect(requestApi).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(produce).toHaveBeenCalledOnce();
+      expect(bridge.state().settingsSyncStatus).toBe(RemoteSyncStatus.Synced);
+      bridge.queueControl({ ...bridge.settings(), createSessionAvailable: false });
+      expect(bridge.state().settingsSyncStatus).toBe(RemoteSyncStatus.Pending);
+      produce.mockResolvedValue(knownDisplay({ settings: { enabled: false }, pendingSettings: true }));
+      await vi.advanceTimersByTimeAsync(0); expect(produce).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5000); expect(produce).toHaveBeenCalledTimes(3);
+      await bridge.configure({ enabled: true });
+      expect(bridge.state().settingsSyncStatus).toBe(RemoteSyncStatus.Pending);
+    } finally { bridge.stop(); vi.useRealTimers(); vi.restoreAllMocks(); }
+  });
   it('keeps acknowledged desktop-only content separate from failed object health in the cached state', () => {
     const { bridge, setDisplay } = fixture(); bridge.lastPong = Date.now();
     const availability = { sessions: 1, pendingSessions: 0, degraded: false, oldest: null, lastSuccess: null,

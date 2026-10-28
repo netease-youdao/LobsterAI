@@ -30,9 +30,10 @@ const options = [{ label: 'A (Recommended)' }, { label: 'B', description: 'secon
 describe('permissionDockRequest', () => {
   test('preserves a pricing subtitle without changing the question answer key', () => {
     const request = permissionDockRequest(pluginPermission([
-      { question: 'Confirm video?', subtitle: '50 credits per second', options },
+      { question: 'Confirm video?', title: 'Generate?', subtitle: '50 credits per second', options },
     ]))!;
     expect(request.questions[0].subtitle).toBe('50 credits per second');
+    expect(request.questions[0].heading).toBe('Generate?');
     expect(permissionDockAnswer(request, { ...emptyQuestionDraft(), answers: { 'question-1': ['B'] } }))
       .toMatchObject({ behavior: 'allow', updatedInput: { answers: { 'Confirm video?': 'B' } } });
   });

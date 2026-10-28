@@ -6,6 +6,13 @@ import {
 } from './openclawAssistantText';
 
 describe('extractOpenClawAssistantStreamText', () => {
+  test('removes a replay diagnostic echoed in a final assistant payload', () => {
+    const text = 'Image ready.\n[session:history] omitted image payload: missing data or mimeType';
+    expect(extractOpenClawAssistantStreamText({ text })).toBe('Image ready.');
+    expect(extractOpenClawAssistantStreamParts({ text, reasoning_content: 'Inspect the image.' }))
+      .toEqual({ text: 'Image ready.', thinking: 'Inspect the image.' });
+  });
+
   test('extracts direct text field', () => {
     expect(extractOpenClawAssistantStreamText({ text: 'hello' })).toBe('hello');
   });

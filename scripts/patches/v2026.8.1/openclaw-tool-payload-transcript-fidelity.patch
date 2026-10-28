@@ -1,0 +1,2914 @@
+Keep tool payloads and transcript text identical to the model-visible context.
+
+Base: OpenClaw v2026.8.1 (ea806575e6450e4d1efdfc72c19f04be982a1b9b).
+Backport of upstream #169063 (f956a18741): stop masking secret-shaped text when
+tool arguments, tool results and conversation text are persisted to transcripts
+or emitted as live tool events. The persisted copy diverged from the context the
+model saw (for example 40-character relative paths matched the bare AWS secret
+pattern), so the next run replayed different bytes and lost the provider prefix
+cache from the first masked string onward.
+Keep logging, diagnostic, telemetry and config redaction, image payload
+stripping, and persisted detail size caps.
+Remove when upgrading to an OpenClaw release that contains #169063.
+
+diff --git a/src/agents/embedded-agent-runner.guard.test.ts b/src/agents/embedded-agent-runner.guard.test.ts
+index 9cb56913332..d524630f918 100644
+--- a/src/agents/embedded-agent-runner.guard.test.ts
++++ b/src/agents/embedded-agent-runner.guard.test.ts
+@@ -497,7 +497,7 @@ describe("guardSessionManager integration", () => {
+     });
+   });
+ 
+-  it("redacts configured text patterns before persisting transcript messages", () => {
++  it("keeps transcript text unchanged despite configured logging patterns", () => {
+     const cfg = {
+       logging: {
+         redactPatterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
+@@ -525,19 +525,20 @@ describe("guardSessionManager integration", () => {
+ 
+     const messages = getMessages(sm);
+ 
+-    const serialized = JSON.stringify(messages);
+-
+-    expect(serialized).not.toContain("the email is peter@dc.io");
+-    expect(serialized).not.toContain("contact peter@dc.io");
+-    expect(serialized).not.toContain("peter@dc.io\\n");
+-    expect(serialized).not.toContain('"/tmp/peter@dc.io"');
+-    expect(serialized).toContain('"thinking":"the email is peter@d***.io"');
+-    expect(serialized).toContain('"text":"contact peter@d***.io"');
+-    expect(serialized).toContain('"text":"peter@d***.io\\n"');
+-    expect(serialized).toContain('"/tmp/peter@d***.io"');
++    expect(messages).toMatchObject([
++      {
++        role: "assistant",
++        content: [
++          { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
++          { type: "text", text: "contact peter@dc.io" },
++          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
++        ],
++      },
++      { role: "toolResult", content: [{ type: "text", text: "peter@dc.io\n" }] },
++    ]);
+   });
+ 
+-  it("can skip plugin write hooks without skipping core transcript redaction", () => {
++  it("can skip plugin write hooks while keeping transcript text unchanged", () => {
+     initializeGlobalHookRunner(
+       createMockPluginRegistry([
+         {
+@@ -569,7 +570,7 @@ describe("guardSessionManager integration", () => {
+     expect(entry).toMatchObject({
+       message: {
+         role: "assistant",
+-        content: [{ type: "text", text: "contact peter@d***.io" }],
++        content: [{ type: "text", text: "contact peter@dc.io" }],
+       },
+     });
+   });
+diff --git a/src/agents/embedded-agent-subscribe.handlers.tools.test.ts b/src/agents/embedded-agent-subscribe.handlers.tools.test.ts
+index f84cecf2923..ac02df0ba98 100644
+--- a/src/agents/embedded-agent-subscribe.handlers.tools.test.ts
++++ b/src/agents/embedded-agent-subscribe.handlers.tools.test.ts
+@@ -2543,7 +2543,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
+     },
+   );
+ 
+-  it("keeps child output out of the terminal diagnostic while retaining a safe full-verbosity error", async () => {
++  it("keeps child output out of the terminal diagnostic while retaining a bounded full-verbosity error", async () => {
+     const { ctx } = createTestContext();
+     const dummyTelegramToken = `123456:${"A".repeat(28)}WXYZ`;
+     await executeProcessResult(ctx, {
+@@ -2559,7 +2559,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
+     });
+     expect(ctx.state.lastToolError?.error?.length).toBeLessThanOrEqual(401);
+     expect(ctx.state.lastToolError?.error).toMatch(/…$/u);
+-    expect(JSON.stringify(ctx.state.lastToolError)).not.toContain(dummyTelegramToken);
++    expect(JSON.stringify(ctx.state.lastToolError)).toContain(dummyTelegramToken);
+   });
+ 
+   it("omits full-verbosity process output containing terminal control characters", async () => {
+@@ -4214,12 +4214,12 @@ describe("messaging tool media URL tracking", () => {
+   });
+ });
+ 
+-describe("control UI credential redaction (issue #72283)", () => {
++describe("control UI tool payload fidelity", () => {
+   afterEach(() => {
+     resetAgentEventsForTest();
+   });
+ 
+-  it("redacts secrets in args before emitting the tool start event", async () => {
++  it("keeps args unchanged in the tool start event", async () => {
+     const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+     registerAgentEventListener((evt) => {
+       events.push(evt as never);
+@@ -4243,12 +4243,12 @@ describe("control UI credential redaction (issue #72283)", () => {
+     );
+     const emittedArgs = (startEvent.data as { args?: Record<string, unknown> })?.args ?? {};
+     const serialized = JSON.stringify(emittedArgs);
+-    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
+-    expect(serialized).not.toContain("abcdef0123456789QWERTY=");
++    expect(serialized).toContain("sk-1234567890abcdefXYZ");
++    expect(serialized).toContain("abcdef0123456789QWERTY=");
+     expect(serialized).toContain("config.apply");
+   });
+ 
+-  it("redacts secrets in exec aggregated stdout before emitting command_output", async () => {
++  it("keeps exec aggregated stdout unchanged in command_output", async () => {
+     const { ctx, onAgentEvent } = createTestContext();
+ 
+     await executeTool(ctx, {
+@@ -4274,12 +4274,12 @@ describe("control UI credential redaction (issue #72283)", () => {
+     expect(commandOutputCalls).toHaveLength(1);
+     const lastOutput = commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined;
+     const output = requireString(lastOutput?.data?.output, "command output");
+-    expect(output).not.toContain("sk-or-v1-abcdef0123456789");
+-    expect(output).not.toContain("ghp_abcdefghij1234567890");
++    expect(output).toContain("sk-or-v1-abcdef0123456789");
++    expect(output).toContain("ghp_abcdefghij1234567890");
+     expect(output).toContain("OPENROUTER_API_KEY=");
+   });
+ 
+-  it("redacts details-only results before emitting the tool result event", async () => {
++  it("keeps details-only results unchanged in the tool result event", async () => {
+     const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+     registerAgentEventListener((evt) => {
+       events.push(evt as never);
+@@ -4303,11 +4303,11 @@ describe("control UI credential redaction (issue #72283)", () => {
+       "tool result",
+     );
+     const serialized = JSON.stringify(resultEvent.data?.result);
+-    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
++    expect(serialized).toContain("sk-1234567890abcdefXYZ");
+     expect(serialized).toContain("gpt-4");
+   });
+ 
+-  it("redacts primitive string results before emitting the tool result event", async () => {
++  it("keeps primitive string results unchanged in the tool result event", async () => {
+     const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+     registerAgentEventListener((evt) => {
+       events.push(evt as never);
+@@ -4331,8 +4331,7 @@ describe("control UI credential redaction (issue #72283)", () => {
+     if (typeof emittedResult !== "string") {
+       throw new Error("expected string result");
+     }
+-    expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
+-    expect(emittedResult).toContain("OPENROUTER_API_KEY=");
++    expect(emittedResult).toBe("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789");
+   });
+ 
+   it("emits primitive string results as visible tool output", async () => {
+diff --git a/src/agents/embedded-agent-subscribe.tools.test.ts b/src/agents/embedded-agent-subscribe.tools.test.ts
+index 489e88c01d3..ca423460158 100644
+--- a/src/agents/embedded-agent-subscribe.tools.test.ts
++++ b/src/agents/embedded-agent-subscribe.tools.test.ts
+@@ -214,21 +214,21 @@ function getTextContent(result: unknown, index = 0): string {
+ }
+ 
+ describe("sanitizeToolResult", () => {
+-  it("redacts JSON-style apiKey fields in text content blocks", () => {
+-    const result = {
+-      content: [
+-        {
+-          type: "text",
+-          text: '{"apiKey":"sk-1234567890abcdef","model":"gpt-4"}',
+-        },
+-      ],
+-    };
+-    const text = getTextContent(sanitizeToolResult(result));
+-    expect(text).not.toContain("sk-1234567890abcdef");
+-    expect(text).toContain("model");
+-  });
+-
+-  it("redacts Link-like payment credential fields in tool result payloads", () => {
++  // LobsterAI: tool events keep their text like model context and transcripts;
++  // only image bytes are stripped and long text is capped.
++  it.each([
++    ["JSON-style apiKey fields", '{"apiKey":"sk-1234567890abcdef","model":"gpt-4"}'],
++    [
++      "ENV-style credential assignments",
++      "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\nMODEL=gpt-4",
++    ],
++    ["Bearer authorization tokens", "Authorization: Bearer abcdef0123456789QWERTY="],
++    ["40-character relative paths", "src/shared/cowork/openclawCronSessionKey.test.ts"],
++  ])("keeps %s in text content blocks", (_name, text) => {
++    expect(getTextContent(sanitizeToolResult({ content: [{ type: "text", text }] }))).toBe(text);
++  });
++
++  it("keeps payment fields in text content and details", () => {
+     const result = {
+       content: [
+         {
+@@ -244,35 +244,7 @@ describe("sanitizeToolResult", () => {
+         },
+       },
+     };
+-    const sanitized = sanitizeToolResult(result) as {
+-      content: Array<{ text: string }>;
+-      details: {
+-        structuredContent: { sharedPaymentToken: string; cardNumber: string; amount: string };
+-      };
+-    };
+-    const serialized = JSON.stringify(sanitized);
+-    expect(serialized).not.toContain("spt_abcdefghijklmnopqrstuvwxyz");
+-    expect(serialized).not.toContain("paycred_abcdefghijklmnopqrstuvwxyz");
+-    expect(serialized).not.toContain("4242424242424242");
+-    expect(serialized).not.toContain("123");
+-    expect(serialized).not.toContain("spt_zyxwvutsrqponmlkjihgfedcba");
+-    expect(serialized).not.toContain("4000056655665556");
+-    expect(sanitized.content[0]?.text).toContain('"amount":"4200"');
+-    expect(sanitized.details.structuredContent.amount).toBe("4200");
+-  });
+-
+-  it("redacts ENV-style credential assignments", () => {
+-    const result = {
+-      content: [
+-        {
+-          type: "text",
+-          text: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\nMODEL=gpt-4",
+-        },
+-      ],
+-    };
+-    const text = getTextContent(sanitizeToolResult(result));
+-    expect(text).not.toContain("sk-or-v1-abcdef0123456789");
+-    expect(text).toContain("MODEL=gpt-4");
++    expect(sanitizeToolResult(result)).toEqual(result);
+   });
+ 
+   it("preserves env placeholders in tool output text", () => {
+@@ -292,14 +264,6 @@ describe("sanitizeToolResult", () => {
+     );
+   });
+ 
+-  it("redacts Bearer authorization tokens", () => {
+-    const result = {
+-      content: [{ type: "text", text: "Authorization: Bearer abcdef0123456789QWERTY=" }],
+-    };
+-    const text = getTextContent(sanitizeToolResult(result));
+-    expect(text).not.toContain("abcdef0123456789QWERTY=");
+-  });
+-
+   it("reports decoded byte size when stripping image content", () => {
+     const data = Buffer.from([0, 1, 2, 3, 4]).toString("base64");
+     const result = {
+@@ -335,100 +299,58 @@ describe("sanitizeToolResult", () => {
+     );
+   });
+ 
+-  it("redacts secrets inside result.details (e.g. exec aggregated stdout)", () => {
+-    const result = {
+-      content: [{ type: "text", text: "ok" }],
+-      details: {
+-        status: "completed",
+-        aggregated:
+-          'OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\napiKey: "ghp_abcdefghij1234567890"',
+-        exitCode: 0,
+-        cwd: "/tmp/work",
++  it.each([
++    [
++      "details (e.g. exec aggregated stdout)",
++      {
++        content: [{ type: "text", text: "ok" }],
++        details: {
++          status: "completed",
++          aggregated:
++            'OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\napiKey: "ghp_abcdefghij1234567890"',
++          exitCode: 0,
++          cwd: "/tmp/work",
++        },
+       },
+-    };
+-    const sanitized = sanitizeToolResult(result) as {
+-      details: { status: string; aggregated: string; exitCode: number; cwd: string };
+-    };
+-    expect(sanitized.details.aggregated).not.toContain("sk-or-v1-abcdef0123456789");
+-    expect(sanitized.details.aggregated).not.toContain("ghp_abcdefghij1234567890");
+-    expect(sanitized.details.status).toBe("completed");
+-    expect(sanitized.details.exitCode).toBe(0);
+-    expect(sanitized.details.cwd).toBe("/tmp/work");
+-  });
+-
+-  it("redacts secrets at the top level outside content/details", () => {
+-    const result = {
+-      output: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789",
+-      metadata: {
+-        token: "ghp_abcdefghij1234567890ABCDEF",
+-        nested: { auth: "Bearer abcdef0123456789QWERTY=" },
++    ],
++    [
++      "top-level fields outside content/details",
++      {
++        output: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789",
++        metadata: {
++          token: "ghp_abcdefghij1234567890ABCDEF",
++          nested: { auth: "Bearer abcdef0123456789QWERTY=" },
++        },
++        summary: "ok",
+       },
+-      summary: "ok",
+-    };
+-    const sanitized = sanitizeToolResult(result) as {
+-      output: string;
+-      metadata: { token: string; nested: { auth: string } };
+-      summary: string;
+-    };
+-    expect(sanitized.output).not.toContain("sk-or-v1-abcdef0123456789");
+-    expect(sanitized.metadata.token).not.toContain("ghp_abcdefghij1234567890ABCDEF");
+-    expect(sanitized.metadata.nested.auth).not.toContain("abcdef0123456789QWERTY=");
+-    expect(sanitized.summary).toBe("ok");
+-  });
+-
+-  it("redacts a details-only result with no content array", () => {
+-    const result = {
+-      details: {
+-        config: { apiKey: "sk-1234567890abcdefXYZ", model: "gpt-4" },
++    ],
++    [
++      "a details-only result with no content array",
++      { details: { config: { apiKey: "sk-1234567890abcdefXYZ", model: "gpt-4" } } },
++    ],
++    [
++      "structured credential fields beside source text",
++      {
++        content: [{ type: "text", text: "if let token = timeObserverToken {" }],
++        detail: "if let token = timeObserverToken {",
++        token: "sk-1234567890abcdefXYZ",
+       },
+-    };
+-    const sanitized = sanitizeToolResult(result) as {
+-      details: { config: { apiKey: string; model: string } };
+-    };
+-    expect(sanitized.details.config.apiKey).not.toContain("sk-1234567890abcdefXYZ");
+-    expect(sanitized.details.config.model).toBe("gpt-4");
+-  });
+-
+-  it("redacts primitive string results", () => {
+-    const sanitized = sanitizeToolResult("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789") as string;
+-    const source = "if let token = timeObserverToken {";
+-
+-    expect(sanitized).not.toContain("sk-or-v1-abcdef0123456789");
+-    expect(sanitized).toContain("OPENROUTER_API_KEY=");
+-    expect(sanitizeToolResult(source)).toBe(source);
+-  });
+-
+-  it("preserves source assignments in structured results while redacting credential fields", () => {
+-    const source = "if let token = timeObserverToken {";
+-    const credential = "sk-1234567890abcdefXYZ";
+-    const sanitized = sanitizeToolResult({
+-      content: [{ type: "text", text: source }],
+-      detail: source,
+-      token: credential,
+-    }) as {
+-      content: Array<{ text: string }>;
+-      detail: string;
+-      token: string;
+-    };
+-
+-    expect(sanitized.content[0]?.text).toBe(source);
+-    expect(sanitized.detail).toBe(source);
+-    expect(sanitized.token).not.toContain(credential);
++    ],
++  ])("keeps %s unchanged", (_name, result) => {
++    expect(sanitizeToolResult(result)).toEqual(result);
+   });
+ 
+-  it("preserves top-level arrays while redacting nested strings", () => {
+-    const sanitized = sanitizeToolResult([
++  it("returns primitive strings and top-level arrays unchanged", () => {
++    const primitive = "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789";
++    const array = [
+       { output: "Authorization: Bearer abcdef0123456789QWERTY=" },
+       "apiKey=sk-1234567890abcdefXYZ",
+-    ]) as Array<{ output: string } | string>;
+-
+-    expect(Array.isArray(sanitized)).toBe(true);
+-    expect(JSON.stringify(sanitized)).not.toContain("abcdef0123456789QWERTY=");
+-    expect(JSON.stringify(sanitized)).not.toContain("sk-1234567890abcdefXYZ");
+-    expect((sanitized[0] as { output: string }).output).toContain("Authorization: Bearer");
++    ];
++    expect(sanitizeToolResult(primitive)).toBe(primitive);
++    expect(sanitizeToolResult(array)).toBe(array);
+   });
+ 
+-  it("applies configured redact patterns to Control UI tool payloads", () => {
++  it("ignores logging redact patterns for tool payloads", () => {
+     vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({
+       redactPatterns: [String.raw`\bcustom-secret-[A-Za-z0-9]+\b`],
+     });
+@@ -436,32 +358,19 @@ describe("sanitizeToolResult", () => {
+     const result = {
+       content: [{ type: "text", text: "value custom-secret-abc123" }],
+     };
+-    const text = getTextContent(sanitizeToolResult(result));
+-
+-    expect(text).not.toContain("custom-secret-abc123");
+-    expect(text).toContain("custom…c123");
++    expect(getTextContent(sanitizeToolResult(result))).toBe("value custom-secret-abc123");
+   });
+ });
+ 
+ describe("sanitizeToolArgs", () => {
+-  it("redacts string-valued credentials nested anywhere in args", () => {
++  it("returns args unchanged, including credential-shaped values", () => {
+     const args = {
+       apiKey: "sk-1234567890abcdefXYZ",
+       headers: { Authorization: "Bearer abcdef0123456789QWERTY=" },
+       command: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ./run.sh",
+       flags: ["--api-key", "sk-1234567890abcdefXYZ"],
+     };
+-    const sanitized = sanitizeToolArgs(args) as {
+-      apiKey: string;
+-      headers: { Authorization: string };
+-      command: string;
+-      flags: string[];
+-    };
+-    expect(sanitized.apiKey).not.toContain("sk-1234567890abcdefXYZ");
+-    expect(sanitized.headers.Authorization).not.toContain("abcdef0123456789QWERTY=");
+-    expect(sanitized.command).not.toContain("sk-or-v1-abcdef0123456789");
+-    expect(sanitized.flags.join(" ")).not.toContain("sk-1234567890abcdefXYZ");
+-    expect(sanitized.flags[0]).toBe("--api-key");
++    expect(sanitizeToolArgs(args)).toBe(args);
+   });
+ 
+   it("preserves structured env placeholders in args", () => {
+@@ -472,16 +381,7 @@ describe("sanitizeToolArgs", () => {
+         GITHUB_TOKEN: "${GITHUB_TOKEN:-literalgithub1234567890}",
+       },
+     };
+-    const sanitized = sanitizeToolArgs(args) as {
+-      DISCORD_BOT_TOKEN: string;
+-      nested: {
+-        apiKey: string;
+-        GITHUB_TOKEN: string;
+-      };
+-    };
+-    expect(sanitized.DISCORD_BOT_TOKEN).toBe("${DISCORD_BOT_TOKEN:-}");
+-    expect(sanitized.nested.apiKey).toBe("${OPEN…Y:-}");
+-    expect(sanitized.nested.GITHUB_TOKEN).toBe("${GITHUB_TOKEN:-liter…890}");
++    expect(sanitizeToolArgs(args)).toBe(args);
+   });
+ 
+   it("passes through null/undefined and non-string primitives unchanged", () => {
+diff --git a/src/agents/embedded-agent-tool-results.ts b/src/agents/embedded-agent-tool-results.ts
+index cf9289576eb..fc917496c6d 100644
+--- a/src/agents/embedded-agent-tool-results.ts
++++ b/src/agents/embedded-agent-tool-results.ts
+@@ -7,11 +7,8 @@ import {
+   readStringValue,
+ } from "@openclaw/normalization-core/string-coerce";
+ import {
+-  redactModelVisibleSecrets,
+   redactModelVisibleSensitiveFieldValueWithConfig,
+   redactModelVisibleToolPayloadText,
+-  redactSensitiveFieldValue,
+-  redactToolPayloadText,
+ } from "../logging/redact.js";
+ import { truncateUtf16Safe } from "../utils.js";
+ import { collectTextContentBlocks } from "./content-blocks.js";
+@@ -218,51 +215,21 @@ function extractAggregatedErrorField(value: unknown): string | undefined {
+   return readErrorCandidate(record.aggregated);
+ }
+ 
+-function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
+-  if (typeof value === "string") {
+-    return redactToolPayloadText(value);
+-  }
+-  if (Array.isArray(value)) {
+-    if (seen.has(value)) {
+-      return "[Circular]";
+-    }
+-    seen.add(value);
+-    return value.map((item) => redactStringsDeep(item, seen));
+-  }
+-  if (value && typeof value === "object") {
+-    if (seen.has(value)) {
+-      return "[Circular]";
+-    }
+-    seen.add(value);
+-    const out: Record<string, unknown> = {};
+-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+-      out[key] =
+-        typeof child === "string"
+-          ? redactSensitiveFieldValue(key, child)
+-          : redactStringsDeep(child, seen);
+-    }
+-    return out;
+-  }
+-  return value;
+-}
+-
++// LobsterAI: tool arguments and results keep their text in live events, as they
++// do in model context and transcripts. Logging and diagnostics still mask secrets.
+ export function sanitizeToolArgs(args: unknown): unknown {
+-  return redactStringsDeep(args);
++  return args;
+ }
+ 
+ export function sanitizeToolResult(result: unknown): unknown {
+-  if (typeof result === "string") {
+-    return redactModelVisibleToolPayloadText(result);
+-  }
+-  if (Array.isArray(result)) {
+-    return redactModelVisibleSecrets(result);
++  if (typeof result === "string" || Array.isArray(result)) {
++    return result;
+   }
+   if (!result || typeof result !== "object") {
+     return result;
+   }
+   const record = result as Record<string, unknown>;
+-  // Strip image data first so the deep redaction pass doesn't waste work
+-  // scanning base64 payloads (and so we capture the original byte counts).
++  // Strip image data so events do not carry base64 payloads, keeping the original byte counts.
+   const preCleaned: Record<string, unknown> = { ...record };
+   const originalContent = Array.isArray(record.content) ? record.content : null;
+   if (originalContent) {
+@@ -282,11 +249,8 @@ export function sanitizeToolResult(result: unknown): unknown {
+       return entry;
+     });
+   }
+-  // Deep-redact the entire result so any top-level or nested string is
+-  // protected, not just `details` and text content blocks.
+-  const baseline = redactModelVisibleSecrets(preCleaned);
+-  const out: Record<string, unknown> = { ...baseline };
+-  const content = Array.isArray(baseline.content) ? baseline.content : null;
++  const out: Record<string, unknown> = { ...preCleaned };
++  const content = Array.isArray(preCleaned.content) ? preCleaned.content : null;
+   if (content) {
+     out.content = content.map((item) => {
+       if (!item || typeof item !== "object") {
+diff --git a/src/agents/session-tool-result-guard.test.ts b/src/agents/session-tool-result-guard.test.ts
+index 722f734d965..ac47715695a 100644
+--- a/src/agents/session-tool-result-guard.test.ts
++++ b/src/agents/session-tool-result-guard.test.ts
+@@ -631,7 +631,7 @@ describe("installSessionToolResultGuard", () => {
+     },
+   );
+ 
+-  it("applies before_message_write redaction to tool-result details before persistence", () => {
++  it("persists tool-result text and details exactly as the model saw them", () => {
+     const sm = SessionManager.inMemory();
+     installSessionToolResultGuard(sm, {
+       beforeMessageWriteHook: ({ message }) => ({
+@@ -667,17 +667,17 @@ describe("installSessionToolResultGuard", () => {
+         safe: string;
+       };
+     };
+-    const serializedToolResult = JSON.stringify(toolResult);
+-    expect(
+-      expectDefined(toolResult.content[0], "toolResult.content[0] test invariant").text,
+-    ).not.toContain("sk-abcdef1234567890xyz");
+-    expect(serializedToolResult).not.toContain("plainsecretvalue123");
+-    expect(serializedToolResult).not.toContain("hunter2");
+-    expect(serializedToolResult).not.toContain("nestedplainsecret123");
+-    expect(toolResult.details.apiKey).toBe("***");
+-    expect(toolResult.details.password).toBe("***");
+-    expect(toolResult.details.nested.accessToken[0]).toBe("***");
+-    expect(serializedToolResult).toContain("visible");
++    // Replayed history must match the live model context byte for byte, or the
++    // provider prefix cache misses from the first rewritten tool result onward.
++    expect(expectDefined(toolResult.content[0], "toolResult.content[0] test invariant").text).toBe(
++      "result sk-abcdef1234567890xyz",
++    );
++    expect(toolResult.details).toEqual({
++      apiKey: "plainsecretvalue123",
++      password: "hunter2",
++      nested: { accessToken: ["nestedplainsecret123"] },
++      safe: "visible",
++    });
+   });
+ 
+   it("preserves correlation IDs while backfilling names through redaction", () => {
+diff --git a/src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts b/src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts
+index 63d43e35c79..fe8da6b679d 100644
+--- a/src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts
++++ b/src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts
+@@ -1,4 +1,4 @@
+-// Verifies persisted tool results are redacted/capped and can be transformed by hooks.
++// Verifies persisted tool results are capped (not masked) and can be transformed by hooks.
+ import fs from "node:fs";
+ import os from "node:os";
+ import path from "node:path";
+@@ -220,10 +220,27 @@ describe("tool_result_persist hook", () => {
+     expect(details.error).toBeUndefined();
+   });
+ 
+-  it("redacts small toolResult details before persistence", () => {
++  it("keeps small toolResult details as written", () => {
+     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
+     const bearerValue = "bearerdiagnosticvalue1234567890";
+     const adjacentLongGithubToken = `ghp_${"a".repeat(5_000)}`;
++    const smallDetails = {
++      status: "completed",
++      token: tokenValue,
++      GITHUB_TOKEN: tokenValue,
++      github_token: tokenValue,
++      openai_api_key: tokenValue,
++      card_number: 4242424242424242,
++      cvc: 123,
++      authToken: [tokenValue],
++      aggregated: `GITHUB_TOKEN=${tokenValue}`,
++      adjacentLongGithubToken: `${"x".repeat(1_000)}${adjacentLongGithubToken} z`,
++      nested: {
++        apiKey: { value: bearerValue },
++        stdout: `Authorization: Bearer ${bearerValue}`,
++        items: [`curl --token ${tokenValue} https://example.test`],
++      },
++    };
+     const sm = guardSessionManager(SessionManager.inMemory(), {
+       agentId: "main",
+       sessionKey: "main",
+@@ -238,39 +255,15 @@ describe("tool_result_persist hook", () => {
+       toolCallId: "call_1",
+       isError: false,
+       content: [{ type: "text", text: "visible output stays small" }],
+-      details: {
+-        status: "completed",
+-        token: tokenValue,
+-        GITHUB_TOKEN: tokenValue,
+-        github_token: tokenValue,
+-        openai_api_key: tokenValue,
+-        card_number: 4242424242424242,
+-        cvc: 123,
+-        authToken: [tokenValue],
+-        aggregated: `GITHUB_TOKEN=${tokenValue}`,
+-        adjacentLongGithubToken: `${"x".repeat(1_000)}${adjacentLongGithubToken} z`,
+-        nested: {
+-          apiKey: { value: bearerValue },
+-          stdout: `Authorization: Bearer ${bearerValue}`,
+-          items: [`curl --token ${tokenValue} https://example.test`],
+-        },
+-      },
++      details: smallDetails,
+     } as ToolResultMessage);
+ 
+     const toolResult = requirePersistedToolResult(sm);
+-    const serialized = JSON.stringify(toolResult.details);
+     expect(requireToolResultText(toolResult)).toBe("visible output stays small");
+-    expect(serialized).toContain("GITHUB_TOKEN=");
+-    expect(serialized).toContain("Bearer");
+-    expect(serialized).toContain("…");
+-    expect(serialized).not.toContain(tokenValue);
+-    expect(serialized).not.toContain(bearerValue);
+-    expect(serialized).not.toContain(adjacentLongGithubToken);
+-    expect(serialized).not.toContain("a".repeat(100));
+-    expect(serialized).not.toContain("4242424242424242");
++    expect(toolResult.details).toEqual(smallDetails);
+   });
+ 
+-  it("applies in-memory redaction config to persisted details", () => {
++  it("ignores logging redaction config for persisted tool results", () => {
+     const customSecret = "customsecret=abcdef1234567890ghij";
+     const sm = guardSessionManager(SessionManager.inMemory(), {
+       agentId: "main",
+@@ -298,11 +291,12 @@ describe("tool_result_persist hook", () => {
+ 
+     const toolResult = requirePersistedToolResult(sm);
+     const serialized = JSON.stringify(toolResult);
+-    expect(serialized).toContain("customsecret=abcdef…ghij");
+-    expect(serialized).not.toContain(customSecret);
++    expect(requireToolResultText(toolResult)).toBe(customSecret);
++    expect(toolResult.details).toEqual({ diagnostic: customSecret });
++    expect(serialized).not.toContain("…");
+   });
+ 
+-  it("keeps sensitive parent keys when custom value patterns match the key probe", () => {
++  it("keeps sensitive detail values under custom logging patterns", () => {
+     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
+     tempDirs.push(tempDir);
+     const configPath = path.join(tempDir, "openclaw.json");
+@@ -332,12 +326,10 @@ describe("tool_result_persist hook", () => {
+     } as ToolResultMessage);
+ 
+     const toolResult = requirePersistedToolResult(sm);
+-    const serialized = JSON.stringify(toolResult.details);
+-    expect(serialized).toContain("***");
+-    expect(serialized).not.toContain("shortsecret");
++    expect(toolResult.details).toEqual({ token: { value: "shortsecret" } });
+   });
+ 
+-  it("redacts secret-bearing keys and too-deep detail branches before persistence", () => {
++  it("keeps detail keys and caps too-deep detail branches before persistence", () => {
+     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
+     const sm = guardSessionManager(SessionManager.inMemory(), {
+       agentId: "main",
+@@ -365,10 +357,9 @@ describe("tool_result_persist hook", () => {
+ 
+     const toolResult = requirePersistedToolResult(sm);
+     const serialized = JSON.stringify(toolResult.details);
+-    expect(serialized).toContain("token=");
+-    expect(serialized).toContain("***");
++    expect(serialized).toContain(`token=${tokenValue}`);
+     expect(serialized).toContain("max depth exceeded");
+-    expect(serialized).not.toContain(tokenValue);
++    expect(serialized).not.toContain("***");
+   });
+ 
+   it("caps oversized toolResult details before persistence", () => {
+@@ -428,11 +419,11 @@ describe("tool_result_persist hook", () => {
+     appendToolResultWithTail(sm, tail);
+ 
+     const persistedTail = requirePersistedToolResult(sm).details.tail as string;
+-    expect(persistedTail).toContain("boundary overlap omitted");
++    expect(persistedTail).toContain("persisted detail truncated");
+     expect(persistedTail).not.toMatch(LONE_SURROGATE_RE);
+   });
+ 
+-  it("redacts summarized oversized toolResult details before persistence", () => {
++  it("keeps summarized oversized toolResult details unmasked", () => {
+     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
+     const boundaryGhToken = `ghp_${"a".repeat(36)}`;
+     const leadingTailToken = "a".repeat(5_000);
+@@ -475,16 +466,14 @@ describe("tool_result_persist hook", () => {
+     const serialized = JSON.stringify(toolResult.details);
+     expect(requireToolResultText(toolResult)).toBe("visible output stays small");
+     expect(toolResult.details.persistedDetailsTruncated).toBe(true);
+-    expect(serialized).toContain("token=***");
+-    expect(serialized).toContain("partial secret span omitted");
+-    expect(serialized).toContain("boundary overlap omitted");
+-    expect(serialized).not.toContain(tokenValue);
+-    expect(serialized).not.toContain(boundaryGhToken.slice(0, 12));
+-    expect(serialized).not.toContain("a".repeat(100));
+-    expect(serialized).not.toContain("b".repeat(100));
++    expect(serialized).toContain(`GITHUB_TOKEN=${tokenValue}`);
++    expect(serialized).toContain("persisted detail truncated");
++    expect(serialized).not.toContain("***");
++    // Text past the persisted string limit is dropped, not masked.
++    expect(serialized).not.toContain(omittedTailToken.slice(0, 100));
+   });
+ 
+-  it("redacts retained structured fields in fallback oversized details summaries", () => {
++  it("keeps retained structured fields in fallback oversized details summaries", () => {
+     const tokenValue = "fallback-token-abcdefghijklmnopqrstuv";
+     const sm = guardSessionManager(SessionManager.inMemory(), {
+       agentId: "main",
+@@ -528,7 +517,7 @@ describe("tool_result_persist hook", () => {
+     const serialized = JSON.stringify(details);
+     expect(details.persistedDetailsTruncated).toBe(true);
+     expect(details.finalDetailsTruncated).toBe(true);
+-    expect(details.status).toMatchObject({ token: "***" });
++    expect(details.status).toMatchObject({ token: tokenValue });
+     expect(details.spilledChars).toBe(2_000_000);
+     expect(details.spillTruncated).toBe(true);
+     expect(details.spill).toEqual({
+@@ -536,10 +525,10 @@ describe("tool_result_persist hook", () => {
+       chars: 2_000_000,
+       truncated: true,
+     });
+-    expect(serialized).not.toContain(tokenValue);
++    expect(serialized).toContain(tokenValue);
+   });
+ 
+-  it("does not persist lookahead text after redaction shrinks an oversized detail prefix", () => {
++  it("truncates oversized detail strings at the persisted limit", () => {
+     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
+     const postBoundarySecret = "UNREDACTED_AFTER_LIMIT_SECRET";
+     const shrinkPrefix = `${Array.from({ length: 20 }, () => `GITHUB_TOKEN=${tokenValue}`).join(
+@@ -572,12 +561,12 @@ describe("tool_result_persist hook", () => {
+     const toolResult = requirePersistedToolResult(sm);
+     const serialized = JSON.stringify(toolResult.details);
+     expect(toolResult.details.persistedDetailsTruncated).toBe(true);
+-    expect(serialized).toContain("partial secret span omitted");
+-    expect(serialized).not.toContain(tokenValue);
++    expect(serialized).toContain(`GITHUB_TOKEN=${tokenValue}`);
++    expect(serialized).toContain("persisted detail truncated");
+     expect(serialized).not.toContain(postBoundarySecret);
+   });
+ 
+-  it("fails closed for partially scanned oversized structured secret values", () => {
++  it("truncates long structured values without masking them", () => {
+     const longSecret = "r".repeat(10_000);
+     const sm = guardSessionManager(SessionManager.inMemory(), {
+       agentId: "main",
+@@ -601,8 +590,9 @@ describe("tool_result_persist hook", () => {
+ 
+     const toolResult = requirePersistedToolResult(sm);
+     const serialized = JSON.stringify(toolResult.details);
+-    expect(serialized).toContain("partial secret span omitted");
+-    expect(serialized).not.toContain("r".repeat(100));
++    expect(serialized).toContain("r".repeat(100));
++    expect(serialized).toContain("persisted detail truncated");
++    expect(serialized).not.toContain("z".repeat(100));
+   });
+ 
+   it("caps oversized toolResult details without serializing the original payload", () => {
+diff --git a/src/agents/session-tool-result-guard.ts b/src/agents/session-tool-result-guard.ts
+index 8cb43e6bdc6..98839a0a819 100644
+--- a/src/agents/session-tool-result-guard.ts
++++ b/src/agents/session-tool-result-guard.ts
+@@ -6,7 +6,7 @@
+ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+ import { isRecord } from "@openclaw/normalization-core/record-coerce";
+ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
++import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+ import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
+ import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+ import {
+@@ -15,11 +15,7 @@ import {
+   jsonUtf8BytesOrInfinity,
+   type BoundedJsonUtf8Bytes,
+ } from "../infra/json-utf8-bytes.js";
+-import {
+-  isSensitiveFieldKey,
+-  redactSensitiveFieldValueWithConfig,
+-  redactToolPayloadTextWithConfig,
+-} from "../logging/redact.js";
++import { isSensitiveFieldKey, redactToolPayloadTextWithConfig } from "../logging/redact.js";
+ import type {
+   PluginHookBeforeMessageWriteEvent,
+   PluginHookBeforeMessageWriteResult,
+@@ -173,14 +169,6 @@ const MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES = 8_192;
+ const MAX_PERSISTED_DETAIL_STRING_CHARS = 2_000;
+ const MAX_PERSISTED_DETAIL_SESSION_COUNT = 10;
+ const MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS = 200;
+-const MAX_PERSISTED_DETAIL_REDACTION_LOOKAHEAD_CHARS = 1_024;
+-const MAX_PERSISTED_DETAIL_BOUNDARY_OVERLAP_CHARS = 512;
+-const PERSISTED_DETAIL_REDACTION_BOUNDARY = "\u0000OPENCLAW_PERSISTED_DETAIL_BOUNDARY\u0000";
+-const PARTIAL_STRUCTURED_SECRET_VALUE_RE =
+-  /(?:["']?(?:api[-_]?key|apikey|token|secret|password|passwd|access[-_]?token|accesstoken|refresh[-_]?token|refreshtoken|auth[-_]?token|authtoken|client[-_]?secret|clientsecret|app[-_]?secret|appsecret|card[-_]?number|cardnumber|cvc|cvv)["']?\s*[:=]\s*["']?)(?!\*{3})(?=[^\s"',}\]]{8,})/i;
+-const PARTIAL_PRIVATE_KEY_BLOCK_RE =
+-  /-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY|OPENSSH PRIVATE KEY|RSA PRIVATE KEY|EC PRIVATE KEY|DSA PRIVATE KEY)-----/i;
+-
+ type ToolResultDetailRedactionConfig = Parameters<typeof redactToolPayloadTextWithConfig>[1];
+ function originalDetailsSizeFields(size: BoundedJsonUtf8Bytes): Record<string, number> {
+   return size.complete
+@@ -188,41 +176,19 @@ function originalDetailsSizeFields(size: BoundedJsonUtf8Bytes): Record<string, n
+     : { originalDetailsBytesAtLeast: size.bytes };
+ }
+ 
++// LobsterAI: persisted tool details keep their text, like tool content and the
++// model-visible transcript. Only the size caps below apply; logs still mask secrets.
+ function redactPersistedDetailString(
+   value: string,
+   maxChars = MAX_PERSISTED_DETAIL_STRING_CHARS,
+-  redactionConfig?: ToolResultDetailRedactionConfig,
++  _redactionConfig?: ToolResultDetailRedactionConfig,
+ ): string {
+   if (value.length <= maxChars) {
+-    return redactToolPayloadTextWithConfig(value, redactionConfig);
++    return value;
+   }
+-
+-  const scan = `${sliceUtf16Safe(value, 0, maxChars)}${PERSISTED_DETAIL_REDACTION_BOUNDARY}${sliceUtf16Safe(
+-    value,
+-    maxChars,
+-    maxChars + MAX_PERSISTED_DETAIL_REDACTION_LOOKAHEAD_CHARS,
+-  )}`;
+-  const redactedScan = redactToolPayloadTextWithConfig(scan, redactionConfig);
+-  const boundaryIndex = redactedScan.indexOf(PERSISTED_DETAIL_REDACTION_BOUNDARY);
+-  const redactedPrefix =
+-    boundaryIndex >= 0
+-      ? redactedScan.slice(0, boundaryIndex)
+-      : "[OpenClaw persisted detail redacted: boundary marker removed]";
+-  const safePrefixChars = Math.max(
+-    0,
+-    maxChars - Math.min(maxChars, MAX_PERSISTED_DETAIL_BOUNDARY_OVERLAP_CHARS),
+-  );
+-  const initialPersistedPrefix = truncateUtf16Safe(redactedPrefix, safePrefixChars);
+-  const persistedPrefix =
+-    PARTIAL_STRUCTURED_SECRET_VALUE_RE.test(initialPersistedPrefix) ||
+-    PARTIAL_PRIVATE_KEY_BLOCK_RE.test(initialPersistedPrefix)
+-      ? "[OpenClaw persisted detail redacted: partial secret span omitted]"
+-      : initialPersistedPrefix;
+-  const boundaryNotice = "[OpenClaw persisted detail redacted: boundary overlap omitted]";
+-  return `${persistedPrefix}${persistedPrefix ? "\n" : ""}${boundaryNotice}\n\n[OpenClaw persisted detail truncated: ${Math.max(
+-    0,
+-    value.length - maxChars,
+-  )} original chars omitted]`;
++  return `${truncateUtf16Safe(value, maxChars)}\n\n[OpenClaw persisted detail truncated: ${
++    value.length - maxChars
++  } original chars omitted]`;
+ }
+ 
+ function selectPersistedDetailRedactionKey(
+@@ -234,30 +200,17 @@ function selectPersistedDetailRedactionKey(
+ 
+ function redactedOriginalDetailKeys(
+   src: Record<string, unknown>,
+-  redactionConfig?: ToolResultDetailRedactionConfig,
++  _redactionConfig?: ToolResultDetailRedactionConfig,
+ ): string[] {
+-  return firstEnumerableOwnKeys(src, 40).map((key) =>
+-    redactToolPayloadTextWithConfig(key, redactionConfig),
+-  );
++  return firstEnumerableOwnKeys(src, 40);
+ }
+ 
+ function redactPersistedDetailValue(
+   value: unknown,
+   depth = 0,
+-  redactionKey?: string,
+-  redactionConfig?: ToolResultDetailRedactionConfig,
++  _redactionKey?: string,
++  _redactionConfig?: ToolResultDetailRedactionConfig,
+ ): unknown {
+-  if (typeof value === "string") {
+-    return redactionKey
+-      ? redactSensitiveFieldValueWithConfig(redactionKey, value, redactionConfig)
+-      : redactToolPayloadTextWithConfig(value, redactionConfig);
+-  }
+-  if (
+-    redactionKey &&
+-    (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint")
+-  ) {
+-    return redactSensitiveFieldValueWithConfig(redactionKey, String(value), redactionConfig);
+-  }
+   if (value === null || value === undefined || typeof value !== "object") {
+     return value;
+   }
+@@ -267,9 +220,9 @@ function redactPersistedDetailValue(
+   if (Array.isArray(value)) {
+     let changed = false;
+     const next = value.map((item) => {
+-      const redacted = redactPersistedDetailValue(item, depth + 1, redactionKey, redactionConfig);
+-      changed ||= redacted !== item;
+-      return redacted;
++      const capped = redactPersistedDetailValue(item, depth + 1);
++      changed ||= capped !== item;
++      return capped;
+     });
+     return changed ? next : value;
+   }
+@@ -278,15 +231,9 @@ function redactPersistedDetailValue(
+   let changed = false;
+   const next: Record<string, unknown> = {};
+   for (const [key, field] of Object.entries(source)) {
+-    const redactedKey = redactToolPayloadTextWithConfig(key, redactionConfig);
+-    const redacted = redactPersistedDetailValue(
+-      field,
+-      depth + 1,
+-      selectPersistedDetailRedactionKey(key, redactionKey),
+-      redactionConfig,
+-    );
+-    changed ||= redactedKey !== key || redacted !== field;
+-    next[redactedKey] = redacted;
++    const capped = redactPersistedDetailValue(field, depth + 1);
++    changed ||= capped !== field;
++    next[key] = capped;
+   }
+   return changed ? next : value;
+ }
+diff --git a/src/agents/sessions/agent-session-code-mode-source.test.ts b/src/agents/sessions/agent-session-code-mode-source.test.ts
+index ac24734a2e9..7625b09f9ca 100644
+--- a/src/agents/sessions/agent-session-code-mode-source.test.ts
++++ b/src/agents/sessions/agent-session-code-mode-source.test.ts
+@@ -210,49 +210,14 @@ describe("AgentSession runtime and transcript projections", () => {
+         const assistant = providerContext.messages.find(
+           (message: { role: string }) => message.role === "assistant",
+         );
++        // LobsterAI: the next provider context replays exactly what the model saw,
++        // so provider prefix caches stay valid across turns.
+         expect(assistant).toMatchObject({
+           content: [
+-            { text: expect.not.stringContaining("API_TOKEN = computeToken()") },
+-            {
+-              type: "toolCall",
+-              id: "call_source",
+-              name: "exec",
+-              arguments: {
+-                apiKey: expect.not.stringContaining("fixture-structured-secret"),
+-                note: expect.not.stringContaining("API_TOKEN = computeToken()"),
+-                nested: {
+-                  code: expect.not.stringContaining("API_TOKEN = computeToken()"),
+-                  command: expect.not.stringContaining("API_TOKEN = computeToken()"),
+-                },
+-              },
+-            },
++            { text: source },
++            { type: "toolCall", id: "call_source", name: "exec", arguments: originalArgs },
+           ],
+         });
+-        const persistedArgs = assistant.content[1].arguments;
+-        for (const field of ["code", "command"] as const) {
+-          const value = field === "code" ? args.code : "command" in args ? args.command : undefined;
+-          if (typeof value !== "string") {
+-            expect(persistedArgs).not.toHaveProperty(field);
+-            continue;
+-          }
+-          if (label.startsWith("invalid language")) {
+-            expect(persistedArgs[field]).not.toContain("fixtureUnquotedLiteral");
+-          } else if (label === "credential masking") {
+-            expect(persistedArgs[field]).toContain(
+-              "OTHER_TOKEN = computeToken(); return OTHER_TOKEN;",
+-            );
+-            for (const literal of [
+-              genericLiteral,
+-              registeredLiteral,
+-              vendorLiteral,
+-              customLiteral,
+-            ]) {
+-              expect(persistedArgs[field]).not.toContain(literal);
+-            }
+-          } else {
+-            expect(persistedArgs[field]).toBe(value);
+-          }
+-        }
+         const replayResult = providerContext.messages.find(
+           (message: { role: string }) => message.role === "toolResult",
+         );
+@@ -431,16 +396,14 @@ describe("AgentSession runtime and transcript projections", () => {
+             if (block.type !== "toolCall") {
+               throw new Error("unexpected stored block");
+             }
+-            if (
+-              action === "unchanged" ||
+-              action === "default-to-javascript" ||
+-              action === "javascript-to-default"
+-            ) {
+-              expect(block.arguments.code).toBe(source);
+-            } else {
+-              expect(block.arguments.code).not.toContain("API_TOKEN = computeToken()");
+-            }
+-            expect(block.arguments.code).not.toContain(genericLiteral);
++            // LobsterAI: stored arguments match the final hook output exactly.
++            const expectedCode =
++              action === "mutate-source"
++                ? source.replaceAll("42", "43")
++                : action === "replace-with-literal"
++                  ? maskedSource
++                  : source;
++            expect(block.arguments.code).toBe(expectedCode);
+           }
+           // Retaining or copying a completed response cannot reuse its append authority.
+           const late = structuredClone(original!);
+@@ -452,9 +415,7 @@ describe("AgentSession runtime and transcript projections", () => {
+           const lateStored = manager.getLeafEntry();
+           expect(lateStored).toMatchObject({
+             message: {
+-              content: [
+-                { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
+-              ],
++              content: [{ arguments: { code: source } }],
+             },
+           });
+         }
+@@ -552,10 +513,7 @@ describe("AgentSession runtime and transcript projections", () => {
+         { toolCallId: "mixed_other", details: { receivedOriginal: true } },
+       ]);
+       expect(reentrant).toMatchObject({
+-        content: [
+-          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
+-          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
+-        ],
++        content: [{ arguments: { code: source } }, { arguments: { code: source } }],
+       });
+       const stored = manager
+         .getEntries()
+@@ -572,7 +530,7 @@ describe("AgentSession runtime and transcript projections", () => {
+             { id: "mixed_code", arguments: { code: source } },
+             {
+               id: "mixed_other",
+-              arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") },
++              arguments: { code: source },
+             },
+           ],
+         },
+@@ -657,11 +615,9 @@ describe("AgentSession runtime and transcript projections", () => {
+         if (latestCall.type !== "toolCall") {
+           throw new Error("missing latest call");
+         }
+-        if (mode === "code") {
+-          expect(latestCall.arguments.code).toBe(source);
+-        } else {
+-          expect(latestCall.arguments.command).not.toContain("API_TOKEN = computeToken()");
+-        }
++        expect(latestCall.arguments).toEqual(
++          mode === "code" ? { code: source } : { command: source },
++        );
+         session.dispose();
+       }
+       const nested = [
+@@ -710,12 +666,12 @@ describe("AgentSession runtime and transcript projections", () => {
+             toolCallId: "nested_shell",
+             parentToolCallId: "reused_id",
+             input: {
+-              command: expect.not.stringContaining("API_TOKEN = computeToken()"),
+-              code: expect.not.stringContaining("API_TOKEN = computeToken()"),
+-              nested: { code: expect.not.stringContaining("API_TOKEN = computeToken()") },
++              command: source,
++              code: source,
++              nested: { code: source },
+             },
+             result: {
+-              content: [{ text: expect.not.stringContaining("API_TOKEN = computeToken()") }],
++              content: [{ text: source }],
+             },
+           },
+         },
+diff --git a/src/agents/sessions/agent-session-runtime-projection.test.ts b/src/agents/sessions/agent-session-runtime-projection.test.ts
+index f0dcc454e86..6f6f68456ba 100644
+--- a/src/agents/sessions/agent-session-runtime-projection.test.ts
++++ b/src/agents/sessions/agent-session-runtime-projection.test.ts
+@@ -21,7 +21,7 @@ registerAgentSessionLoopTestLifecycle();
+ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+ 
+ describe("AgentSession runtime and transcript projections", () => {
+-  it("preserves execution correlation IDs through redacted transcript persistence", async () => {
++  it("preserves execution correlation IDs and argument bytes through transcript persistence", async () => {
+     const dir = tempDirs.make("openclaw-correlation-projection-");
+     const scope = {
+       agentId: "main",
+@@ -75,21 +75,21 @@ describe("AgentSession runtime and transcript projections", () => {
+       content: ids.map((id) => ({
+         type: "toolCall",
+         id,
+-        arguments: { value: expect.not.stringContaining(id) },
++        arguments: { value: id },
+       })),
+     });
+     expect(stored.filter((message) => message.role === "toolResult")).toMatchObject(
+       ids.map((toolCallId) => ({
+         toolCallId,
+-        content: [{ type: "text", text: expect.not.stringContaining(toolCallId) }],
+-        details: { value: expect.not.stringContaining(toolCallId) },
++        content: [{ type: "text", text: toolCallId }],
++        details: { value: toolCallId },
+         isError: false,
+       })),
+     );
+   });
+ 
+   it.each(["key", "apiKey", "account"])(
+-    "executes original %s arguments while preserving redacted storage and delivery facts",
++    "executes and persists original %s arguments while preserving delivery facts",
+     async (field) => {
+       const dir = tempDirs.make("openclaw-runtime-projection-");
+       const scope = {
+@@ -195,7 +195,7 @@ describe("AgentSession runtime and transcript projections", () => {
+             { type: "text", text: "Extension: Looking up both records." },
+             ...values.map((value) => ({
+               type: "toolCall",
+-              arguments: { [field]: field === "account" ? value : "***" },
++              arguments: { [field]: value },
+             })),
+           ],
+           openclawDelivery: { replyToCurrent: true },
+diff --git a/src/agents/transcript-redact.test.ts b/src/agents/transcript-redact.test.ts
+index 9e0f197b515..120587364b2 100644
+--- a/src/agents/transcript-redact.test.ts
++++ b/src/agents/transcript-redact.test.ts
+@@ -1,5 +1,5 @@
+-// Transcript redaction tests cover structured and text transcript fields so
+-// secrets do not persist in logs or replay artifacts.
++// Transcript sanitization tests: replay and image payload hygiene still applies,
++// while LobsterAI keeps message text as the model saw it (prompt cache stability).
+ 
+ import { expectDefined } from "@openclaw/normalization-core";
+ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+@@ -83,65 +83,28 @@ describe("redactTranscriptMessage", () => {
+       senderKind: "human",
+       id: "person",
+     },
+-  ])("sender provenance survives label redaction but not identity redaction: $type", (identity) => {
+-    const message = castAgentMessage({
+-      role: "user",
+-      content: "private-label",
+-      timestamp: 1,
+-      __openclaw: { senderId: identity.id, senderIdentity: identity, senderName: "private-label" },
+-    });
+-    expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+-    const labelOnly = redactTranscriptMessage(message, cfg("tools", ["private-label"]));
+-    expect(labelOnly).toMatchObject({
+-      __openclaw: { senderIdentity: identity, senderId: "person" },
+-    });
+-    expect(JSON.stringify(labelOnly)).not.toContain("private-label");
+-    const redacted = redactTranscriptMessage(message, cfg("tools", ["person"]));
+-    expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+-    expect(JSON.stringify(redacted)).not.toContain('"person"');
+-    expect(Reflect.get(message, "__openclaw").senderIdentity).toBe(identity);
+-  });
+-
+-  it.each([
+-    { senderId: "private-raw-id", senderIdentity: { type: "profile", id: "person" } },
+-    {
+-      senderId: "person",
+-      senderIdentity: {
+-        type: "remote",
+-        pluginId: "chat",
+-        domain: "private-domain",
+-        idKind: "user",
+-        id: "person",
+-      },
+-    },
+-    {
+-      senderId: "person",
+-      senderIdentity: {
+-        type: "observation",
+-        pluginId: "chat",
+-        accountId: "private-account",
+-        senderKind: "human",
+-        id: "person",
+-      },
+-    },
+   ])(
+-    "drops sender provenance when any qualified source fact or paired ID is redacted: %j",
+-    (metadata) => {
++    "keeps sender labels and provenance as written under any logging pattern: $type",
++    (identity) => {
+       const message = castAgentMessage({
+         role: "user",
+-        content: "visible",
++        content: "private-label",
+         timestamp: 1,
+-        __openclaw: metadata,
++        __openclaw: {
++          senderId: identity.id,
++          senderIdentity: identity,
++          senderName: "private-label",
++        },
+       });
+-      const redacted = redactTranscriptMessage(message, cfg("tools", ["private-[a-z-]+"]));
+-      expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+-      expect(JSON.stringify(redacted)).not.toContain("private-");
+-      expect(Reflect.get(message, "__openclaw")).toBe(metadata);
++      // LobsterAI: transcripts keep conversation text so replay matches the live context.
++      expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
++      expect(redactTranscriptMessage(message, cfg("tools", ["private-label"]))).toBe(message);
++      expect(redactTranscriptMessage(message, cfg("tools", ["person"]))).toBe(message);
+     },
+   );
+ 
+   it.each(["default", "custom", "registered"] as const)(
+-    "preserves canonical tool correlation IDs while applying %s redaction to payloads",
++    "preserves tool correlation IDs and payload text under %s logging patterns",
+     (policy) => {
+       const ids =
+         policy === "default"
+@@ -220,7 +183,7 @@ describe("redactTranscriptMessage", () => {
+           noncanonical,
+         ]);
+         for (const id of ids) {
+-          expect(redactedPayloads).not.toContain(id);
++          expect(redactedPayloads).toContain(id);
+         }
+         expect(msgContent(message)).toEqual(
+           ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+@@ -231,18 +194,32 @@ describe("redactTranscriptMessage", () => {
+     },
+   );
+ 
+-  it("redacts text block matching default patterns (sk- token)", () => {
++  it("keeps text blocks with credential-shaped tokens unchanged", () => {
+     const msg = textMessage("key is sk-abcdef1234567890xyz end");
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const text = expectDefined(
+-      (msgContent(result) as Array<{ text: string }>)[0],
+-      "(msgContent(result) as Array<{ text: string }>)[0] test invariant",
+-    ).text;
+-    expect(text).not.toContain("sk-abcdef1234567890xyz");
+-    expect(text).toContain("end");
++    expect(redactTranscriptMessage(msg, cfg("tools"))).toBe(msg);
+   });
+ 
+-  it("preserves source assignments in tool results while redacting explicit credentials", () => {
++  it("keeps 40-character relative paths in tool results unchanged", () => {
++    // These matched the bare AWS secret access key rule and were masked on write,
++    // so the next turn replayed different text and lost the provider prefix cache.
++    const listing = [
++      "src/shared/cowork/openclawCronSessionKey.test.ts",
++      "src/main/libs/openclawChannelSessionSync.ts",
++      "src/main/ipcHandlers/scheduledTask/index.ts",
++    ].join("\n");
++    const msg = castAgentMessage({
++      role: "toolResult",
++      toolCallId: "call_1",
++      toolName: "exec",
++      content: [{ type: "text", text: listing }],
++      details: { aggregated: listing },
++      isError: false,
++      timestamp: 1,
++    });
++    expect(redactTranscriptMessage(msg, cfg("tools"))).toBe(msg);
++  });
++
++  it("preserves source assignments and explicit credentials in tool results", () => {
+     const sourceLines = [
+       "        if let token = timeObserverToken {",
+       "        if let token=timeObserverToken {",
+@@ -277,25 +254,16 @@ describe("redactTranscriptMessage", () => {
+       "tool result text block",
+     ).text;
+ 
+-    for (const sourceLine of sourceLines) {
+-      expect(text).toContain(sourceLine);
+-    }
+-    expect(text).not.toContain(apiKey);
+-    expect(text).toContain(envToken);
++    expect(text).toBe(input);
+   });
+ 
+-  it("keeps broad assignment masking for non-tool transcript messages", () => {
++  it("keeps credential assignments in assistant text unchanged", () => {
+     const credential = "assistant-credential-value-127697";
+-    const result = redactTranscriptMessage(textMessage(`password = ${credential}`), cfg("tools"));
+-    const text = expectDefined(
+-      (msgContent(result) as Array<{ text: string }>)[0],
+-      "assistant text block",
+-    ).text;
+-
+-    expect(text).not.toContain(credential);
++    const msg = textMessage(`password = ${credential}`);
++    expect(redactTranscriptMessage(msg, cfg("tools"))).toBe(msg);
+   });
+ 
+-  it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
++  it("keeps pagination cursors and credential fields in tool args unchanged", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       content: [
+@@ -318,17 +286,16 @@ describe("redactTranscriptMessage", () => {
+         arguments: Record<string, string>;
+       }>
+     )[0]!.arguments;
+-    // Pagination cursors are opaque paging state — replaying a "***" mask as a
+-    // real cursor silently pages from the start, so keep them intact.
+-    expect(args.page_token).toBe("PGabc123XYZ");
+-    expect(args.next_page_token).toBe("NXTpage456");
+-    expect(args.page_cursor).toBe("PC789");
+-    // Genuine credentials stay masked.
+-    expect(args.doc_token).toBe("***");
+-    expect(args.app_secret).toBe("***");
++    expect(args).toEqual({
++      page_token: "PGabc123XYZ",
++      next_page_token: "NXTpage456",
++      page_cursor: "PC789",
++      doc_token: "DOCsecret999",
++      app_secret: "REALSECRETzzz",
++    });
+   });
+ 
+-  it("still masks a secret-shaped value even under an exempt pagination key (#104992)", () => {
++  it("keeps secret-shaped values under pagination keys unchanged", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       content: [
+@@ -345,24 +312,17 @@ describe("redactTranscriptMessage", () => {
+         arguments: Record<string, string>;
+       }>
+     )[0]!.arguments;
+-    // Value-pattern redaction still runs on exempt keys, so an embedded real
+-    // secret shape is masked even though the key itself is allowed through.
+-    expect(args.page_token).not.toContain("sk-abcdef1234567890xyz");
++    expect(args.page_token).toBe("sk-abcdef1234567890xyz");
+   });
+ 
+-  it("redacts thinking block", () => {
++  it("keeps thinking text unchanged", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       content: [
+         { type: "thinking", thinking: "secret sk-abcdef1234567890xyz", thinkingSignature: "sig" },
+       ],
+     });
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const block = expectDefined(
+-      (msgContent(result) as Array<{ thinking: string }>)[0],
+-      "(msgContent(result) as Array<{ thinking: string }>)[0] test invariant",
+-    );
+-    expect(block.thinking).not.toContain("sk-abcdef1234567890xyz");
++    expect(redactTranscriptMessage(msg, cfg("tools"))).toBe(msg);
+   });
+ 
+   it("preserves OpenAI encrypted reasoning inside thinkingSignature", () => {
+@@ -377,6 +337,12 @@ describe("redactTranscriptMessage", () => {
+         secret: "sk-abcdef1234567890xyz",
+       },
+     });
++    const futureSignature = JSON.stringify({
++      type: "reasoning",
++      status: "future",
++      encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
++      summary: [{ type: "summary_text", text: "secret sk-abcdef1234567890xyz" }],
++    });
+     const msg = castAgentMessage({
+       role: "assistant",
+       api: "openai-responses",
+@@ -395,12 +361,7 @@ describe("redactTranscriptMessage", () => {
+         {
+           type: "thinking",
+           thinking: "visible",
+-          thinkingSignature: JSON.stringify({
+-            type: "reasoning",
+-            status: "future",
+-            encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+-            summary: [{ type: "summary_text", text: "secret sk-abcdef1234567890xyz" }],
+-          }),
++          thinkingSignature: futureSignature,
+           openclawReasoningReplay: {
+             ...OPENAI_REASONING_REPLAY_METADATA,
+             model: "sk-abcdef1234567890xyz",
+@@ -431,7 +392,8 @@ describe("redactTranscriptMessage", () => {
+       (msgContent(result) as Array<{ thinkingSignature: string }>)[1],
+       "(msgContent(result) as Array<{ thinkingSignature: string }>)[1] test invariant",
+     ).thinkingSignature;
+-    expect(block.thinking).not.toContain("sk-abcdef1234567890xyz");
++    // Replay metadata is still validated and reduced; reasoning text stays as written.
++    expect(block.thinking).toBe("secret sk-abcdef1234567890xyz");
+     expect(replayItem.id).toBe("reasoning-1");
+     expect(replayItem.type).toBe("reasoning");
+     expect(replayItem.encrypted_content).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+@@ -441,8 +403,7 @@ describe("redactTranscriptMessage", () => {
+     expect(blockMetadata).toEqual(OPENAI_REASONING_REPLAY_METADATA);
+     expect(block.thinkingSignature).not.toContain("sk-abcdef1234567890xyz");
+     expect(JSON.stringify(blockMetadata)).not.toContain("sk-abcdef1234567890xyz");
+-    expect(rejectedSignature).not.toContain("sk-abcdef1234567890xyz");
+-    expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
++    expect(rejectedSignature).toBe(futureSignature);
+   });
+ 
+   it.each([
+@@ -531,14 +492,6 @@ describe("redactTranscriptMessage", () => {
+   );
+ 
+   it.each([
+-    ["plaintext secret", { type: "input_text", text: "sk-abcdef1234567890xyz" }, {}],
+-    ["custom text rule", { type: "input_text", text: "retained-private" }, {}],
+-    ["structured secret", { type: "input_text", text: "safe", apiKey: "plainsecretvalue123" }, {}],
+-    [
+-      "file reference",
+-      { type: "input_file", file_url: "https://example.com/retained-private" },
+-      {},
+-    ],
+     [
+       "image normalization",
+       {
+@@ -548,11 +501,6 @@ describe("redactTranscriptMessage", () => {
+       },
+       {},
+     ],
+-    [
+-      "compaction metadata",
+-      { type: "input_text", text: "safe" },
+-      { created_by: "retained-private" },
+-    ],
+     [
+       "mismatched opaque item",
+       { type: "input_text", text: "safe" },
+@@ -604,6 +552,56 @@ describe("redactTranscriptMessage", () => {
+     },
+   );
+ 
++  it.each([
++    ["plaintext secret", { type: "input_text", text: "sk-abcdef1234567890xyz" }, {}],
++    ["custom text rule", { type: "input_text", text: "retained-private" }, {}],
++    ["structured secret", { type: "input_text", text: "safe", apiKey: "plainsecretvalue123" }, {}],
++    [
++      "file reference",
++      { type: "input_file", file_url: "https://example.com/retained-private" },
++      {},
++    ],
++    [
++      "compaction metadata",
++      { type: "input_text", text: "safe" },
++      { created_by: "retained-private" },
++    ],
++  ])("keeps the canonical compaction window ready for %s", (_name, content, itemOverride) => {
++    const message = castAgentMessage({
++      role: "assistant",
++      api: "openai-responses",
++      model: "gpt-5.6-luna",
++      provider: "openai",
++      content: [],
++      providerReplay: {
++        v: 1,
++        type: "openai-responses-retained-compaction",
++        id: "cmp_1",
++        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
++        provider: "openai",
++        api: "openai-responses",
++        model: "gpt-5.6-luna",
++        baseUrlHash: "ozhevd1smnk8s",
++        sessionHash: "171dzdv17gum5g",
++        authProfileHash: "oe8bkr3r8947",
++        compactedWindow: {
++          state: "ready",
++          output: JSON.stringify([
++            { type: "message", role: "user", content: [content] },
++            {
++              type: "compaction",
++              id: "cmp_1",
++              encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
++              ...itemOverride,
++            },
++          ]),
++        },
++      },
++    });
++    // Window text is no longer masked, so it never needs a refresh for its contents.
++    expect(redactTranscriptMessage(message, cfg("tools", ["retained-private"]))).toEqual(message);
++  });
++
+   it("preserves validated OpenAI compaction suppression state", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+@@ -644,7 +642,7 @@ describe("redactTranscriptMessage", () => {
+     expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+   });
+ 
+-  it("preserves validated Anthropic compaction state while redacting its summary", () => {
++  it("preserves validated Anthropic compaction state and its summary text", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       api: "anthropic-messages",
+@@ -681,8 +679,7 @@ describe("redactTranscriptMessage", () => {
+       sessionHash: "171dzdv17gum5g",
+       authProfileHash: "oe8bkr3r8947",
+     });
+-    expect(result.providerReplay.data).toContain("summary containing");
+-    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
++    expect(result.providerReplay.data).toBe("summary containing sk-abcdef1234567890xyz");
+     expect(result.providerReplay).not.toHaveProperty("secret");
+   });
+ 
+@@ -1015,7 +1012,7 @@ describe("redactTranscriptMessage", () => {
+     });
+   });
+ 
+-  it("preserves Google tool-call thought signatures while redacting arguments", () => {
++  it("preserves Google tool-call thought signatures and arguments", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       api: "google-generative-ai",
+@@ -1057,8 +1054,9 @@ describe("redactTranscriptMessage", () => {
+       "( msgContent(result) as Array<{ thoughtSignature: string; arguments: ... test invariant",
+     );
+     expect(block.thoughtSignature).toBe(GOOGLE_THOUGHT_SIGNATURE);
+-    expect(JSON.stringify(block.arguments)).not.toContain("sk-abcdef1234567890xyz");
+-    expect(block.arguments.apiKey).toBe("plains…e123");
++    expect(block.arguments).toEqual(
++      (msgContent(msg) as Array<{ arguments: Record<string, unknown> }>)[0]!.arguments,
++    );
+   });
+ 
+   it("preserves Google text and legacy thinking signatures", () => {
+@@ -1087,17 +1085,17 @@ describe("redactTranscriptMessage", () => {
+ 
+     const result = redactTranscriptMessage(msg, cfg("tools", [GOOGLE_THOUGHT_SIGNATURE]));
+     const blocks = msgContent(result) as Array<Record<string, string>>;
+-    expect(expectDefined(blocks[0], "blocks[0] test invariant").text).not.toContain(
+-      "sk-abcdef1234567890xyz",
++    expect(expectDefined(blocks[0], "blocks[0] test invariant").text).toBe(
++      "secret sk-abcdef1234567890xyz",
+     );
+     expect(expectDefined(blocks[0], "blocks[0] test invariant").textSignature).toBe(
+       GOOGLE_THOUGHT_SIGNATURE,
+     );
+-    expect(expectDefined(blocks[1], "blocks[1] test invariant").textSignature).not.toContain(
++    expect(expectDefined(blocks[1], "blocks[1] test invariant").textSignature).toBe(
+       "sk-abcdef1234567890xyz",
+     );
+-    expect(expectDefined(blocks[2], "blocks[2] test invariant").thinking).not.toContain(
+-      "sk-abcdef1234567890xyz",
++    expect(expectDefined(blocks[2], "blocks[2] test invariant").thinking).toBe(
++      "secret sk-abcdef1234567890xyz",
+     );
+     expect(expectDefined(blocks[2], "blocks[2] test invariant").thought_signature).toBe(
+       SHORT_GOOGLE_THOUGHT_SIGNATURE,
+@@ -1145,7 +1143,7 @@ describe("redactTranscriptMessage", () => {
+     expect(block.textSignature).toBe(textSignature);
+   });
+ 
+-  it("preserves Anthropic redacted_thinking data while redacting siblings", () => {
++  it("preserves Anthropic redacted_thinking data and sibling text", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       api: "anthropic-messages",
+@@ -1185,12 +1183,12 @@ describe("redactTranscriptMessage", () => {
+       )[1],
+       "( msgContent(result) as Array<{ data: string; signature: string; thin... test invariant",
+     );
+-    expect(thinkingBlock.thinking).not.toContain("sk-abcdef1234567890xyz");
++    expect(thinkingBlock.thinking).toBe("secret sk-abcdef1234567890xyz");
+     expect(thinkingBlock.thinkingSignature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+     expect(redactedBlock.data).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+     expect(redactedBlock.signature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+     expect(redactedBlock.thinkingSignature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+-    expect(redactedBlock.metadata.accessToken).toBe("nested…t123");
++    expect(redactedBlock.metadata.accessToken).toBe("nestedplainsecret123");
+   });
+ 
+   it("preserves credential-shaped bytes in recognized provider replay fields", () => {
+@@ -1336,9 +1334,10 @@ describe("redactTranscriptMessage", () => {
+       data: githubToken,
+       id: "reasoning-encrypted-1",
+     });
++    // An unvalidated signature is kept as written; only recognized replay shapes are reduced.
+     expect(
+       expectDefined(completionsBlocks[1], "completionsBlocks[1] test invariant").thoughtSignature,
+-    ).not.toBe(githubToken);
++    ).toBe(githubToken);
+ 
+     const googleCompletionsBlock = expectDefined(
+       (
+@@ -1378,7 +1377,7 @@ describe("redactTranscriptMessage", () => {
+     });
+   });
+ 
+-  it("keeps unknown and malformed replay fields credential-safe", () => {
++  it("keeps unknown and malformed replay fields as written", () => {
+     const customProviderMsg = castAgentMessage({
+       role: "assistant",
+       api: "custom-provider-api",
+@@ -1451,21 +1450,21 @@ describe("redactTranscriptMessage", () => {
+ 
+     expect(
+       JSON.stringify(msgContent(redactTranscriptMessage(customProviderMsg, cfg("tools")))),
+-    ).not.toContain(ALIBABA_CREDENTIAL_COLLISION);
++    ).toContain(ALIBABA_CREDENTIAL_COLLISION);
+     expect(
+       JSON.stringify(msgContent(redactTranscriptMessage(customProviderMsg, cfg("tools")))),
+-    ).not.toContain(GOOGLE_CREDENTIAL_COLLISION);
++    ).toContain(GOOGLE_CREDENTIAL_COLLISION);
+     expect(
+       JSON.stringify(msgContent(redactTranscriptMessage(malformedGoogleMsg, cfg("tools")))),
+-    ).not.toContain(OPAQUE_CREDENTIAL_COLLISION);
++    ).toContain(OPAQUE_CREDENTIAL_COLLISION);
+     for (const message of malformedKnownOpaqueMessages) {
+-      expect(
+-        JSON.stringify(msgContent(redactTranscriptMessage(message, cfg("tools")))),
+-      ).not.toContain("sk-abcdef1234567890xyz");
++      expect(JSON.stringify(msgContent(redactTranscriptMessage(message, cfg("tools"))))).toContain(
++        "sk-abcdef1234567890xyz",
++      );
+     }
+   });
+ 
+-  it("redacts provider-shaped fields when the assistant route is missing", () => {
++  it("keeps provider-shaped fields when the assistant route is missing", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       content: [
+@@ -1488,9 +1487,7 @@ describe("redactTranscriptMessage", () => {
+       msg,
+       cfg("tools", [CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES, GOOGLE_THOUGHT_SIGNATURE]),
+     );
+-    const serialized = JSON.stringify(msgContent(result));
+-    expect(serialized).not.toContain(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+-    expect(serialized).not.toContain(GOOGLE_THOUGHT_SIGNATURE);
++    expect(result).toBe(msg);
+   });
+ 
+   it("preserves validated replay signatures for custom provider APIs", () => {
+@@ -1538,225 +1535,144 @@ describe("redactTranscriptMessage", () => {
+     );
+   });
+ 
+-  it("redacts provider-shaped fields outside direct assistant content blocks", () => {
+-    const msg = castAgentMessage({
+-      role: "assistant",
+-      content: [
+-        {
+-          type: "gatewayCustom",
+-          data: "secret sk-abcdef1234567890xyz",
+-          signature: "secret sk-abcdef1234567890xyz",
+-          thinkingSignature: "secret sk-abcdef1234567890xyz",
+-          thoughtSignature: "secret sk-abcdef1234567890xyz",
+-          thought_signature: "secret sk-abcdef1234567890xyz",
+-          encrypted_content: "secret sk-abcdef1234567890xyz",
+-          nested: {
+-            type: "redacted_thinking",
++  it.each([
++    [
++      "provider-shaped fields outside direct assistant content blocks",
++      {
++        role: "assistant",
++        content: [
++          {
++            type: "gatewayCustom",
+             data: "secret sk-abcdef1234567890xyz",
++            signature: "secret sk-abcdef1234567890xyz",
++            thinkingSignature: "secret sk-abcdef1234567890xyz",
++            thoughtSignature: "secret sk-abcdef1234567890xyz",
++            thought_signature: "secret sk-abcdef1234567890xyz",
++            encrypted_content: "secret sk-abcdef1234567890xyz",
++            nested: { type: "redacted_thinking", data: "secret sk-abcdef1234567890xyz" },
+           },
+-        },
+-      ],
+-    });
+-
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
+-  });
+-
+-  it("redacts partialJson block", () => {
+-    const msg = castAgentMessage({
+-      role: "assistant",
+-      content: [{ type: "toolCallDelta", partialJson: '{"key":"sk-abcdef1234567890xyz"}' }],
+-    });
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const block = expectDefined(
+-      (msgContent(result) as Array<{ partialJson: string }>)[0],
+-      "(msgContent(result) as Array<{ partialJson: string }>)[0] test invariant",
+-    );
+-    expect(block.partialJson).not.toContain("sk-abcdef1234567890xyz");
+-  });
+-
+-  it("redacts nested strings in assistant tool-call arguments", () => {
+-    const msg = castAgentMessage({
+-      role: "assistant",
+-      content: [
+-        {
+-          type: "toolCall",
+-          id: "call_1",
+-          name: "shell",
+-          arguments: {
+-            command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+-            env: { nested: ["token sk-abcdef1234567890xyz"] },
+-            count: 1,
+-          },
+-        },
+-      ],
+-    });
+-
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const block = expectDefined(
+-      (msgContent(result) as Array<{ arguments: unknown }>)[0],
+-      "(msgContent(result) as Array<{ arguments: unknown }>)[0] test invariant",
+-    );
+-    const argumentsValue = block.arguments as {
+-      command: string;
+-      env: { nested: string[] };
+-      count: number;
+-    };
+-    const serializedArguments = JSON.stringify(block.arguments);
+-    expect(serializedArguments).not.toContain("sk-abcdef1234567890xyz");
+-    expect(argumentsValue.command).toBe("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+-    expect(argumentsValue.env.nested[0]).toBe("token sk-abc…0xyz");
+-    expect(argumentsValue.count).toBe(1);
+-    expect(serializedArguments).toContain("openclaw health");
+-    expect(block.arguments).not.toBe(
+-      expectDefined(
+-        (msgContent(msg) as Array<{ arguments: unknown }>)[0],
+-        "(msgContent(msg) as Array<{ arguments: unknown }>)[0] test invariant",
+-      ).arguments,
+-    );
+-  });
+-
+-  it("redacts structured secret fields in assistant tool-call arguments", () => {
+-    const msg = castAgentMessage({
+-      role: "assistant",
+-      content: [
+-        {
+-          type: "toolCall",
+-          id: "call_1",
+-          name: "send_request",
+-          arguments: {
+-            apiKey: "plainsecretvalue123",
+-            password: "hunter2",
+-            nested: { accessToken: ["nestedplainsecret123"] },
+-            safe: "visible",
++        ],
++      },
++    ],
++    [
++      "partialJson blocks",
++      {
++        role: "assistant",
++        content: [{ type: "toolCallDelta", partialJson: '{"key":"sk-abcdef1234567890xyz"}' }],
++      },
++    ],
++    [
++      "nested strings in assistant tool-call arguments",
++      {
++        role: "assistant",
++        content: [
++          {
++            type: "toolCall",
++            id: "call_1",
++            name: "shell",
++            arguments: {
++              command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
++              env: { nested: ["token sk-abcdef1234567890xyz"] },
++              count: 1,
++            },
+           },
+-        },
+-      ],
+-    });
+-
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const block = expectDefined(
+-      (msgContent(result) as Array<{ arguments: unknown }>)[0],
+-      "(msgContent(result) as Array<{ arguments: unknown }>)[0] test invariant",
+-    );
+-    const argumentsValue = block.arguments as {
+-      apiKey: string;
+-      password: string;
+-      nested: { accessToken: string[] };
+-      safe: string;
+-    };
+-    const serializedArguments = JSON.stringify(block.arguments);
+-    expect(serializedArguments).not.toContain("plainsecretvalue123");
+-    expect(serializedArguments).not.toContain("hunter2");
+-    expect(serializedArguments).not.toContain("nestedplainsecret123");
+-    expect(argumentsValue.apiKey).toBe("plains…e123");
+-    expect(argumentsValue.password).toBe("***");
+-    expect(argumentsValue.nested.accessToken[0]).toBe("nested…t123");
+-    expect(serializedArguments).toContain("visible");
+-  });
+-
+-  it("redacts structured tool-use input payloads", () => {
+-    const msg = castAgentMessage({
+-      role: "assistant",
+-      content: [
+-        {
+-          type: "toolUse",
+-          id: "call_1",
+-          name: "send_request",
+-          input: {
+-            apiKey: "plainsecretvalue123",
+-            nested: { accessToken: ["nestedplainsecret123"] },
+-            command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+-            safe: "visible",
++        ],
++      },
++    ],
++    [
++      "structured secret fields in assistant tool-call arguments",
++      {
++        role: "assistant",
++        content: [
++          {
++            type: "toolCall",
++            id: "call_1",
++            name: "send_request",
++            arguments: {
++              apiKey: "plainsecretvalue123",
++              password: "hunter2",
++              nested: { accessToken: ["nestedplainsecret123"] },
++              safe: "visible",
++            },
+           },
+-        },
+-      ],
+-    });
+-
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const block = expectDefined(
+-      (msgContent(result) as Array<{ input: unknown }>)[0],
+-      "(msgContent(result) as Array<{ input: unknown }>)[0] test invariant",
+-    );
+-    const inputValue = block.input as {
+-      apiKey: string;
+-      nested: { accessToken: string[] };
+-      command: string;
+-      safe: string;
+-    };
+-    const serializedInput = JSON.stringify(block.input);
+-    expect(serializedInput).not.toContain("plainsecretvalue123");
+-    expect(serializedInput).not.toContain("nestedplainsecret123");
+-    expect(serializedInput).not.toContain("sk-abcdef1234567890xyz");
+-    expect(inputValue.apiKey).toBe("plains…e123");
+-    expect(inputValue.nested.accessToken[0]).toBe("nested…t123");
+-    expect(inputValue.command).toBe("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+-    expect(serializedInput).toContain("visible");
+-  });
+-
+-  it("redacts defensive function-call input payloads", () => {
+-    const msg = castAgentMessage({
+-      role: "assistant",
+-      content: [
+-        {
+-          type: "functionCall",
+-          id: "call_1",
+-          name: "send_request",
+-          input: {
+-            password: "hunter2",
+-            nested: { accessToken: ["nestedplainsecret123"] },
++        ],
++      },
++    ],
++    [
++      "structured tool-use input payloads",
++      {
++        role: "assistant",
++        content: [
++          {
++            type: "toolUse",
++            id: "call_1",
++            name: "send_request",
++            input: {
++              apiKey: "plainsecretvalue123",
++              nested: { accessToken: ["nestedplainsecret123"] },
++              command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
++              safe: "visible",
++            },
+           },
+-        },
+-      ],
+-    });
+-
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const block = expectDefined(
+-      (msgContent(result) as Array<{ input: unknown }>)[0],
+-      "(msgContent(result) as Array<{ input: unknown }>)[0] test invariant",
+-    );
+-    const inputValue = block.input as {
+-      password: string;
+-      nested: { accessToken: string[] };
+-    };
+-    const serializedInput = JSON.stringify(block.input);
+-    expect(serializedInput).not.toContain("hunter2");
+-    expect(serializedInput).not.toContain("nestedplainsecret123");
+-    expect(inputValue.password).toBe("***");
+-    expect(inputValue.nested.accessToken[0]).toBe("nested…t123");
+-  });
+-
+-  it("redacts arbitrary gateway/custom content-block fields recursively", () => {
+-    const msg = castAgentMessage({
+-      role: "assistant",
+-      content: [
+-        {
+-          type: "gatewayCustom",
+-          source: {
+-            url: "https://example.com/callback?token=sk-abcdef1234567890xyz",
++        ],
++      },
++    ],
++    [
++      "defensive function-call input payloads",
++      {
++        role: "assistant",
++        content: [
++          {
++            type: "functionCall",
++            id: "call_1",
++            name: "send_request",
++            input: { password: "hunter2", nested: { accessToken: ["nestedplainsecret123"] } },
+           },
+-          data: {
+-            apiKey: "plainsecretvalue123",
+-            nested: {
+-              accessToken: "nestedplainsecret123",
++        ],
++      },
++    ],
++    [
++      "arbitrary gateway/custom content-block fields",
++      {
++        role: "assistant",
++        content: [
++          {
++            type: "gatewayCustom",
++            source: { url: "https://example.com/callback?token=sk-abcdef1234567890xyz" },
++            data: {
++              apiKey: "plainsecretvalue123",
++              nested: { accessToken: "nestedplainsecret123" },
+             },
++            safe: "visible",
+           },
++        ],
++      },
++    ],
++    [
++      "structured secret fields in tool-result details",
++      {
++        role: "toolResult",
++        toolCallId: "call_1",
++        toolName: "send_request",
++        content: [{ type: "text", text: "result sk-abcdef1234567890xyz" }],
++        details: {
++          apiKey: "plainsecretvalue123",
++          password: "hunter2",
++          nested: { accessToken: ["nestedplainsecret123"] },
+           safe: "visible",
+         },
+-      ],
+-    });
+-
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    const block = (msgContent(result) as Array<Record<string, unknown>>)[0];
+-    const serializedBlock = JSON.stringify(block);
+-    expect(serializedBlock).not.toContain("sk-abcdef1234567890xyz");
+-    expect(serializedBlock).not.toContain("plainsecretvalue123");
+-    expect(serializedBlock).not.toContain("nestedplainsecret123");
+-    expect(serializedBlock).toContain("visible");
++        isError: false,
++        timestamp: 1,
++      },
++    ],
++    ["string-form content", { role: "user", content: "my key is sk-abcdef1234567890xyz" }],
++  ])("keeps %s unchanged", (_name, fixture) => {
++    const msg = castAgentMessage(fixture);
++    expect(redactTranscriptMessage(msg, cfg("tools"))).toBe(msg);
+   });
+ 
+-  it("redacts circular structured payloads without throwing", () => {
+-    // Redaction walks arbitrary tool payloads, so circular structures must be
++  it("replaces circular structured payloads without masking siblings", () => {
++    // The walk still visits arbitrary tool payloads, so circular structures must be
+     // replaced instead of recursing forever or throwing.
+     const details: Record<string, unknown> = {
+       apiKey: "plainsecretvalue123",
+@@ -1775,59 +1691,11 @@ describe("redactTranscriptMessage", () => {
+     const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+       details: Record<string, unknown>;
+     };
+-    expect(result.details.apiKey).toBe("plains…e123");
++    expect(result.details.apiKey).toBe("plainsecretvalue123");
+     expect(result.details.self).toBe("[Circular]");
+   });
+ 
+-  it("redacts structured secret fields in tool-result details", () => {
+-    const msg = castAgentMessage({
+-      role: "toolResult",
+-      toolCallId: "call_1",
+-      toolName: "send_request",
+-      content: [{ type: "text", text: "result sk-abcdef1234567890xyz" }],
+-      details: {
+-        apiKey: "plainsecretvalue123",
+-        password: "hunter2",
+-        nested: { accessToken: ["nestedplainsecret123"] },
+-        safe: "visible",
+-      },
+-      isError: false,
+-      timestamp: Date.now(),
+-    });
+-
+-    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+-      content: Array<{ text: string }>;
+-      details: unknown;
+-    };
+-    const serializedDetails = JSON.stringify(result.details);
+-    const details = result.details as {
+-      apiKey: string;
+-      password: string;
+-      nested: { accessToken: string[] };
+-      safe: string;
+-    };
+-    expect(expectDefined(result.content[0], "result.content[0] test invariant").text).not.toContain(
+-      "sk-abcdef1234567890xyz",
+-    );
+-    expect(serializedDetails).not.toContain("plainsecretvalue123");
+-    expect(serializedDetails).not.toContain("hunter2");
+-    expect(serializedDetails).not.toContain("nestedplainsecret123");
+-    expect(details.apiKey).toBe("plains…e123");
+-    expect(details.password).toBe("***");
+-    expect(details.nested.accessToken[0]).toBe("nested…t123");
+-    expect(serializedDetails).toContain("visible");
+-  });
+-
+-  it("redacts string-form content", () => {
+-    const msg = castAgentMessage({
+-      role: "user",
+-      content: "my key is sk-abcdef1234567890xyz",
+-    });
+-    const result = redactTranscriptMessage(msg, cfg("tools"));
+-    expect(msgContent(result) as string).not.toContain("sk-abcdef1234567890xyz");
+-  });
+-
+-  it("preserves image data while redacting adjacent transcript text", () => {
++  it("preserves image data and adjacent transcript text", () => {
+     const msg = castAgentMessage({
+       role: "user",
+       content: [
+@@ -1842,16 +1710,15 @@ describe("redactTranscriptMessage", () => {
+ 
+     const result = redactTranscriptMessage(msg, cfg("tools"));
+     const content = msgContent(result) as Array<{ type: string; text?: string; data?: string }>;
+-    expect(expectDefined(content[0], "content[0] test invariant").text).not.toContain(
+-      "sk-abcdef1234567890xyz",
++    expect(expectDefined(content[0], "content[0] test invariant").text).toBe(
++      "my key is sk-abcdef1234567890xyz",
+     );
+     expect(expectDefined(content[1], "content[1] test invariant").data).toBe(
+       IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING,
+     );
+-    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+   });
+ 
+-  it("redacts fake image payloads that are not valid image base64", () => {
++  it("keeps fake image payloads that are not valid image base64 as written", () => {
+     const msg = castAgentMessage({
+       role: "user",
+       content: [
+@@ -1865,10 +1732,12 @@ describe("redactTranscriptMessage", () => {
+ 
+     const result = redactTranscriptMessage(msg, cfg("tools"));
+     const content = msgContent(result) as Array<{ data: string }>;
+-    expect(expectDefined(content[0], "content[0] test invariant").data).toBe("sk-abc…0xyz");
++    expect(expectDefined(content[0], "content[0] test invariant").data).toBe(
++      "sk-abcdef1234567890xyz",
++    );
+   });
+ 
+-  it("preserves valid BMP image base64 while redacting adjacent text", () => {
++  it("preserves valid BMP image base64 and adjacent text", () => {
+     const msg = castAgentMessage({
+       role: "user",
+       content: [
+@@ -1883,8 +1752,8 @@ describe("redactTranscriptMessage", () => {
+ 
+     const result = redactTranscriptMessage(msg, cfg("tools"));
+     const content = msgContent(result) as Array<{ type: string; text?: string; data?: string }>;
+-    expect(expectDefined(content[0], "content[0] test invariant").text).not.toContain(
+-      "sk-abcdef1234567890xyz",
++    expect(expectDefined(content[0], "content[0] test invariant").text).toBe(
++      "my key is sk-abcdef1234567890xyz",
+     );
+     expect(expectDefined(content[1], "content[1] test invariant").data).toBe(
+       BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING,
+@@ -1913,7 +1782,7 @@ describe("redactTranscriptMessage", () => {
+       "(msgContent(result) as Array<{ source: { data: string }; apiKey: stri... test invariant",
+     );
+     expect(block.source.data).toBe(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
+-    expect(block.apiKey).toBe("plains…e123");
++    expect(block.apiKey).toBe("plainsecretvalue123");
+   });
+ 
+   it("canonicalizes preserved image MIME from sniffed base64 bytes", () => {
+@@ -1940,7 +1809,7 @@ describe("redactTranscriptMessage", () => {
+     expect(block.source.media_type).toBe("image/png");
+   });
+ 
+-  it("preserves image data URLs without exempting non-image data fields", () => {
++  it("preserves image data URLs and sibling non-image data fields", () => {
+     const dataUrl = `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
+     const msg = castAgentMessage({
+       role: "assistant",
+@@ -1959,7 +1828,7 @@ describe("redactTranscriptMessage", () => {
+       "(msgContent(result) as Array<{ image_url: string; data: string }>)[0] test invariant",
+     );
+     expect(block.image_url).toBe(dataUrl);
+-    expect(block.data).toBe("AKIDAB…MNOP");
++    expect(block.data).toBe("AKIDABCDEFGHIJKLMNOP");
+   });
+ 
+   it("preserves valid non-browser image data URLs in transcripts", () => {
+@@ -2023,7 +1892,7 @@ describe("redactTranscriptMessage", () => {
+     expect(block.image_url.url).toBe(dataUrl);
+   });
+ 
+-  it("redacts documented transcript text fields on content-less message types", () => {
++  it("keeps documented transcript text fields on content-less message types", () => {
+     const msg = castAgentMessage({
+       role: "bashExecution",
+       command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+@@ -2034,15 +1903,10 @@ describe("redactTranscriptMessage", () => {
+       timestamp: Date.now(),
+     });
+ 
+-    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+-      command: string;
+-      output: string;
+-    };
+-    expect(result.command).not.toContain("sk-abcdef1234567890xyz");
+-    expect(result.output).not.toContain("sk-abcdef1234567890xyz");
++    expect(redactTranscriptMessage(msg, cfg("tools"))).toBe(msg);
+   });
+ 
+-  it("redacts assistant error and summary transcript fields", () => {
++  it("keeps assistant error and summary transcript fields", () => {
+     const assistant = castAgentMessage({
+       role: "assistant",
+       content: [{ type: "text", text: "safe" }],
+@@ -2055,36 +1919,21 @@ describe("redactTranscriptMessage", () => {
+       timestamp: Date.now(),
+     });
+ 
+-    const assistantResult = redactTranscriptMessage(assistant, cfg("tools")) as unknown as {
+-      errorMessage: string;
+-    };
+-    const summaryResult = redactTranscriptMessage(summary, cfg("tools")) as unknown as {
+-      summary: string;
+-    };
+-    expect(assistantResult.errorMessage).not.toContain("sk-abcdef1234567890xyz");
+-    expect(summaryResult.summary).not.toContain("sk-abcdef1234567890xyz");
++    expect(redactTranscriptMessage(assistant, cfg("tools"))).toBe(assistant);
++    expect(redactTranscriptMessage(summary, cfg("tools"))).toBe(summary);
+   });
+ 
+-  it("redacts using custom pattern without dropping default patterns", () => {
++  it("ignores logging redact patterns for transcript text", () => {
+     const msg = textMessage("email peter@dc.io and key sk-abcdef1234567890xyz ok");
+-    const result = redactTranscriptMessage(msg, cfg("tools", [EMAIL_PATTERN]));
+-    const text = expectDefined(
+-      (msgContent(result) as Array<{ text: string }>)[0],
+-      "(msgContent(result) as Array<{ text: string }>)[0] test invariant",
+-    ).text;
+-    expect(text).not.toContain("peter@dc.io");
+-    expect(text).not.toContain("sk-abcdef1234567890xyz");
+-    expect(text).toContain("ok");
++    expect(redactTranscriptMessage(msg, cfg("tools", [EMAIL_PATTERN]))).toBe(msg);
+   });
+ 
+-  it("redacts text even when a caller supplies the retired off spelling", () => {
++  it("keeps text when a caller supplies the retired off spelling", () => {
+     const msg = textMessage("key is sk-abcdef1234567890xyz");
+-    const result = redactTranscriptMessage(msg, cfg("off"));
+-    expect(result).not.toBe(msg);
+-    expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
++    expect(redactTranscriptMessage(msg, cfg("off"))).toBe(msg);
+   });
+ 
+-  it("redacts structured tool-call secrets regardless of retired mode input", () => {
++  it("keeps structured tool-call arguments regardless of retired mode input", () => {
+     const msg = castAgentMessage({
+       role: "assistant",
+       content: [
+@@ -2096,13 +1945,10 @@ describe("redactTranscriptMessage", () => {
+         },
+       ],
+     });
+-    const result = redactTranscriptMessage(msg, cfg("off"));
+-    expect(result).not.toBe(msg);
+-    expect(JSON.stringify(msgContent(result))).not.toContain("plainsecretvalue123");
+-    expect(JSON.stringify(msgContent(result))).not.toContain("hunter2");
++    expect(redactTranscriptMessage(msg, cfg("off"))).toBe(msg);
+   });
+ 
+-  it("redacts structured tool-result details regardless of retired mode input", () => {
++  it("keeps structured tool-result details regardless of retired mode input", () => {
+     const msg = castAgentMessage({
+       role: "toolResult",
+       toolCallId: "call_1",
+@@ -2112,10 +1958,7 @@ describe("redactTranscriptMessage", () => {
+       isError: false,
+       timestamp: Date.now(),
+     });
+-    const result = redactTranscriptMessage(msg, cfg("off")) as unknown as { details: unknown };
+-    expect(result).not.toBe(msg);
+-    expect(JSON.stringify(result.details)).not.toContain("plainsecretvalue123");
+-    expect(JSON.stringify(result.details)).not.toContain("hunter2");
++    expect(redactTranscriptMessage(msg, cfg("off"))).toBe(msg);
+   });
+ 
+   it("returns same object reference when nothing matches", () => {
+@@ -2124,7 +1967,7 @@ describe("redactTranscriptMessage", () => {
+     expect(result).toBe(msg);
+   });
+ 
+-  it("redacts signature summaries with the fixed global policy", () => {
++  it("keeps unrouted signature summaries regardless of the global logging policy", () => {
+     const readLoggingConfig = vi
+       .spyOn(loggingConfigModule, "readLoggingConfig")
+       .mockReturnValue({});
+@@ -2145,20 +1988,15 @@ describe("redactTranscriptMessage", () => {
+     });
+ 
+     try {
+-      expect(JSON.stringify(redactTranscriptMessage(msg))).not.toContain("sk-abcdef1234567890xyz");
++      expect(redactTranscriptMessage(msg)).toBe(msg);
+     } finally {
+       readLoggingConfig.mockRestore();
+     }
+   });
+ 
+-  it("redacts with cfg=undefined (falls back to default patterns)", () => {
++  it("keeps text with cfg=undefined", () => {
+     const msg = textMessage("key is sk-abcdef1234567890xyz");
+-    const result = redactTranscriptMessage(msg, undefined);
+-    const text = expectDefined(
+-      (msgContent(result) as Array<{ text: string }>)[0],
+-      "(msgContent(result) as Array<{ text: string }>)[0] test invariant",
+-    ).text;
+-    expect(text).not.toContain("sk-abcdef1234567890xyz");
++    expect(redactTranscriptMessage(msg, undefined)).toBe(msg);
+   });
+ 
+   it("passes through non-object and null blocks without throwing", () => {
+diff --git a/src/agents/transcript-redact.ts b/src/agents/transcript-redact.ts
+index 160d686e5b0..f3fd62c6ba3 100644
+--- a/src/agents/transcript-redact.ts
++++ b/src/agents/transcript-redact.ts
+@@ -6,22 +6,13 @@ import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-pa
+  */
+ import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+ import type { OpenClawConfig } from "../config/types.openclaw.js";
+-import { readLoggingConfig } from "../logging/config.js";
+-import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
+-import {
+-  redactModelVisibleSensitiveFieldValueWithConfig,
+-  redactModelVisibleToolPayloadTextWithConfig,
+-  redactSensitiveFieldValueWithConfig,
+-  redactSensitiveText,
+-  redactToolPayloadTextWithConfig,
+-} from "../logging/redact.js";
++import { redactSensitiveText } from "../logging/redact.js";
+ import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
+ import type { ProviderEndpointClass } from "./provider-attribution.js";
+ import { resolveProviderEndpoint } from "./provider-attribution.js";
+ import type { AgentMessage } from "./runtime/index.js";
+ import {
+   copyCodeModeSourceAppend,
+-  readCodeModeSourceFields,
+   type CodeModeSourceAppend,
+ } from "./transcript-code-mode-source.js";
+ import {
+@@ -32,41 +23,6 @@ import {
+ } from "./transcript-redact-images.js";
+ import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
+ 
+-function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
+-  const configuredLogging = readLoggingConfig();
+-  const redactPatterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
+-  return redactPatterns ? { redactPatterns } : undefined;
+-}
+-
+-function redactTranscriptText(
+-  value: string,
+-  cfg?: OpenClawConfig,
+-  modelVisibleToolResult = false,
+-): string {
+-  const loggingConfig = resolveTranscriptLoggingConfig(cfg);
+-  return modelVisibleToolResult
+-    ? redactModelVisibleToolPayloadTextWithConfig(value, loggingConfig)
+-    : redactToolPayloadTextWithConfig(value, loggingConfig);
+-}
+-
+-function redactTranscriptStructuredFieldValue(
+-  key: string,
+-  value: string,
+-  cfg?: OpenClawConfig,
+-  modelVisibleToolResult = false,
+-): string {
+-  // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
+-  return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
+-    ? redactTranscriptText(value, cfg, modelVisibleToolResult)
+-    : modelVisibleToolResult
+-      ? redactModelVisibleSensitiveFieldValueWithConfig(
+-          key,
+-          value,
+-          resolveTranscriptLoggingConfig(cfg),
+-        )
+-      : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
+-}
+-
+ function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
+   const prototype = Object.getPrototypeOf(value);
+   return prototype === Object.prototype || prototype === null;
+@@ -246,7 +202,8 @@ const replaySanitizerHelpers = {
+   isPlainTranscriptObject,
+   isStructurallyValidOpaqueReplayToken,
+   redactTranscriptStructuredValue,
+-  redactTranscriptText,
++  // LobsterAI: replay data keeps its text, like the rest of the transcript.
++  redactTranscriptText: (value: string) => value,
+ };
+ 
+ function isOpenAITextSignature(
+@@ -491,15 +448,11 @@ function redactTranscriptStructuredValue(
+   preserveImageDataUrlFields = false,
+   location: TranscriptValueLocation = "nested",
+   assistantRoute?: TranscriptAssistantRoute,
+-  modelVisibleToolResult = false,
+-  sourceFields?: ReadonlyMap<string, string>,
+-  sourceSlots?: ReadonlyMap<object, ReadonlyMap<string, string>>,
+ ): unknown {
++  // LobsterAI: persisted text matches what the model saw, so prompt replay stays
++  // byte-identical for provider prefix caches. Logging and diagnostics still mask secrets.
+   if (typeof value === "string") {
+-    if (fieldKey) {
+-      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg, modelVisibleToolResult);
+-    }
+-    return redactTranscriptText(value, cfg, modelVisibleToolResult);
++    return value;
+   }
+   if (Array.isArray(value)) {
+     if (seen.has(value)) {
+@@ -516,9 +469,6 @@ function redactTranscriptStructuredValue(
+         preserveImageDataUrlFields,
+         location === "assistant-content-array" ? "assistant-content-block" : "nested",
+         assistantRoute,
+-        modelVisibleToolResult,
+-        undefined,
+-        sourceSlots,
+       );
+       changed ||= next !== item;
+       return next;
+@@ -679,32 +629,19 @@ function redactTranscriptStructuredValue(
+     if (shouldPreserveTranscriptImagePayload(source, key, item, preserveImageDataUrlFields)) {
+       continue;
+     }
+-    const redacted =
+-      typeof item === "string" && sourceFields?.get(key) === item
+-        ? redactSourceInputTextWithConfig(item, resolveTranscriptLoggingConfig(cfg))
+-        : redactTranscriptStructuredValue(
+-            item,
+-            cfg,
+-            key,
+-            seen,
+-            preserveImageDataUrlFields ||
+-              shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
+-            location === "root" &&
+-              source.role === "assistant" &&
+-              key === "content" &&
+-              Array.isArray(item)
+-              ? "assistant-content-array"
+-              : location === "root" && key === "details" && readNestedToolActivity(source)
+-                ? "nested-tool-details"
+-                : "nested",
+-            currentAssistantRoute,
+-            modelVisibleToolResult ||
+-              (location === "root" && source.role === "toolResult" && key === "content"),
+-            location === "assistant-content-block" && key === "arguments"
+-              ? sourceSlots?.get(source)
+-              : undefined,
+-            sourceSlots,
+-          );
++    const redacted = redactTranscriptStructuredValue(
++      item,
++      cfg,
++      key,
++      seen,
++      preserveImageDataUrlFields || shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
++      location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
++        ? "assistant-content-array"
++        : location === "root" && key === "details" && readNestedToolActivity(source)
++          ? "nested-tool-details"
++          : "nested",
++      currentAssistantRoute,
++    );
+     if (redacted === item) {
+       continue;
+     }
+@@ -724,7 +661,7 @@ function redactTranscriptStructuredValue(
+   return next ?? value;
+ }
+ 
+-/** Return a redacted transcript message according to logging config. */
++/** Return a transcript message with replay and image payload hygiene applied; text is kept as sent. */
+ export function redactTranscriptMessage(
+   message: AgentMessage,
+   cfg?: OpenClawConfig,
+@@ -737,13 +674,7 @@ export function redactTranscriptMessage(
+     new WeakSet<object>(),
+     false,
+     "root",
+-    undefined,
+-    false,
+-    undefined,
+-    readCodeModeSourceFields(message, sourceAppend),
+   ) as AgentMessage;
+-  copyCodeModeSourceAppend(message, redacted, sourceAppend, (source) =>
+-    redactSourceInputTextWithConfig(source, resolveTranscriptLoggingConfig(cfg)),
+-  );
++  copyCodeModeSourceAppend(message, redacted, sourceAppend);
+   return redacted;
+ }
+diff --git a/src/config/sessions/session-accessor.test.ts b/src/config/sessions/session-accessor.test.ts
+index b9bef43668c..4e56beb9a43 100644
+--- a/src/config/sessions/session-accessor.test.ts
++++ b/src/config/sessions/session-accessor.test.ts
+@@ -3808,7 +3808,7 @@ describe("session accessor seam", () => {
+     });
+   });
+ 
+-  it("accepts idempotent transcript replays after storage redaction", async () => {
++  it("accepts idempotent transcript replays with exact secret-shaped text", async () => {
+     const scope = {
+       agentId: "main",
+       sessionId: "session-redacted-replay",
+@@ -3835,7 +3835,7 @@ describe("session accessor seam", () => {
+     });
+ 
+     expect(first?.appended).toBe(true);
+-    expect(JSON.stringify(first?.message)).not.toContain("sk-abcdef1234567890xyz");
++    expect(first?.message).toEqual(message);
+     expect(replay).toMatchObject({
+       appended: false,
+       messageId: first?.messageId,
+diff --git a/src/config/sessions/transcript-append-redact.test.ts b/src/config/sessions/transcript-append-redact.test.ts
+index e09b9790864..9fa1cd82799 100644
+--- a/src/config/sessions/transcript-append-redact.test.ts
++++ b/src/config/sessions/transcript-append-redact.test.ts
+@@ -1,4 +1,4 @@
+-// Transcript append redaction tests cover secret scrubbing when appending transcript entries.
++// Transcript append tests cover source fidelity for model-visible transcript entries.
+ import fs from "node:fs";
+ import path from "node:path";
+ import { expectDefined } from "@openclaw/normalization-core";
+@@ -55,7 +55,7 @@ async function readStoredMessages(params: {
+     .map((record) => record.message);
+ }
+ 
+-describe("appendSessionTranscriptMessage - redaction", () => {
++describe("appendSessionTranscriptMessage - source fidelity", () => {
+   const fixture = useTempSessionsFixture("transcript-redact-test-");
+ 
+   beforeEach(() => {
+@@ -63,7 +63,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+     readLoggingConfig.mockReturnValue(undefined);
+   });
+ 
+-  it("masks secrets in message content before writing to disk", async () => {
++  it("keeps message content unchanged when writing to disk", async () => {
+     const sessionFile = resolveSessionTranscriptPathInDir("redact-on", fixture.sessionsDir());
+     const config: OpenClawConfig = {};
+ 
+@@ -76,10 +76,6 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+       config,
+     });
+ 
+-    const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+-    expect(raw).toContain("ok"); // safe text preserved
+-
+     const [msg] = readMessages(sessionFile) as Array<{
+       content: Array<{ text: string }>;
+     }>;
+@@ -88,7 +84,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+         expectDefined(msg, "msg test invariant").content[0],
+         "msg.content[0] test invariant",
+       ).text,
+-    ).not.toContain("sk-abcdef1234567890xyz");
++    ).toBe("my key is sk-abcdef1234567890xyz ok");
+   });
+ 
+   it("preserves image base64 payloads before writing to disk", async () => {
+@@ -115,7 +111,6 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+     });
+ 
+     const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+     expect(raw).toContain(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
+     expect(raw).not.toContain("AKID…MNOP");
+ 
+@@ -127,7 +122,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+         expectDefined(msg, "msg test invariant").content[0],
+         "msg.content[0] test invariant",
+       ).text,
+-    ).not.toContain("sk-abcdef1234567890xyz");
++    ).toBe("my key is sk-abcdef1234567890xyz");
+     expect(
+       expectDefined(
+         expectDefined(msg, "msg test invariant").content[1],
+@@ -136,7 +131,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+     ).toBe(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
+   });
+ 
+-  it("redacts content regardless of the retired off switch", async () => {
++  it("keeps content unchanged with an empty config", async () => {
+     const sessionFile = resolveSessionTranscriptPathInDir("redact-off", fixture.sessionsDir());
+     const config: OpenClawConfig = {};
+ 
+@@ -150,10 +145,10 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+     });
+ 
+     const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("sk-abcdef1234567890xyz");
++    expect(raw).toContain("sk-abcdef1234567890xyz");
+   });
+ 
+-  it("masks secrets when config is undefined (default patterns)", async () => {
++  it("keeps content unchanged when config is undefined", async () => {
+     const sessionFile = resolveSessionTranscriptPathInDir("redact-undef", fixture.sessionsDir());
+ 
+     await appendSessionTranscriptMessage({
+@@ -166,7 +161,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+     });
+ 
+     const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("sk-abcdef1234567890xyz");
++    expect(raw).toContain("sk-abcdef1234567890xyz");
+   });
+ 
+   it("masks secrets in string payloads without role before writing to disk", async () => {
+@@ -238,7 +233,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+     expect(expectDefined(msg, "msg test invariant").safe).toBe("visible");
+   });
+ 
+-  it("uses configured custom patterns when cfg omits logging", async () => {
++  it("does not apply logging redact patterns to transcript content", async () => {
+     const sessionFile = resolveSessionTranscriptPathInDir(
+       "redact-config-pattern-fallback",
+       fixture.sessionsDir(),
+@@ -259,96 +254,54 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+     });
+ 
+     const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("peter@dc.io");
+-    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+-    expect(raw).toContain("ok");
++    expect(raw).toContain("email peter@dc.io and key sk-abcdef1234567890xyz ok");
+   });
+ 
+-  it("masks secrets in assistant tool-call arguments before writing to disk", async () => {
++  it("keeps assistant tool-call arguments unchanged when writing to disk", async () => {
+     const sessionFile = resolveSessionTranscriptPathInDir(
+       "redact-tool-call-args",
+       fixture.sessionsDir(),
+     );
+     const config: OpenClawConfig = {};
++    const args = {
++      command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
++      env: { nested: ["token sk-abcdef1234567890xyz"] },
++      apiKey: "plainsecretvalue123",
++      password: "hunter2",
++    };
+ 
+     await appendSessionTranscriptMessage({
+       transcriptPath: sessionFile,
+       message: {
+         role: "assistant",
+-        content: [
+-          {
+-            type: "toolCall",
+-            id: "call_1",
+-            name: "shell",
+-            arguments: {
+-              command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+-              env: { nested: ["token sk-abcdef1234567890xyz"] },
+-              apiKey: "plainsecretvalue123",
+-              password: "hunter2",
+-            },
+-          },
+-        ],
++        content: [{ type: "toolCall", id: "call_1", name: "shell", arguments: args }],
+       },
+       config,
+     });
+ 
+-    const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+-    expect(raw).not.toContain("plainsecretvalue123");
+-    expect(raw).not.toContain("hunter2");
+-    expect(raw).toContain("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+-    expect(raw).toContain("openclaw health");
+-
+     const [msg] = readMessages(sessionFile) as Array<{
+-      content: Array<{
+-        arguments: {
+-          command: string;
+-          env: { nested: string[] };
+-          apiKey: string;
+-          password: string;
+-        };
+-      }>;
++      content: Array<{ arguments: unknown }>;
+     }>;
+-    expect(
+-      JSON.stringify(
+-        expectDefined(
+-          expectDefined(msg, "msg test invariant").content[0],
+-          "msg.content[0] test invariant",
+-        ).arguments,
+-      ),
+-    ).not.toContain("sk-abcdef1234567890xyz");
+-    expect(
+-      expectDefined(
+-        expectDefined(msg, "msg test invariant").content[0],
+-        "msg.content[0] test invariant",
+-      ).arguments.command,
+-    ).toBe("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+     expect(
+       expectDefined(
+         expectDefined(msg, "msg test invariant").content[0],
+         "msg.content[0] test invariant",
+-      ).arguments.env.nested[0],
+-    ).toBe("token sk-abc…0xyz");
+-    expect(
+-      expectDefined(
+-        expectDefined(msg, "msg test invariant").content[0],
+-        "msg.content[0] test invariant",
+-      ).arguments.apiKey,
+-    ).toBe("plains…e123");
+-    expect(
+-      expectDefined(
+-        expectDefined(msg, "msg test invariant").content[0],
+-        "msg.content[0] test invariant",
+-      ).arguments.password,
+-    ).toBe("***");
++      ).arguments,
++    ).toEqual(args);
+   });
+ 
+-  it("masks secrets in tool-result details before writing to disk", async () => {
++  it("keeps tool-result content and details unchanged when writing to disk", async () => {
+     const sessionFile = resolveSessionTranscriptPathInDir(
+       "redact-tool-result-details",
+       fixture.sessionsDir(),
+     );
+     const config: OpenClawConfig = {};
++    const details = {
++      apiKey: "plainsecretvalue123",
++      password: "hunter2",
++      nested: { accessToken: ["nestedplainsecret123"] },
++      safe: "visible",
++    };
+ 
+     await appendSessionTranscriptMessage({
+       transcriptPath: sessionFile,
+@@ -357,51 +310,24 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+         toolCallId: "call_1",
+         toolName: "send_request",
+         content: [{ type: "text", text: "result sk-abcdef1234567890xyz" }],
+-        details: {
+-          apiKey: "plainsecretvalue123",
+-          password: "hunter2",
+-          nested: { accessToken: ["nestedplainsecret123"] },
+-          safe: "visible",
+-        },
++        details,
+         isError: false,
+         timestamp: Date.now(),
+       },
+       config,
+     });
+ 
+-    const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+-    expect(raw).not.toContain("plainsecretvalue123");
+-    expect(raw).not.toContain("hunter2");
+-    expect(raw).not.toContain("nestedplainsecret123");
+-    expect(raw).toContain("visible");
+-
+     const [msg] = readMessages(sessionFile) as Array<{
+       content: Array<{ text: string }>;
+-      details: {
+-        apiKey: string;
+-        password: string;
+-        nested: { accessToken: string[] };
+-        safe: string;
+-      };
++      details: unknown;
+     }>;
+     expect(
+       expectDefined(
+         expectDefined(msg, "msg test invariant").content[0],
+         "msg.content[0] test invariant",
+       ).text,
+-    ).not.toContain("sk-abcdef1234567890xyz");
+-    expect(JSON.stringify(expectDefined(msg, "msg test invariant").details)).not.toContain(
+-      "plainsecretvalue123",
+-    );
+-    expect(expectDefined(msg, "msg test invariant").details.apiKey).toBe("plains…e123");
+-    expect(expectDefined(msg, "msg test invariant").details.password).toBe("***");
+-    expect(
+-      expectDefined(
+-        expectDefined(msg, "msg test invariant").details.nested.accessToken[0],
+-        "msg.details.nested.accessToken[0] test invariant",
+-      ),
+-    ).toBe("nested…t123");
++    ).toBe("result sk-abcdef1234567890xyz");
++    expect(expectDefined(msg, "msg test invariant").details).toEqual(details);
+   });
+ 
+   it("preserves env placeholders in persisted tool results", async () => {
+@@ -442,7 +368,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
+   });
+ });
+ 
+-describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
++describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () => {
+   const fixture = useTempSessionsFixture("exact-assistant-redact-test-");
+ 
+   async function seedSessionEntry(params: {
+@@ -529,7 +455,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
+     expect(internalUpdates[0]?.message).toHaveProperty("providerReplay.data", OPAQUE_COMPACTION);
+   });
+ 
+-  it("always redacts exact assistant transcript appends", async () => {
++  it("preserves secret-shaped text in exact assistant transcript appends", async () => {
+     const sessionsDir = fixture.sessionsDir();
+     const storePath = path.join(sessionsDir, "sessions.json");
+     const sessionId = "test-session-redact-off";
+@@ -568,10 +494,10 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
+     }
+ 
+     const raw = JSON.stringify(await readStoredMessages({ sessionId, sessionKey, storePath }));
+-    expect(raw).not.toContain(fakeApiKey);
++    expect(raw).toContain(fakeApiKey);
+   });
+ 
+-  it("emits the redacted assistant message for inline transcript updates", async () => {
++  it("emits the persisted assistant source text for inline transcript updates", async () => {
+     const sessionsDir = fixture.sessionsDir();
+     const storePath = path.join(sessionsDir, "sessions.json");
+     const sessionId = "test-session-redact-event";
+@@ -613,16 +539,16 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
+       }
+ 
+       const [diskMessage] = await readStoredMessages({ sessionId, sessionKey, storePath });
+-      expect(JSON.stringify(diskMessage)).not.toContain(fakeApiKey);
++      expect(JSON.stringify(diskMessage)).toContain(fakeApiKey);
+       expect(updates).toHaveLength(1);
+       expect(updates[0]?.message).toEqual(diskMessage);
+-      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
++      expect(JSON.stringify(updates[0]?.message)).toContain(fakeApiKey);
+     } finally {
+       unsubscribe();
+     }
+   });
+ 
+-  it("dedupes delivery mirrors against the redacted persisted text", async () => {
++  it("dedupes delivery mirrors against exact persisted text", async () => {
+     const sessionsDir = fixture.sessionsDir();
+     const storePath = path.join(sessionsDir, "sessions.json");
+     const sessionId = "test-session-redact-dedupe";
+@@ -653,7 +579,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
+     expect(second.messageId).toBe(first.messageId);
+ 
+     const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
+-    expect(JSON.stringify(events)).not.toContain(fakeApiKey);
++    expect(JSON.stringify(events)).toContain(fakeApiKey);
+     expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
+       1,
+     );
+@@ -704,7 +630,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
+     expect(deduped.messageId).toBe(unredacted.messageId);
+ 
+     const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
+-    expect(JSON.stringify(events)).not.toContain(fakeApiKey);
++    expect(JSON.stringify(events)).toContain(fakeApiKey);
+     expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
+       1,
+     );
+diff --git a/src/config/sessions/transcript.test.ts b/src/config/sessions/transcript.test.ts
+index b99ec2ef08b..a4ab41fc3b3 100644
+--- a/src/config/sessions/transcript.test.ts
++++ b/src/config/sessions/transcript.test.ts
+@@ -2503,7 +2503,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
+     }
+   });
+ 
+-  it("redacts structured message content before transcript persistence", async () => {
++  it("keeps structured message content unchanged in transcript persistence", async () => {
+     const sessionFile = resolveSessionTranscriptPathInDir(
+       "redacted-transcript-session",
+       fixture.sessionsDir(),
+@@ -2531,10 +2531,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
+     });
+ 
+     const raw = fs.readFileSync(sessionFile, "utf-8");
+-    expect(raw).not.toContain("ya29.fake-access-token");
+-    expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+-    expect(raw).not.toContain("AIzaSyD-very-real-looking");
+-    expect(raw).not.toContain("1//0fake-refresh-token");
++    expect(raw).toContain("ya29.fake-access-token-with-enough-length");
++    expect(raw).toContain("abcd-efgh-ijkl-mnop");
++    expect(raw).toContain("AIzaSyD-very-real-looking-google-api-key-123");
++    expect(raw).toContain("1//0fake-refresh-token-with-enough-length");
+   });
+ 
+   it("migrates small linear transcripts before appending", async () => {
+diff --git a/src/gateway/cli-session-history.test.ts b/src/gateway/cli-session-history.test.ts
+index 28e1ed86dca..6edd93217cb 100644
+--- a/src/gateway/cli-session-history.test.ts
++++ b/src/gateway/cli-session-history.test.ts
+@@ -1642,7 +1642,7 @@ describe("cli session history", () => {
+     });
+   });
+ 
+-  it("does not surface a secret present only in imported history after merge", async () => {
++  it("preserves source text present only in imported history after merge", async () => {
+     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+       const importedSecret = "sk-abcdef1234567890xyz";
+       await fs.writeFile(
+@@ -1665,7 +1665,7 @@ describe("cli session history", () => {
+       });
+ 
+       expect(messages).toHaveLength(2);
+-      expect(JSON.stringify(messages)).not.toContain(importedSecret);
++      expect(JSON.stringify(messages)).toContain(importedSecret);
+     });
+   });
+ 
+diff --git a/src/gateway/server-methods/chat.inject.parentid.test.ts b/src/gateway/server-methods/chat.inject.parentid.test.ts
+index ca1f78e9b0e..0ca69602a65 100644
+--- a/src/gateway/server-methods/chat.inject.parentid.test.ts
++++ b/src/gateway/server-methods/chat.inject.parentid.test.ts
+@@ -139,7 +139,7 @@ describe("gateway chat.inject transcript writes", () => {
+     }
+   });
+ 
+-  it("emits a redacted injected message through its persisted transcript owner", async () => {
++  it("preserves injected source text through its persisted transcript owner", async () => {
+     const fixture = await createSqliteTranscriptFixture({
+       prefix: "openclaw-chat-inject-redact-",
+       sessionId: "sess-redact",
+@@ -159,14 +159,14 @@ describe("gateway chat.inject transcript writes", () => {
+       });
+ 
+       expect(appended.ok).toBe(true);
+-      expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
++      expect(JSON.stringify(appended.message)).toContain(fakeApiKey);
+       expect(updates).toHaveLength(1);
+       expect(updates[0]).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
+ 
+       const last = (await readLastTranscriptRecord(fixture)) as { message?: unknown };
+-      expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);
++      expect(JSON.stringify(last.message)).toContain(fakeApiKey);
+       expect(updates[0]?.message).toEqual(last.message);
+-      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
++      expect(JSON.stringify(updates[0]?.message)).toContain(fakeApiKey);
+     } finally {
+       unsubscribe();
+       await cleanupFixture(fixture);
+diff --git a/src/gateway/worker-environments/transcript-commit.test.ts b/src/gateway/worker-environments/transcript-commit.test.ts
+index 6c449bc45c7..82382feee0f 100644
+--- a/src/gateway/worker-environments/transcript-commit.test.ts
++++ b/src/gateway/worker-environments/transcript-commit.test.ts
+@@ -626,7 +626,9 @@ describe("worker transcript commit application", () => {
+       .filter((entry) => entry.id !== baseLeafId);
+     const committedEntryIds = committedEntries.map((entry) => entry.id);
+     expect(committedEntryIds).toHaveLength(request.messages.length);
+-    expect(JSON.stringify(committedEntries)).not.toContain("sk-abcdef1234567890xyz");
++    expect(committedEntries[0]).toMatchObject({
++      message: { content: request.messages[0]?.content },
++    });
+ 
+     const firstCommitted = committedEntries[0];
+     if (firstCommitted?.type !== "message") {

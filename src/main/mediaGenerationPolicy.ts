@@ -1,4 +1,5 @@
 import { type MediaSelection, MediaSelectionMode } from '../shared/media/defaultPolicy';
+import { MediaGenerationGateReason } from '../shared/media/usage';
 export { MediaSelectionMode };
 
 export const MediaGenerationTool = {
@@ -12,11 +13,7 @@ export const MediaGenerationAction = {
 } as const;
 export type MediaGenerationAction = typeof MediaGenerationAction[keyof typeof MediaGenerationAction];
 
-export const MediaGenerationGateReason = {
-  MediaNotEnabled: 'MEDIA_NOT_ENABLED',
-  WrongMediaType: 'WRONG_MEDIA_TYPE',
-} as const;
-export type MediaGenerationGateReason = typeof MediaGenerationGateReason[keyof typeof MediaGenerationGateReason];
+export { MediaGenerationGateReason } from '../shared/media/usage';
 
 export type MediaSelectionState = MediaSelection;
 

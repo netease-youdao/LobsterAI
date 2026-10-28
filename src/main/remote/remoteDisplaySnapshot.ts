@@ -8,10 +8,12 @@ interface SnapshotJob {
   controller: AbortController;
   cancellationScheduled?: boolean;
 }
-interface Snapshot<T> { value: T; storedAt: number }
+interface Snapshot<T> { value: T; storedAt: number; retained: boolean }
 interface RemoteDisplaySnapshotOptions<T> {
   /** Owns the worker's five-second deadline and must settle only after cancellation/exit is confirmed. */
   produce(contextKey: string, signal: AbortSignal): Promise<T | null>;
+  /** Only for quiescent state whose writes explicitly invalidate this cache. */
+  retainUntilInvalidated?(value: T): boolean;
   onChanged?(): void;
 }
 
@@ -36,7 +38,7 @@ export class RemoteDisplaySnapshot<T> {
       this.invalidate();
     }
     this.schedule();
-    return this.snapshot && performance.now() - this.snapshot.storedAt < RemoteDisplaySnapshotTiming.ttlMs
+    return this.snapshot && (this.snapshot.retained || performance.now() - this.snapshot.storedAt < RemoteDisplaySnapshotTiming.ttlMs)
       ? this.snapshot.value : null;
   }
 
@@ -66,7 +68,7 @@ export class RemoteDisplaySnapshot<T> {
   }
 
   private schedule(): void {
-    if (this.stopped || this.contextKey === null || this.job || this.refreshTimer) return;
+    if (this.stopped || this.contextKey === null || this.job || this.refreshTimer || this.snapshot?.retained) return;
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
       if (this.stopped || this.contextKey === null || this.job) return;
@@ -88,15 +90,15 @@ export class RemoteDisplaySnapshot<T> {
       if (!this.current(job)) { remotePerformance.event(RemotePerformanceStage.DisplaySnapshot, RemotePerformanceEvent.Instant, { reason: RemotePerformanceReason.ContextChanged, outcome: RemotePerformanceOutcome.Cancelled }); return; }
       this.clearSnapshot();
       if (value !== null) {
-        const snapshot = this.snapshot = { value, storedAt: performance.now() };
-        this.expiryTimer = setTimeout(() => {
+        const snapshot = this.snapshot = { value, storedAt: performance.now(), retained: this.options.retainUntilInvalidated?.(value) === true };
+        if (!snapshot.retained) this.expiryTimer = setTimeout(() => {
           this.expiryTimer = null;
           if (this.snapshot !== snapshot || !this.currentScope(job)) return;
           this.snapshot = null;
           remotePerformance.event(RemotePerformanceStage.DisplaySnapshot, RemotePerformanceEvent.Instant, { reason: RemotePerformanceReason.Stale, outcome: RemotePerformanceOutcome.Unknown });
           this.notify();
         }, RemoteDisplaySnapshotTiming.ttlMs);
-        this.expiryTimer.unref?.();
+        this.expiryTimer?.unref?.();
       }
       this.notify();
     } catch {

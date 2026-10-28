@@ -87,6 +87,7 @@ import {
   isDuplicateGeneratedVideoAssistantMessage,
   isModelChangeMessage,
   type ToolGroupItem,
+  withTurnModelPreset,
 } from './messageDisplayUtils';
 import ModelChangeDivider from './ModelChangeDivider';
 import ThinkingBlock from './ThinkingBlock';
@@ -952,7 +953,12 @@ const AssistantTurnBlock: React.FC<{
           mapDisplayText={mapDisplayText}
           showCopyButton={isLastAssistant}
           onFork={isLastAssistant ? onForkMessage : undefined}
-          turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
+          turnMetadata={isLastAssistant
+            ? withTurnModelPreset(
+              item.message.metadata as CoworkMessageMetadata,
+              turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+            )
+            : undefined}
           completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
           turnUsageSlot={item.message.id === turnUsageReplyId ? turnUsageSlot : null}
           planConfirmationMessageId={planConfirmationMessageId}

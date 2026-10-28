@@ -6,6 +6,7 @@ import { UsageEntry } from '../../shared/analytics/usage';
 import {
   CompanionAnalyticsAction as Action, CompanionAnalyticsOutcome as Outcome, CompanionAnalyticsSetting as Setting,
   CompanionAnalyticsSource as Source, CompanionAnalyticsStage as Stage, CompanionAnalyticsTool as Tool,
+  CompanionTaskBlockedReason, CompanionTaskFailureCode, CompanionTaskFailureStage,
   normalizeCompanionAnalyticsEvent,
 } from '../../shared/desktopCompanion/analytics';
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
@@ -19,6 +20,7 @@ describe('companion analytics privacy and reporting', () => {
       prompt: 'private selection', text: 'private answer', path: '/Users/private/document.pdf',
       sessionId: 'local-session', requestId: 'upstream-id', appId: 'private.application',
       skin: '/private/skin.png', reason: 'HTTP error containing secrets', durationMs: Infinity,
+      failureCode: 'private response', failureStage: '/private/file', blockedReason: 'private account',
       attachmentCount: -1, fileKinds: [CompanionFileKind.Pdf, '/private/document.pdf', CompanionFileKind.Pdf].join(','),
     })).toEqual({ action: Action.FileDrop, source: Source.FileDrop, fileKinds: CompanionFileKind.Pdf });
     expect(normalizeCompanionAnalyticsEvent({ action: LogReporterAction.AppStarted, source: Source.Panel })).toBeNull();
@@ -111,16 +113,26 @@ test('links a panel opening and one submission to runtime IDs without reporting 
   expect(JSON.stringify(s.events())).not.toContain('private');
 });
 
-test('failed and undispatched submissions do not borrow another task context', () => {
+test('undispatched submissions do not borrow another task context', () => {
   for (const outcome of [Outcome.Failed, Outcome.Success]) {
     const s = taskSetup();
     s.analytics.task(s.submit, 10, Source.Panel);
-    if (outcome === Outcome.Failed) s.analytics.captureTask(10)(s.context);
     s.analytics.task({ ...s.result, outcome }, 10, Source.Panel);
     expect(s.events()).toHaveLength(2);
     expect(s.events()[1].taskId).toBeUndefined();
     expect(s.events()[1].turnId).toBeUndefined();
   }
+});
+
+test('a failed dispatch retains its own runtime IDs and configured failure columns', () => {
+  const s = taskSetup();
+  s.analytics.task(s.submit, 10, Source.Panel);
+  s.analytics.captureTask(10)(s.context);
+  const failure = { failureCode: CompanionTaskFailureCode.EngineNotReady,
+    failureStage: CompanionTaskFailureStage.SessionStart, blockedReason: CompanionTaskBlockedReason.Starting };
+  s.analytics.task({ ...s.result, outcome: Outcome.Failed, ...failure, taskId: randomUUID(), turnId: randomUUID() }, 10, Source.Panel);
+  expect(s.events()[1]).toMatchObject({ ...failure, outcome: Outcome.Failed,
+    taskId: s.context.taskId, turnId: s.context.turnId });
 });
 
 test('late follow-up completion retains the dispatched turn even when a later turn has started', () => {

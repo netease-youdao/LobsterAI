@@ -7,6 +7,7 @@ import {
   ProviderAuthType,
   ProviderName,
   ProviderRegistry,
+  supportsOpenAIApiModeSelection,
 } from '../../../shared/providers';
 import { defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, isCustomProvider } from '../../config';
 import { getProviderIcon } from '../../providers/uiRegistry';
@@ -15,8 +16,12 @@ import EditIcon from '../icons/EditIcon';
 import PlusCircleIcon from '../icons/PlusCircleIcon';
 import { GitHubCopilotIcon } from '../icons/providers';
 import TrashIcon from '../icons/TrashIcon';
+import ThemedSelect from '../ui/ThemedSelect';
 import {
+  ApiFormatOption,
   CUSTOM_PROVIDER_KEYS,
+  getApiFormatOption,
+  getApiFormatOptions,
   getEffectiveApiFormat,
   getProviderDefaultBaseUrl,
   hasProviderAuthConfigured,
@@ -24,8 +29,29 @@ import {
   providerRequiresApiKey,
   type ProvidersConfig,
   type ProviderType,
+  resolveApiFormatOption,
   shouldShowApiFormatSelector,
 } from './modelProviderUtils';
+import {
+  SETTINGS_DESCRIPTION_TEXT,
+  SETTINGS_ITEM_TITLE_TEXT,
+  SETTINGS_META_TEXT,
+  SETTINGS_SECTION_TITLE_TEXT,
+} from './settingsTypography';
+
+const API_FORMAT_OPTION_LABEL_KEYS: Record<ApiFormatOption, string> = {
+  [ApiFormatOption.Anthropic]: 'apiFormatAnthropicMessages',
+  [ApiFormatOption.OpenAIChatCompletions]: 'apiFormatOpenAIChatCompletions',
+  [ApiFormatOption.OpenAIResponses]: 'apiFormatOpenAIResponses',
+  [ApiFormatOption.Gemini]: 'apiFormatGemini',
+};
+
+const API_FORMAT_OPTION_HINT_KEYS: Record<ApiFormatOption, string> = {
+  [ApiFormatOption.Anthropic]: 'apiFormatHint',
+  [ApiFormatOption.OpenAIChatCompletions]: 'apiFormatHint',
+  [ApiFormatOption.OpenAIResponses]: 'apiFormatResponsesHint',
+  [ApiFormatOption.Gemini]: 'apiFormatGeminiHint',
+};
 
 // Context Window slider constants & helpers
 const CW_MIN = 32000;
@@ -298,7 +324,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                       className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
                       placeholder={i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNamePlaceholder' : 'ollamaModelNamePlaceholder')}
                     />
-                    <p className="mt-1 text-[11px] text-muted">
+                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                       {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNameHint' : 'ollamaModelNameHint')}
                     </p>
                   </div>
@@ -320,7 +346,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                       className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
                       placeholder={i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayNamePlaceholder' : 'ollamaDisplayNamePlaceholder')}
                     />
-                    <p className="mt-1 text-[11px] text-muted">
+                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                       {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayNameHint' : 'ollamaDisplayNameHint')}
                     </p>
                   </div>
@@ -346,7 +372,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                       className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
                       placeholder="GPT-4"
                     />
-                    <p className="mt-1 text-[11px] text-muted">
+                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                       {i18nService.t('modelNameHint')}
                     </p>
                   </div>
@@ -368,7 +394,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                       className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
                       placeholder="gpt-4"
                     />
-                    <p className="mt-1 text-[11px] text-muted">
+                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                       {i18nService.t('modelIdHint')}
                     </p>
                   </div>
@@ -390,7 +416,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                   onChange={(e) => setNewModelSupportsImage(e.target.checked)}
                   className="h-3.5 w-3.5 text-primary focus:ring-primary bg-surface border-border rounded"
                 />
-                <p className="mt-1 text-[11px] text-muted">
+                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                   {i18nService.t('supportsImageInputHint')}
                 </p>
               </div>
@@ -410,7 +436,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                   onChange={(e) => setNewModelSupportsThinking(e.target.checked)}
                   className="h-3.5 w-3.5 text-primary focus:ring-primary bg-surface border-border rounded"
                 />
-                <p className="mt-1 text-[11px] text-muted">
+                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                   {i18nService.t('supportsThinkingOutputHint')}
                 </p>
               </div>
@@ -474,7 +500,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                     </span>
                   ))}
                 </div>
-                <p className="mt-1 text-[11px] text-muted">
+                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                   {i18nService.t('contextWindowHint')}
                 </p>
               </div>
@@ -502,7 +528,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                     placeholder={i18nService.t('maxOutputTokensPlaceholder')}
                     className="w-24 rounded-lg bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-2.5 py-1 text-xs text-center tabular-nums"
                   />
-                  <p className="mt-1 text-[11px] text-muted">
+                  <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                     {i18nService.t('maxOutputTokensHint')}
                   </p>
                 </div>
@@ -529,7 +555,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
                   rows={3}
                   className="w-full rounded-lg bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-2.5 py-1.5 text-xs font-mono resize-y"
                 />
-                <p className="mt-1 text-[11px] text-muted">
+                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
                   {i18nService.t('customParamsHint')}
                 </p>
               </div>
@@ -658,6 +684,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
   const copilotSignedIn = copilotAuthStatus === 'authenticated'
     || copilotProvider?.authType === ProviderAuthType.OAuth;
 
+  const applyApiFormatOption = (provider: ProviderType, option: ApiFormatOption) => {
+    const { apiFormat, openaiApiMode } = resolveApiFormatOption(option);
+    handleProviderConfigChange(provider, 'apiFormat', apiFormat);
+    if (supportsOpenAIApiModeSelection(provider)) {
+      handleProviderConfigChange(provider, 'openaiApiMode', openaiApiMode);
+    }
+  };
+
   // Guides users who click a toggle that cannot be enabled yet: highlights the
   // missing auth requirement (API key input / login) instead of ignoring the click.
   const [authAttention, setAuthAttention] = React.useState<{ provider: ProviderType; nonce: number } | null>(null);
@@ -707,7 +741,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
   const authAttentionHint = showAuthAttentionHint ? (
     <p
       key={`auth-attention-${authAttention?.nonce ?? 0}`}
-      className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-red-500 dark:text-red-400 animate-fade-in-down"
+      className={`mt-1.5 flex items-center gap-1 ${SETTINGS_META_TEXT} font-medium text-red-500 dark:text-red-400 animate-fade-in-down`}
     >
       <ExclamationCircleIcon className="h-3.5 w-3.5 shrink-0" />
       {getProviderAuthRequirementHint(activeProvider, providers[activeProvider])}
@@ -721,9 +755,9 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
             <div className="w-2/5 border-r border-border pr-3 flex flex-col min-h-0">
               <div className="shrink-0 space-y-2 pb-2">
                 <div className="flex items-center justify-between px-1">
-                  <h3 className="flex items-baseline gap-1.5 text-sm font-medium text-foreground">
+                  <h3 className={`flex items-baseline gap-1.5 ${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>
                     {i18nService.t('modelProviders')}
-                    <span className="text-[10px] font-normal text-muted">
+                    <span className={`${SETTINGS_META_TEXT} font-normal text-muted`}>
                       {enabledProviderCount}/{providerEntries.length} {i18nService.t('providersEnabledSuffix')}
                     </span>
                   </h3>
@@ -732,7 +766,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       type="button"
                       onClick={handleImportProvidersClick}
                       disabled={isImportingProviders || isExportingProviders}
-                      className="inline-flex items-center px-2 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                      className={`inline-flex items-center px-2 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]`}
                     >
                       {i18nService.t('import')}
                     </button>
@@ -740,7 +774,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       type="button"
                       onClick={handleExportProviders}
                       disabled={isImportingProviders || isExportingProviders}
-                      className="inline-flex items-center px-2 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                      className={`inline-flex items-center px-2 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]`}
                     >
                       {i18nService.t('export')}
                     </button>
@@ -800,7 +834,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                         </span>
                       </div>
                       <div className="flex flex-col min-w-0">
-                        <span className={`text-sm font-medium truncate ${
+                        <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium truncate ${
                           activeProvider === provider
                             ? 'text-primary'
                             : 'text-foreground'
@@ -808,7 +842,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           {displayLabel}
                         </span>
                         {isCustom && (
-                          <span className="text-[9px] leading-tight mt-0.5 text-primary">
+                          <span className={`${SETTINGS_META_TEXT} mt-0.5 text-primary`}>
                             {i18nService.t('customBadge')}
                           </span>
                         )}
@@ -877,7 +911,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
             <div className="w-3/5 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
               <div className="flex items-center justify-between pb-2 border-b border-border">
                 <div className="flex items-center gap-1.5">
-                  <h3 className="text-base font-medium text-foreground">
+                  <h3 className={`${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>
                     {isCustomProvider(activeProvider)
                       ? ((providers[activeProvider] as ProviderConfig)?.displayName || getCustomProviderDefaultName(activeProvider))
                       : (ProviderRegistry.get(activeProvider)?.label ?? getProviderDisplayName(activeProvider))
@@ -937,7 +971,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           {!minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabApiKey')}</p>
-                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('minimaxAuthApiKeyDesc')}</p>
+                        <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('minimaxAuthApiKeyDesc')}</p>
                       </button>
                       <button
                         type="button"
@@ -956,7 +990,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           {minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabOAuth')}</p>
-                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('minimaxAuthOAuthDesc')}</p>
+                        <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('minimaxAuthOAuthDesc')}</p>
                       </button>
                     </div>
                   </div>
@@ -972,7 +1006,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get('minimax')!.apiKeyUrl!)}
-                            className="text-[11px] text-claude-accent hover:underline transition-colors"
+                            className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
                           >
                             {i18nService.t('getApiKey')} →
                           </button>
@@ -1025,14 +1059,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                             >
                               {i18nService.t('minimaxOAuthRelogin')}
                             </button>
                             <button
                               type="button"
                               onClick={handleMiniMaxOAuthLogout}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors`}
                             >
                               {i18nService.t('minimaxOAuthLogout')}
                             </button>
@@ -1072,7 +1106,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           >
                             {i18nService.t('minimaxOAuthLogin')}
                           </button>
-                          <p className="text-[11px] text-secondary">
+                          <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                             {i18nService.t('minimaxOAuthHint')}
                           </p>
                         </div>
@@ -1094,7 +1128,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             {i18nService.t('minimaxOAuthOpenBrowserHint')}
                           </p>
                           <div>
-                            <span className="text-[11px] text-secondary">
+                            <span className={`${SETTINGS_META_TEXT} text-secondary`}>
                               {i18nService.t('minimaxOAuthUserCode')}:&nbsp;
                             </span>
                             <code className="text-xs font-mono text-primary">
@@ -1104,17 +1138,17 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <a
                             href={minimaxOAuthPhase.verificationUri}
                             onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(minimaxOAuthPhase.verificationUri); }}
-                            className="block text-[11px] text-primary underline truncate"
+                            className={`block ${SETTINGS_META_TEXT} text-primary underline truncate`}
                           >
                             {minimaxOAuthPhase.verificationUri}
                           </a>
-                          <p className="text-[11px] text-secondary">
+                          <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                             {i18nService.t('minimaxOAuthStatusPending')}
                           </p>
                           <button
                             type="button"
                             onClick={handleCancelMiniMaxLogin}
-                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                            className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                           >
                             {i18nService.t('minimaxOAuthCancel')}
                           </button>
@@ -1136,21 +1170,21 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <p className="text-xs text-red-600 dark:text-red-400 font-medium">
                             {i18nService.t('minimaxOAuthStatusError')}
                           </p>
-                          <p className="text-[11px] text-red-600/80 dark:text-red-400/80 break-words">
+                          <p className={`${SETTINGS_META_TEXT} text-red-600/80 dark:text-red-400/80 break-words`}>
                             {minimaxOAuthPhase.message}
                           </p>
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors`}
                             >
                               {i18nService.t('minimaxOAuthRelogin')}
                             </button>
                             <button
                               type="button"
                               onClick={() => setMinimaxOAuthPhase({ kind: 'idle' })}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                             >
                               {i18nService.t('minimaxOAuthCancel')}
                             </button>
@@ -1190,7 +1224,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           {!openaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('openaiOAuthTabApiKey')}</p>
-                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('openaiAuthApiKeyDesc')}</p>
+                        <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('openaiAuthApiKeyDesc')}</p>
                       </button>
                       <button
                         type="button"
@@ -1208,7 +1242,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           {openaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('openaiOAuthTabOAuth')}</p>
-                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('openaiAuthOAuthDesc')}</p>
+                        <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('openaiAuthOAuthDesc')}</p>
                       </button>
                     </div>
                   </div>
@@ -1227,14 +1261,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={handleOpenAIOAuthLogin}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                             >
                               {i18nService.t('openaiOAuthRelogin')}
                             </button>
                             <button
                               type="button"
                               onClick={() => { void handleOpenAIOAuthLogout(); }}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors`}
                             >
                               {i18nService.t('openaiOAuthLogout')}
                             </button>
@@ -1252,7 +1286,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           >
                             {i18nService.t('openaiOAuthLogin')}
                           </button>
-                          <p className="text-[11px] text-secondary">
+                          <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                             {i18nService.t('openaiOAuthHint')}
                           </p>
                         </div>
@@ -1264,13 +1298,13 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <p className="text-xs text-foreground font-medium">
                             {i18nService.t('openaiOAuthOpenBrowserHint')}
                           </p>
-                          <p className="text-[11px] text-secondary">
+                          <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                             {i18nService.t('openaiOAuthStatusPending')}
                           </p>
                           <button
                             type="button"
                             onClick={() => { void handleCancelOpenAIOAuthLogin(); }}
-                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                            className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                           >
                             {i18nService.t('openaiOAuthCancel')}
                           </button>
@@ -1293,21 +1327,21 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <p className="text-xs text-red-600 dark:text-red-400 font-medium">
                             {i18nService.t('openaiOAuthStatusError')}
                           </p>
-                          <p className="text-[11px] text-red-600/80 dark:text-red-400/80 break-words">
+                          <p className={`${SETTINGS_META_TEXT} text-red-600/80 dark:text-red-400/80 break-words`}>
                             {openaiOAuthPhase.message}
                           </p>
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={handleOpenAIOAuthLogin}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors`}
                             >
                               {i18nService.t('openaiOAuthRelogin')}
                             </button>
                             <button
                               type="button"
                               onClick={() => setOpenaiOAuthPhase({ kind: 'idle' })}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                             >
                               {i18nService.t('openaiOAuthCancel')}
                             </button>
@@ -1347,7 +1381,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           {!xaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('xaiOAuthTabApiKey')}</p>
-                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('xaiAuthApiKeyDesc')}</p>
+                        <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('xaiAuthApiKeyDesc')}</p>
                       </button>
                       <button
                         type="button"
@@ -1365,7 +1399,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           {xaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('xaiOAuthTabOAuth')}</p>
-                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('xaiAuthOAuthDesc')}</p>
+                        <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('xaiAuthOAuthDesc')}</p>
                       </button>
                     </div>
                   </div>
@@ -1384,14 +1418,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={handleXaiOAuthLogin}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                             >
                               {i18nService.t('xaiOAuthRelogin')}
                             </button>
                             <button
                               type="button"
                               onClick={() => { void handleXaiOAuthLogout(); }}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors`}
                             >
                               {i18nService.t('xaiOAuthLogout')}
                             </button>
@@ -1409,7 +1443,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           >
                             {i18nService.t('xaiOAuthLogin')}
                           </button>
-                          <p className="text-[11px] text-secondary">
+                          <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                             {i18nService.t('xaiOAuthHint')}
                           </p>
                         </div>
@@ -1421,13 +1455,13 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <p className="text-xs text-foreground font-medium">
                             {i18nService.t('xaiOAuthOpenBrowserHint')}
                           </p>
-                          <p className="text-[11px] text-secondary">
+                          <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                             {i18nService.t('xaiOAuthStatusPending')}
                           </p>
                           <button
                             type="button"
                             onClick={() => { void handleCancelXaiOAuthLogin(); }}
-                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                            className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                           >
                             {i18nService.t('xaiOAuthCancel')}
                           </button>
@@ -1441,7 +1475,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             {i18nService.t('xaiOAuthDeviceCodeHint')}
                           </p>
                           <div>
-                            <span className="text-[11px] text-secondary">
+                            <span className={`${SETTINGS_META_TEXT} text-secondary`}>
                               {i18nService.t('xaiOAuthUserCode')}:&nbsp;
                             </span>
                             <code className="text-xs font-mono text-primary">
@@ -1451,14 +1485,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <a
                             href={xaiOAuthPhase.verificationUri}
                             onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(xaiOAuthPhase.verificationUri); }}
-                            className="block text-[11px] text-primary underline truncate"
+                            className={`block ${SETTINGS_META_TEXT} text-primary underline truncate`}
                           >
                             {xaiOAuthPhase.verificationUri}
                           </a>
                           <button
                             type="button"
                             onClick={() => { void handleCancelXaiOAuthLogin(); }}
-                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                            className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                           >
                             {i18nService.t('xaiOAuthCancel')}
                           </button>
@@ -1481,21 +1515,21 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <p className="text-xs text-red-600 dark:text-red-400 font-medium">
                             {i18nService.t('xaiOAuthStatusError')}
                           </p>
-                          <p className="text-[11px] text-red-600/80 dark:text-red-400/80 break-words">
+                          <p className={`${SETTINGS_META_TEXT} text-red-600/80 dark:text-red-400/80 break-words`}>
                             {xaiOAuthPhase.message}
                           </p>
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={handleXaiOAuthLogin}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors`}
                             >
                               {i18nService.t('xaiOAuthRelogin')}
                             </button>
                             <button
                               type="button"
                               onClick={() => setXaiOAuthPhase({ kind: 'idle' })}
-                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors`}
                             >
                               {i18nService.t('xaiOAuthCancel')}
                             </button>
@@ -1504,7 +1538,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       )}
 
                       {/* Shared consent-screen note */}
-                      <p className="text-[11px] text-secondary leading-relaxed">
+                      <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                         {i18nService.t('xaiOAuthConsentNote')}
                       </p>
                     </div>
@@ -1543,7 +1577,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get(activeProvider)!.apiKeyUrl!)}
-                            className="text-[11px] text-claude-accent hover:underline transition-colors"
+                            className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
                           >
                             {i18nService.t('getApiKey')} →
                           </button>
@@ -1594,7 +1628,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get('qwen')!.apiKeyUrl!)}
-                            className="text-[11px] text-claude-accent hover:underline transition-colors"
+                            className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
                           >
                             {i18nService.t('getApiKey')} →
                           </button>
@@ -1684,7 +1718,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             onClick={() => {
                               navigator.clipboard.writeText(copilotUserCode);
                             }}
-                            className="px-2 py-0.5 rounded text-[10px] text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent border border-claude-border dark:border-claude-darkBorder transition-colors"
+                            className={`px-2 py-0.5 rounded ${SETTINGS_META_TEXT} text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent border border-claude-border dark:border-claude-darkBorder transition-colors`}
                           >
                             {i18nService.t('copy') || 'Copy'}
                           </button>
@@ -1784,23 +1818,23 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 </div>
                 {isCustomProvider(activeProvider) && !isBaseUrlLocked && (
                 <div className="mt-1.5 space-y-1">
-                  <p className="text-[10px] text-muted">{i18nService.t('baseUrlExamplesTitle')}</p>
+                  <p className={`${SETTINGS_META_TEXT} text-muted`}>{i18nService.t('baseUrlExamplesTitle')}</p>
                   {([
-                    { format: 'anthropic', label: i18nService.t('apiFormatNative'), url: i18nService.t('baseUrlHintExample1') },
-                    { format: 'openai', label: i18nService.t('apiFormatOpenAI'), url: i18nService.t('baseUrlHintExample2') },
+                    { format: ApiFormatOption.OpenAIChatCompletions, label: i18nService.t('apiFormatOpenAI'), url: i18nService.t('baseUrlHintExample2') },
+                    { format: ApiFormatOption.Anthropic, label: i18nService.t('apiFormatNative'), url: i18nService.t('baseUrlHintExample1') },
                   ] as const).map(example => (
                     <button
                       key={example.format}
                       type="button"
                       onClick={() => {
-                        handleProviderConfigChange(activeProvider, 'apiFormat', example.format);
+                        applyApiFormatOption(activeProvider, example.format);
                         handleProviderConfigChange(activeProvider, 'baseUrl', example.url);
                       }}
                       title={i18nService.t('clickToFillBaseUrl')}
                       className="flex w-full items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2 py-1 text-left transition-colors hover:border-primary hover:bg-primary-muted"
                     >
-                      <code className="min-w-0 flex-1 truncate text-[11px] text-primary">{example.url}</code>
-                      <span className="shrink-0 rounded-md bg-surface-raised px-1.5 py-0.5 text-[10px] text-secondary">{example.label}</span>
+                      <code className={`min-w-0 flex-1 truncate ${SETTINGS_META_TEXT} text-primary`}>{example.url}</code>
+                      <span className={`shrink-0 rounded-md bg-surface-raised px-1.5 py-0.5 ${SETTINGS_META_TEXT} text-secondary`}>{example.label}</span>
                     </button>
                   ))}
                 </div>
@@ -1808,7 +1842,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 {/* GLM Coding Plan 提示 */}
                 {activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled && (
                   <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className="text-[11px] text-primary dark:text-primary">
+                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
                       <span className="font-medium">GLM Coding Plan:</span> {i18nService.t('zhipuCodingPlanEndpointHint')}
                     </p>
                   </div>
@@ -1816,7 +1850,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 {/* Qwen Coding Plan 提示 */}
                 {activeProvider === 'qwen' && providers.qwen.codingPlanEnabled && (
                   <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className="text-[11px] text-primary dark:text-primary">
+                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('qwenCodingPlanEndpointHint')}
                     </p>
                   </div>
@@ -1824,7 +1858,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 {/* Volcengine Coding Plan 提示 */}
                 {activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled && (
                   <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className="text-[11px] text-primary dark:text-primary">
+                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('volcengineCodingPlanEndpointHint')}
                     </p>
                   </div>
@@ -1832,7 +1866,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 {/* Moonshot Coding Plan 提示 */}
                 {activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled && (
                   <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className="text-[11px] text-primary dark:text-primary">
+                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('moonshotCodingPlanEndpointHint')}
                     </p>
                   </div>
@@ -1840,7 +1874,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 {/* Qianfan Coding Plan 提示 */}
                 {activeProvider === 'qianfan' && providers.qianfan.codingPlanEnabled && (
                   <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className="text-[11px] text-primary dark:text-primary">
+                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('qianfanCodingPlanEndpointHint')}
                     </p>
                   </div>
@@ -1848,7 +1882,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 {/* Xiaomi Coding Plan 提示 */}
                 {activeProvider === 'xiaomi' && providers.xiaomi.codingPlanEnabled && (
                   <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className="text-[11px] text-primary dark:text-primary">
+                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('xiaomiCodingPlanEndpointHint')}
                     </p>
                   </div>
@@ -1865,36 +1899,18 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                   <label htmlFor={`${activeProvider}-apiFormat`} className="block text-xs font-medium text-foreground mb-1">
                     {i18nService.t('apiFormat')}
                   </label>
-                  <div className="flex items-center space-x-4">
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name={`${activeProvider}-apiFormat`}
-                        value="anthropic"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) !== 'openai'}
-                        onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'anthropic')}
-                        className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface disabled:opacity-50"
-                      />
-                      <span className="ml-2 text-xs text-foreground">
-                        {i18nService.t('apiFormatNative')}
-                      </span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name={`${activeProvider}-apiFormat`}
-                        value="openai"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) === 'openai'}
-                        onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'openai')}
-                        className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface disabled:opacity-50"
-                      />
-                      <span className="ml-2 text-xs text-foreground">
-                        {i18nService.t('apiFormatOpenAI')}
-                      </span>
-                    </label>
-                  </div>
+                  <ThemedSelect
+                    id={`${activeProvider}-apiFormat`}
+                    size="sm"
+                    value={getApiFormatOption(activeProvider, providers[activeProvider])}
+                    onChange={(value) => applyApiFormatOption(activeProvider, value as ApiFormatOption)}
+                    options={getApiFormatOptions(activeProvider, providers[activeProvider]).map(option => ({
+                      value: option,
+                      label: i18nService.t(API_FORMAT_OPTION_LABEL_KEYS[option]),
+                    }))}
+                  />
                   <p className="mt-1 text-xs text-secondary">
-                    {i18nService.t('apiFormatHint')}
+                    {i18nService.t(API_FORMAT_OPTION_HINT_KEYS[getApiFormatOption(activeProvider, providers[activeProvider])])}
                   </p>
                 </div>
               )}
@@ -1907,11 +1923,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         GLM Coding Plan
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                         Beta
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-secondary">
+                    <p className={`mt-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                       {i18nService.t('zhipuCodingPlanHint')}
                     </p>
                   </div>
@@ -1935,11 +1951,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                         {i18nService.t('codingPlanSubscriptionBadge')}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-secondary">
+                    <p className={`mt-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                       {i18nService.t('qwenCodingPlanHint')}
                     </p>
                   </div>
@@ -1963,11 +1979,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                         Beta
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-secondary">
+                    <p className={`mt-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                       {i18nService.t('volcengineCodingPlanHint')}
                     </p>
                   </div>
@@ -1991,11 +2007,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                         Beta
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-secondary">
+                    <p className={`mt-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                       {i18nService.t('moonshotCodingPlanHint')}
                     </p>
                   </div>
@@ -2019,11 +2035,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                         Beta
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-secondary">
+                    <p className={`mt-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                       {i18nService.t('qianfanCodingPlanHint')}
                     </p>
                   </div>
@@ -2047,11 +2063,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                         Beta
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-secondary">
+                    <p className={`mt-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                       {i18nService.t('xiaomiCodingPlanHint')}
                     </p>
                   </div>
@@ -2087,7 +2103,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                     type="button"
                     onClick={() => setIsTestResultModalOpen(true)}
                     title={i18nService.t('connectionTestResult')}
-                    className={`inline-flex items-center gap-1 text-[11px] font-medium hover:underline ${
+                    className={`inline-flex items-center gap-1 ${SETTINGS_META_TEXT} font-medium hover:underline ${
                       testResult.success
                         ? 'text-green-600 dark:text-green-400'
                         : 'text-red-500 dark:text-red-400'
@@ -2133,18 +2149,18 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
                           <div className="w-1.5 h-1.5 shrink-0 rounded-full bg-green-400"></div>
                           <div className="min-w-0">
-                            <div className="text-foreground font-medium text-[11px] truncate">{model.name}</div>
-                            <div className="text-[10px] text-secondary truncate">{model.id}</div>
+                            <div className={`text-foreground font-medium ${SETTINGS_DESCRIPTION_TEXT} truncate`}>{model.name}</div>
+                            <div className={`${SETTINGS_META_TEXT} text-secondary truncate`}>{model.id}</div>
                           </div>
                         </div>
                         <div className="flex items-center shrink-0 space-x-1">
                           {model.supportsImage && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                               {i18nService.t('imageInput')}
                             </span>
                           )}
                           {model.supportsThinking && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary-muted text-primary">
+                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
                               {i18nService.t('thinkingOutput')}
                             </span>
                           )}
@@ -2177,11 +2193,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
 
                   {(!providers[activeProvider].models || providers[activeProvider].models.length === 0) && (
                     <div className="bg-surface p-2.5 rounded-xl border border-border-subtle text-center">
-                      <p className="text-[11px] text-secondary">{i18nService.t('noModelsAvailable')}</p>
+                      <p className={`${SETTINGS_META_TEXT} text-secondary`}>{i18nService.t('noModelsAvailable')}</p>
                       <button
                         type="button"
                         onClick={handleAddModel}
-                        className="mt-1.5 inline-flex items-center text-[11px] font-medium text-primary hover:text-primary-hover"
+                        className={`mt-1.5 inline-flex items-center ${SETTINGS_META_TEXT} font-medium text-primary hover:text-primary-hover`}
                       >
                         <PlusCircleIcon className="h-3 w-3 mr-1" />
                         {i18nService.t('addFirstModel')}
@@ -2219,7 +2235,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
 
               <div className="flex items-center gap-2 text-xs text-secondary">
                 <span>{ProviderRegistry.get(testResult.provider)?.label ?? testResult.provider}</span>
-                <span className="text-[11px]">•</span>
+                <span className={`${SETTINGS_META_TEXT}`}>•</span>
                 <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                   {testResult.success ? (
                     <CheckCircleIcon className="h-4 w-4" />

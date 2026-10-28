@@ -1,5 +1,6 @@
 import { LogReporterAction } from '../analytics/constants';
-import { isUsageId } from '../analytics/usage';
+import { isUsageId, UsageFailureCode, usageFailureCode } from '../analytics/usage';
+import { OpenClawEnginePhase } from '../openclawEngine/constants';
 import { CompanionAppCategory } from './appCategories';
 import { DesktopCompanionSnoozeMode, DesktopCompanionSurface } from './constants';
 import { CompanionDropAction, CompanionFileKind } from './fileKinds';
@@ -47,6 +48,41 @@ export const CompanionAnalyticsReason = {
   Unavailable: 'unavailable', Limit: 'limit', Upstream: 'upstream',
 } as const;
 
+/** Reuse configured rlog columns; bounded values contain no prompts, paths or raw errors. */
+export const CompanionTaskFailureCode = {
+  ...UsageFailureCode,
+  NoModel: 'no_model', ModelBillingSide: 'model_billing_side',
+  WorkingDirectory: 'working_directory', PayloadPreparation: 'payload_preparation',
+} as const;
+export const CompanionTaskFailureStage = {
+  Preflight: 'preflight', Prepare: 'prepare', SessionStart: 'session_start',
+  SessionLookup: 'session_lookup', SessionStop: 'session_stop', SessionContinue: 'session_continue',
+} as const;
+export type CompanionTaskFailureStage = typeof CompanionTaskFailureStage[keyof typeof CompanionTaskFailureStage];
+export const CompanionTaskBlockedReason = {
+  ...OpenClawEnginePhase,
+  Unknown: 'unknown', EnterpriseQuota: 'enterprise_quota', ModelBillingSide: 'model_billing_side', NoModel: 'no_model',
+} as const;
+
+export interface CompanionTaskFailure {
+  failureCode: ValueOf<typeof CompanionTaskFailureCode>;
+  failureStage: CompanionTaskFailureStage;
+  blockedReason?: ValueOf<typeof CompanionTaskBlockedReason>;
+}
+
+/** Prefer structured IPC codes and retain a bounded gateway phase for readiness races. */
+export function companionTaskFailure(error: unknown, failureStage: CompanionTaskFailureStage): CompanionTaskFailure {
+  const response = error && typeof error === 'object' && !(error instanceof Error)
+    ? error as { code?: unknown; error?: unknown; engineStatus?: { phase?: unknown } } : undefined;
+  const code = response?.code;
+  const knownCode = Object.values(CompanionTaskFailureCode).find(value => value === code);
+  const failureCode = knownCode ?? usageFailureCode(code ?? response?.error ?? error);
+  const phase = response?.engineStatus?.phase;
+  return { failureCode, failureStage,
+    ...(failureCode === CompanionTaskFailureCode.EngineNotReady ? { blockedReason:
+      Object.values(OpenClawEnginePhase).find(value => value === phase) ?? CompanionTaskBlockedReason.Unknown } : {}) };
+}
+
 type ValueOf<T> = T[keyof T];
 export interface CompanionAnalyticsEvent {
   action: ValueOf<typeof CompanionAnalyticsAction>;
@@ -58,6 +94,9 @@ export interface CompanionAnalyticsEvent {
   tool?: ValueOf<typeof CompanionAnalyticsTool>;
   setting?: ValueOf<typeof CompanionAnalyticsSetting>;
   reason?: ValueOf<typeof CompanionAnalyticsReason>;
+  failureCode?: CompanionTaskFailure['failureCode'];
+  failureStage?: CompanionTaskFailureStage;
+  blockedReason?: CompanionTaskFailure['blockedReason'];
   topic?: CompanionHintTopic;
   dropAction?: CompanionDropAction;
   snoozeMode?: DesktopCompanionSnoozeMode;
@@ -84,6 +123,8 @@ const enumFields = {
   outcome: [...Object.values(CompanionAnalyticsOutcome), ...Object.values(CompanionHintOutcome)],
   surface: Object.values(DesktopCompanionSurface), tool: Object.values(CompanionAnalyticsTool),
   setting: Object.values(CompanionAnalyticsSetting), reason: Object.values(CompanionAnalyticsReason),
+  failureCode: Object.values(CompanionTaskFailureCode), failureStage: Object.values(CompanionTaskFailureStage),
+  blockedReason: Object.values(CompanionTaskBlockedReason),
   topic: [COMPANION_WELCOME_TOPIC, ...Object.values(CompanionAppCategory)], dropAction: Object.values(CompanionDropAction),
   snoozeMode: Object.values(DesktopCompanionSnoozeMode), skin: COMPANION_SKINS.map(skin => skin.id),
 };

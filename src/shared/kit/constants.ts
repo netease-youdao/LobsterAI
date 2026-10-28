@@ -61,6 +61,14 @@ export const KitStoreKey = {
 } as const;
 export type KitStoreKey = typeof KitStoreKey[keyof typeof KitStoreKey];
 
+export const KitIpcChannel = {
+  FetchStore: 'kits:fetchStore',
+} as const;
+
+export type KitStoreResponse =
+  | { success: true; data: string }
+  | { success: false; data?: string; error: string };
+
 export const buildKitReferenceUri = (id: string): string =>
   `${KitReferenceScheme.Kit}://${encodeURIComponent(id)}@${KitReferenceSource.LobsterAiKits}`;
 import type { SkinWorkflowKind } from '../skin/constants';

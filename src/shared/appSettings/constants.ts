@@ -3,6 +3,8 @@ export const AppSettingsIpc = {
   SetAutoLaunch: 'app:setAutoLaunch',
   GetPreventSleep: 'app:getPreventSleep',
   SetPreventSleep: 'app:setPreventSleep',
+  GetQuitConfirmation: 'app:getQuitConfirmation',
+  SetQuitConfirmation: 'app:setQuitConfirmation',
 } as const;
 
 export type AppSettingsIpc = typeof AppSettingsIpc[keyof typeof AppSettingsIpc];

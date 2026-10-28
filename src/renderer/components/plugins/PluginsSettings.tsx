@@ -3,6 +3,11 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'r
 
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
+import {
+  SETTINGS_DESCRIPTION_TEXT,
+  SETTINGS_ITEM_TITLE_TEXT,
+  SETTINGS_SECTION_TITLE_TEXT,
+} from '../settings/settingsTypography';
 import PluginConfigPage from './PluginConfigPage';
 
 type PluginSource = 'npm' | 'clawhub' | 'git' | 'local' | 'openclaw';
@@ -555,10 +560,10 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-foreground">
+          <h3 className={`${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>
             {i18nService.t('pluginsTitle')}
           </h3>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className={`${SETTINGS_DESCRIPTION_TEXT} text-muted-foreground mt-1`}>
             {i18nService.t('pluginsDesc')}
           </p>
         </div>
@@ -567,7 +572,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
             type="button"
             onClick={handleCheckUpdates}
             disabled={checking}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <ArrowPathIcon className={`h-4 w-4 ${checking ? 'animate-spin' : ''}`} />
             {checking ? i18nService.t('pluginsChecking') : i18nService.t('pluginsCheckUpdates')}
@@ -575,7 +580,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
           <button
             type="button"
             onClick={() => { setShowInstallModal(true); setInstallLog(''); setInstallError(null); setDiscoverResult(null); }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             <PlusIcon className="h-4 w-4" />
             {i18nService.t('pluginsInstall')}
@@ -585,10 +590,10 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
 
       {/* Plugin List */}
       {loading ? (
-        <div className="text-sm text-muted-foreground py-8 text-center">Loading...</div>
+        <div className={`${SETTINGS_DESCRIPTION_TEXT} text-muted-foreground py-8 text-center`}>Loading...</div>
       ) : plugins.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-sm text-muted-foreground">{i18nService.t('pluginsEmpty')}</p>
+          <p className={`${SETTINGS_DESCRIPTION_TEXT} text-muted-foreground`}>{i18nService.t('pluginsEmpty')}</p>
           <p className="text-xs text-muted-foreground mt-1">{i18nService.t('pluginsEmptyHint')}</p>
         </div>
       ) : (
@@ -605,7 +610,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
                       plugin.enabled ? 'bg-green-500' : 'bg-gray-400'
                     }`}
                   />
-                  <span className="text-sm font-medium text-foreground truncate">
+                  <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground truncate`}>
                     {plugin.pluginId}
                   </span>
                   {plugin.version && (
@@ -621,7 +626,7 @@ export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
                   </span>
                 </div>
                 {plugin.description && (
-                  <p className="text-xs text-muted-foreground mt-1 ml-4">
+                  <p className={`${SETTINGS_DESCRIPTION_TEXT} text-muted-foreground mt-1 ml-4`}>
                     {plugin.description}
                   </p>
                 )}

@@ -4,10 +4,10 @@ import { type Artifact, ArtifactTypeValue } from '@/types/artifact';
 
 import { isWorkspaceDiffArtifact } from '../../../shared/artifactPreview/workspaceChanges';
 import type { ArtifactSelectedTextContext } from './artifactSelectedText';
+import ImageEditor from './imageEditor/ImageEditor';
 import CodeRenderer from './renderers/CodeRenderer';
 import DocumentRenderer from './renderers/DocumentRenderer';
 import HtmlRenderer from './renderers/HtmlRenderer';
-import ImageRenderer from './renderers/ImageRenderer';
 import MarkdownRenderer from './renderers/MarkdownRenderer';
 import MermaidRenderer from './renderers/MermaidRenderer';
 import SvgRenderer from './renderers/SvgRenderer';
@@ -37,7 +37,7 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ artifact, selectedT
     case 'svg':
       return <SvgRenderer key={artifact.id} artifact={artifact} />;
     case 'image':
-      return <ImageRenderer key={artifact.id} artifact={artifact} />;
+      return <ImageEditor key={artifact.id} artifact={artifact} />;
     case 'video':
       return <VideoRenderer artifact={artifact} />;
     case 'mermaid':

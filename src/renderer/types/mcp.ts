@@ -1,3 +1,6 @@
+import type { McpAuthMode } from '../../shared/mcp/auth';
+import type { McpMarketplaceConnector } from '../../shared/mcp/marketplace';
+
 // MCP Server type definitions
 export type McpTransportType = 'stdio' | 'sse' | 'http';
 
@@ -25,8 +28,12 @@ export interface McpServerConfig {
   env?: Record<string, string>;  // stdio
   url?: string;                  // sse / http
   headers?: Record<string, string>; // sse / http
+  auth?: McpAuthMode;            // sse / http: 'oauth' = sign in via MCP OAuth (OpenClaw stores the token)
+  tokenValues?: Record<string, string>; // marketplace connector credential form values (re-shown on edit)
   toolFilter?: McpToolFilter;    // expose only / hide selected tools
   supportsParallelToolCalls?: boolean; // allow parallel execution of this server's tools
+  requestTimeoutMs?: number;     // per-request timeout passed to OpenClaw
+  connectionTimeoutMs?: number;  // connect timeout passed to OpenClaw
   isBuiltIn: boolean;            // installed from built-in registry
   githubUrl?: string;            // GitHub repository URL
   registryId?: string;           // matching registry entry ID
@@ -64,8 +71,12 @@ export interface McpServerFormData {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthMode;
+  tokenValues?: Record<string, string>;
   toolFilter?: McpToolFilter;
   supportsParallelToolCalls?: boolean;
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
   isBuiltIn?: boolean;
   githubUrl?: string;
   registryId?: string;
@@ -83,7 +94,7 @@ export interface McpRegistryEntry {
   category: McpCategory;         // category tag
   categoryKey: string;           // i18n translation key for category
   transportType: McpTransportType;
-  command: string;               // default command, e.g. 'npx'
+  command: string;               // default command, e.g. 'npx'; empty for remote entries
   defaultArgs: string[];         // default arguments
   requiredEnvKeys?: string[];    // env vars the user must fill
   optionalEnvKeys?: string[];    // optional env vars
@@ -91,9 +102,11 @@ export interface McpRegistryEntry {
   oauthProvider?: 'qichacha';    // special app-managed OAuth/API key flow
   kind?: McpRegistryEntryKind;   // defaults to a single-server registry entry
   marketplacePosition?: number;  // 1-based preferred position; clamps to the available list
+  connector?: McpMarketplaceConnector; // remote URL/auth/credential form, tool allowlist, examples
 }
 
-// Remote marketplace server entry
+// Remote marketplace server entry. Connector fields are untrusted remote JSON;
+// `parseMcpMarketplaceConnector` validates them (see McpMarketplaceConnector).
 export interface McpMarketplaceServer {
   id: string;
   name: string;
@@ -103,11 +116,20 @@ export interface McpMarketplaceServer {
   description_en?: string;
   category: string;
   transportType: string;
-  command: string;
-  defaultArgs: string[];
+  command?: string;              // stdio only
+  defaultArgs?: string[];        // stdio only
   requiredEnvKeys?: string[];
   optionalEnvKeys?: string[];
   kind?: McpRegistryEntryKind;
+  url?: unknown;
+  auth?: unknown;
+  tokenSchema?: unknown;
+  tokenAuth?: unknown;
+  allowedTools?: unknown;
+  requestTimeoutMs?: unknown;
+  connectionTimeoutMs?: unknown;
+  examples_zh?: unknown;
+  examples_en?: unknown;
 }
 
 // Dynamic marketplace category from remote

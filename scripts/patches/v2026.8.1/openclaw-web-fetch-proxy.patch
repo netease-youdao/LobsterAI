@@ -1,0 +1,409 @@
+diff --git a/src/agents/tools/web-fetch.proxy.integration.test.ts b/src/agents/tools/web-fetch.proxy.integration.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/tools/web-fetch.proxy.integration.test.ts
+@@ -0,0 +1,199 @@
++import { createServer, type Server } from "node:http";
++import { connect } from "node:net";
++import type { Duplex } from "node:stream";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import type { LookupFn, SsrFPolicy } from "../../infra/net/ssrf.js";
++import { createWebFetchTool } from "./web-fetch.js";
++
++const PUBLIC_HOST = "public.example.test";
++const PUBLIC_ADDRESS = "93.184.216.34";
++const BYPASS_HOST = "localhost";
++const PRIVATE_HOST = "private.example.test";
++
++async function listen(server: Server): Promise<number> {
++  await new Promise<void>((resolve, reject) => {
++    server.once("error", reject);
++    server.listen(0, "127.0.0.1", () => {
++      server.off("error", reject);
++      resolve();
++    });
++  });
++  const address = server.address();
++  if (!address || typeof address === "string") {
++    throw new Error("Expected TCP listener");
++  }
++  return address.port;
++}
++
++describe("web_fetch environment proxy boundary", () => {
++  let origin: Server;
++  let proxy: Server;
++  let originPort: number;
++  const sockets = new Set<Duplex>();
++  const connects: string[] = [];
++  const hosts: string[] = [];
++  const lookup = vi.fn<LookupFn>();
++
++  function ownSocket(socket: Duplex): void {
++    sockets.add(socket);
++    socket.once("close", () => sockets.delete(socket));
++    socket.on("error", () => socket.destroy());
++  }
++
++  function fetchPage(
++    path: string,
++    options?: {
++      hostname?: string;
++      useProxy?: boolean;
++      ssrfPolicy?: SsrFPolicy;
++    },
++  ) {
++    const tool = createWebFetchTool({
++      config: {
++        tools: {
++          web: {
++            fetch: {
++              useTrustedEnvProxy: options?.useProxy ?? true,
++              ssrfPolicy: options?.ssrfPolicy,
++              cacheTtlMinutes: 0,
++              timeoutSeconds: 5,
++            },
++          },
++        },
++      },
++      lookupFn: lookup,
++    });
++    if (!tool) {
++      throw new Error("Expected enabled web_fetch tool");
++    }
++    return tool.execute("proxy-boundary", {
++      url: `http://${options?.hostname ?? PUBLIC_HOST}:${originPort}${path}`,
++    });
++  }
++
++  beforeEach(async () => {
++    connects.length = 0;
++    hosts.length = 0;
++    lookup.mockReset();
++    lookup.mockImplementation(async (hostname) => [
++      {
++        address:
++          hostname === PRIVATE_HOST || hostname === BYPASS_HOST ? "127.0.0.1" : PUBLIC_ADDRESS,
++        family: 4,
++      },
++    ]);
++    origin = createServer((req, res) => {
++      hosts.push(req.headers.host ?? "");
++      if (req.url === "/redirect-private" || req.url === "/redirect-bypass") {
++        const hostname = req.url === "/redirect-private" ? PRIVATE_HOST : BYPASS_HOST;
++        res.writeHead(302, { location: `http://${hostname}:${originPort}/done` });
++        res.end();
++      } else {
++        res.writeHead(200, { "content-type": "text/plain" });
++        res.end("proxy boundary fixture");
++      }
++    });
++    origin.on("connection", ownSocket);
++    originPort = await listen(origin);
++    proxy = createServer((_req, res) => {
++      res.writeHead(405);
++      res.end();
++    });
++    proxy.on("connection", ownSocket);
++    proxy.on("connect", (req, socket, head) => {
++      connects.push(req.url ?? "");
++      // This fixture routes only to its own origin; no request leaves loopback.
++      const upstream = connect(originPort, "127.0.0.1", () => {
++        socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
++        if (head.length > 0) {
++          upstream.write(head);
++        }
++        socket.pipe(upstream);
++        upstream.pipe(socket);
++      });
++      ownSocket(upstream);
++    });
++    const proxyPort = await listen(proxy);
++    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
++      vi.stubEnv(key, `http://127.0.0.1:${proxyPort}`);
++    }
++    for (const key of ["NO_PROXY", "no_proxy", "OPENCLAW_PROXY_ACTIVE"]) {
++      vi.stubEnv(key, "");
++    }
++  });
++
++  afterEach(async () => {
++    for (const socket of sockets) {
++      socket.destroy();
++    }
++    await Promise.all(
++      [origin, proxy].map(
++        (server) =>
++          new Promise<void>((resolve, reject) => {
++            server.close((error) => (error ? reject(error) : resolve()));
++          }),
++      ),
++    );
++    vi.unstubAllEnvs();
++  });
++
++  it("pins the proxy CONNECT to validated DNS while preserving the destination Host", async () => {
++    const result = await fetchPage("/public");
++    expect(result.details).toMatchObject({ status: 200 });
++    expect(connects).toEqual([`${PUBLIC_ADDRESS}:${originPort}`]);
++    expect(hosts).toEqual([`${PUBLIC_HOST}:${originPort}`]);
++    expect(lookup).toHaveBeenCalledWith(PUBLIC_HOST, { all: true });
++  });
++
++  it("blocks private DNS answers before connecting to the proxy", async () => {
++    await expect(fetchPage("/private", { hostname: PRIVATE_HOST })).rejects.toThrow(
++      /private|internal|blocked/i,
++    );
++    expect(connects).toEqual([]);
++    expect(hosts).toEqual([]);
++  });
++
++  it("rejects mixed public and private DNS answers before connecting", async () => {
++    lookup.mockResolvedValue([
++      { address: PUBLIC_ADDRESS, family: 4 },
++      { address: "127.0.0.1", family: 4 },
++    ]);
++    await expect(fetchPage("/mixed-dns")).rejects.toThrow(/private|internal|blocked/i);
++    expect(connects).toEqual([]);
++  });
++
++  it("revalidates a redirect before it can reach private DNS through the proxy", async () => {
++    await expect(fetchPage("/redirect-private")).rejects.toThrow(/private|internal|blocked/i);
++    expect(connects).toEqual([`${PUBLIC_ADDRESS}:${originPort}`]);
++    expect(hosts).toEqual([`${PUBLIC_HOST}:${originPort}`]);
++  });
++
++  it("honors NO_PROXY after a redirect while preserving explicit host policy", async () => {
++    vi.stubEnv("no_proxy", BYPASS_HOST);
++    const result = await fetchPage("/redirect-bypass", {
++      ssrfPolicy: { allowedHostnames: [BYPASS_HOST] },
++    });
++    expect(result.details).toMatchObject({ status: 200 });
++    expect(connects).toEqual([`${PUBLIC_ADDRESS}:${originPort}`]);
++    expect(hosts).toEqual([`${PUBLIC_HOST}:${originPort}`, `${BYPASS_HOST}:${originPort}`]);
++  });
++
++  it("keeps the private DNS policy for NO_PROXY targets", async () => {
++    vi.stubEnv("no_proxy", PRIVATE_HOST);
++    await expect(fetchPage("/private-bypass", { hostname: PRIVATE_HOST })).rejects.toThrow(
++      /private|internal|blocked/i,
++    );
++    expect(connects).toEqual([]);
++  });
++
++  it("ignores inherited proxy settings when the fetch preference is disabled", async () => {
++    const result = await fetchPage("/direct", {
++      hostname: BYPASS_HOST,
++      useProxy: false,
++      ssrfPolicy: { allowedHostnames: [BYPASS_HOST] },
++    });
++    expect(result.details).toMatchObject({ status: 200 });
++    expect(connects).toEqual([]);
++    expect(hosts).toEqual([`${BYPASS_HOST}:${originPort}`]);
++  });
++});
+diff --git a/src/agents/tools/web-fetch.ts b/src/agents/tools/web-fetch.ts
+--- a/src/agents/tools/web-fetch.ts
++++ b/src/agents/tools/web-fetch.ts
+@@ -785,7 +785,10 @@
+       timeoutSeconds: params.timeoutSeconds,
+       signal: params.signal,
+       lookupFn: params.lookupFn,
+-      useEnvProxy: params.useTrustedEnvProxy,
++      // Desktop proxy preference changes transport, never the URL's SSRF authority.
++      dispatcherPolicy: params.useTrustedEnvProxy
++        ? { mode: "env-proxy", pinProxyTarget: true }
++        : undefined,
+       policy: params.ssrfPolicy,
+       capture: params.headers
+         ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
+diff --git a/src/agents/tools/web-tools.fetch.test.ts b/src/agents/tools/web-tools.fetch.test.ts
+--- a/src/agents/tools/web-tools.fetch.test.ts
++++ b/src/agents/tools/web-tools.fetch.test.ts
+@@ -742,26 +742,6 @@
+       throw new Error("expected SSRF dispatcher");
+     }
+     expect(dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+-  });
+-
+-  it("uses env proxy dispatch for web_fetch when trusted env proxy is explicitly enabled", async () => {
+-    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+-    const mockFetch = installMockFetch((input: RequestInfo | URL) =>
+-      Promise.resolve(textResponse("proxy body", resolveRequestUrl(input))),
+-    );
+-    const tool = createFetchTool({
+-      firecrawl: { enabled: false },
+-      useTrustedEnvProxy: true,
+-    });
+-
+-    await tool?.execute?.("call", { url: "https://example.com/proxy" });
+-
+-    const requestInit = firstFetchRequestInit(mockFetch);
+-    const dispatcher = requestInit?.dispatcher;
+-    if (!dispatcher) {
+-      throw new Error("expected trusted proxy dispatcher");
+-    }
+-    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+   });
+ 
+   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
+diff --git a/src/config/schema.help.runtime.ts b/src/config/schema.help.runtime.ts
+--- a/src/config/schema.help.runtime.ts
++++ b/src/config/schema.help.runtime.ts
+@@ -595,7 +595,7 @@
+   "tools.web.fetch.readability":
+     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+   "tools.web.fetch.useTrustedEnvProxy":
+-    "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
++    "Route web_fetch through the configured env proxy while retaining local DNS validation and pinned target IPs. NO_PROXY bypasses are checked on every redirect and do not bypass SSRF policy.",
+   "tools.web.fetch.ssrfPolicy":
+     "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
+   "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+diff --git a/src/config/types.tools.ts b/src/config/types.tools.ts
+--- a/src/config/types.tools.ts
++++ b/src/config/types.tools.ts
+@@ -495,7 +495,7 @@
+       headers?: Record<string, string>;
+       /** Use Readability to extract main content (default: true). */
+       readability?: boolean;
+-      /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
++      /** Route web_fetch through the configured env proxy while retaining local DNS validation and pinned target IPs. */
+       useTrustedEnvProxy?: boolean;
+       /** SSRF policy configuration for web_fetch. */
+       ssrfPolicy?: SsrFPolicyConfig;
+diff --git a/src/infra/net/fetch-guard.ts b/src/infra/net/fetch-guard.ts
+--- a/src/infra/net/fetch-guard.ts
++++ b/src/infra/net/fetch-guard.ts
+@@ -528,7 +528,21 @@
+     };
+     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
+     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
+-    const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
++    const requestedDispatcherPolicy =
++      params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
++    const usesPinnedEnvProxy =
++      requestedDispatcherPolicy?.mode === "env-proxy" &&
++      requestedDispatcherPolicy.pinProxyTarget === true;
++    // Resolve bypasses against the original hostname on every redirect, before IP rewriting.
++    const dispatcherPolicy =
++      usesPinnedEnvProxy && !shouldUseEnvHttpProxyForUrl(parsedUrl.toString())
++        ? {
++            mode: "direct" as const,
++            connect: requestedDispatcherPolicy.connect,
++            pinnedHostname: requestedDispatcherPolicy.pinnedHostname,
++          }
++        : requestedDispatcherPolicy;
++    const pinDns = usesPinnedEnvProxy ? true : params.pinDns;
+     const resolvePinnedHostname = async () =>
+       await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+         lookupFn: params.lookupFn,
+@@ -542,11 +556,11 @@
+       assertExplicitProxySupportsPinnedDns(
+         parsedUrl,
+         dispatcherPolicy,
+-        usesTrustedExplicitProxyMode ? false : params.pinDns,
++        usesTrustedExplicitProxyMode ? false : pinDns,
+       );
+       await assertExplicitProxyAllowed(dispatcherPolicy, params.lookupFn, params.policy, signal);
+       const isStrictManagedProxyActive =
+-        mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive();
++        mode === GUARDED_FETCH_MODE.STRICT && !usesPinnedEnvProxy && isManagedProxyActive();
+       const shouldCheckManagedProxyBypass =
+         isStrictManagedProxyActive &&
+         shouldResolveConfiguredLocalOriginManagedProxyBypass({
+@@ -567,12 +581,12 @@
+         !canUseTrustedEnvProxy &&
+         !canUseManagedProxy &&
+         !usesTrustedExplicitProxyMode &&
+-        params.pinDns !== false;
++        pinDns !== false;
+       const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+ 
+       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
+       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
+-      if (canUseTrustedEnvProxy || canUseManagedProxy || params.pinDns === false) {
++      if (canUseTrustedEnvProxy || canUseManagedProxy || pinDns === false) {
+         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
+       }
+ 
+@@ -611,7 +625,7 @@
+         // Test-installed fetch mocks should stay hermetic. Host/IP policy still runs;
+         // real fetches continue through pinned DNS below.
+         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
+-      } else if (params.pinDns === false) {
++      } else if (pinDns === false) {
+         await resolvePinnedHostname();
+         dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
+       } else {
+diff --git a/src/infra/net/ssrf.ts b/src/infra/net/ssrf.ts
+--- a/src/infra/net/ssrf.ts
++++ b/src/infra/net/ssrf.ts
+@@ -2,6 +2,7 @@
+ // and create dispatcher policies for guarded network fetches.
+ import { lookup as dnsLookupCb, type LookupAddress, type LookupOptions } from "node:dns";
+ import { lookup as dnsLookup } from "node:dns/promises";
++import { isIP } from "node:net";
+ import {
+   extractEmbeddedIpv4FromIpv6,
+   isCloudMetadataIpAddress,
+@@ -22,6 +23,7 @@
+ import type { Dispatcher } from "undici";
+ import { createDeferredCore } from "../../shared/deferred.js";
+ import { normalizeHostname } from "./hostname.js";
++import { loadUndiciModule } from "./undici-dispatcher-options.js";
+ import {
+   createHttp1Agent,
+   createHttp1EnvHttpProxyAgent,
+@@ -594,6 +596,8 @@
+       connect?: Record<string, unknown>;
+       proxyTls?: Record<string, unknown>;
+       pinnedHostname?: PinnedHostnameOverride;
++      /** Bind proxy targets to validated IPs; callers resolve NO_PROXY before dispatch. */
++      pinProxyTarget?: boolean;
+     }
+   | {
+       mode: "explicit-proxy";
+@@ -741,12 +745,42 @@
+   }
+ 
+   if (policy.mode === "env-proxy") {
+-    return createHttp1EnvHttpProxyAgent(
++    const dispatcher = createHttp1EnvHttpProxyAgent(
+       {
+         connect: withPinnedLookup(lookup, policy.connect),
+         ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
++        ...(policy.pinProxyTarget
++          ? {
++              noProxy: "",
++              requestTls: isIP(pinned.hostname) ? undefined : { servername: pinned.hostname },
++            }
++          : {}),
+       },
+       timeoutMs,
++    );
++    if (!policy.pinProxyTarget) {
++      return dispatcher;
++    }
++    // Undici's DNS interceptor preserves Host and rewrites CONNECT to these IPs.
++    // Pin SNI above too, including its bounded fallback between address families.
++    return dispatcher.compose(
++      loadUndiciModule([]).interceptors.dns({
++        affinity: 4,
++        lookup(origin, _options, callback) {
++          if (normalizeHostname(origin.hostname) !== pinned.hostname) {
++            callback(new Error("Pinned proxy target hostname mismatch"), []);
++            return;
++          }
++          callback(
++            null,
++            (policy.pinnedHostname?.addresses ?? pinned.addresses).map((address) => ({
++              address,
++              family: address.includes(":") ? 6 : 4,
++              ttl: 60_000,
++            })),
++          );
++        },
++      }),
+     );
+   }
+ 

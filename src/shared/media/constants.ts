@@ -23,7 +23,7 @@ export const MediaTaskPhase = {
 } as const;
 
 export const MediaProtocol = { Legacy: 1, Durable: 2 } as const;
-export const MediaDeliveryStatus = { Pending: 'pending', Retrying: 'retrying', Saved: 'saved' } as const;
+export const MediaDeliveryStatus = { Pending: 'pending', Retrying: 'retrying', Saved: 'saved', Failed: 'failed' } as const;
 export const MediaBillingStatus = { Reserved: 'reserved', Settled: 'settled', Refunded: 'refunded' } as const;
 export const MEDIA_V2_TASKS_PATH = '/api/media/v2/tasks';
 export const MEDIA_TASK_STORE_KEY = 'media.tasks.v2';

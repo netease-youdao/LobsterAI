@@ -26,6 +26,7 @@ import {
   OpenClawBrowserGatewayMethod,
 } from '../../../shared/browserWebAccess/constants';
 import { type ApprovalDecisionOptions, type ApprovalDecisionOutcome, type ApprovalReconcileOptions, type ApprovalState, type DualApprovalConfiguration, OPENCLAW_DESKTOP_GATEWAY_CAPS } from '../../../shared/cowork/approval';
+import { stripAssistantImageDiagnostic } from '../../../shared/cowork/assistantImageDiagnostic';
 import {
   buildBrowserAnnotationPromptSection,
   type CoworkBrowserAnnotationMessageBatch,
@@ -84,6 +85,8 @@ import {
 } from '../../../shared/enterpriseAccount/constants';
 import { resolveEnterpriseQuotaError } from '../../../shared/enterpriseAccount/quotaError';
 import type { EnterpriseQuotaErrorDetails } from '../../../shared/enterpriseAccount/types';
+import { imageEditMessageMetadata } from '../../../shared/imageEditing/messageSnapshot';
+import { imageEditMaskContext, imageEditRegionPrompt } from '../../../shared/imageEditing/prompts';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -102,7 +105,6 @@ import { type QuestionRegistration, RemoteQuestionError, RemoteQuestionService }
 import type { SubagentMessageStore } from '../../subagentMessageStore';
 import type { SubagentRunStore } from '../../subagentRunStore';
 import { getServerModelMetadata } from '../claudeSettings';
-import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
 import { getServerApiBaseUrl } from '../endpoints';
 import { createCoworkLlmTrace, createLlmTraceparent } from '../llmTrace';
 import { registerLlmUsageContext } from '../llmUsageContext';
@@ -176,6 +178,7 @@ import { buildMediaGenerationTurnInstruction } from './mediaGenerationTurnInstru
 import { OpenClawApprovalController } from './openclawApprovalController';
 import {
   applyLocalTimestampsToEntries,
+  applyLocalTurnUsageToEntries,
   buildGatewayMediaMetadata,
   findTailAlignment,
   getLocalMediaAttachmentsKey,
@@ -517,6 +520,8 @@ type GatewayClientCtor = new (options: Record<string, unknown>) => GatewayClient
 type ChannelSessionLifecycleRun = {
   runId: string;
   observedAtMs: number;
+  /** OpenClaw's time for the run start; runs of a session do not overlap. */
+  startedAt?: number;
 };
 
 export class OpenClawAccountTransitionCancelledError extends Error {
@@ -542,6 +547,8 @@ type OpenClawRuntimeAdapterOptions = {
     isMainAgent: boolean;
     platform: string;
   }, sessionId: string) => void;
+  /** An IM run that no local turn followed has ended and its messages are synced. */
+  onChannelRunEnded?: (sessionId: string, runId: string, runStartedAt?: number) => void;
   onGatewayClientReady?: () => void;
   onBrowserToolEvent?: (event: AgentBrowserToolEvent) => void;
 };
@@ -1542,7 +1549,7 @@ const normalizeEntryText = (
   text: string,
   flags: PlatformFlags,
 ): string => {
-  let result = text.trim();
+  let result = (role === 'assistant' ? stripAssistantImageDiagnostic(text) : text).trim();
   if (!result) return result;
   if (flags.isDiscord) result = stripDiscordMentions(result);
   if (flags.isQQ && role === 'user') result = stripQQBotSystemPrompt(result);
@@ -2479,8 +2486,8 @@ const MediaReferenceTypeLabel = {
   Audio: 'audio',
 } as const;
 
-const sanitizeMediaReferenceText = (value: string): string => (
-  value.replace(/[\r\n]+/g, ' ').trim().slice(0, 200)
+const sanitizeMediaReferenceText = (value: string, maxLength = 200): string => (
+  value.replace(/[\r\n]+/g, ' ').trim().slice(0, maxLength)
 );
 
 const buildMediaReferencePromptSection = (mediaReferences?: CoworkMediaAttachmentRef[]): string => {
@@ -2495,14 +2502,20 @@ const buildMediaReferencePromptSection = (mediaReferences?: CoworkMediaAttachmen
   ];
 
   for (const ref of refs) {
+    if (ref.imageEdit) {
+      lines.push('This image has a user-prepared image editing request. Call lobsterai_image_generate once with action=generate. LobsterAI will supply the immutable original, selected regions and any guide/mask, and will save a new version. Do not edit it with scripts or other image tools. Include any additional user instructions in the prompt.');
+      const maskContext = imageEditMaskContext(ref.imageEdit);
+      if (maskContext) lines.push(maskContext);
+    }
+    if (ref.imageEdit?.regions.length) lines.push(`${ref.token}: ${imageEditRegionPrompt(ref.imageEdit)}`);
     const mediaType = ref.mediaType === MediaReferenceTypeLabel.Image
       ? MediaReferenceTypeLabel.Image
       : ref.mediaType === MediaReferenceTypeLabel.Video
         ? MediaReferenceTypeLabel.Video
         : MediaReferenceTypeLabel.Audio;
     const locations = [
-      ref.localPath ? `localPath "${sanitizeMediaReferenceText(ref.localPath)}"` : '',
-      ref.remoteUrl ? `remoteUrl "${sanitizeMediaReferenceText(ref.remoteUrl)}"` : '',
+      ref.localPath ? `localPath "${sanitizeMediaReferenceText(ref.localPath, 32768)}"` : '',
+      ref.remoteUrl ? `remoteUrl "${sanitizeMediaReferenceText(ref.remoteUrl, 32768)}"` : '',
       !ref.localPath && !ref.remoteUrl && ref.dataUrl ? 'dataUrl fallback available through LobsterAI host' : '',
     ].filter(Boolean);
     const locationText = locations.length > 0 ? `, ${locations.join(', ')}` : '';
@@ -5807,6 +5820,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     return this.activeTurns.has(sessionId) || this.yieldedSessions.has(sessionId);
   }
 
+  getTurnRunIds(sessionId: string): string[] {
+    return [...(this.activeTurns.get(sessionId)?.knownRunIds ?? [])];
+  }
+
   hasActiveSessions(): boolean {
     return this.activeTurns.size > 0 || this.yieldedSessions.size > 0;
   }
@@ -6142,7 +6159,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const userMessage = this.store.addMessage(sessionId, {
         type: 'user',
         content: prompt,
-        metadata: { ...metadata, llmTrace },
+        metadata: { ...metadata, ...imageEditMessageMetadata(options.mediaReferences), llmTrace },
       });
       usageModelSelection = userMessage.metadata;
       this.refreshContinuityCapsule(sessionId, ContinuityCapsuleSource.UserMessage, {
@@ -6177,7 +6194,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     this.store.updateSession(sessionId, { status: 'running' });
     this.emitSessionStatus(sessionId, 'running');
-    setCoworkProxySessionId(sessionId);
     firstResponseTiming.gatewayReadyStartedAtMs = Date.now();
     await this.ensureGatewayClientReady();
     this.assertAccountOperation(accountEpoch);
@@ -8184,6 +8200,20 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
   }
 
+  /**
+   * IM runs are often followed only through lifecycle events, without a local
+   * turn or `complete`. Sync the run's messages first so its user message exists.
+   */
+  private notifyChannelRunEnded(sessionId: string, sessionKey: string, runId: string, runStartedAt?: number): void {
+    const onChannelRunEnded = this.options.onChannelRunEnded;
+    if (!onChannelRunEnded) return;
+    void this.syncSessionHistoryFromGateway(sessionId, sessionKey)
+      .then(() => onChannelRunEnded(sessionId, runId, runStartedAt))
+      .catch((error) => {
+        console.warn('[ChannelSync] failed to sync IM history after a run ended:', error);
+      });
+  }
+
   private handleChannelSessionLifecycleEvent(payload: unknown): void {
     if (!this.channelSessionSync || !isRecord(payload)) return;
 
@@ -8244,6 +8274,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.channelLifecycleRunBySessionKey.set(sessionKey, {
         runId,
         observedAtMs: Date.now(),
+        ...(typeof payload.ts === 'number' && Number.isFinite(payload.ts) ? { startedAt: payload.ts } : {}),
       });
       if (activeTurn && runId) {
         activeTurn.knownRunIds.add(runId);
@@ -8290,6 +8321,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
     if (isNewlyKnownSession) {
       this.notifySessionsChanged(sessionId);
+    }
+    if (phase !== AgentLifecyclePhase.Start && runId && !activeTurn) {
+      this.notifyChannelRunEnded(
+        sessionId,
+        sessionKey,
+        runId,
+        trackedRun?.runId === runId ? trackedRun.startedAt : undefined,
+      );
     }
     if (phase === AgentLifecyclePhase.Start && runId) {
       this.reportChannelPromptSubmit(sessionId, sessionKey, runId, activeTurn);
@@ -11781,7 +11820,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       if (shouldReplaceLocalConversationWithCronHistory(localEntries, authoritativeEntries, runHistoryKey)) {
         this.store.replaceConversationMessages(
           sessionId,
-          applyLocalTimestampsToEntries(authoritativeEntries, localEntries),
+          applyLocalTurnUsageToEntries(applyLocalTimestampsToEntries(authoritativeEntries, localEntries), localEntries),
         );
         this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
         this.notifySessionsChanged(sessionId);
@@ -12066,7 +12105,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         );
       }
 
-      this.store.replaceConversationMessages(sessionId, applyLocalTimestampsToEntries(entriesToStore, localEntries));
+      this.store.replaceConversationMessages(
+        sessionId,
+        applyLocalTurnUsageToEntries(applyLocalTimestampsToEntries(entriesToStore, localEntries), localEntries),
+      );
       this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
 
       // Notify renderer to refresh
@@ -12760,7 +12802,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.refreshContinuityCapsule(sessionId, ContinuityCapsuleSource.PostRun);
     }
     this.activeTurns.delete(sessionId);
-    setCoworkProxySessionId(null);
     if (completedNormally && !turn?.yieldedRunId) {
       setTimeout(() => this.startPendingGoalContinuation(sessionId), 0);
     } else if (!completedNormally && !this.yieldedSessions.has(sessionId)) {

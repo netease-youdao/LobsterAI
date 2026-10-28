@@ -16,56 +16,13 @@ export function getOpenClawGatewayRepairBusyError(hasActiveWorkloads: boolean): 
   return hasActiveWorkloads ? OPENCLAW_GATEWAY_REPAIR_BUSY_ERROR : null;
 }
 
-const padDatePart = (value: number): string => String(value).padStart(2, '0');
-
-export function formatOpenClawBackupTimestamp(date: Date): string {
-  return [
-    date.getFullYear(),
-    padDatePart(date.getMonth() + 1),
-    padDatePart(date.getDate()),
-  ].join('')
-    + '-'
-    + [
-      padDatePart(date.getHours()),
-      padDatePart(date.getMinutes()),
-      padDatePart(date.getSeconds()),
-    ].join('');
-}
-
-export function resolveOpenClawConfigBackupPath(
-  configPath: string,
-  fileExists: (filePath: string) => boolean = fs.existsSync,
-  now: Date = new Date(),
-): string {
-  const configDir = path.dirname(configPath);
-  const preferredBackupPath = path.join(configDir, 'openclaw-bak.json');
-  if (!fileExists(preferredBackupPath)) {
-    return preferredBackupPath;
-  }
-
-  const timestamp = formatOpenClawBackupTimestamp(now);
-  const timestampedBackupPath = path.join(configDir, `openclaw-bak-${timestamp}.json`);
-  if (!fileExists(timestampedBackupPath)) {
-    return timestampedBackupPath;
-  }
-
-  for (let index = 2; index < Number.MAX_SAFE_INTEGER; index += 1) {
-    const candidatePath = path.join(configDir, `openclaw-bak-${timestamp}-${index}.json`);
-    if (!fileExists(candidatePath)) {
-      return candidatePath;
-    }
-  }
-
-  throw new Error('Unable to allocate an OpenClaw config backup path.');
-}
-
-export function backupOpenClawConfig(configPath: string, backupDirectory?: string): OpenClawConfigBackupResult {
+/** Move the config into the repair run's backup directory, which repair pruning bounds. */
+export function backupOpenClawConfig(configPath: string, backupDirectory: string): OpenClawConfigBackupResult {
   if (!fs.existsSync(configPath)) {
     return { originalPath: configPath };
   }
 
-  const backupPath = backupDirectory
-    ? path.join(backupDirectory, 'openclaw.json') : resolveOpenClawConfigBackupPath(configPath);
+  const backupPath = path.join(backupDirectory, 'openclaw.json');
   if (fs.existsSync(backupPath)) throw new Error(`OpenClaw config backup already exists: ${backupPath}`);
   fs.renameSync(configPath, backupPath);
   return {

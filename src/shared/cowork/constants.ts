@@ -77,6 +77,7 @@ export const CoworkIpcChannel = {
   RenameSession: 'cowork:session:rename',
   PermissionRespond: 'cowork:permission:respond',
   StreamPermissionState: 'cowork:stream:permissionState',
+  MediaConfirmation: 'cowork:media:confirmation',
   StreamPermissionDismiss: 'cowork:stream:permissionDismiss',
   StreamComplete: 'cowork:stream:complete',
   StreamError: 'cowork:stream:error',

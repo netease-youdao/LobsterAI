@@ -10,6 +10,7 @@ import {
   isModelAgenticBlocked,
   partitionModelSelectorModels,
   resolveCascadePlacement,
+  resolveCustomModelProviderName,
   resolveDropdownListMaxHeight,
   resolveHoverCardTop,
   resolveNestedCascadePlacement,
@@ -326,4 +327,12 @@ test('hides the thinking protocol entry when request-options support is absent',
     thinkingConfig,
     requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
   })).toBe(true);
+});
+
+test('prefers the live provider name for the custom-model badge', () => {
+  expect(resolveCustomModelProviderName({ provider: 'Old Gateway' }, { provider: ' Renamed Gateway ' }))
+    .toBe('Renamed Gateway');
+  expect(resolveCustomModelProviderName({ provider: 'OpenRouter' }, undefined)).toBe('OpenRouter');
+  expect(resolveCustomModelProviderName({}, undefined)).toBe('');
+  expect(resolveCustomModelProviderName(null, undefined)).toBe('');
 });

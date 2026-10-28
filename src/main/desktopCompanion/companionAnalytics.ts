@@ -64,7 +64,14 @@ export class CompanionAnalytics {
       let context: UsageContext | undefined;
       if (event.stage === CompanionAnalyticsStage.Result) {
         pending.finished = true;
-        if (event.outcome === CompanionAnalyticsOutcome.Success) context = pending.context;
+        context = pending.context;
+        if (event.outcome === CompanionAnalyticsOutcome.Failed) {
+          console.warn('[DesktopCompanion] Task submission failed', {
+            callId: event.callId, source, failureStage: event.failureStage, failureCode: event.failureCode,
+            blockedReason: event.blockedReason, durationMs: event.durationMs,
+            taskId: context?.taskId, turnId: context?.turnId,
+          });
+        }
       } else if (event.stage !== CompanionAnalyticsStage.Submit) return;
       this.report({ ...event, source, journeyId: pending.journeyId, isFollowUp: pending.isFollowUp,
         taskId: context?.taskId, turnId: context?.turnId });

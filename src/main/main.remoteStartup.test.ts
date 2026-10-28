@@ -16,6 +16,8 @@ import { OPENCLAW_LOOPBACK_STATE_FILE } from './libs/openclawLoopbackState';
 import { ServerRouteContextTracker } from './libs/serverRouteContext';
 import { payloadHash, sameOwner } from './remote/canonical';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
+import { RemoteInitializationError, RemoteInitializationRecovery } from './remote/remoteInitialization';
+import { RemotePerformanceStage } from './remote/remotePerformanceLog';
 import { RemoteStore } from './remote/remoteStore';
 
 const mainPath = fileURLToPath(new URL('./main.ts', import.meta.url));
@@ -73,6 +75,7 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
   const sqlite = {
     getDatabase: () => { events.push('store:database'); return {}; },
     get: (key: string) => values.get(key),
+    onDidChange: () => noop,
     set: (key: string, value: unknown) => { values.set(key, value); if (key === 'remote_account_execution_fence') events.push(`fence:${(value as { phase: string }).phase}`); },
     onCriticalChange: (key: string, listener: () => void) => {
       events.push(`store:listen:${key}`); storeListeners.set(key, listener); return noop;
@@ -123,6 +126,11 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     './startupRecoveryWindow': moduleOf({ showStartupRecoveryWindow: () => { events.push('startup:recovery'); } }),
     './remote/canonical': moduleOf({ payloadHash, sameOwner }),
     './remote/remoteAccountTransition': moduleOf({ RemoteAccountTransition }),
+    './remote/remoteInitialization': moduleOf({ RemoteInitializationError, RemoteInitializationRecovery }),
+    './remote/remotePerformanceLog': moduleOf({ RemotePerformanceStage, remotePerformance: {
+      start: noop, sync: <T>(_stage: unknown, operation: () => T): T => operation(),
+      async: <T>(_stage: unknown, operation: () => Promise<T>): Promise<T> => operation(),
+    } }),
     './remote/automationOwnership': moduleOf({ fenceCronJobs: () => { events.push('gateway:fence'); if (failFence) throw new Error('cron fence failed'); } }),
     './libs/openclawEngineManager': moduleOf({ OpenClawEngineManager: function () { return moduleOf({ getStatus: () => ({ phase: OpenClawConstants.OpenClawEnginePhase.Ready }), getStateDir: () => fakePath, stopGateway: () => { events.push('gateway:stop'); return stopped.promise; } }); } }),
     './libs/openclawLoopbackState': moduleOf({ OPENCLAW_LOOPBACK_STATE_FILE }),

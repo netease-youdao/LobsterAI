@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 import ts from 'typescript';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 
 import { LogReporterStoreKey } from '../shared/analytics/constants';
 import { OpenClawEnginePhase } from '../shared/openclawEngine/constants';
@@ -126,6 +126,7 @@ function fixture(initialPhase: OpenClawEngineStatus['phase'] = OpenClawEnginePha
     isQuitting: false, isDataMigrationRestoreInProgress: false,
     getRemoteAccountEpoch: () => vm.runInContext('`${ownershipAccountEpoch}:${authAccountGeneration}`', context),
     getCurrentRemoteOwner: () => owner, getAuthTokens: () => owner ? { accessToken: 'fixture' } : null,
+    captureRemoteRouteContext: vi.fn(), authSessionManager: { invalidateContext: vi.fn() },
     getOpenClawEngineManager: () => manager, openClawRuntimeAdapter: adapter,
     getStore: () => store, getCoworkStore: () => ({ remote: {} }),
     resetOpenClawConfigRecoveryForAccount: (identity: string) => configRecovery.resetForOwner(identity),

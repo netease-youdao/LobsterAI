@@ -16,6 +16,9 @@ vi.mock('electron', () => ({
 
 import { net } from 'electron';
 
+import { formatLlmTraceparent, NATIVE_RUN_LLM_TRACE_PROXY_PATH } from '../../shared/cowork/llmTurnUsage';
+import { registerLlmUsageContext } from './llmUsageContext';
+import { claimNativeRunTurnUsage } from './nativeRunTurnUsage';
 import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
@@ -976,5 +979,102 @@ test('the running proxy rejects foreign hosts and missing tokens before touching
     expect(getAuthTokens).toHaveBeenCalledOnce();
   } finally {
     stopOpenClawTokenProxy();
+  }
+});
+
+test('the running proxy records native run traces locally without a signed-in account', async () => {
+  const token = 'd'.repeat(48);
+  const getAuthTokens = vi.fn(() => null);
+  const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens,
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => token,
+  });
+  const send = (headers: http.OutgoingHttpHeaders, body: string) => new Promise<number>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: NATIVE_RUN_LLM_TRACE_PROXY_PATH, headers }, res => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+  try {
+    const report = JSON.stringify({ runId: 'im-run-1', traceId, model: 'deepseek-flash-YoudaoInner', virtualModelId: 'yd-fast' });
+    expect(await send({ authorization: 'Bearer wrong' }, report)).toBe(401);
+    expect(await send({ authorization: `Bearer ${token}` }, 'not json')).toBe(400);
+    expect(await send({ authorization: `Bearer ${token}` }, report)).toBe(204);
+    expect(getAuthTokens).not.toHaveBeenCalled();
+    expect(vi.mocked(net.fetch)).not.toHaveBeenCalledWith(expect.stringContaining('native-run'), expect.anything());
+    expect(claimNativeRunTurnUsage(['im-run-1'])).toMatchObject({
+      trace: { traceId },
+      modelPreset: { modelPresetId: 'balanced', resolvedModelId: 'deepseek-flash-YoudaoInner' },
+    });
+  } finally {
+    stopOpenClawTokenProxy();
+  }
+});
+
+test('the running proxy logs where a new turn breaks the cached prompt prefix', async () => {
+  const token = 'e'.repeat(48);
+  const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  const firstTrace = '0af7651916cd43dd8448eb211c80319c';
+  const secondTrace = '1bf7651916cd43dd8448eb211c80319d';
+  registerLlmUsageContext(firstTrace, 'session-1', 'first');
+  registerLlmUsageContext(secondTrace, 'session-1', 'second');
+  const sse = (cached: number) => [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })}`,
+    `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 600000, prompt_cache_hit_tokens: cached } })}`,
+    'data: [DONE]',
+    '',
+    '',
+  ].join('\n\n');
+  vi.mocked(net.fetch)
+    .mockResolvedValueOnce(new Response(sse(0), { headers: { 'content-type': 'text/event-stream' } }))
+    .mockResolvedValueOnce(new Response(sse(43136), { headers: { 'content-type': 'text/event-stream' } }));
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'access', refreshToken: 'refresh' }),
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => token,
+  });
+  const tools = (names: string[]) => names.map(name => ({ type: 'function', function: { name } }));
+  const send = (traceId: string, body: unknown) => new Promise<void>((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      method: 'POST',
+      path: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${token}`, traceparent: formatLlmTraceparent(traceId, '00f067aa0ba902b7') },
+    }, res => {
+      res.resume();
+      res.on('end', resolve);
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+  const messages = [{ role: 'system', content: 'rules' }, { role: 'user', content: 'private question' }];
+  try {
+    await send(firstTrace, { model: 'deepseek-flash', messages, tools: tools(['exec', 'read']) });
+    await send(secondTrace, {
+      model: 'deepseek-flash',
+      messages: [...messages, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'next' }],
+      tools: tools(['read', 'exec']),
+    });
+    const lines = logSpy.mock.calls.map(call => String(call[0])).filter(line => line.includes('prompt prefix'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('key=session:session-1 boundary=turn change=first');
+    expect(lines[1]).toContain(`trace=${secondTrace}`);
+    expect(lines[1]).toContain('boundary=turn change=tools_order firstIndex=0 prev=exec cur=read');
+    expect(lines[1]).toContain('promptTokens=600000 cachedTokens=43136(7%) suspect=prompt');
+    expect(lines.join('\n')).not.toContain('private question');
+  } finally {
+    stopOpenClawTokenProxy();
+    logSpy.mockRestore();
+    debugSpy.mockRestore();
   }
 });

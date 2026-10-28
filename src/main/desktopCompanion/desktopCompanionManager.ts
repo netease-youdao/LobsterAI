@@ -70,6 +70,7 @@ import type { CompanionTaskInfo } from '../../shared/desktopCompanion/results';
 import { normalizeSelectionTaskContext } from '../../shared/desktopCompanion/selectionTaskContext';
 import { normalizeCompanionToolbarOrder } from '../../shared/desktopCompanion/selectionToolbar';
 import { COMPANION_SKINS, companionOrbSize, normalizeCompanionSkin } from '../../shared/desktopCompanion/skins';
+import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { t } from '../i18n';
 import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companionAnalytics';
 import { copyCompanionText } from './companionClipboard';
@@ -103,6 +104,7 @@ export interface DesktopCompanionServices {
 }
 
 interface DesktopCompanionOptions {
+  enginePhase: OpenClawEnginePhase;
   store: CompanionStore;
   preloadPath: string;
   rendererDirectory: string;
@@ -175,6 +177,8 @@ function describeDraggedPaths(paths: string[]): DesktopCompanionDropFile[] {
 }
 
 export class DesktopCompanionManager {
+  private enginePhase: OpenClawEnginePhase;
+  private pendingPanelSource: AnalyticsSource | null = null;
   private pendingMainPage: DesktopCompanionMainPage | null = null;
   private orb: BrowserWindow | null = null;
   private panel: BrowserWindow | null = null;
@@ -220,6 +224,7 @@ export class DesktopCompanionManager {
   private readonly analytics: CompanionAnalytics;
 
   constructor(private readonly options: DesktopCompanionOptions) {
+    this.enginePhase = options.enginePhase;
     this.analytics = new CompanionAnalytics(options.reportAnalytics, options.getAnalyticsOwner);
     const { store } = options;
     this.preferences = normalizeCompanionPreferences(store.get(DesktopCompanionStoreKey.Preferences));
@@ -271,7 +276,7 @@ export class DesktopCompanionManager {
     });
     this.hints = new CompanionHintsController({
       store,
-      isEnabled: () => this.preferences.enabled && this.preferences.contextHints && !this.snooze && !this.capturing,
+      isEnabled: () => this.isPresent() && this.preferences.contextHints && !this.capturing,
       isQuiet: category => this.isBusy(category),
       showHint: (topic, variant) => this.showHint(topic, variant),
     });
@@ -310,6 +315,23 @@ export class DesktopCompanionManager {
 
   isComposerWebContents(webContents: WebContents): boolean {
     return !!this.panel && !this.panel.isDestroyed() && this.panel.webContents === webContents;
+  }
+
+  /** Runtime files being ready does not mean the gateway can accept a task yet. */
+  setEnginePhase(phase: OpenClawEnginePhase): void {
+    if (this.disposing || phase === this.enginePhase) return;
+    const wasReady = this.isTaskReady();
+    this.enginePhase = phase;
+    if (wasReady === this.isTaskReady()) return;
+    console.log('[DesktopCompanion] Task availability changed', { phase, ready: this.isTaskReady() });
+    if (!this.isTaskReady()) this.hidePanel();
+    this.applyActivity();
+    if (this.isTaskReady() && this.pendingPanelSource) {
+      const source = this.pendingPanelSource;
+      this.pendingPanelSource = null;
+      this.showPanel(source);
+    }
+    this.publish();
   }
 
   getState(): DesktopCompanionState {
@@ -380,7 +402,7 @@ export class DesktopCompanionManager {
   }
 
   private toggleOrb(fromPointer: boolean): void {
-    if (this.capturing) return;
+    if (this.capturing || !this.isTaskReady()) return;
     this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Orb, interactionType: Interaction.Click });
     const closeOnly = fromPointer && this.orbPressVisible;
     this.orbPressVisible = false;
@@ -395,6 +417,7 @@ export class DesktopCompanionManager {
 
   togglePanel(source: AnalyticsSource = AnalyticsSource.Tray): void {
     if (this.capturing) return;
+    if (this.pendingPanelSource) { this.pendingPanelSource = null; return; }
     if (this.panelVisible) this.hidePanel();
     else this.showPanel(source);
   }
@@ -432,6 +455,7 @@ export class DesktopCompanionManager {
   captureTaskAnalytics(senderId: number): ReturnType<CompanionAnalytics['captureTask']> { return this.analytics.captureTask(senderId); }
 
   hidePanel(): void {
+    this.pendingPanelSource = null;
     if (!this.panelVisible) return;
     this.panelVisible = false;
     this.panelShowRevision = null;
@@ -501,9 +525,13 @@ export class DesktopCompanionManager {
 
   // ── Activity ──────────────────────────────────────────────
 
-  /** Present on screen: enabled and not hidden by a snooze. */
+  private isTaskReady(): boolean {
+    return this.enginePhase === OpenClawEnginePhase.Running;
+  }
+
+  /** Present only when the gateway can accept tasks and the user enables it. */
   private isPresent(): boolean {
-    return this.preferences.enabled && !this.snooze;
+    return this.isTaskReady() && this.preferences.enabled && !this.snooze;
   }
 
   private isBusy(category: CompanionAppCategory): boolean {
@@ -586,7 +614,13 @@ export class DesktopCompanionManager {
   private showOrb(): void {
     if (!this.orb || this.orb.isDestroyed()) {
       const bounds = this.defaultOrbBounds();
-      const win = this.createWindow(DesktopCompanionSurface.Mascot, false, bounds);
+      // Electron's macOS panel only emulates a nonactivating panel: clicking a window
+      // that cannot become key half-activates LobsterAI, so the quick panel loses key
+      // focus at once and the main window can come forward. A key-capable orb takes
+      // the click without activating the app, like the composer panel does.
+      const win = this.createWindow(DesktopCompanionSurface.Mascot, process.platform === 'darwin', bounds);
+      // A key orb receives the app menu's Close (Cmd+W); only dispose removes it.
+      win.on('close', event => { if (!this.disposing) event.preventDefault(); });
       win.on('closed', () => { if (this.orb === win) this.orb = null; });
       win.once('ready-to-show', () => {
         if (this.disposing || win.isDestroyed() || !this.isPresent()) return;
@@ -665,6 +699,10 @@ export class DesktopCompanionManager {
   // ── Panel ─────────────────────────────────────────────────
 
   private showPanel(source: AnalyticsSource = AnalyticsSource.System): void {
+    if (!this.isTaskReady()) {
+      this.pendingPanelSource = source;
+      return;
+    }
     const opening = !this.panelVisible || !this.panel || this.panel.isDestroyed();
     if (opening) this.panelJourneyId = randomUUID();
     this.results.hide();

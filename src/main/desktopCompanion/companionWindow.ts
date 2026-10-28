@@ -84,6 +84,9 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
     skipTaskbar: true,
     alwaysOnTop: true,
     focusable: options.focusable,
+    // Use WS_EX_TOOLWINDOW so Windows excludes companion surfaces from taskbar
+    // previews even when they are shown again after skipTaskbar removed the tab.
+    ...(process.platform === 'win32' ? { type: 'toolbar' as const } : {}),
     // Native panels can hide on app deactivation even when our result card is pinned.
     ...(process.platform === 'darwin' && options.surface !== DesktopCompanionSurface.Result ? { type: 'panel' as const } : {}),
     webPreferences: {

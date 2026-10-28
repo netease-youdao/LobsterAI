@@ -324,7 +324,7 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
               <button
                 type="button"
                 onClick={handleManualRetry}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-primary hover:bg-surface-raised transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-foreground hover:bg-surface-raised transition-colors"
               >
                 <ArrowPathIcon className="w-3.5 h-3.5" />
                 {i18nService.t('scheduledTasksSessionRetry')}

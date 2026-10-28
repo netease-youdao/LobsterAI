@@ -9,6 +9,7 @@ import {
 } from '../../../shared/desktopCompanion/constants';
 import { COMPANION_SKINS, type CompanionSkin, CompanionSkinKind } from '../../../shared/desktopCompanion/skins';
 import { i18nService } from '../../services/i18n';
+import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT } from '../settings/settingsTypography';
 import LobsterMark from './mascot/LobsterMark';
 import SelectionToolbarSettings from './SelectionToolbarSettings';
 import { useDesktopCompanionState } from './useDesktopCompanionState';
@@ -58,7 +59,7 @@ export default function DesktopCompanionSettings() {
     const checked = preferences?.[key] ?? false;
     return (
       <div className="px-4 py-3.5">
-        <label className="flex items-center justify-between gap-4 text-sm font-medium text-foreground">
+        <label className={`flex items-center justify-between gap-4 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
           {t(title)}
           <button
             type="button"
@@ -70,7 +71,7 @@ export default function DesktopCompanionSettings() {
             onClick={() => { void update({ [key]: !checked }); }}
           ><span className={'mt-0.5 inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ' + (checked ? 'translate-x-[18px]' : 'translate-x-0.5')} /></button>
         </label>
-        <p className="mt-1 text-sm text-secondary">{t(description)}</p>
+        <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{t(description)}</p>
         {extra}
       </div>
     );
@@ -99,8 +100,8 @@ export default function DesktopCompanionSettings() {
       <SettingsGroup title={t('desktopCompanionGroupDisplay')}>
         {toggle('enabled', 'desktopCompanionEnable', 'desktopCompanionEnableDescription')}
         <div className="px-4 py-3.5">
-          <div className="text-sm font-medium text-foreground">{t('desktopCompanionSkin')}</div>
-          <p className="mt-1 text-sm text-secondary">{t('desktopCompanionSkinDescription')}</p>
+          <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{t('desktopCompanionSkin')}</div>
+          <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{t('desktopCompanionSkinDescription')}</p>
           <div className="mt-3 grid grid-cols-3 gap-2" role="radiogroup" aria-label={t('desktopCompanionSkin')}>
             {COMPANION_SKINS.map(skin => {
               const selected = preferences?.skin === skin.id;
@@ -136,7 +137,7 @@ export default function DesktopCompanionSettings() {
               className="mt-3 flex w-full items-center gap-3 rounded-lg bg-background px-3 py-2.5 text-left transition-colors hover:bg-secondary/10 disabled:opacity-50">
               <AdjustmentsHorizontalIcon className="h-5 w-5 shrink-0 text-secondary" />
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium text-foreground">{t('desktopCompanionToolbarCustomize')}</span>
+                <span className={`block ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{t('desktopCompanionToolbarCustomize')}</span>
                 <span className="mt-0.5 block text-xs text-secondary">{t('desktopCompanionToolbarCustomizeDescription')}</span>
               </span>
               <ChevronRightIcon className="h-4 w-4 shrink-0 text-secondary" />

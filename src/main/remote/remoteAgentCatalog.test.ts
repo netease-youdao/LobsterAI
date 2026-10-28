@@ -15,7 +15,7 @@ const owner = { userId: '1001', scopeKey: 'personal' };
 const other = { userId: '1002', scopeKey: 'personal' };
 const dispose: Array<() => void> = [];
 afterEach(() => { for (const cleanup of dispose.splice(0).reverse()) cleanup(); });
-function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'], getTargetId?: () => string | null) {
+function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'], getTargetId?: () => string | null, deferredProjection = false) {
   const directory = mkdtempSync(join(tmpdir(), 'remote-agent-catalog-'));
   const db = new Database(':memory:');
   dispose.push(() => { db.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -23,7 +23,7 @@ function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'],
     INSERT INTO agents VALUES('main','Main','',1,1,1),('anonymous','Shared','🤖',1,1,1);
     CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,agent_id TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
-  const store = new RemoteStore(db);
+  const store = new RemoteStore(db, { deferredProjection });
   const ownership = new AgentOwnerStore(db);
   for (const [id, actor] of [['mine', owner], ['other', other]] as const) ownership.transaction(() => {
     db.prepare('INSERT INTO agents VALUES(?,?,?,1,1,1)').run(id, id, 'https://private.invalid/icon');
@@ -205,17 +205,23 @@ it('adds summaries only after negotiation while preserving the bytes and hashes 
   expect(payloadHash(store.pending('session'))).toBe(payloadHash(after));
 });
 
-it('renaming an Agent emits only its session summary without scanning existing messages', () => {
-  const { db, store, ownership, catalog } = fixture();
+it('defers message scans while renaming an Agent and projects only the changed session summary', () => {
+  const { db, store, ownership, catalog } = fixture(undefined, undefined, true);
   store.setEnabledOwner(owner); store.setAgentSummaryResolver((id, actor) => catalog.summary(id, actor));
   store.transaction(() => {
     db.prepare("INSERT INTO cowork_sessions VALUES('session','Task',1,1,'idle','mine')").run(); store.assignNew('session', owner, 'local_create');
     db.prepare("INSERT INTO cowork_messages VALUES('message','session','user','Existing conversation',null,1,1)").run();
   });
+  store.projectIsolatedForTest('session');
   const before = store.pending('session');
+  const revision = store.projectionRevision('session');
   const read = vi.spyOn(db, 'prepare');
   store.transaction(() => ownership.transaction(() => db.prepare("UPDATE agents SET name='Renamed',updated_at=2 WHERE id='mine'").run()));
   expect(read.mock.calls.some(([sql]) => sql.includes('SELECT * FROM cowork_messages'))).toBe(false);
+  expect(store.projectionRevision('session')).toBeGreaterThan(revision);
+  expect(store.pending('session')).toEqual(before);
+  // Model the isolated projection turn after the foreground write has returned.
+  store.projectIsolatedForTest('session');
   const added = store.pending('session').slice(before.length);
   expect(added).toHaveLength(1);
   expect(added[0]).toMatchObject({ eventType: 'session.upsert', payload: { session: { preview: 'Existing conversation', agent: { name: 'Renamed' } } } });

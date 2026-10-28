@@ -36,5 +36,5 @@ Server 的 LLM 代理（`/api/proxy/v1/chat/completions`、`/api/proxy/v1/messag
 
 - 先执行 Server `sql/V104__llm_request_trace.sql`（`api_call_logs`、`tob_enterprise_usage_records` 新增可空列，不建索引），再发布 Server，最后发布客户端。旧客户端不带 `traceparent`，行为不变。
 - 迁移前写入的记录没有 trace，历史对话不显示积分入口。
-- IM、定时任务等不经客户端 `chat.send` 发起的对话没有客户端 trace，不显示入口；这些请求仍有 OpenClaw 生成的 trace/span，日志可对上。
+- IM、定时任务等不经客户端 `chat.send` 发起的对话没有客户端 trace，但请求带有 OpenClaw 生成的 trace/span。客户端（2026-10-19 起）由 `lobster-model-routing` 插件在 `model_call_started` 时把 run 的 trace 报给本地 token 代理，轮次结束后挂到同步下来的用户消息上，按同一接口汇总；一次 run 有多个 trace（定时任务重试的每次 attempt 各一个）时逐个查询并合并。Server 无需改动。
 - 子 Agent 的模型请求、子 Agent 汇报后父任务的续跑是否沿用本轮 trace，取决于 OpenClaw 内部调度，尚未验证；未沿用的请求不计入本轮汇总，但各自仍有可对上的 trace/span 日志。
