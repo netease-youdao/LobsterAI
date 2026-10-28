@@ -1,6 +1,7 @@
 import { expect, test, vi } from 'vitest';
 
 import type { ApprovalState } from '../shared/cowork/approval';
+import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../shared/cowork/constants';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { submitCoworkPermission } from './coworkPermissionIpc';
 import type { CoworkRuntime } from './libs/agentEngine/types';
@@ -17,6 +18,7 @@ function fixture() {
   const deps = {
     runtime: { getPermissionState: () => snapshot, respondToPermissionConfirmed: respond } as unknown as CoworkRuntime,
     sessionForRequest: () => 'session-1', isRuntimeRequest: () => true,
+    canAccessLocalQuestion: () => true,
     canAccessSession: () => true, accountKey: () => 'account-a', resolveQuestion: vi.fn(),
   };
   return { deps, respond };
@@ -63,6 +65,24 @@ test('missing runtime state cannot fall through to AskUser and falsely close the
   deps.runtime.getPermissionState = () => null;
   await expect(submitCoworkPermission(request, deps)).rejects.toThrow('APPROVAL_UNAVAILABLE');
   expect(deps.resolveQuestion).not.toHaveBeenCalled();
+});
+
+test('global question access cannot bypass runtime, native question or session ownership checks', async () => {
+  for (const kind of ['approval', 'native', 'session', 'registered'] as const) {
+    const { deps, respond } = fixture();
+    deps.canAccessSession = () => false;
+    deps.sessionForRequest = () => kind === 'session' ? 'session-1' : SESSION_AGNOSTIC_PERMISSION_SESSION_ID;
+    deps.runtime.getPermissionState = () => null;
+    deps.isRuntimeRequest = () => kind === 'approval';
+    if (kind === 'registered') deps.runtime.getQuestionState = () => ({ sessionId: 'session-1' }) as never;
+    const canAccessLocalQuestion = vi.fn(() => true);
+    const requestId = kind === 'native' ? `${OpenClawQuestion.RequestIdPrefix}question-1` : request.requestId;
+    await expect(submitCoworkPermission({ ...request, requestId }, { ...deps, canAccessLocalQuestion }))
+      .rejects.toThrow('APPROVAL_ACCESS_DENIED');
+    if (kind !== 'session') expect(canAccessLocalQuestion).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
+    expect(deps.resolveQuestion).not.toHaveBeenCalled();
+  }
 });
 
 test('AskUser retains its separate answer payload and resolver', async () => {

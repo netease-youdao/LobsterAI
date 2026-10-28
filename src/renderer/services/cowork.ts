@@ -2319,15 +2319,22 @@ class CoworkService {
     const metadata = approval ? { submissionId: crypto.randomUUID(), expectedVersion: approval.approvalVersion,
       operationDigest: approval.operationDigest } : {};
     store.dispatch(setPermissionSubmissionState({ requestId, phase: 'submitting' }));
+    const startedAt = Date.now();
+    const diagnostic = `permission response requestId=${requestId} sessionId=${permission.sessionId} behavior=${result.behavior}`;
+    this.logDiagnostic('debug', `${diagnostic} submitting`);
     try {
       const response = await accountBoundRequest(() => cowork.respondToPermission({ requestId, result, ...metadata }));
       if (response.outcome && 'state' in response.outcome && response.outcome.state) {
         store.dispatch(updatePendingPermissionState(response.outcome.state));
       }
       if (response.success && (!approval || response.outcome?.kind === 'confirmed')) {
+        this.logDiagnostic('debug', `${diagnostic} succeeded elapsedMs=${Date.now() - startedAt}`);
         store.dispatch(dequeuePendingPermission({ requestId }));
         return true;
       }
+      const reason = response.error || (response.outcome && 'reason' in response.outcome ? response.outcome.reason : undefined);
+      const errorCode = typeof reason === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(reason) ? reason : 'UNCLASSIFIED';
+      this.logDiagnostic('warn', `${diagnostic} failed code=${errorCode} elapsedMs=${Date.now() - startedAt}`);
       store.dispatch(setPermissionSubmissionState({ requestId,
         phase: !approval || response.outcome?.kind === 'known_not_applied' ? undefined : 'unknown',
         error: i18nService.t(!approval ? 'coworkQuestionSubmitFailed'
@@ -2336,7 +2343,11 @@ class CoworkService {
       return false;
     } catch {
       // IPC cancellation/disconnect is not evidence that the runtime did not apply it.
-      if (!sameAccountContext(account, store.getState().auth)) return false;
+      if (!sameAccountContext(account, store.getState().auth)) {
+        this.logDiagnostic('debug', `${diagnostic} discarded after account change`);
+        return false;
+      }
+      this.logDiagnostic('warn', `${diagnostic} IPC failed elapsedMs=${Date.now() - startedAt}`);
       store.dispatch(setPermissionSubmissionState({ requestId, phase: approval ? 'unknown' : undefined,
         error: i18nService.t(approval ? 'coworkApprovalUnknown' : 'coworkQuestionSubmitFailed') }));
       return false;

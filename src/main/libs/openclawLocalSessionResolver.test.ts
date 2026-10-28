@@ -6,6 +6,7 @@ import {
   isCoworkSessionBoundToIm,
   resolveCoworkSessionIdByOpenClawSessionKey,
   resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey,
+  resolveOpenClawSessionKeyForCoworkSession,
 } from './openclawLocalSessionResolver';
 
 const dbs: Database.Database[] = [];
@@ -43,6 +44,21 @@ afterEach(() => {
 });
 
 describe('openclaw local session resolver', () => {
+  test('resolves new desktop session keys and preserves persisted subagent keys', () => {
+    expect(resolveOpenClawSessionKeyForCoworkSession(null)).toBeUndefined();
+    for (const agentId of ['main', 'qa-reviewer']) {
+      const session = { id: 'session-1', agentId, claudeSessionId: null };
+      const key = resolveOpenClawSessionKeyForCoworkSession(session);
+      const db = createDb();
+      insertSession(db, session.id);
+      expect(key).toBe(`agent:${agentId}:lobsterai:session-1`);
+      expect(resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey(db, key)).toBe(session.id);
+      expect(resolveOpenClawSessionKeyForCoworkSession({ ...session, claudeSessionId: '  ' })).toBe(key);
+      expect(resolveOpenClawSessionKeyForCoworkSession({ ...session, claudeSessionId: 'agent:qa-reviewer:subagent:run-1' }))
+        .toBe('agent:qa-reviewer:subagent:run-1');
+    }
+  });
+
   test('resolves managed desktop session keys across agents', () => {
     const db = createDb();
     insertSession(db, 'session-1');

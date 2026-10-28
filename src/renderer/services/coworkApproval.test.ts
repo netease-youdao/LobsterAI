@@ -166,6 +166,38 @@ test('question IPC rejection shows a retryable submission failure instead of app
   expect(store.getState().cowork.pendingPermissions).toEqual([]);
 });
 
+test('permission diagnostics correlate submissions without logging question bodies or answers', async () => {
+  const fromRenderer = vi.fn();
+  const respondToPermission = vi.fn()
+    .mockResolvedValueOnce({ success: false, error: 'APPROVAL_ACCESS_DENIED' })
+    .mockRejectedValueOnce(new Error('sensitive-exception-detail'))
+    .mockResolvedValueOnce({ success: true, outcome: { kind: 'question_resolved' } });
+  vi.stubGlobal('window', { electron: { cowork: { respondToPermission }, log: { fromRenderer } } });
+  const permission = { ...nativeQuestion('1'), requestId: 'local-login', toolInput: { question: 'private-question' } };
+  store.dispatch(enqueuePendingPermission(permission));
+  const answer: CoworkPermissionResult = { behavior: 'allow', updatedInput: { answers: { 'private-question': 'private-answer' } } };
+  expect(await coworkService.respondToPermission(permission.requestId, answer)).toBe(false);
+  expect(await coworkService.respondToPermission(permission.requestId, answer)).toBe(false);
+  expect(await coworkService.respondToPermission(permission.requestId, answer)).toBe(true);
+  const logs = JSON.stringify(fromRenderer.mock.calls);
+  expect(logs).toContain('requestId=local-login');
+  expect(logs).toContain('APPROVAL_ACCESS_DENIED');
+  expect(logs).toContain('IPC failed');
+  expect(logs).toContain('succeeded');
+  for (const value of ['private-question', 'private-answer', 'sensitive-exception-detail']) expect(logs).not.toContain(value);
+});
+
+test('diagnostic transport failure cannot prevent a successful permission response', async () => {
+  vi.stubGlobal('window', { electron: {
+    cowork: { respondToPermission: vi.fn().mockResolvedValue({ success: true }) },
+    log: { fromRenderer: () => { throw new Error('Logger unavailable'); } },
+  } });
+  const permission = nativeQuestion('1');
+  store.dispatch(enqueuePendingPermission(permission));
+  expect(await coworkService.respondToPermission(permission.requestId, allow)).toBe(true);
+  expect(store.getState().cowork.pendingPermissions).toEqual([]);
+});
+
 const setupNativeQuestionRecovery = (getPendingQuestions: () => Promise<CoworkPermissionRequest[]>) => {
   const dismissListeners = new Set<(event: { requestId: string }) => void>();
   const noopListener = () => () => undefined;
