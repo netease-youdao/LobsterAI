@@ -216,3 +216,10 @@ describe('safe live-encoding diagnostics', () => {
     expect(JSON.stringify(logged)).not.toContain(privateText);
   });
 });
+
+
+it.each(['Unverified legacy session has no original mapping', 'Persisted synchronization safety block requires task review'])(
+  'logs the fixed local admission failure without leaking appended context: %s', message => {
+    expect(remoteSyncErrorMetadata(new Error(message)).validation).toBe(message);
+    expect(remoteSyncErrorMetadata(new Error(message + ' /Users/private/file.pdf token=secret')).validation).toBeNull();
+  });

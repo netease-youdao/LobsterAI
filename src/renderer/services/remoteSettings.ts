@@ -6,6 +6,7 @@ import {
 } from '../../shared/remote/constants';
 import { RemoteTelemetryUiAction, type RemoteTelemetryUiInput, RemoteTelemetryUiStage, RemoteTelemetryUiSurface } from '../../shared/remote/telemetryUi';
 import { isNewRemoteState } from '../components/settings/remoteControlState';
+import { configureRemoteWithRetryLog } from './remoteConfigureLog';
 
 export interface RemoteSettingsSnapshot {
   state: RemoteSettingsState | null;
@@ -143,7 +144,7 @@ export class RemoteSettingsService {
     this.submitting = true;
     this.update({ busy: true, error: null });
     try {
-      const result = await this.getApi().configure({ ...changes, expectedAccountEpoch: initial.accountEpoch });
+      const result = await configureRemoteWithRetryLog(this.getApi(), { ...changes, expectedAccountEpoch: initial.accountEpoch });
       if (generation !== this.generation) return false;
       if (!sameIdentity(initial, result)) {
         this.invalidate();

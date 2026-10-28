@@ -24,6 +24,7 @@ const lifecycleStates = new Set(['starting', 'running', 'waiting_approval', 'wai
 const validationMessages = new Set([
   ...Object.values(RemoteDeletionReason),
   ...Object.values(RemoteNetworkFailure), ...Object.values(RemoteLiveEncodingError),
+  'Unverified legacy session has no original mapping', 'Persisted synchronization safety block requires task review',
   'Remote ACK outside durable local bounds', 'Remote batch ACK identity mismatch',
   'Remote import receipt identity mismatch', 'Import receipt identity mismatch', 'Import abortion is not confirmed',
   'REMOTE_IMPORT_BUDGET', 'REMOTE_IMPORT_RECORD_LIMIT', 'REMOTE_IMPORT_PART_UNAVAILABLE', 'REMOTE_IMPORT_CONTEXT_CHANGED',

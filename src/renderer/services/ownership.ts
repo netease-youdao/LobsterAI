@@ -7,6 +7,7 @@ import type { ToastEventDetail } from '../components/Toast';
 import { store } from '../store';
 import { i18nService } from './i18n';
 import { clearOwnershipPending, type OwnershipPendingIntent,readOwnershipPending, saveOwnershipPending } from './ownershipPending';
+import { configureRemoteWithRetryLog } from './remoteConfigureLog';
 
 export const OwnershipView = { Detail: 'detail', Preview: 'preview', Unknown: 'unknown' } as const;
 export type OwnershipView = typeof OwnershipView[keyof typeof OwnershipView];
@@ -161,7 +162,7 @@ export const ownershipService = {
         panel = { ...panel, notice: 'remoteTaskSyncWaiting' };
         return;
       }
-      const updated = await window.electron.remote.configure(task
+      const updated = await configureRemoteWithRetryLog(window.electron.remote, task
         ? { retrySessionId: currentTarget.id, expectedAccountEpoch: remote.accountEpoch! }
         : { retry: true, ...(remote.accountEpoch ? { expectedAccountEpoch: remote.accountEpoch } : {}) });
       if (!current() || !panel) return;
