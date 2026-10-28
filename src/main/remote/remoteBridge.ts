@@ -30,6 +30,7 @@ import { matchesRemoteDeletionAdoption } from './remoteDeletionSyncState';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { type RemoteDisplayHealthInput, type RemoteDisplayHealthResult, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { RemoteDisplaySnapshot } from './remoteDisplaySnapshot';
+import { remoteFileDiagnostic } from './remoteFileDiagnostics';
 import { RemoteFileSync, type RemoteFileSyncDependencies } from './remoteFileSync';
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import { LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX, RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
@@ -391,7 +392,7 @@ export class RemoteBridge {
       deviceId: this.registration.deviceId, generation: this.generation, environment: this.remoteEnvironment(), routeEpoch: this.accountGeneration });
   }
   async prepareFileRun(sessionId: string, roots: string[]): Promise<void> {
-    if (!this.canCaptureRemoteFiles()) return;
+    if (!this.canCaptureRemoteFiles()) { remoteFileDiagnostic('prepare_skipped', { sessionId, reason: 'FILE_CAPTURE_DISABLED' }); return; }
     const epoch = this.accountGeneration;
     await this.files?.prepareRun(sessionId, roots, () => epoch === this.accountGeneration && !this.deps.store.needsSecurityRecovery());
   }

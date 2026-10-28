@@ -29,7 +29,7 @@ afterEach(() => { for (const dispose of disposable.splice(0).reverse()) dispose(
 const policy: RemoteFilePolicy = { policyVersion: '1', features: { inputUpload: true, desktopInputSync: true, artifactPublish: true, artifactDownload: true },
   types: [{ category: 'text', extensions: ['md', 'txt', 'json', 'yaml', 'js', 'html'], maxFileBytes: '5242880', inputAllowed: true, artifactAutoSync: true },
     { category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true },
-    { category: 'document', extensions: ['pdf', 'docx'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true }],
+    { category: 'document', extensions: ['pdf', 'docx', 'pptx'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true }],
   limits: { partBytes: '4194304', maxInputCount: 10, maxInputBytes: '104857600', maxImageBytes: '20971520', maxTaskArtifactCount: 20, maxTaskArtifactBytes: '209715200' } };
 function folder(): string { const result = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-files-test-'))); disposable.push(() => fs.rmSync(result, { recursive: true, force: true })); return result; }
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
@@ -51,11 +51,13 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
     db.exec("INSERT INTO library_artifact_sessions VALUES('local','s','m1','created')");
   });
   let actor: RemoteOwner | null = owner, generation = '1', version = 0;
+  let routeEpoch = 0, environment = 'https://example.invalid', deviceId = 'pc';
+  let recordHook: (() => Promise<void>) | undefined;
   const calls: Array<{ pathname: string; body: any; headers: HeadersInit | undefined; generation: string }> = [];
   const uploads = new Map<string, any>(), bytes = new Map<string, Buffer>(), references: any[] = [], chunks = new Map<string, Map<number, Buffer>>();
   const latestByArtifact = new Map<string, any>(), artifactIds = new Map<string, string>();
   let responseHook: ((pathname: string) => Response | void) | undefined, loseVersionReceipt = false, manifestOverrides: Record<string, unknown> = {};
-  const connection = () => ({ owner, environment: 'https://example.invalid', deviceId: 'pc', generation });
+  const connection = () => ({ owner, environment, deviceId, generation, routeEpoch });
   const request = vi.fn(async (con, pathname, init) => {
     const body = init.body && init.method !== 'PUT' ? JSON.parse(String(init.body)) : null;
     calls.push({ pathname, body, headers: init.headers, generation: con.generation });
@@ -123,6 +125,8 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
       const stat = fs.statSync(candidate.filePath);
       const identity = `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`;
       validate({ filePath: candidate.filePath, fileIdentity: identity, sizeBytes: stat.size, fileMtimeMs: Math.trunc(stat.mtimeMs) } as LibraryIndexedFile);
+      await recordHook?.();
+      assert();
       const indexed = db.prepare('SELECT id FROM library_local_artifacts WHERE file_path=?').get(candidate.filePath) as { id: string } | undefined;
       if (!indexed) return false;
       db.prepare('UPDATE library_local_artifacts SET file_identity=?,size_bytes=?,updated_at=? WHERE id=?').run(identity, stat.size, Date.now(), indexed.id);
@@ -151,7 +155,13 @@ function fixture(sealedProducer = true, deliveries = false, fileName = 'report.m
   };
   return { store, db, source, cache, calls, bytes, references, uploads, tick, nextRun, health: () => sync.health(),
     tickUnacknowledged: async () => { sync.tick(connection()); await sync.settled(); },
-    prepareDelivery: () => sync.prepareRun('s', [fs.realpathSync(directory)], () => true),
+    prepareDelivery: (validEpoch = () => true) => sync.prepareRun('s', [fs.realpathSync(directory)], validEpoch),
+    rotateConnection: () => { generation = String(Number(generation) + 1); },
+    changeRouteEpoch: () => { routeEpoch++; },
+    changeEnvironment: () => { environment = 'https://other.invalid'; },
+    changeDevice: () => { deviceId = 'other-device'; },
+    pause: () => sync.pause(),
+    recordHook: (hook?: () => Promise<void>) => { recordHook = hook; },
     switchOwner: () => { actor = { userId: 'B', scopeKey: 'personal' }; },
     hook: (hook?: typeof responseHook) => { responseHook = hook; },
     loseVersionReceipt: () => { loseVersionReceipt = true; },
@@ -791,5 +801,129 @@ describe('artifact sync durable boundaries and protocol', () => {
     f.store.transaction(() => f.db.prepare("INSERT INTO cowork_messages VALUES('input-message','s','user','Read',?,1,2)").run(JSON.stringify({ remoteRunId: 'run1' })));
     const message = f.store.snapshot('s').records.find(record => record.eventType === 'message.upsert' && record.payload.message.messageId === 'input-message')!;
     expect(message.payload.message.blocks[1]).toMatchObject({ type: 'attachment', assetId: 'input-asset', availability: 'ready' }); bridge.stop();
+  });
+});
+
+
+/** Run discovery must outlive transport churn without reviving authority or old run bytes. */
+describe('artifact delivery across transport reconnections', () => {
+  async function prepared(fileName = 'report.pptx') {
+    const f = fixture(false, true, fileName);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); await f.prepareDelivery();
+    return f;
+  }
+  function complete(f: ReturnType<typeof fixture>) {
+    fs.writeFileSync(f.source, 'generated document bytes');
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'").run(`Delivered [document](${f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,1)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolName: 'exec', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,2)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true, toolResultDetails: { exitCode: 0 } }));
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5);
+    try { f.store.updateRun('s', 'succeeded'); } finally { clock.mockRestore(); }
+  }
+  function card(f: ReturnType<typeof fixture>) {
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    return message?.payload.message.blocks.find((block: { type: string }) => block.type === 'artifact');
+  }
+
+  it.each(['report.pptx', 'report.pdf'])('publishes %s once after repeated generation changes', async fileName => {
+    const f = await prepared(fileName);
+    for (let i = 0; i < 3; i++) { f.rotateConnection(); await f.tick(); }
+    complete(f);
+    f.rotateConnection(); await f.tick(); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('generated document bytes');
+    expect(card(f)).toMatchObject({ availability: 'ready', referenceMode: 'latest' });
+    expect(f.jobs()[0].queue).toHaveLength(0);
+    expect(f.references).toHaveLength(0);
+    f.rotateConnection(); await f.tick();
+    expect(f.uploads.size).toBe(1);
+  });
+
+  it('retains the pre-run baseline instead of treating an old unchanged link as a delivery', async () => {
+    const f = await prepared();
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='m1'").run(`Delivered [document](${f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,2)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolName: 'write', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,3)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true }));
+    });
+    f.rotateConnection(); await f.tick();
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.uploads.size).toBe(0);
+    expect(card(f)?.availability).toBe('desktop_only');
+  });
+
+  it('retries with the new connection when it changes during file indexing', async () => {
+    const f = await prepared(); complete(f);
+    let release!: () => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    f.recordHook(async () => { entered(); await waiting; });
+    const oldCycle = f.tick(); await started;
+    f.rotateConnection(); const reboundCycle = f.tick();
+    release(); await Promise.all([oldCycle, reboundCycle]);
+    expect(f.uploads.size).toBe(0);
+    f.recordHook(); await f.tick(); await f.tick();
+    expect(f.uploads.size).toBe(1);
+    expect(card(f)?.availability).toBe('ready');
+    expect(f.calls.filter(call => call.pathname === '/devices/pc/artifacts').every(call => call.generation === '2')).toBe(true);
+  });
+
+  const invalidations = {
+    'route epoch': (f: ReturnType<typeof fixture>) => f.changeRouteEpoch(),
+    environment: (f: ReturnType<typeof fixture>) => f.changeEnvironment(),
+    device: (f: ReturnType<typeof fixture>) => f.changeDevice(),
+    pause: (f: ReturnType<typeof fixture>) => f.pause(),
+  };
+  for (const [name, invalidate] of Object.entries(invalidations)) it(`discards discovery on ${name} change`, async () => {
+    const f = await prepared();
+    invalidate(f); f.rotateConnection(); await f.tick();
+    complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+    expect(f.jobs()).toHaveLength(0);
+  });
+
+  it('does not reuse discovery after the caller revokes its account epoch', async () => {
+    const f = fixture(false, true, 'report.pptx');
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); let allowed = true; await f.prepareDelivery(() => allowed);
+    allowed = false; f.rotateConnection(); complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+  });
+
+  it('does not revive discovery after task admission is revoked and restored', async () => {
+    const f = await prepared();
+    f.store.setTaskAdmission(() => false); f.rotateConnection(); await f.tick();
+    f.store.setTaskAdmission(() => true); complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+  });
+
+  it('rejects bytes changed after the original completion boundary following reconnect', async () => {
+    const f = await prepared(); complete(f);
+    // Set a later mtime deterministically without relying on filesystem timer resolution.
+    const later = new Date(Date.now() + 10_000);
+    fs.writeFileSync(f.source, 'replaced after completion'); fs.utimesSync(f.source, later, later);
+    f.rotateConnection(); await f.tick();
+    expect(f.uploads.size).toBe(0);
+    expect(card(f)?.availability).toBe('desktop_only');
+  });
+
+  it('clears discovery across an explicit pause even if the same scope reconnects', async () => {
+    const f = await prepared();
+    f.pause(); f.rotateConnection(); await f.tick(); complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+  });
+
+  it('does not reuse discovery from an earlier run', async () => {
+    const f = await prepared();
+    f.store.updateRun('s', 'succeeded');
+    f.nextRun(2, 'later run bytes'); f.rotateConnection(); await f.tick();
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.uploads.size).toBe(0);
   });
 });

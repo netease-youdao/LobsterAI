@@ -36,6 +36,21 @@ describe('remote file policy polling', () => {
     advance(2000); await tick(); expect(request).toHaveBeenCalledTimes(2);
     connection.generation = '2'; await tick(); expect(request).toHaveBeenCalledTimes(3);
   });
+  it('clears stale health on reconnect while waiting for a fresh policy', async () => {
+    const { request, sync, connection, tick } = fixture();
+    request.mockRejectedValueOnce(new Error('unavailable'));
+    await tick();
+    expect(sync.health().degraded).toBe(true);
+    let release!: (response: Response) => void;
+    const original = request.getMockImplementation()!;
+    request.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve; }));
+    connection.generation = '2';
+    const reconnect = tick();
+    expect(sync.health()).toEqual({ degraded: false, pending: null });
+    release(await original()); await reconnect;
+    expect(sync.health()).toEqual({ degraded: false, pending: 0 });
+  });
+
   it('invalidates cached policy when the server reports a changed policy version', async () => {
     const { request, sync, tick } = fixture();
     await tick();

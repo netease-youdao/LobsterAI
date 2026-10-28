@@ -296,3 +296,21 @@ describe('explicit MEDIA declarations', () => {
     expect(await changedDeliveredFile(baseline, file, boundary, current, true)).toBeNull();
   });
 });
+
+
+describe('delivery rejection diagnostics', () => {
+  it('reports an unadmitted root without logging its path or changing admission', async () => {
+    const report = vi.fn();
+    const baseline = { directories: [], current: () => true };
+    const file = path.join(os.tmpdir(), 'private-customer-name.pdf');
+    expect(await changedDeliveredFile(baseline, file, Date.now(), () => true, false, report)).toBeNull();
+    expect(report).toHaveBeenCalledWith('FILE_OUTSIDE_CAPTURED_BASELINE');
+    expect(JSON.stringify(report.mock.calls)).not.toContain(file);
+  });
+
+  it('keeps a diagnostic callback failure out of the admission path', async () => {
+    const baseline = { directories: [], current: () => true };
+    await expect(changedDeliveredFile(baseline, path.join(os.tmpdir(), 'private.pdf'), Date.now(), () => true, false,
+      () => { throw new Error('log unavailable'); })).resolves.toBeNull();
+  });
+});
