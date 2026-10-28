@@ -23,6 +23,7 @@ function fixture() {
   const session = { id: 'session', modelOverride: '', status: 'idle' } as CoworkSession;
   const getSession = vi.fn(() => session);
   const updateSession = vi.fn();
+  const onSelectionCommitted = vi.fn();
   const patchSession = vi.fn(async () => ({ modelOverride: modelRef, resolvedModelRef: modelRef }));
   const directPatch = vi.fn();
   const ensureModelsReady = vi.fn(async () => undefined);
@@ -40,12 +41,13 @@ function fixture() {
     getRuntime: () => ({ isSessionActive: () => false, patchSession: directPatch }) as never,
     ownerAccountKey: () => 'owner',
     ensureModelsReady,
+    onSelectionCommitted,
     isAccountCurrent: captureAccount,
     assertSessionAccess,
     patchSession,
     t: key => key,
   });
-  return { ...registration, getSession, updateSession, patchSession, directPatch, ensureModelsReady, resolve,
+  return { ...registration, getSession, updateSession, onSelectionCommitted, patchSession, directPatch, ensureModelsReady, resolve,
     revoke: () => { allowed = false; }, changeAccount: () => { epoch++; }, captureAccount };
 }
 
@@ -55,6 +57,7 @@ describe('model preset selection access', () => {
     expect(() => f.choose('session', ModelPresetId.Balanced, false)).toThrow('access denied');
     expect(f.getSession).not.toHaveBeenCalled();
     expect(f.ensureModelsReady).not.toHaveBeenCalled();
+    expect(f.onSelectionCommitted).not.toHaveBeenCalled();
   });
 
   test.each(['prepare', 'resolve', 'patch'] as const)('rechecks session access after %s completes', async stage => {
@@ -68,6 +71,7 @@ describe('model preset selection access', () => {
     await expect(f.choose('session', ModelPresetId.Balanced, false)).rejects.toThrow('access denied');
     expect(f.updateSession).not.toHaveBeenCalled();
     expect(f.directPatch).not.toHaveBeenCalled();
+    expect(f.onSelectionCommitted).not.toHaveBeenCalled();
     if (stage !== 'patch') expect(f.patchSession).not.toHaveBeenCalled();
   });
 
@@ -87,6 +91,29 @@ describe('model preset selection access', () => {
     await expect(f.choose('session', ModelPresetId.Balanced, false, true)).rejects.toThrow('modelPresetAccountChanged');
     expect(f.patchSession).not.toHaveBeenCalled();
     expect(f.updateSession).not.toHaveBeenCalled();
+    expect(f.onSelectionCommitted).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])('notifies after the selected preset and runtime are persisted (initial=%s)', async initial => {
+    const f = fixture();
+    let persisted: Partial<CoworkSession> | undefined;
+    f.updateSession.mockImplementation((_id, updates) => { persisted = updates; });
+    f.onSelectionCommitted.mockImplementation(id => {
+      expect(id).toBe('session');
+      expect(persisted).toMatchObject({ modelPresetId: ModelPresetId.Ultimate, modelOverride: modelRef });
+    });
+    await f.choose('session', ModelPresetId.Ultimate, false, initial);
+    expect(f.onSelectionCommitted).toHaveBeenCalledExactlyOnceWith('session');
+    expect(f.updateSession.mock.invocationCallOrder[0]).toBeLessThan(f.onSelectionCommitted.mock.invocationCallOrder[0]);
+  });
+
+  test.each(['resolve', 'patch', 'persist'] as const)('does not notify when %s fails', async stage => {
+    const f = fixture();
+    if (stage === 'resolve') f.resolve.mockRejectedValueOnce(new Error('selection failed'));
+    if (stage === 'patch') f.patchSession.mockRejectedValueOnce(new Error('selection failed'));
+    if (stage === 'persist') f.updateSession.mockImplementationOnce(() => { throw new Error('selection failed'); });
+    await expect(f.choose('session', ModelPresetId.Balanced, false)).rejects.toThrow('selection failed');
+    expect(f.onSelectionCommitted).not.toHaveBeenCalled();
   });
 });
 

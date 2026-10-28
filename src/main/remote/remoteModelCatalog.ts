@@ -83,7 +83,7 @@ export class RemoteModelCatalog {
     return this.resolve(owner, deviceId, binding.modelRef);
   }
   async publish(owner: RemoteOwner, deviceId: string, generation: string,
-    api: (path: string, method?: string, body?: unknown) => Promise<any>, current: () => boolean): Promise<void> {
+    api: (path: string, method?: string, body?: unknown) => Promise<any>, current: () => boolean): Promise<boolean> {
     const telemetry = captureRemoteTelemetry({ deviceId, remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey,
       operationKind: SyncTelemetry.Kind.ModelCatalog, lane: 'background' });
     try {
@@ -96,7 +96,8 @@ export class RemoteModelCatalog {
     if (this.publicationContext !== context) { this.resetPublication(); this.publicationContext = context; }
     const epoch = this.publicationEpoch;
     const digest = payloadHash(items);
-    if (Date.now() < this.retryAt || this.checkedHash === digest && Date.now() - this.checkedAt < 300000) return;
+    if (this.checkedHash === digest && Date.now() - this.checkedAt < 300000) return true;
+    if (Date.now() < this.retryAt) return false;
     // Local configuration is checked frequently; unchanged catalogs only need a slow remote reconciliation.
     this.retryAt = Date.now() + 60000;
     const remote = await api(`/devices/${deviceId}/models`);
@@ -109,7 +110,7 @@ export class RemoteModelCatalog {
       this.checkedHash = digest; this.checkedAt = Date.now(); this.retryAt = 0;
       telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Skipped,
         catalogVersion: state.catalogVersion, recordCount: items.length });
-      return;
+      return payloadHash(this.refresh(owner, deviceId)) === digest;
     }
     state.pending ||= { publicationId: randomUUID(), expectedCatalogVersion: state.catalogVersion, items };
     this.store.put(this.key(owner, deviceId), state);
@@ -117,11 +118,12 @@ export class RemoteModelCatalog {
     const result = await api(`/devices/${deviceId}/models/publish`, 'POST', { ...state.pending, connectionGeneration: generation });
     if (!isCurrent() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
     const latest = this.state(owner, deviceId);
-    if (latest.pending?.publicationId !== state.pending.publicationId) return;
+    if (latest.pending?.publicationId !== state.pending.publicationId) return false;
     latest.catalogVersion = result.catalogVersion; delete latest.pending; this.store.put(this.key(owner, deviceId), latest);
     this.checkedHash = publishedHash; this.checkedAt = Date.now(); this.retryAt = 0;
     telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Completed,
       operationId: publicationId, catalogVersion: result.catalogVersion, recordCount: items.length, persistOutcome: 'success' });
+    return publishedHash === payloadHash(this.refresh(owner, deviceId));
     } catch (error) {
       telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Failed,
         reason: SyncTelemetry.Reason.RequestFailed });

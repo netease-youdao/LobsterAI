@@ -870,6 +870,8 @@ type ActiveTurn = {
   pendingOpenClawRetry?: boolean;
   /** True while a short visible final is being held open for a possible retry continuation. */
   pendingVisibleFinalContinuation?: boolean;
+  /** Size-only confirmation is not evidence that OpenClaw is performing maintenance. */
+  pendingVisibleFinalConfirmation?: boolean;
   /** True after a recoverable wait has accepted visible continuation text. */
   hasRecoverableContinuationText?: boolean;
   /** Most recent recoverable final timestamp, used for diagnostics and retry guards. */
@@ -1210,6 +1212,7 @@ type FirstResponseTiming = {
 type RecentlyClosedRunInfo = {
   expiresAt: number;
   closedAt: number;
+  turnToken?: number;
   sessionId?: string;
   sessionKey?: string;
   allowRetryReopen?: boolean;
@@ -2973,7 +2976,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       || turn.pendingRecoverableFollowup
       || turn.pendingOpenClawRetry
       || turn.pendingVisibleFinalContinuation
-      || turn.finalCompletionFlushOnLifecycleEnd === false
+      || (turn.finalCompletionFlushOnLifecycleEnd === false && !turn.pendingVisibleFinalConfirmation)
     );
   }
 
@@ -2984,6 +2987,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     turn.pendingRecoverableFollowup = false;
     turn.pendingOpenClawRetry = false;
     turn.pendingVisibleFinalContinuation = false;
+    turn.pendingVisibleFinalConfirmation = false;
     turn.pendingThinkingOnlyHint = false;
     if (wasActive) {
       this.emitContextMaintenance(sessionId, false);
@@ -3047,7 +3051,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     turn: ActiveTurn,
     finalText: string,
     options: { forceForEmptyFinal?: boolean } = {},
-  ): { wait: boolean; reason: string; toolResultChars: number; graceMs: number } {
+  ): { wait: boolean; reason: string; toolResultChars: number; graceMs: number; confirmationOnly?: boolean } {
     const visibleText = finalText.trim();
     const toolResultChars = this.getTurnToolResultCharCount(sessionId, turn);
     const hasToolWork = this.hasTurnToolWork(sessionId, turn);
@@ -3092,6 +3096,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return {
         wait: true,
         reason: 'short visible final followed large tool results',
+        confirmationOnly: true,
         toolResultChars,
         graceMs: OpenClawRuntimeAdapter.VISIBLE_FINAL_LARGE_TOOL_CONFIRMATION_GRACE_MS,
       };
@@ -3114,6 +3119,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       graceMs: number;
       pendingThinkingOnlyHint?: boolean;
       pendingVisibleFinalContinuation?: boolean;
+      confirmationOnly?: boolean;
       toolResultChars: number;
       visibleTextLen: number;
     } {
@@ -3147,6 +3153,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         reason: `missing chat.final lifecycle fallback: ${visibleRisk.reason}`,
         graceMs: visibleRisk.graceMs,
         pendingVisibleFinalContinuation: true,
+        confirmationOnly: visibleRisk.confirmationOnly,
         toolResultChars: visibleRisk.toolResultChars,
         visibleTextLen: visibleText.length,
       };
@@ -3170,6 +3177,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       graceMs: number;
       pendingThinkingOnlyHint?: boolean;
       pendingVisibleFinalContinuation?: boolean;
+      confirmationOnly?: boolean;
     },
   ): void {
     if (this.activeTurns.get(sessionId) !== turn || turn.stopRequested) {
@@ -3178,6 +3186,24 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         `sessionId=${sessionId}`,
         `runId=${runId}`,
         `reason=${options.reason}`,
+      );
+      return;
+    }
+
+    if (options.confirmationOnly) {
+      // Repeated finals can overlap while chat.history is awaited. Preserve the
+      // first short deadline without promoting a size heuristic to a retry signal.
+      if (turn.pendingVisibleFinalConfirmation && turn.finalCompletionTimer) return;
+      this.deferChatFinalCompletion(sessionId, turn, runId, {
+        graceMs: options.graceMs,
+        flushOnLifecycleEnd: false,
+        allowLateContinuation: true,
+        confirmationOnly: true,
+      });
+      console.debug(
+        '[OpenClawRuntime] confirming visible tool final without a maintenance signal.',
+        `sessionId=${sessionId}`,
+        `runId=${runId}`,
       );
       return;
     }
@@ -6047,6 +6073,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private async runTurn(...args: Parameters<OpenClawRuntimeAdapter['runTurnImpl']>): Promise<void> {
+    // New input supersedes closed retries even if startup fails before a new
+    // turn token is allocated. Keep the tombstone so late packets stay closed.
+    for (const info of this.recentlyClosedRunIds.values()) {
+      if (info.sessionId === args[0]) info.allowRetryReopen = false;
+    }
     const epoch = this.accountRecoveryEpoch;
     let cancel!: () => void;
     const cancelled = new Promise<never>((_resolve, reject) => { cancel = () => reject(new OpenClawAccountTransitionCancelledError()); });
@@ -7240,7 +7271,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private rememberRecentlyClosedRunId(
     runId: string,
-    options: { sessionId?: string; sessionKey?: string; allowRetryReopen?: boolean } = {},
+    options: { sessionId?: string; sessionKey?: string; turnToken?: number; allowRetryReopen?: boolean } = {},
   ): void {
     const normalizedRunId = runId.trim();
     if (!normalizedRunId) return;
@@ -7250,6 +7281,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       expiresAt: now + OpenClawRuntimeAdapter.RECENTLY_CLOSED_RUN_ID_TTL_MS,
       ...(options.sessionId ? { sessionId: options.sessionId } : {}),
       ...(options.sessionKey ? { sessionKey: options.sessionKey } : {}),
+      ...(options.turnToken !== undefined ? { turnToken: options.turnToken } : {}),
       ...(options.allowRetryReopen ? { allowRetryReopen: true } : {}),
     });
     this.pruneRecentlyClosedRunIds(now);
@@ -7278,6 +7310,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   ): boolean {
     const info = this.getRecentlyClosedRunInfo(runId);
     if (!info?.allowRetryReopen) {
+      return false;
+    }
+    // A retry belongs to the closed turn, never a later request in this session.
+    if (this.activeTurns.has(sessionId)
+      || [...this.accountTurnOperations].some(operation => operation.sessionId === sessionId)
+      || info.turnToken === undefined || !this.isCurrentTurnToken(sessionId, info.turnToken)) {
       return false;
     }
     if (info.sessionId && info.sessionId !== sessionId) {
@@ -9481,6 +9519,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         graceMs: fallbackContinuation.graceMs,
         pendingThinkingOnlyHint: fallbackContinuation.pendingThinkingOnlyHint,
         pendingVisibleFinalContinuation: fallbackContinuation.pendingVisibleFinalContinuation,
+        confirmationOnly: fallbackContinuation.confirmationOnly,
       });
       console.debug(
         '[OpenClawRuntime] lifecycle fallback stayed open after history sync because a retry may follow.',
@@ -10896,6 +10935,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         reason: visibleFinalContinuation.reason,
         graceMs: visibleFinalContinuation.graceMs,
         pendingVisibleFinalContinuation: true,
+        confirmationOnly: visibleFinalContinuation.confirmationOnly,
       });
       console.debug(
         '[OpenClawRuntime] delayed visible tool final while waiting for a recoverable continuation.',
@@ -11047,7 +11087,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     sessionId: string,
     turn: ActiveTurn,
     runId: string,
-    options: { graceMs?: number; flushOnLifecycleEnd?: boolean; allowLateContinuation?: boolean } = {},
+    options: { graceMs?: number; flushOnLifecycleEnd?: boolean; allowLateContinuation?: boolean; confirmationOnly?: boolean } = {},
   ): void {
     if (turn.finalCompletionTimer) {
       clearTimeout(turn.finalCompletionTimer);
@@ -11057,6 +11097,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     turn.finalCompletionRunId = runId;
     turn.finalCompletionFlushOnLifecycleEnd = options.flushOnLifecycleEnd;
     turn.finalCompletionAllowLateContinuation = options.allowLateContinuation;
+    turn.pendingVisibleFinalConfirmation = options.confirmationOnly === true;
     turn.finalCompletionTimer = setTimeout(() => {
       const currentTurn = this.activeTurns.get(sessionId);
       if (!currentTurn || currentTurn.turnToken !== turnToken) return;
@@ -12787,6 +12828,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           this.rememberRecentlyClosedRunId(knownRunId, {
             sessionId,
             sessionKey: turn.sessionKey,
+            turnToken: turn.turnToken,
             allowRetryReopen,
           });
         }

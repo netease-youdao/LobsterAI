@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import { RemoteCapability, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus } from '../../shared/remote/constants';
+import { RemoteDeletion } from '../../shared/remote/deletions';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteInputCapability } from '../../shared/remote/input';
 import { RemoteQuestion } from '../../shared/remote/questions';
 import { RemoteReply } from '../../shared/remote/reply';
 import { OwnershipAssociationStore } from '../ownershipAssociationStore';
@@ -81,6 +83,103 @@ function fixture() {
     disconnect: () => { disconnectOnReceipt = true; }, terminalReceipt: () => { receiptStatus = 'applied'; } };
 }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+
+describe('confirmed model catalog session refresh', () => {
+  function modelFixture() {
+    const f = fixture();
+    f.bridge.targetId = 'target-a';
+    f.bridge.inputCapabilities = [RemoteInputCapability.Schema];
+    const publish = vi.fn(async () => true);
+    const refresh = vi.fn();
+    f.bridge.deps.input = { models: { publish }, preparations: {}, refreshSessionModel: refresh };
+    const admitted = vi.spyOn(f.bridge.targets, 'isAdmitted').mockReturnValue(true);
+    const scan = vi.spyOn(f.store, 'controlBindings');
+    const histories = vi.spyOn(f.store, 'sessions');
+    const snapshot = vi.spyOn(f.store, 'snapshot');
+    const add = (id: string, taskOwner = owner): void => {
+      f.store.transaction(() => {
+        f.store.db.prepare("INSERT INTO cowork_sessions VALUES(?,?,1,1,'idle')").run(id, id);
+        f.store.assignNew(id, taskOwner, 'local_create');
+        f.store.bindRemote(id, `remote-${id}`, 'desktop');
+        f.store.db.prepare('UPDATE remote_sync SET sync_environment=? WHERE local_id=?').run('target-a', id);
+      });
+    };
+    const run = async (): Promise<void> => {
+      f.bridge.lastInputPublish = 0;
+      f.bridge.startOptionalPublications(owner, f.bridge.accountGeneration);
+      await f.bridge.optionalPublishWork;
+    };
+    return { ...f, publish, refresh, admitted, scan, histories, snapshot, add, run };
+  }
+
+  it('does not scan or refresh sessions when catalog publication remains unconfirmed', async () => {
+    const f = modelFixture(); f.add('task'); f.publish.mockResolvedValue(false);
+    await f.run();
+    expect(f.publish).toHaveBeenCalledOnce();
+    expect(f.scan).not.toHaveBeenCalled(); expect(f.refresh).not.toHaveBeenCalled();
+    expect(f.histories).not.toHaveBeenCalled(); expect(f.snapshot).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+
+  it('refreshes confirmed session selections in bounded pages without reading history', async () => {
+    const f = modelFixture();
+    const ids = Array.from({ length: 10 }, (_, index) => `task-${String(index).padStart(2, '0')}`);
+    for (const id of ids) f.add(id);
+    await f.run();
+    expect(f.scan).toHaveBeenNthCalledWith(1, owner, 8, 0);
+    expect(f.refresh.mock.calls.map(([id]) => id)).toEqual(ids.slice(0, 8));
+    await f.run();
+    expect(f.scan).toHaveBeenNthCalledWith(2, owner, 8, 8);
+    expect(f.refresh.mock.calls.map(([id]) => id)).toEqual(ids);
+    expect(f.bridge.inputModelRefresh.offset).toBe(0);
+    expect(f.histories).not.toHaveBeenCalled(); expect(f.snapshot).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+
+  it('excludes foreign identities, unadmitted, frozen and deleting sessions from refresh', async () => {
+    const f = modelFixture();
+    for (const id of ['valid', 'device', 'environment', 'migration', 'closed', 'input', 'deletion', 'gc', 'isolated', 'unadmitted']) f.add(id);
+    f.add('foreign-owner', { userId: 'other-user', scopeKey: owner.scopeKey });
+    f.add('foreign-scope', { ...owner, scopeKey: 'enterprise:other' });
+    f.store.db.exec("UPDATE remote_sync SET device_id='other-device' WHERE local_id='device'; UPDATE remote_sync SET sync_environment='target-b' WHERE local_id='environment'; UPDATE remote_sync SET migration_frozen=1 WHERE local_id='migration'");
+    f.store.put(`${RemoteDeletion.Closed}closed`, true);
+    f.store.put('inputFence:input', { phase: 'prepared' });
+    f.store.put(`${RemoteDeletion.Fence}deletion`, { phase: RemoteDeletion.Prepared });
+    f.store.put('localGcDeleted:gc', { owner, sessionId: 'remote-gc', deviceId: 'desktop', environment: 'target-a', streamEpoch: null });
+    f.store.db.prepare('INSERT INTO remote_run_isolation VALUES(?,?,?,?)').run('isolated', 'run', 'hash', 'local');
+    f.admitted.mockImplementation((_owner, _deviceId, _targetId, id) => id !== 'unadmitted');
+    await f.run(); await f.run();
+    expect(f.scan).toHaveBeenNthCalledWith(1, owner, 8, 0);
+    expect(f.scan).toHaveBeenNthCalledWith(2, owner, 8, 8);
+    expect(f.refresh).toHaveBeenCalledExactlyOnceWith('valid');
+    expect(f.histories).not.toHaveBeenCalled(); expect(f.snapshot).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+
+  it.each(['target', 'connection'] as const)('abandons a confirmed publication after the %s changes while awaiting it', async change => {
+    const f = modelFixture(); f.add('task');
+    let release!: (confirmed: boolean) => void;
+    f.publish.mockImplementationOnce(() => new Promise<boolean>(resolve => { release = resolve; }));
+    const work = f.run();
+    expect(f.publish).toHaveBeenCalledOnce();
+    if (change === 'target') f.bridge.targetId = 'target-b';
+    else f.bridge.generation = '2';
+    release(true); await work;
+    expect(f.scan).not.toHaveBeenCalled(); expect(f.refresh).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+
+  it.each(['target', 'connection'] as const)('restarts a refresh page after the %s changes', async change => {
+    const f = modelFixture();
+    const ids = Array.from({ length: 10 }, (_, index) => `task-${String(index).padStart(2, '0')}`);
+    for (const id of ids) f.add(id);
+    await f.run(); expect(f.bridge.inputModelRefresh.offset).toBe(8);
+    f.refresh.mockClear();
+    if (change === 'target') {
+      f.bridge.targetId = 'target-b';
+      f.store.db.prepare('UPDATE remote_sync SET sync_environment=?').run('target-b');
+    } else f.bridge.generation = '2';
+    await f.run();
+    expect(f.scan).toHaveBeenNthCalledWith(2, owner, 8, 0);
+    expect(f.refresh.mock.calls.map(([id]) => id)).toEqual(ids.slice(0, 8)); f.bridge.stop();
+  });
+});
 
 describe('remote command task admission', () => {
   it('does not claim new commands while shared execution evidence is unverified', async () => {

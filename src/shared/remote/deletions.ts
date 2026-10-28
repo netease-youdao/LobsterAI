@@ -2,6 +2,7 @@ import type { RemoteOwner } from './constants';
 import type { RemoteSyncTargetIdentity } from './syncTarget';
 
 export const RemoteDeletion = {
+  ControlCapability: 'session_delete_control_v1',
   Capability: 'session_delete_v1', Inbox: 'sessionDeletion:', Pending: 'sessionDeletionPending:', Fence: 'deletionFence:', Closed: 'deletionClosed:',
   Guard: 'deletionGuard:', Completed: 'completed', Cancelled: 'cancelled',
   Prepared: 'prepared', EffectStarted: 'effect_started', Stopped: 'stopped', Deleted: 'local_deleted',

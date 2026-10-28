@@ -1,18 +1,26 @@
 import Database from 'better-sqlite3';
 import { afterEach, expect, it } from 'vitest';
 
+import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { RemoteFileReason } from '../../shared/remote/files';
+import { payloadHash } from './canonical';
+import { availabilityControlSnapshot } from './remoteAvailabilitySource';
 import { RemoteStore } from './remoteStore';
 
 const owner = { userId: 'A', scopeKey: 'personal' };
 const databases: Database.Database[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
-function fixture(): RemoteStore {
+function fixture(presetId?: ModelPresetId | null): RemoteStore {
   const db = new Database(':memory:'); databases.push(db);
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
+  if (presetId !== undefined) db.exec('ALTER TABLE cowork_sessions ADD COLUMN model_preset_id TEXT');
   const store = new RemoteStore(db); store.setEnabledOwner(owner); store.setInputProjectionSupported(true);
-  store.transaction(() => { db.exec("INSERT INTO cowork_sessions VALUES('s','Task',1,1,'idle','provider/model','low')"); store.assignNew('s', owner, 'local_create'); });
+  store.transaction(() => {
+    db.exec("INSERT INTO cowork_sessions(id,title,created_at,updated_at,status,model_override,thinking_level) VALUES('s','Task',1,1,'idle','provider/model','low')");
+    if (presetId !== undefined) db.prepare("UPDATE cowork_sessions SET model_preset_id=? WHERE id='s'").run(presetId);
+    store.assignNew('s', owner, 'local_create');
+  });
   return store;
 }
 function userMessage(store: RemoteStore): void {
@@ -154,4 +162,58 @@ it('keeps configuration signature, version and previous model together when vers
   store.db.exec('DROP TRIGGER reject_version');
   expect(store.inputVersion('s')).toBe('2');
   expect(store.get('inputModel:s')).toBeNull();
+});
+
+it.each([ModelPresetId.Ultimate, null])('advances input version when only the preset changes from balanced to %s', presetId => {
+  const store = fixture(ModelPresetId.Balanced);
+  const previous = { modelRef: 'fast-preset', version: '1', thinkingLevel: null };
+  expect(store.setInputModel('s', previous)).toBe('1');
+  store.transaction(() => store.db.prepare("UPDATE cowork_sessions SET model_preset_id=? WHERE id='s'").run(presetId));
+  expect(store.inputVersion('s')).toBe('2');
+  expect(store.get('inputModel:s')).toBeNull();
+  expect(store.db.prepare("SELECT model_override,thinking_level FROM cowork_sessions WHERE id='s'").get())
+    .toEqual({ model_override: 'provider/model', thinking_level: 'low' });
+  expect(store.inputVersion('s')).toBe('2');
+});
+
+it.each([undefined, null])('preserves legacy non-preset signatures with preset column value %s', presetId => {
+  const store = fixture(presetId);
+  const previous = { modelRef: 'physical-model', version: '3', thinkingLevel: 'low' };
+  const signature = payloadHash({ model_override: 'provider/model', thinking_level: 'low' });
+  store.transaction(() => {
+    store.put('inputSignature:s', signature);
+    store.put('inputVersion:s', '7');
+    store.put('inputModel:s', previous);
+  });
+  expect(store.inputVersion('s')).toBe('7');
+  expect(store.get('inputSignature:s')).toBe(signature);
+  expect(store.get('inputModel:s')).toEqual(previous);
+  expect(availabilityControlSnapshot(store, 's').records[0].payload.session).toMatchObject({ inputVersion: '7', inputModel: previous });
+});
+
+it('projects a preset alias consistently while preserving frozen historical message selection', () => {
+  const store = fixture(ModelPresetId.Balanced);
+  const previous = { modelRef: 'physical-model', version: '3', source: 'subscription', displayName: 'Physical model',
+    providerLabel: 'LobsterAI', thinkingLevel: 'low' };
+  store.setInputModel('s', previous);
+  const frozenInput = { owner, text: 'Previous question', attachments: [], inputModel: previous };
+  store.put('desktopInputRun:run', frozenInput);
+  const metadata = JSON.stringify({ remoteRunId: 'run', modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'physical-model' });
+  store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('reply','s','assistant','Previous reply',?,2,1)").run(metadata));
+  const oldMessage = store.snapshot('s').records.find(record => record.eventType === 'message.upsert')!.payload.message;
+  const alias = { ...previous, modelRef: 'ultra-preset', displayName: 'Flagship', thinkingLevel: null };
+  store.transaction(() => {
+    store.db.prepare("UPDATE cowork_sessions SET model_preset_id=? WHERE id='s'").run(ModelPresetId.Ultimate);
+    store.setInputModel('s', alias);
+    store.project('s');
+  });
+  const projection = store.snapshot('s');
+  const summary = projection.records.find(record => record.eventType === 'session.upsert')!.payload.session;
+  const control = availabilityControlSnapshot(store, 's').records[0].payload.session;
+  expect(summary).toMatchObject({ inputVersion: '2', inputModel: alias });
+  expect(control).toMatchObject({ inputVersion: summary.inputVersion, inputModel: alias });
+  expect(projection.records.find(record => record.eventType === 'message.upsert')!.payload.message).toEqual(oldMessage);
+  expect(oldMessage.inputModel).toMatchObject({ modelRef: previous.modelRef, version: previous.version, thinkingLevel: previous.thinkingLevel });
+  expect(store.get('desktopInputRun:run')).toEqual(frozenInput);
+  expect(store.db.prepare("SELECT metadata FROM cowork_messages WHERE id='reply'").get()).toEqual({ metadata });
 });

@@ -113,6 +113,7 @@ function fixture(options: { createIdentity?: boolean; realBridge?: boolean } = {
     return bridge;
   });
   const globals = {
+    remoteStartupReady: true,
     remoteBridge: null as RemoteBridge | null, remoteSettingsController: null as RemoteSettingsController | null,
     ownershipBootId: 'boot', ownershipAccountEpoch: 1, authAccountGeneration: 1,
     remoteDisplayOwner: owner, getRemoteRouteEpoch: () => 1,
@@ -169,6 +170,7 @@ function fixture(options: { createIdentity?: boolean; realBridge?: boolean } = {
   return { remote, store, original, safeStorage, readIdentity, journalResources, securityResources, bridgeResources,
     bridgeConstructor, network, socket, remoteLogMessage, publish, notifyInput, lifecycle,
     fail: (stage: FailureStage) => { failAt = stage; },
+    setStartupReady: (ready: boolean) => { globals.remoteStartupReady = ready; },
     configure: (changes: Record<string, unknown>) => handlers.get(RemoteIpc.Configure)!({}, { expectedAccountEpoch: remote.epoch(), ...changes }),
   };
 }
@@ -248,4 +250,26 @@ test('recovered initialization reuses the original identity while the real bridg
   expect(f.remote.state()).toMatchObject({ connected: false, syncHealth: { reason: RemoteSyncHealthReason.LocalRecovery } });
   expect(f.remote.state().initializationFailure).toBeUndefined();
   expect(f.network).not.toHaveBeenCalled(); expect(f.socket).not.toHaveBeenCalled();
+});
+
+
+test('early initialization and configure calls cannot bypass startup or consume identity recovery retries', async () => {
+  const f = fixture(); f.setStartupReady(false);
+  expect(() => f.remote.initialize()).toThrow(Failure.DependencyUnavailable);
+  expect(() => f.remote.initialize(true)).toThrow(Failure.DependencyUnavailable);
+  await expect(f.configure({ enabled: true })).rejects.toThrow(Failure.DependencyUnavailable);
+  await expect(f.configure({ retry: true })).resolves.toMatchObject({ connected: false });
+  expect(f.remote.state()).toMatchObject({ connected: false, initializationFailure: undefined });
+  expect(f.readIdentity).not.toHaveBeenCalled(); expect(f.bridgeConstructor).not.toHaveBeenCalled();
+  expect(f.remoteLogMessage).not.toHaveBeenCalled();
+  expect(f.network).not.toHaveBeenCalled(); expect(f.socket).not.toHaveBeenCalled();
+
+  // No time advance: early calls must not poison the real initializer's first attempt.
+  f.setStartupReady(true);
+  const bridge = f.remote.initialize();
+  expect(f.remote.initialize()).toBe(bridge);
+  expect(f.bridgeConstructor).toHaveBeenCalledOnce();
+  expect(f.readIdentity).toHaveBeenCalledOnce();
+  expect(f.bridgeResources[0].deps.identity).toEqual(f.original);
+  expect(f.remote.state().initializationFailure).toBeUndefined();
 });

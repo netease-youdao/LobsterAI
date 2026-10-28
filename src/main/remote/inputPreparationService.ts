@@ -4,6 +4,8 @@ import path from 'path';
 
 import { AgentId } from '../../shared/agent/constants';
 import { COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES, type CoworkImageAttachmentPayload, estimateBase64DecodedBytes } from '../../shared/cowork/imageAttachments';
+import { type ModelPresetId, modelPresetModelId, parseModelPresetId } from '../../shared/modelPresets/constants';
+import { OpenClawProviderId } from '../../shared/providers/constants';
 import { REMOTE_TEXT_BYTES, type RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryReceipt, type RemotePreparationClaim, type RemoteResolvedInput } from '../../shared/remote/input';
 import type { CoworkStore } from '../coworkStore';
@@ -20,6 +22,8 @@ export class RemoteAttachmentError extends RemoteInputError {
   constructor() { super(RemoteInputReason.Invalid); }
 }
 
+export const inputOperationKey = (operationId: string, targetId?: string): string => `inputOperation:${targetId ? `${targetId}:` : ''}${operationId}`;
+
 interface FileIdentity { realPath: string; dev: string; ino: string; size: number; mtimeMs: number }
 interface InputImagePreview { mimeType: string; base64Data: string }
 interface LocalAsset { preview?: InputImagePreview | null; assetId: string; version: string; path: string; identity: FileIdentity; imagePath?: string; imageIdentity?: FileIdentity; imageMime?: string }
@@ -27,6 +31,9 @@ export interface LocalPreparedInput {
   preparationId: string; owner: RemoteOwner; deviceId: string; requestHash: string; inputDigest: string;
   targetId?: string;
   resolvedInput: RemoteResolvedInput; cwd: string; directoryIdentity: FileIdentity; runtimeRef: string;
+  /** Local-only evidence for retaining an already bound preset during keep_session. */
+  presetBinding?: { mode: 'keep_session'; presetId: ModelPresetId; physicalModel: { modelRef: string; version: string };
+    sessionThinkingLevel: string | null; thinkingLevel: string | null };
   sessionId: string | null; expectedInputVersion: string | null; expectedControlVersion: string | null;
   files: LocalAsset[]; createdAt: number; expiresAt: number; boundCommandId: string | null;
   cacheDirectory?: string; cacheCleanup?: 'deleting';
@@ -211,12 +218,32 @@ export class InputPreparationService {
       const directoryIdentity = identity(cwd);
       const mode = request.input.model.mode;
       if ((!continuation && mode === RemoteInputMode.Session) || !Object.values(RemoteInputMode).includes(mode)) throw new RemoteInputError(RemoteInputReason.Invalid);
-      const model = mode === RemoteInputMode.Selected
+      const physical = mode === RemoteInputMode.Selected
         ? this.deps.models.resolve(owner, deviceId, request.input.model.modelRef || '', request.input.model.expectedVersion || '')
         : this.deps.models.resolveRuntime(owner, deviceId, mode === RemoteInputMode.Session
           ? session?.modelOverride || agent.model || this.deps.getDefaultModel() : agent.model || this.deps.getDefaultModel());
+      const presetId = mode === RemoteInputMode.Session ? parseModelPresetId(session?.modelPresetId) : null;
+      const model = presetId ? this.deps.models.resolveRuntime(owner, deviceId, `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`) : physical;
       const inheritedThinking = mode === RemoteInputMode.Session ? session?.thinkingLevel : mode === RemoteInputMode.Agent ? agent.thinkingLevel : undefined;
-      const thinkingLevel = request.input.options?.thinkingLevel ?? (inheritedThinking || model.item.thinking.default);
+      let thinkingLevel = request.input.options?.thinkingLevel ?? (inheritedThinking || model.item.thinking.default);
+      let presetBinding: LocalPreparedInput['presetBinding'];
+      if (presetId) {
+        if (!session?.modelOverride || session.modelOverride !== physical.local.runtimeRef) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+        const actualThinking = session.thinkingLevel || physical.item.thinking.default || null;
+        const visibleThinking = actualThinking && model.item.thinking.options.includes(actualThinking)
+          && physical.item.thinking.options.includes(actualThinking) ? actualThinking : null;
+        const explicitThinking = Object.prototype.hasOwnProperty.call(request.input.options || {}, 'thinkingLevel');
+        thinkingLevel = explicitThinking ? request.input.options!.thinkingLevel : visibleThinking || model.item.thinking.default;
+        if (explicitThinking && (typeof thinkingLevel !== 'string' || !thinkingLevel)
+          || thinkingLevel && (!model.item.thinking.options.includes(thinkingLevel) || !physical.item.thinking.options.includes(thinkingLevel)))
+          throw new RemoteInputError(RemoteInputReason.Invalid);
+        if (!explicitThinking && thinkingLevel && thinkingLevel !== actualThinking) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+        const executionThinking = thinkingLevel || actualThinking;
+        if (executionThinking && !physical.item.thinking.options.includes(executionThinking)) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+        presetBinding = { mode: RemoteInputMode.Session, presetId,
+          physicalModel: { modelRef: physical.item.modelRef, version: physical.item.version },
+          sessionThinkingLevel: session.thinkingLevel || null, thinkingLevel: executionThinking };
+      }
       if (thinkingLevel && !model.item.thinking.options.includes(thinkingLevel)) throw new RemoteInputError(RemoteInputReason.Invalid);
       const text = request.input.text || '';
       const requestedAssets = request.input.attachments || [];
@@ -226,7 +253,7 @@ export class InputPreparationService {
         if (!asset || asset.intent !== ref.intent || !/^[a-f0-9]{64}$/u.test(asset.sha256) || !/^\d+$/u.test(asset.sizeBytes)) throw new RemoteInputError(RemoteInputReason.Asset);
         const size = Number(asset.sizeBytes);
         if (!Number.isSafeInteger(size) || size < 0 || size > maxFileBytes || ref.kind !== 'uploaded_asset') throw new RemoteInputError(RemoteInputReason.Invalid);
-        if (asset.intent === RemoteInputIntent.Image && !model.item.inputCapabilities.image) throw new RemoteInputError(RemoteInputReason.Invalid);
+        if (asset.intent === RemoteInputIntent.Image && (!model.item.inputCapabilities.image || !physical.item.inputCapabilities.image)) throw new RemoteInputError(RemoteInputReason.Invalid);
         return { assetId: asset.assetId, version: asset.version, intent: asset.intent, sha256: asset.sha256, sizeBytes: asset.sizeBytes,
           mimeType: asset.mimeType, fileName: asset.fileName };
       });
@@ -330,7 +357,8 @@ export class InputPreparationService {
         check();
         const prepared: LocalPreparedInput = { preparationId: claim.preparationId, owner, deviceId, requestHash: payloadHash(request),
           ...(targetId ? { targetId } : {}),
-          inputDigest: payloadHash(resolvedInput), resolvedInput, cwd, directoryIdentity, runtimeRef: model.local.runtimeRef,
+          inputDigest: payloadHash(resolvedInput), resolvedInput, cwd, directoryIdentity, runtimeRef: physical.local.runtimeRef,
+          ...(presetBinding ? { presetBinding } : {}),
           sessionId: session?.id || null, expectedInputVersion: request.expectedInputVersion || null, expectedControlVersion: request.expectedControlVersion || null,
           files, cacheDirectory: folder, createdAt: Date.now(), expiresAt: Math.min(Date.now() + 15 * 60_000, claim.expiresAt ? Date.parse(claim.expiresAt) : Infinity), boundCommandId: null };
         this.validate(prepared, owner, deviceId, false);
@@ -360,7 +388,35 @@ export class InputPreparationService {
       || (!bound && prepared.expiresAt <= Date.now()) || payloadHash(prepared.resolvedInput) !== prepared.inputDigest) throw new RemoteInputError(RemoteInputReason.Stale);
     const input = prepared.resolvedInput;
     const model = this.deps.models.resolve(owner, deviceId, input.model.modelRef, input.model.version);
-    if (model.local.runtimeRef !== prepared.runtimeRef) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    if (prepared.presetBinding) {
+      const binding = prepared.presetBinding;
+      const session = prepared.sessionId ? this.deps.store.getSession(prepared.sessionId, 0) : null;
+      const applied = bound && prepared.boundCommandId ? this.deps.store.remote.get<{ phase: string; beforeVersion: string; afterVersion: string; presetApplication?: unknown }>(inputOperationKey(prepared.boundCommandId, prepared.targetId)) : null;
+      const saved = applied ? this.deps.store.remote.get<LocalPreparedInput>(this.key(prepared.preparationId)) : null;
+      const ownApplication = saved?.boundCommandId === prepared.boundCommandId && saved?.inputDigest === prepared.inputDigest
+        && saved?.runtimeRef === prepared.runtimeRef && saved?.presetBinding && payloadHash(saved.presetBinding) === payloadHash(binding)
+        && applied?.phase === 'model_applied' && applied.beforeVersion === prepared.expectedInputVersion && applied.presetApplication && payloadHash(applied.presetApplication) === payloadHash({
+        preparationId: prepared.preparationId, inputDigest: prepared.inputDigest, bindingHash: payloadHash(binding),
+        runtimeRef: prepared.runtimeRef, thinkingLevel: binding.thinkingLevel });
+      if (binding.mode !== RemoteInputMode.Session || !parseModelPresetId(binding.presetId) || !session
+        || !binding.physicalModel || typeof binding.physicalModel.modelRef !== 'string' || !binding.physicalModel.modelRef
+        || typeof binding.physicalModel.version !== 'string' || !binding.physicalModel.version
+        || session.modelPresetId !== binding.presetId || session.modelOverride !== prepared.runtimeRef
+        || (session.thinkingLevel || null) !== (ownApplication ? binding.thinkingLevel : binding.sessionThinkingLevel)
+        || ownApplication && this.sessionInputVersion(session.id) !== applied!.afterVersion || prepared.expectedInputVersion === null
+        || model.local.runtimeRef !== `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(binding.presetId)}`)
+        throw new RemoteInputError(RemoteInputReason.ModelChanged);
+      const physical = this.deps.models.resolve(owner, deviceId, binding.physicalModel.modelRef, binding.physicalModel.version);
+      if (Object.prototype.hasOwnProperty.call(input.options, 'thinkingLevel') && (typeof input.options.thinkingLevel !== 'string' || !input.options.thinkingLevel))
+        throw new RemoteInputError(RemoteInputReason.Invalid);
+      const wireThinking = input.options.thinkingLevel || null;
+      const expectedThinking = wireThinking || session.thinkingLevel || physical.item.thinking.default || null;
+      if (physical.local.runtimeRef !== prepared.runtimeRef || binding.thinkingLevel !== expectedThinking
+        || wireThinking && (!model.item.thinking.options.includes(wireThinking) || !physical.item.thinking.options.includes(wireThinking))
+        || binding.thinkingLevel && !physical.item.thinking.options.includes(binding.thinkingLevel)
+        || input.attachments.some(asset => asset.intent === RemoteInputIntent.Image && (!model.item.inputCapabilities.image || !physical.item.inputCapabilities.image)))
+        throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    } else if (model.local.runtimeRef !== prepared.runtimeRef) throw new RemoteInputError(RemoteInputReason.ModelChanged);
     this.deps.store.assertAgentAccess(input.agentId, owner);
     if (!this.deps.store.getAgent(input.agentId)?.enabled) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
     if (!bound && !prepared.sessionId && this.deps.store.agentOwnership.get(input.agentId)?.version !== input.expectedAgentVersion) throw new RemoteInputError(RemoteInputReason.AgentChanged);
@@ -440,6 +496,7 @@ export class InputPreparationService {
       this.assertTarget(prepared);
       if (epoch !== this.operationEpoch) throw new RemoteInputError(RemoteInputReason.Stale);
       checkCurrent();
+      if (prepared.presetBinding) this.validate(prepared, prepared.owner, prepared.deviceId, true);
     };
     check();
     await this.validateFiles(prepared, check);
@@ -464,7 +521,8 @@ export class InputPreparationService {
         if (!preview && data.length > COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES) references.push(`[File: ${JSON.stringify(asset.fileName)}]`);
       } else references.push(`[File: ${JSON.stringify(asset.fileName)}] ${JSON.stringify(file.path)}`);
     }
+    const executionThinking = prepared.presetBinding ? prepared.presetBinding.thinkingLevel : prepared.resolvedInput.options.thinkingLevel;
     return { prompt: [prepared.resolvedInput.text, ...references].filter(Boolean).join('\n\n') || ' ', modelOverride: prepared.runtimeRef,
-      ...(prepared.resolvedInput.options.thinkingLevel ? { thinkingLevel: prepared.resolvedInput.options.thinkingLevel } : {}), imageAttachments };
+      ...(executionThinking ? { thinkingLevel: executionThinking } : {}), imageAttachments };
   }
 }

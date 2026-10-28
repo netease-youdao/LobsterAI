@@ -9,6 +9,8 @@ import { archivedRemoteSyncReferences } from './remoteSyncTargetStore';
 import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
 
 const fileSetPattern = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u;
+export const LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX = 'legacyImportTakeover:';
+
 export class RemoteImportSnapshotError extends Error {}
 /** Private immutable snapshot bodies. Only the manifest/index is persisted in the core database. */
 export class RemoteImportSnapshots {
@@ -80,13 +82,23 @@ export class RemoteImportSnapshots {
   }
   private referenced(): Set<string> | null {
     // Unknown receipts can still own files. Corrupt bookkeeping must never authorize cache deletion.
-    if (this.store.db.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'import:%' AND NOT json_valid(value) LIMIT 1").get()) return null;
+    const takeoverPattern = `${LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX}%`;
+    if (this.store.db.prepare("SELECT 1 FROM remote_state WHERE (key LIKE 'import:%' OR key LIKE ?) AND NOT json_valid(value) LIMIT 1").get(takeoverPattern)) return null;
     let archived: ReturnType<typeof archivedRemoteSyncReferences>;
     try { archived = archivedRemoteSyncReferences(this.store); }
     catch (error) {
       // Preserve all spool files on uncertain evidence. Shared storage errors still propagate.
       if (typeof (error as { code?: unknown })?.code === 'string' && String((error as { code: string }).code).startsWith('SQLITE_')) throw error;
       return null;
+    }
+    const takeovers = this.store.db.prepare(`SELECT json_extract(value,'$.importId') AS import_id,
+      json_type(value,'$.savedImport') AS saved_type,json_extract(value,'$.savedImport.importId') AS saved_id,
+      json_type(value,'$.savedImport.fileSet') AS file_type,json_extract(value,'$.savedImport.fileSet') AS file_set
+      FROM remote_state WHERE key LIKE ?`).iterate(takeoverPattern) as Iterable<{ import_id: unknown; saved_type: string; saved_id: unknown; file_type: string | null; file_set: unknown }>;
+    for (const entry of takeovers) {
+      if (entry.saved_type !== 'object' || typeof entry.import_id !== 'string' || entry.import_id !== entry.saved_id
+        || entry.file_type !== null && (entry.file_type !== 'text' || typeof entry.file_set !== 'string' || !fileSetPattern.test(entry.file_set))) return null;
+      if (typeof entry.file_set === 'string') archived.importFileSets.add(entry.file_set);
     }
     return new Set([...archived.importFileSets,
       ...(this.store.db.prepare("SELECT json_extract(value,'$.fileSet') AS file_set FROM remote_state WHERE key LIKE 'import:%' AND json_valid(value)").all() as Array<{ file_set: string | null }>).map(row => row.file_set).filter((value): value is string => typeof value === 'string')]);

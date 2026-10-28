@@ -75,10 +75,10 @@ describe('remote model references', () => {
       return { catalogVersion: version, items: savedItems };
     });
 
-    await catalog.publish(owner, 'pc', '1', api, () => true);
+    await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(false);
     expect(api.mock.calls.find(([, method]) => method === 'POST')?.[2]).toMatchObject(pending);
     expect(savedItems).toEqual(legacyItems);
-    await catalog.publish(owner, 'pc', '1', api, () => true);
+    await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(true);
     expect(savedItems).toEqual(desktopItems);
     const publications = api.mock.calls.filter(([, method]) => method === 'POST');
     expect(publications).toHaveLength(2);
@@ -238,6 +238,30 @@ describe('remote model references', () => {
       return published ? { catalogVersion: '1', lastPublicationId: published.publicationId, items: published.items } : { catalogVersion: '0', items: [] };
     };
     await expect(catalog.publish(owner, 'pc', '1', api, () => true)).rejects.toThrow('response lost');
-    await expect(catalog.publish(owner, 'pc', '2', api, () => true)).resolves.toBeUndefined();
+    await expect(catalog.publish(owner, 'pc', '2', api, () => true)).resolves.toBe(true);
   });
+});
+
+it('confirms only the current remotely checked digest and returns false during an unconfirmed retry', async () => {
+  const { catalog, change } = fixture(); const api = vi.fn(async () => { throw new Error('offline'); });
+  await expect(catalog.publish(owner, 'pc', '1', api, () => true)).rejects.toThrow('offline');
+  await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(false);
+  expect(api).toHaveBeenCalledOnce();
+  catalog.resetPublication();
+  const items = catalog.refresh(owner, 'pc'), confirmed = vi.fn(async () => ({ catalogVersion: '1', items }));
+  await expect(catalog.publish(owner, 'pc', '1', confirmed, () => true)).resolves.toBe(true);
+  await expect(catalog.publish(owner, 'pc', '1', confirmed, () => true)).resolves.toBe(true);
+  expect(confirmed).toHaveBeenCalledOnce();
+  change({ configuration: { revision: 2 } });
+  await expect(catalog.publish(owner, 'pc', '1', api, () => true)).rejects.toThrow('offline');
+  await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(false);
+});
+it('does not confirm a new local catalog changed while the old publication was in flight', async () => {
+  const { catalog, change } = fixture();
+  const api = vi.fn(async (_path: string, method?: string) => {
+    if (method === 'POST') { change({ configuration: { revision: 2 } }); return { catalogVersion: '1' }; }
+    return { catalogVersion: '0', items: [] };
+  });
+  await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(false);
+  expect(api).toHaveBeenCalledTimes(2);
 });

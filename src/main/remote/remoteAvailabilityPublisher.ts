@@ -1,14 +1,15 @@
 import { randomUUID } from 'crypto';
 
 import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus } from '../../shared/remote/constants';
+import { RemoteDeletion } from '../../shared/remote/deletions';
 import { payloadHash, sameOwner, stableJson } from './canonical';
-import { acknowledgeAvailabilityDeletion, AvailabilityDeletion, availabilityDeletion, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
+import { acknowledgeAvailabilityDeletion, AvailabilityDeletion, availabilityDeletion, mirrorAvailabilityDeletionIdentity, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
 import { availabilitySourceHealth, recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
 import { type ControlReconciliationPage,RemoteAvailabilityReconcile } from './remoteAvailabilityReconcile';
 import { availabilityControlSnapshot,type ControlSnapshot } from './remoteAvailabilitySource';
 import { AvailabilityReadState, type AvailabilityRequest, type AvailabilitySession, RemoteAvailabilityStore, ReplyModelDisplayVersion } from './remoteAvailabilityStore';
 import { RemoteDeletionSyncKind } from './remoteDeletionSyncPolicy';
-import { hasRemoteDeletionAdoption, readRemoteDeletionSync, reconcileRemoteDeletionSync, rememberRemoteDeletionAdoption, type RemoteDeletionSyncContext } from './remoteDeletionSyncState';
+import { hasRemoteDeletionAdoption, matchesRemoteDeletionAdoption, readRemoteDeletionSync, reconcileRemoteDeletionSync, rememberRemoteDeletionAdoption, type RemoteDeletionSyncContext } from './remoteDeletionSyncState';
 import { ensureDesktopInputJobs } from './remoteDesktopInputJobs';
 import { type HistoryContext, type HistoryOperation,HistoryPreparation } from './remoteHistoryStore';
 import { recentLiveCandidates } from './remoteLiveCandidates';
@@ -24,7 +25,7 @@ import { remoteDiagnosticLog, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
-export interface AvailabilityContext { environment?: string; targetId?: string; routeEpoch?: number; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
+export interface AvailabilityContext { environment?: string; targetId?: string; routeEpoch?: number; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; controlDeletionSupported?: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
 export const HistoryOwnership = { Owned: 'owned', Unowned: 'unowned', Unavailable: 'unavailable' } as const;
 export type HistoryOwnershipResult = { state: typeof HistoryOwnership.Owned | typeof HistoryOwnership.Unowned }
   | { state: typeof HistoryOwnership.Unavailable; dependency: 'control_ledger' | 'context'; error: unknown };
@@ -126,6 +127,19 @@ export class RemoteAvailabilityPublisher {
     const context = this.deps.context(), row = this.deps.store.controlBinding(localId);
     return !!context && !!row && readRemoteDeletionSync(this.deps.store, localId, this.deletionContext(context, row, null)).kind === RemoteDeletionSyncKind.LegacyDelete;
   }
+  /** Recovery may inspect a frozen legacy import, but may not create or replace its independent writer. */
+  legacyImportTakeover(localId: string): { scope: string; sessionId: string; writerGeneration: string; controlEpoch: string } | null {
+    const context = this.deps.context();
+    if (!context || !context.generation || !this.current(context)) return null;
+    const row = this.deps.store.controlBinding(localId), state = this.ledger.session(context.scope, localId);
+    if (!row || !state || state.localId !== localId || state.sessionId !== row.session_id || state.scope !== context.scope
+      || row.device_id !== context.deviceId || row.sync_environment !== context.targetId || !this.deps.admitted(localId)
+      || !sameOwner(this.deps.store.owner(localId), context.owner) || this.deps.store.isSyncClosed(localId)
+      || this.deps.store.get(`${AvailabilityDeletion.Prefix}${localId}`) || this.deps.store.get(`${RemoteDeletion.Fence}${localId}`)
+      || !matchesRemoteDeletionAdoption(this.deps.store, localId, this.deletionContext(context, row, state),
+        { scope: state.scope, sessionId: state.sessionId, deviceId: context.deviceId, writerGeneration: state.writerGeneration, controlEpoch: state.controlEpoch })) return null;
+    return { scope: context.scope, sessionId: state.sessionId, writerGeneration: state.writerGeneration, controlEpoch: state.controlEpoch };
+  }
   controlReady(localId: string): boolean {
     const context = this.deps.context();
     try { return !!context && !this.deps.store.get(`${AvailabilityDeletion.Prefix}${localId}`) && this.ledger.session(context.scope, localId)?.phase === 'active'; }
@@ -224,7 +238,7 @@ export class RemoteAvailabilityPublisher {
     let next: AvailabilityContext | null;
     try { next = this.deps.context(); } catch { return false; }
     return next?.routeEpoch === context.routeEpoch && next?.scope === context.scope && next.deviceId === context.deviceId
-      && next.environment === context.environment && sameOwner(next.owner, context.owner) && next.generation === context.generation;
+      && next.environment === context.environment && next.targetId === context.targetId && sameOwner(next.owner, context.owner) && next.generation === context.generation;
   }
   private capture(context: AvailabilityContext): CapturedContext {
     return (context as CapturedContext)[publisherEpoch] === undefined ? { ...context, owner: { ...context.owner }, [publisherEpoch]: this.timerEpoch } : context;
@@ -438,7 +452,9 @@ export class RemoteAvailabilityPublisher {
         { operationId: state.operationId }, 3, `/sync/mode-activations/${state.operationId}`);
       const result = await this.send(context, request);
       this.assertCurrent(context);
-      if (result.writerGeneration !== state.writerGeneration || !['fenced', 'active'].includes(result.state)) throw new Error('REMOTE_ACTIVATION_RECEIPT_INVALID');
+      if (result.writerGeneration !== state.writerGeneration || !['fenced', 'active'].includes(result.state)
+        || context.controlDeletionSupported && (result.sessionId !== state.sessionId || typeof result.streamEpoch !== 'string'
+          || !/^[A-Za-z0-9_-]{1,128}$/u.test(result.streamEpoch))) throw new Error('REMOTE_ACTIVATION_RECEIPT_INVALID');
       state.pendingCommandIds = result.pendingCommandIds || [];
       state.requiredRunIds = result.pendingRunIds || [];
       state.pendingApprovalIds = result.pendingApprovalIds || []; state.pendingQuestionIds = result.pendingQuestionIds || [];
@@ -455,6 +471,8 @@ export class RemoteAvailabilityPublisher {
         businessStatus: result.state, writerGeneration: state.writerGeneration, persistOutcome: 'success' });
       this.deps.store.bindRemote(row.local_id, row.session_id, context.deviceId);
     }
+    if (context.controlDeletionSupported && state.phase === 'bootstrap' && state.streamEpoch && !this.deps.store.get(`${AvailabilityDeletion.Prefix}${state.localId}`))
+      mirrorAvailabilityDeletionIdentity(this.deps.store, context, state);
     rememberAvailabilityDeletionBinding(this.deps.store, context, state);
     if (state.phase === 'bootstrap') {
       try { await this.bootstrap(context, state); }
@@ -489,10 +507,42 @@ export class RemoteAvailabilityPublisher {
         }
         throw error;
       }
+      await this.repairDeletionIdentity(context, state);
       return;
     }
     rememberAvailabilityDeletionBinding(this.deps.store, context, state);
     await this.facts(context, state);
+    await this.repairDeletionIdentity(context, state);
+  }
+  private async repairDeletionIdentity(context: AvailabilityContext, state: AvailabilitySession): Promise<void> {
+    if (!context.controlDeletionSupported || state.phase !== 'active'
+      || this.deps.store.get(`${AvailabilityDeletion.Prefix}${state.localId}`)) return;
+    const key = `${context.scope}:deletion-identity:${state.localId}`;
+    if (!this.eligible(key)) return;
+    try {
+      if (!state.streamEpoch) {
+        const query = new URLSearchParams({ deviceId: context.deviceId, sessionId: state.sessionId, localSessionId: state.localId,
+          writerGeneration: state.writerGeneration, mode: 'online', connectionGeneration: context.generation });
+        const result = await this.deps.request(`/sync/state?${query}`, 'GET', undefined, 3);
+        this.assertCurrent(context);
+        if (result.sessionId !== state.sessionId || result.writerGeneration !== state.writerGeneration
+          || result.controlEpoch !== state.controlEpoch || result.state !== 'active' || result.controlReady !== true
+          || typeof result.streamEpoch !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(result.streamEpoch))
+          throw new Error('REMOTE_DELETION_IDENTITY_UNRESOLVED');
+        const current = this.ledger.session(context.scope, state.localId);
+        if (!current || current.phase !== 'active' || current.sessionId !== state.sessionId
+          || current.writerGeneration !== state.writerGeneration || current.controlEpoch !== state.controlEpoch)
+          throw new Error('REMOTE_DELETION_IDENTITY_UNRESOLVED');
+        current.streamEpoch = result.streamEpoch;
+        this.ledger.saveSession(current); Object.assign(state, current);
+      }
+      this.assertCurrent(context);
+      mirrorAvailabilityDeletionIdentity(this.deps.store, context, state);
+      this.failures.delete(key);
+    } catch (error) {
+      // Missing deletion identity must not delay ordinary control facts or resume a legacy writer.
+      this.fail(key, error, context, state.localId, 'control');
+    }
   }
   private validateBootstrapReceipt(receipt: Record<string, any>, begin: AvailabilityRequest): void {
     const terminal = ['aborted', 'expired', 'superseded'].includes(receipt?.state);

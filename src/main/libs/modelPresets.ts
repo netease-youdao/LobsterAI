@@ -72,6 +72,7 @@ export function registerModelPresetIpc(dependencies: {
   patchSession: import('./agentEngine/types').CoworkRuntime['patchSession'];
   ownerAccountKey: () => string | null;
   ensureModelsReady: () => Promise<unknown>;
+  onSelectionCommitted?: (sessionId: string) => void;
   isAccountCurrent: () => () => boolean;
   t: (key: string) => string;
 }) {
@@ -122,6 +123,7 @@ export function registerModelPresetIpc(dependencies: {
     dependencies.assertSessionAccess(sessionId);
     if (selectionRevision.get(sessionId) !== revision) throw new Error(t('modelPresetModelMismatch'));
     getSessions().updateSession(sessionId, { modelPresetId: presetId, modelOverride: modelRef, thinkingLevel }, { touchUpdatedAt: false });
+    dependencies.onSelectionCommitted?.(sessionId);
     const updatedSession = getSessions().getSession(sessionId)!;
     return initial ? updatedSession : recordSessionModelChange(getSessions(), session, updatedSession);
   };

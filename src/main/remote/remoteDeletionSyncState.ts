@@ -96,6 +96,16 @@ export function hasRemoteDeletionAdoption(store: DeletionSyncReader, localId: st
   return false;
 }
 
+/** Recovery needs the exact original binding, unlike the conservative writer-fence existence check. */
+export function matchesRemoteDeletionAdoption(store: DeletionSyncReader, localId: string, context: RemoteDeletionSyncContext,
+  binding: AvailabilityDeletionBinding): boolean {
+  const sync = store.sync(localId);
+  if (!sync || !sameOwner(store.owner(localId), context.owner) || !sameEnvironment(store, context, sync.sync_environment)
+    || !validControlBinding(binding, context, sync)) return false;
+  const saved = readState(store, adoptionKey(localId, context));
+  return record(saved) && saved.version === VERSION && stableJson(saved.binding) === stableJson(binding);
+}
+
 /** Before the first uncertain activation request, retain a core fence even if a sidecar is subsequently lost. */
 export function rememberRemoteDeletionAdoption(store: RemoteStore, localId: string, context: RemoteDeletionSyncContext, binding: AvailabilityDeletionBinding): void {
   const row = store.sync(localId);

@@ -5,6 +5,8 @@ import { resolve } from 'path';
 
 import { AgentId, AgentOwnerKind } from '../../shared/agent/constants';
 import type { ApprovalDecisionOutcome, ApprovalState } from '../../shared/cowork/approval';
+import { modelPresetModelId, parseModelPresetId } from '../../shared/modelPresets/constants';
+import { OpenClawProviderId } from '../../shared/providers/constants';
 import { parseModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputOperationPhase, RemoteInputReason } from '../../shared/remote/input';
@@ -15,7 +17,7 @@ import { t } from '../i18n';
 import { type CoworkRuntime, CoworkRuntimeDiagnosticEvent, type PermissionRequest } from '../libs/agentEngine/types';
 import { type OwnershipOperationGate, ownershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash, sameOwner } from './canonical';
-import type { InputPreparationService, LocalPreparedInput } from './inputPreparationService';
+import { inputOperationKey, type InputPreparationService, type LocalPreparedInput } from './inputPreparationService';
 import { RemoteAgentError, remoteAgentFailure } from './remoteAgentCatalog';
 import { RemoteApprovalError } from './remoteApproval';
 import type { InboxEntry, RemoteCommand } from './remoteBridge';
@@ -59,7 +61,6 @@ interface InputFence {
   syncTargetId?: string;
 }
 
-const inputOperationKey = (operationId: string, targetId?: string): string => `inputOperation:${targetId ? `${targetId}:` : ''}${operationId}`;
 
 
 /** All local/mobile submissions pass this account fence and per-session control lane. */
@@ -209,9 +210,13 @@ export class SessionCommandService {
       const session = this.store.getSession(sessionId, 0);
       if (!session) return null;
       const runtimeRef = session.modelOverride || this.store.getAgent(session.agentId)?.model || '';
-      const item = this.input!.models.resolveRuntime(actor, deviceId, runtimeRef).item;
+      const physical = this.input!.models.resolveRuntime(actor, deviceId, runtimeRef).item;
+      const presetId = parseModelPresetId(session.modelPresetId);
+      const item = presetId ? this.input!.models.resolveRuntime(actor, deviceId, `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`).item : physical;
+      const actualThinking = session.thinkingLevel || physical.thinking?.default || null;
+      const thinkingLevel = presetId ? actualThinking && item.thinking.options.includes(actualThinking) && physical.thinking.options.includes(actualThinking) ? actualThinking : null : session.thinkingLevel || null;
       const summary = { modelRef: item.modelRef, version: item.version, source: item.source, displayName: item.displayName,
-        providerLabel: item.providerLabel, thinkingLevel: session.thinkingLevel || null };
+        providerLabel: item.providerLabel, thinkingLevel };
       this.store.remote.setInputModel(sessionId, summary); return summary;
     } catch { return null; }
   }
@@ -510,7 +515,9 @@ export class SessionCommandService {
               if (fence?.operationId !== entry.command.commandId || fence.syncTargetId !== syncTargetId) throw new RemoteInputError(RemoteInputReason.Busy);
               this.store.remote.remove(`inputFence:${localId}`);
             }
-            this.store.remote.put(inputOperationKey(entry.command.commandId, syncTargetId), { phase: 'model_applied', beforeVersion, afterVersion });
+            this.store.remote.put(inputOperationKey(entry.command.commandId, syncTargetId), { phase: 'model_applied', beforeVersion, afterVersion,
+              ...(preparedInput.presetBinding ? { presetApplication: { preparationId: preparedInput.preparationId, inputDigest: preparedInput.inputDigest,
+                bindingHash: payloadHash(preparedInput.presetBinding), runtimeRef: options.modelOverride, thinkingLevel: options.thinkingLevel || null } } : {}) });
             // The gateway patch is a local fact; its old service references are not the new target's projection.
             if (sameInputTarget()) {
               this.store.remote.put(`inputRun:${entry.runId}`, { input: preparedInput.resolvedInput, inputModel });

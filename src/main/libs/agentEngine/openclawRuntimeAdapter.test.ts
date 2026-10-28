@@ -6122,8 +6122,7 @@ test('lifecycle fallback waits when history sync returns a short assistant segme
 
     expect(completeSpy).not.toHaveBeenCalled();
     expect(session.status).toBe('running');
-    expect(maintenanceSpy).toHaveBeenCalledWith(session.id, true);
-    expect(adapter.activeTurns.get(session.id)?.pendingOpenClawRetry).toBe(true);
+    expect(maintenanceSpy).not.toHaveBeenCalledWith(session.id, true);
     expect(session.messages.some((message) => (
       message.type === 'assistant'
       && message.content === interimAnswer
@@ -6143,7 +6142,7 @@ test('lifecycle fallback waits when history sync returns a short assistant segme
       data: { text: finalAnswer },
     });
 
-    expect(maintenanceSpy).toHaveBeenLastCalledWith(session.id, false);
+    expect(maintenanceSpy).not.toHaveBeenCalledWith(session.id, true);
     expect(session.messages.some((message) => (
       message.type === 'assistant'
       && message.content.includes('Final answer: the retry after context compaction')
@@ -7544,6 +7543,89 @@ test('retryable closed run reopens on same-run lifecycle start', () => {
   ))).toBe(true);
 });
 
+test.each(['preparing', 'running', 'completed'])('a retryable closed run cannot reopen after a newer turn is %s', (newerStatus) => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'first question', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'first answer', timestamp: 2, metadata: { isStreaming: false, isFinal: true } },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  adapter.rememberSessionKey(session.id, sessionKey);
+  adapter.ensureActiveTurn(session.id, sessionKey, 'older-retry-run');
+  adapter.activeTurns.get(session.id)!.allowRecentlyClosedRunRetryReopenOnCleanup = true;
+  session.status = 'completed';
+  adapter.cleanupSessionTurn(session.id);
+
+  store.addMessage(session.id, { type: 'user', content: 'second question' });
+  if (newerStatus === 'preparing') {
+    adapter.accountTurnOperations.add({ sessionId: session.id, cancel: vi.fn() });
+  } else {
+    adapter.ensureActiveTurn(session.id, sessionKey, 'newer-run');
+  }
+  const newerTurn = adapter.activeTurns.get(session.id);
+  if (newerStatus === 'completed') {
+    store.addMessage(session.id, { type: 'assistant', content: 'second answer' });
+    session.status = 'completed';
+    adapter.cleanupSessionTurn(session.id);
+  }
+  const historyBefore = JSON.stringify(session.messages);
+  const statusBefore = session.status;
+  const latestToken = adapter.latestTurnTokenBySession.get(session.id);
+
+  adapter.handleGatewayEvent({ event: 'agent', seq: 10, payload: {
+    runId: 'older-retry-run', sessionKey, stream: 'lifecycle', data: { phase: 'start' },
+  } });
+  adapter.handleGatewayEvent({ event: 'agent', seq: 11, payload: {
+    runId: 'older-retry-run', sessionKey, stream: 'assistant', data: { text: 'late older answer' },
+  } });
+
+  expect(session.status).toBe(statusBefore);
+  expect(adapter.latestTurnTokenBySession.get(session.id)).toBe(latestToken);
+  expect(adapter.sessionIdByRunId.has('older-retry-run')).toBe(false);
+  expect(JSON.stringify(session.messages)).toBe(historyBefore);
+  if (newerStatus === 'running') {
+    expect(adapter.activeTurns.get(session.id)).toBe(newerTurn);
+    expect([...newerTurn!.knownRunIds]).toEqual(['newer-run']);
+    expect(newerTurn!.pendingOpenClawRetry).not.toBe(true);
+    adapter.cleanupSessionTurn(session.id);
+  } else {
+    expect(adapter.activeTurns.has(session.id)).toBe(false);
+  }
+});
+
+test('a failed new submission permanently supersedes a closed retry before a new turn token exists', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'first question', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'first answer', timestamp: 2, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  adapter.rememberSessionKey(session.id, sessionKey);
+  adapter.ensureActiveTurn(session.id, sessionKey, 'older-retry-run');
+  const olderTurn = adapter.activeTurns.get(session.id)!;
+  olderTurn.allowRecentlyClosedRunRetryReopenOnCleanup = true;
+  session.status = 'completed';
+  adapter.cleanupSessionTurn(session.id);
+  vi.spyOn(adapter, 'runTurnImpl').mockImplementation(async () => {
+    store.addMessage(session.id, { type: 'user', content: 'second question' });
+    session.status = 'error';
+    throw new Error('gateway unavailable during startup');
+  });
+
+  await expect(adapter.runTurn(session.id, 'second question', {})).rejects.toThrow('gateway unavailable');
+  expect(adapter.latestTurnTokenBySession.get(session.id)).toBe(olderTurn.turnToken);
+  const historyBefore = JSON.stringify(session.messages);
+  adapter.handleGatewayEvent({ event: 'agent', seq: 10, payload: {
+    runId: olderTurn.runId, sessionKey, stream: 'lifecycle', data: { phase: 'start' },
+  } });
+  adapter.handleGatewayEvent({ event: 'agent', seq: 11, payload: {
+    runId: olderTurn.runId, sessionKey, stream: 'assistant', data: { text: 'late older answer' },
+  } });
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+  expect(session.status).toBe('error');
+  expect(JSON.stringify(session.messages)).toBe(historyBefore);
+});
+
 test('plugin approval request is forwarded as a cowork permission and resolves through plugin approval API', async () => {
   const { session, store } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'apply the skill proposal', timestamp: 1, metadata: {} },
@@ -8612,12 +8694,12 @@ test('visible short tool final waits with retry signal and accepts same-run cont
   }
 });
 
-test('visible short tool final uses short confirmation when only large tool results are present', async () => {
+test.each(['single', 'overlapping', 'delayed'])('large tool results use one bounded confirmation without maintenance for %s finals', async (delivery) => {
   vi.useFakeTimers();
   try {
-    const shortAnswer = 'A'.repeat(514);
+    const shortAnswer = '天气'.repeat(136) + '。';
     const lateAnswer = 'This late continuation should not be accepted.';
-    const largeToolResult = 'T'.repeat(41_758);
+    const largeToolResult = 'T'.repeat(28_058);
     const { session, store } = createReconcileStore([
       { id: 'msg-1', type: 'user', content: 'check the logs', timestamp: 1, metadata: {} },
       { id: 'msg-2', type: 'tool_use', content: 'Using exec', timestamp: 2, metadata: { toolUseId: 'call-1' } },
@@ -8626,6 +8708,7 @@ test('visible short tool final uses short confirmation when only large tool resu
     const adapter = new OpenClawRuntimeAdapter(store, {});
     const sessionKey = `agent:main:lobsterai:${session.id}`;
     const completeSpy = vi.fn();
+    const maintenanceSpy = vi.fn();
 
     adapter.gatewayClient = {
       start: () => {},
@@ -8651,24 +8734,35 @@ test('visible short tool final uses short confirmation when only large tool resu
 
     session.status = 'running';
     adapter.on('complete', completeSpy);
+    adapter.on('contextMaintenance', maintenanceSpy);
     const turn = createActiveTurn(session.id, sessionKey, 'run-visible-timeout');
     turn.toolUseMessageIdByToolCallId.set('call-1', 'msg-2');
     turn.toolResultMessageIdByToolCallId.set('call-1', 'msg-3');
     adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
     adapter.sessionIdByRunId.set('run-visible-timeout', session.id);
     adapter.rememberSessionKey(session.id, sessionKey);
 
-    adapter.handleChatEvent({
-      state: 'final',
-      runId: 'run-visible-timeout',
-      sessionKey,
-      message: { role: 'assistant', content: shortAnswer },
-    }, 1);
+    // The gateway has already ended; two final handlers can overlap while
+    // backfilling history, just as in the weather incident.
+    adapter.handleAgentLifecycleEvent(session.id, { phase: 'end' }, turn.runId);
+    const deliverFinal = (text: string, seq: number) => adapter.handleChatEvent({
+      state: 'final', runId: turn.runId, sessionKey,
+      message: { role: 'assistant', content: text },
+    }, seq);
+    deliverFinal(shortAnswer, 1);
+    if (delivery === 'overlapping') deliverFinal(shortAnswer.slice(0, 114), 2);
+    await vi.advanceTimersByTimeAsync(0);
+    let elapsed = 0;
+    if (delivery === 'delayed') {
+      await vi.advanceTimersByTimeAsync(1_000);
+      elapsed = 1_000;
+      deliverFinal(shortAnswer.slice(0, 114), 2);
+      await vi.advanceTimersByTimeAsync(0);
+    }
 
-    await vi.advanceTimersByTimeAsync(7_999);
-    await Promise.resolve();
-    await Promise.resolve();
-
+    await vi.advanceTimersByTimeAsync(7_999 - elapsed);
+    expect(maintenanceSpy).not.toHaveBeenCalledWith(session.id, true);
     expect(completeSpy).not.toHaveBeenCalled();
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
 
@@ -8678,6 +8772,7 @@ test('visible short tool final uses short confirmation when only large tool resu
 
     expect(completeSpy).toHaveBeenCalledWith(session.id, 'run-visible-timeout');
     expect(session.status).toBe('completed');
+    expect(completeSpy).toHaveBeenCalledTimes(1);
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
     expect(session.messages.some((message) => (
       message.type === 'assistant'
@@ -8695,6 +8790,85 @@ test('visible short tool final uses short confirmation when only large tool resu
       message.type === 'assistant'
       && message.content === lateAnswer
     ))).toBe(false);
+
+    // A late text packet alone stays closed, but an explicit runtime restart
+    // can still recover the same run under the existing retry guards.
+    adapter.handleGatewayEvent({ event: 'agent', seq: 10, payload: {
+      runId: turn.runId, sessionKey, stream: 'lifecycle', data: { phase: 'start' },
+    } });
+    expect(adapter.activeTurns.has(session.id)).toBe(true);
+    expect(session.status).toBe('running');
+    adapter.cleanupSessionTurn(session.id);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('large-tool confirmation preserves a later compaction recovery', async () => {
+  vi.useFakeTimers();
+  try {
+    let answer = 'Checking the weather.';
+    const largeResult = 'T'.repeat(28_058);
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'weather', timestamp: 1, metadata: {} },
+      { id: 'msg-2', type: 'tool_use', content: 'Using exec', timestamp: 2, metadata: { toolUseId: 'call-1' } },
+      { id: 'msg-3', type: 'tool_result', content: largeResult, timestamp: 3, metadata: { toolUseId: 'call-1' } },
+    ]);
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-confirmation-retry');
+    adapter.gatewayClient = {
+      start: () => {}, stop: () => {},
+      request: async (method: string) => method === 'chat.history' ? { messages: [
+        { role: 'user', content: 'weather' },
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'exec', arguments: {} }] },
+        { role: 'toolResult', toolCallId: 'call-1', content: largeResult },
+        { role: 'assistant', content: answer },
+      ] } : {},
+    };
+    turn.toolUseMessageIdByToolCallId.set('call-1', 'msg-2');
+    turn.toolResultMessageIdByToolCallId.set('call-1', 'msg-3');
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+    adapter.sessionIdByRunId.set(turn.runId, session.id);
+    adapter.rememberSessionKey(session.id, sessionKey);
+    session.status = 'running';
+    const completeSpy = vi.fn();
+    const maintenanceSpy = vi.fn();
+    adapter.on('complete', completeSpy);
+    adapter.on('contextMaintenance', maintenanceSpy);
+    const deliverFinal = (content: string) => adapter.handleChatFinal(session.id, turn, {
+      state: 'final', runId: turn.runId, sessionKey, message: { role: 'assistant', content },
+    });
+    await deliverFinal(answer);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(maintenanceSpy).not.toHaveBeenCalledWith(session.id, true);
+
+    adapter.handleAgentEvent({
+      runId: turn.runId, sessionKey, stream: 'compaction', data: { phase: 'start' },
+    }, 1);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(completeSpy).not.toHaveBeenCalled();
+    adapter.handleAgentEvent({
+      runId: turn.runId, sessionKey, stream: 'compaction',
+      data: { phase: 'end', completed: true, willRetry: true },
+    }, 2);
+    await deliverFinal(answer);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(completeSpy).not.toHaveBeenCalled();
+    expect(session.status).toBe('running');
+    expect(maintenanceSpy).toHaveBeenLastCalledWith(session.id, true);
+
+    answer = 'Final weather answer. '.repeat(40);
+    adapter.processAgentAssistantText({
+      runId: turn.runId, sessionKey, stream: 'assistant', data: { text: answer },
+    });
+    await deliverFinal(answer);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(completeSpy).toHaveBeenCalledExactlyOnceWith(session.id, turn.runId);
+    expect(session.status).toBe('completed');
+    expect(maintenanceSpy).toHaveBeenLastCalledWith(session.id, false);
+    expect(session.messages.some(message => message.type === 'assistant' && message.content.trim() === answer.trim())).toBe(true);
   } finally {
     vi.useRealTimers();
   }
@@ -8851,7 +9025,7 @@ test.each(['chat', 'lifecycle'])('yielded %s completion stays silent while a del
     });
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(session.messages.filter((message) => message.type === 'assistant' && message.content === answer)).toHaveLength(1);
+    expect(session.messages.filter((message) => message.type === 'assistant' && message.content.trim() === answer.trim())).toHaveLength(1);
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
     expect(completeSpy).toHaveBeenCalledExactlyOnceWith(session.id, announceRunId);
     expect(session.status).toBe('completed');
@@ -8996,7 +9170,7 @@ test('a delayed announce retracts only the current user request structured empty
     expect(session.messages.some((message) => message.id === hint?.id)).toBe(false);
     expect(session.messages.some((message) => message.id === 'previous-empty-hint')).toBe(true);
     expect(session.messages.some((message) => message.id === 'other-error')).toBe(true);
-    expect(session.messages.some((message) => message.type === 'assistant' && message.content === answer)).toBe(true);
+    expect(session.messages.some((message) => message.type === 'assistant' && message.content.trim() === answer.trim())).toBe(true);
   } finally {
     vi.useRealTimers();
   }
@@ -9136,7 +9310,7 @@ test('an old yielded final cannot close an announce run that starts during histo
     expect(adapter.activeTurns.has(session.id)).toBe(true);
     expect(session.status).toBe('running');
     expect(completeSpy).not.toHaveBeenCalled();
-    expect(session.messages.some((message) => message.type === 'assistant' && message.content === answer)).toBe(true);
+    expect(session.messages.some((message) => message.type === 'assistant' && message.content.trim() === answer.trim())).toBe(true);
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
 
     adapter.handleGatewayEvent({
@@ -9333,7 +9507,7 @@ test('an earlier request announce cannot retract a later request empty-response 
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(session.messages.some((message) => message.id === hint?.id)).toBe(true);
-    expect(session.messages.some((message) => message.type === 'assistant' && message.content === answer)).toBe(true);
+    expect(session.messages.some((message) => message.type === 'assistant' && message.content.trim() === answer.trim())).toBe(true);
   } finally {
     vi.useRealTimers();
   }
@@ -9421,9 +9595,9 @@ test('memory maintenance fallback does not block a delayed queued run', async ()
     session.status = 'running';
     adapter.reconcileWithHistory = async () => {};
     adapter.on('complete', completeSpy);
-    const turn = createActiveTurn(session.id, sessionKey, 'run-memory');
+    adapter.ensureActiveTurn(session.id, sessionKey, 'run-memory');
+    const turn = adapter.activeTurns.get(session.id)!;
     turn.knownRunIds.add('run-followup');
-    adapter.activeTurns.set(session.id, turn);
 
     adapter.handleAgentEvent({
       runId: 'run-memory',

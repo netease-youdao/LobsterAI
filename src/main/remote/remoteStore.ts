@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'crypto';
 
 import { isConversationArtifactFileName } from '../../shared/artifactPreview/displayPolicy';
+import { parseModelPresetId } from '../../shared/modelPresets/constants';
 import { OWNERSHIP_MANUAL_SOURCE } from '../../shared/ownership/constants';
 import { REMOTE_MESSAGE_BYTES, type RemoteAgentSummary, type RemoteOwner, type RemoteRunStatusValue } from '../../shared/remote/constants';
 import { type DeletionGuard, RemoteDeletion } from '../../shared/remote/deletions';
@@ -775,11 +776,16 @@ export class RemoteStore {
     const owner = this.owner(sessionId);
     return owner && this.agentSummary ? this.agentSummary(sessionId, owner) : null;
   }
+  private sessionPresetColumn: boolean | undefined;
   inputVersion(sessionId: string): string {
     return this.transaction(() => {
-      const row = this.db.prepare('SELECT model_override,thinking_level FROM cowork_sessions WHERE id=?').get(sessionId);
+      this.sessionPresetColumn ??= (this.db.prepare('PRAGMA table_info(cowork_sessions)').all() as Array<{ name: string }>).some(column => column.name === 'model_preset_id');
+      const row = this.db.prepare(`SELECT model_override,thinking_level${this.sessionPresetColumn ? ',model_preset_id' : ''} FROM cowork_sessions WHERE id=?`)
+        .get(sessionId) as { model_override: string; thinking_level: string; model_preset_id?: string | null } | undefined;
       if (!row) return '0';
-      const signature = payloadHash(row);
+      const presetId = parseModelPresetId(row.model_preset_id);
+      // Keep old non-preset signatures stable; only actual preset selection adds identity.
+      const signature = payloadHash({ model_override: row.model_override, thinking_level: row.thinking_level, ...(presetId ? { model_preset_id: presetId } : {}) });
       const previous = this.get<string>(`inputSignature:${sessionId}`);
       let version = this.get<string>(`inputVersion:${sessionId}`) || '0';
       if (previous !== signature) {

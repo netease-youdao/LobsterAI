@@ -6429,6 +6429,8 @@ if (!gotTheLock) {
     return sessionDeletionService;
   };
 
+  // Remote transport must wait for startup recovery, provider setup and config synchronization.
+  let remoteStartupReady = false;
   // Read persisted initialization intent only while initializing, never from a settings/diagnostic read.
   let remoteInitializationIntent: { key: string; enabled: boolean } | null = null;
   let remoteDisplayOwner: RemoteOwner | null = null;
@@ -6468,7 +6470,7 @@ if (!gotTheLock) {
       security,
       createSocket: url => remoteNetworkTransport.socket(url),
       deletion: { service: getSessionDeletionService(), runtime: getCoworkEngineRouter(), reconcileStop: id => remoteSessionCommands!.reconcileSession(id) },
-      input: { models, preparations },
+      input: { models, preparations, refreshSessionModel: sessionId => { remoteSessionCommands!.recordCurrentInputModel(sessionId); } },
       files: {
         cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), access: filePath => captureLibraryFileAccess(filePath),
         recordArtifact: async (candidate, owner, assertCurrent, validateIndexed) => {
@@ -6564,6 +6566,8 @@ if (!gotTheLock) {
     },
   });
   const initializeRemoteBridge = (manual = false): RemoteBridge => {
+    // Early IPC must not start transport or consume the local recovery retry budget.
+    if (!remoteStartupReady) throw new RemoteInitializationError(RemoteInitializationFailure.DependencyUnavailable);
     remoteInitialization.ensure(manual);
     return remoteBridge!;
   };
@@ -6832,7 +6836,7 @@ if (!gotTheLock) {
     try {
       remoteLocalGc ??= new RemoteLocalGc({ store: getCoworkStore().remote,
         cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), inputCacheRoot: path.join(app.getPath('userData'), 'remote-inputs'), owner: getCurrentRemoteOwner,
-        enabled: () => !getCoworkStore().remote.needsSecurityRecovery() });
+        enabled: () => remoteStartupReady && Boolean(remoteBridge) && !getCoworkStore().remote.needsSecurityRecovery() });
       remoteLocalGc.start();
     } catch { console.warn('[RemoteGc] Background cache maintenance unavailable'); }
     try {
@@ -6855,7 +6859,6 @@ if (!gotTheLock) {
       });
       remoteSettingsController.restoreKeepAwake();
     } catch (error) { console.warn('[RemoteSettings] Optional settings initialization failed', error); }
-    try { initializeRemoteBridge(); } catch { /* Classified state and bounded recovery are owned by remoteInitialization. */ }
   };
 
   registerOwnershipHandlers(() => ownershipAssociations);
@@ -9567,6 +9570,7 @@ if (!gotTheLock) {
     patchSession: (sessionId, patch) => remoteSessionCommands!.patchConfiguration(sessionId, patch),
     ownerAccountKey: () => getCurrentMediaAccountScope()?.ownerAccountKey ?? null,
     ensureModelsReady: () => loadAvailableServerModels({ reason: 'chat-model-preset', awaitConfigSync: true }),
+    onSelectionCommitted: sessionId => { remoteSessionCommands!.recordCurrentInputModel(sessionId); },
     isAccountCurrent: () => {
       const generation = authAccountGeneration;
       const scope = getCurrentMediaAccountScope();
@@ -12988,6 +12992,7 @@ if (!gotTheLock) {
             : '';
         }
         getCoworkStore().updateSession(sessionId, sessionUpdates, { touchUpdatedAt: false });
+        remoteSessionCommands!.recordCurrentInputModel(sessionId);
       }
 
       const session = getCoworkStore().getSession(sessionId);
@@ -17141,6 +17146,9 @@ if (!gotTheLock) {
       console.error('[OpenClaw] Startup config sync failed:', startupSync.error);
     }
     profiler.measure('syncOpenClawConfig');
+    // Startup writes can no longer overwrite a remotely accepted task or its model binding.
+    remoteStartupReady = true;
+    try { initializeRemoteBridge(); } catch { /* Classified state and bounded recovery are owned by remoteInitialization. */ }
     void ensureOpenClawRunningForCowork()
       .then(() => {
         // Start cron polling once the gateway is confirmed running.

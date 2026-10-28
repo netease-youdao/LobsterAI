@@ -11,10 +11,12 @@ import { describe, expect, test } from 'vitest';
 
 import { LogReporterStoreKey } from '../shared/analytics/constants';
 import * as OpenClawConstants from '../shared/openclawEngine/constants';
+import { RemoteInitializationFailure, RemoteIpc } from '../shared/remote/constants';
 import * as AccountRecovery from './libs/openclawAccountRecovery';
 import { OPENCLAW_LOOPBACK_STATE_FILE } from './libs/openclawLoopbackState';
 import { ServerRouteContextTracker } from './libs/serverRouteContext';
 import { payloadHash, sameOwner } from './remote/canonical';
+import { RemoteIdentityError } from './remote/installationIdentity';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
 import { RemoteInitializationError, RemoteInitializationRecovery } from './remote/remoteInitialization';
 import { RemotePerformanceStage } from './remote/remotePerformanceLog';
@@ -45,10 +47,13 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
   const stopped = deferred<void>();
   let failFence = false;
   const storeListeners = new Map<string, () => void>();
+  const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
   const errors: unknown[][] = [];
   let isReady = false;
   let failCommandsChange = false;
   let failBridgeChange = false;
+  let remoteGcEnabled: (() => boolean) | undefined;
+  let synchronizationAttempts = 0;
   const fakePath = path.join(os.tmpdir(), 'lobsterai-main-startup-fixture');
   const noop = (): undefined => undefined;
   const inert: any = new Proxy(function () {}, {
@@ -82,7 +87,7 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     },
   };
   const cowork = moduleOf({
-    remote: moduleOf({ initializeSynchronization: () => { if (failSynchronization) throw new Error('optional schema unavailable'); } }),
+    remote: moduleOf({ initializeSynchronization: () => { synchronizationAttempts++; if (failSynchronization) throw new Error('optional schema unavailable'); } }),
     autoDeleteNonPersonalMemories: () => 0,
     onSessionProjectionChanges: () => noop,
   });
@@ -109,9 +114,11 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     os: moduleOf({ default: { homedir: () => fakePath, hostname: () => 'fixture-host' } }),
     path: moduleOf({ default: path }),
     url: moduleOf({ fileURLToPath, pathToFileURL: inert }),
-    electron: moduleOf({ app, BrowserWindow: moduleOf({ getAllWindows: () => [] }) }),
+    electron: moduleOf({ app, BrowserWindow: moduleOf({ getAllWindows: () => [] }),
+      ipcMain: moduleOf({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => ipcHandlers.set(channel, handler) }) }),
     '../shared/analytics/constants': moduleOf({ LogReporterStoreKey }),
     '../shared/openclawEngine/constants': moduleOf(OpenClawConstants),
+    '../shared/remote/constants': moduleOf({ RemoteInitializationFailure, RemoteIpc }),
     './libs/openclawAccountRecovery': moduleOf(AccountRecovery),
     './libs/serverRouteContext': moduleOf({ ServerRouteContextTracker: class extends ServerRouteContextTracker {
       constructor() { super(); routeTrackers.push(this); }
@@ -135,6 +142,9 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
     './libs/openclawEngineManager': moduleOf({ OpenClawEngineManager: function () { return moduleOf({ getStatus: () => ({ phase: OpenClawConstants.OpenClawEnginePhase.Ready }), getStateDir: () => fakePath, stopGateway: () => { events.push('gateway:stop'); return stopped.promise; } }); } }),
     './libs/openclawLoopbackState': moduleOf({ OPENCLAW_LOOPBACK_STATE_FILE }),
     './remote/sessionCommandService': moduleOf({ SessionCommandService: function () { events.push('remote:construct'); return commands; } }),
+    './remote/remoteLocalGc': moduleOf({ RemoteLocalGc: function (options: { enabled(): boolean }) {
+      remoteGcEnabled = options.enabled; return { start: noop };
+    } }),
     './remote/remoteBridge': moduleOf({ RemoteBridge: function () { events.push('remote:bridge'); return bridge; } }),
     './remote/remoteSettingsController': moduleOf({ RemoteSettingsController: function () {
       return moduleOf({ restoreKeepAwake: () => { events.push('power:restore'); } });
@@ -155,6 +165,9 @@ function startupFixture(failSynchronization = false, savedFence?: unknown, coreD
   });
   return {
     events, errors, values,
+    remoteGcEnabled: () => { expect(remoteGcEnabled).toBeDefined(); return remoteGcEnabled!(); },
+    synchronizationAttempts: () => synchronizationAttempts,
+    invoke: (channel: string, ...args: unknown[]) => ipcHandlers.get(channel)!({}, ...args),
     routeEpoch: () => routeTrackers[0]?.peekEpoch() ?? 0,
     confirmStop: async () => { stopped.resolve(); await settle(); },
     failFence: () => { failFence = true; },
@@ -172,19 +185,18 @@ async function settle() {
 }
 
 describe('main remote-control startup lifecycle', () => {
-  test.each(['commands', 'bridge'] as const)('still restores power when the %s account callback fails', async failingCallback => {
+  test('still restores power when the command account callback fails before remote startup', async () => {
     const fixture = startupFixture();
     fixture.evaluate();
     await fixture.appReady();
     await fixture.storeReady();
-    if (failingCallback === 'commands') fixture.failCommandsChange();
-    else fixture.failBridgeChange();
+    fixture.failCommandsChange();
     const before = fixture.events.length;
     expect(() => fixture.notifyStoreChange('auth_tokens')).not.toThrow();
-    expect(fixture.events.slice(before)).toEqual(['remote:accountChanged', 'power:restore']);
+    expect(fixture.events.slice(before)).toEqual(['power:restore']);
   });
 
-  test('restores power settings after refreshing the remote account on authentication changes', async () => {
+  test('restores power settings on authentication changes before remote startup', async () => {
     const fixture = startupFixture();
     fixture.evaluate();
     await fixture.appReady();
@@ -192,17 +204,30 @@ describe('main remote-control startup lifecycle', () => {
     for (const key of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context']) {
       const before = fixture.events.length;
       fixture.notifyStoreChange(key);
-      expect(fixture.events.slice(before)).toEqual(['remote:accountChanged', 'power:restore']);
+      expect(fixture.events.slice(before)).toEqual(['power:restore']);
     }
   });
 
-  test('continues desktop startup and keeps command handlers when optional synchronization initialization fails', async () => {
+  test('defers optional synchronization initialization while retaining command handlers', async () => {
     const fixture = startupFixture(true);
     fixture.evaluate(); await fixture.appReady(); await fixture.storeReady();
+    expect(fixture.synchronizationAttempts()).toBe(0);
+    expect(fixture.remoteGcEnabled()).toBe(false);
     expect(fixture.events).toContain('remote:configure');
     expect(fixture.events).not.toContain('remote:bridge');
     expect(fixture.errors).toHaveLength(1);
     expect(String(fixture.errors[0].at(-1))).toContain('fixture:startup-complete');
+  });
+
+  test('early remote IPC cannot start transport or make read-only state initialize it', async () => {
+    const fixture = startupFixture();
+    fixture.evaluate(); await fixture.appReady(); await fixture.storeReady();
+    expect(() => fixture.invoke(RemoteIpc.Decide, 'access-request', 'approve')).toThrow(RemoteInitializationFailure.DependencyUnavailable);
+    expect(() => fixture.invoke(RemoteIpc.Decide, 'access-request', 'deny')).toThrow(RemoteInitializationFailure.DependencyUnavailable);
+    expect(() => fixture.invoke(RemoteIpc.State)).not.toThrow();
+    expect(fixture.remoteGcEnabled()).toBe(false);
+    expect(fixture.events).not.toContain('remote:bridge');
+    expect(fixture.events).not.toContain('remote:start');
   });
 
   test('does not access the database or construct remote services before app and store readiness', async () => {
@@ -218,13 +243,13 @@ describe('main remote-control startup lifecycle', () => {
     expect(fixture.routeEpoch()).toBeGreaterThan(0);
   });
 
-  test('initializes ownership and configures command handlers before starting the bridge', async () => {
+  test('initializes ownership and command handlers without starting transport during startup recovery', async () => {
     const fixture = startupFixture();
     fixture.evaluate();
     await fixture.appReady();
     await fixture.storeReady();
     const remoteEvents = fixture.events.filter(event => event.startsWith('remote:'));
-    expect(remoteEvents).toEqual(['remote:owner', 'remote:construct', 'remote:configure', 'remote:bridge', 'remote:start']);
+    expect(remoteEvents).toEqual(['remote:owner', 'remote:construct', 'remote:configure']);
     expect(fixture.events.indexOf('attribution:ready')).toBeLessThan(fixture.events.indexOf('remote:owner'));
     expect(fixture.events.filter(event => event.startsWith('store:listen:'))).toEqual([
       'store:listen:auth_tokens', `store:listen:${LogReporterStoreKey.AuthUser}`, 'store:listen:enterprise_account_context',
@@ -278,4 +303,129 @@ test('real core migration failure displays recovery without initializing command
     expect(db.prepare("SELECT type FROM sqlite_master WHERE name='remote_sync'").get()).toEqual({ type: 'view' });
     expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name='local_execution_dispatch'").get()).toBeUndefined();
   } finally { db.close(); }
+});
+
+
+// Run the real startup prerequisite statements and the shared initializer. The
+// surrounding subsystems are already isolated by the full-entrypoint fixture
+// above; these deferred dependencies expose the two asynchronous readiness gaps.
+function startupReadinessFixture(failIdentity = false) {
+  const ast = ts.createSourceFile(mainPath, source, ts.ScriptTarget.Latest, true);
+  const declarations = new Map<string, ts.VariableDeclaration>();
+  const statements = new Map<string, ts.VariableStatement>();
+  let gcEnabled: ts.Expression | undefined;
+  const collect = (node: ts.Node): void => {
+    if (ts.isNewExpression(node) && node.expression.getText(ast) === 'RemoteLocalGc') {
+      const options = node.arguments?.[0] as ts.ObjectLiteralExpression;
+      const property = options.properties.find(item => item.name?.getText(ast) === 'enabled') as ts.PropertyAssignment;
+      gcEnabled = property.initializer;
+    }
+    if (ts.isVariableStatement(node)) {
+      for (const declaration of node.declarationList.declarations) {
+        declarations.set(declaration.name.getText(ast), declaration);
+        statements.set(declaration.name.getText(ast), node);
+      }
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(ast);
+  const initApp = declarations.get('initApp')!.initializer as ts.ArrowFunction;
+  const startup = initApp.body as ts.Block;
+  const names = new Set(['resetCount', 'defaultAgentModelRef', 'backfilledAgentModels', 'qualifiedAgentModels', 'startupSync']);
+  const calls = new Set(['initializeSessionExecutionCore', 'initializeRemoteControl', 'setStoreGetter', 'setAuthTokensGetter', 'setServerBaseUrlGetter']);
+  const selected = startup.statements.filter(node => {
+    if (ts.isVariableStatement(node)) return node.declarationList.declarations.some(declaration => names.has(declaration.name.getText(ast)));
+    if (ts.isExpressionStatement(node)) {
+      if (ts.isCallExpression(node.expression)) return calls.has(node.expression.expression.getText(ast));
+      return ts.isBinaryExpression(node.expression) && node.expression.left.getText(ast) === 'remoteStartupReady';
+    }
+    if (ts.isIfStatement(node)) return node.expression.getText(ast) === 'getAuthTokens()';
+    return ts.isTryStatement(node) && node.tryBlock.getText(ast).includes('initializeRemoteBridge()');
+  });
+  const warmup = deferred<{ subscriptionStatus: null; mediaGenerationEntitled: false }>();
+  const configuration = deferred<{ success: boolean }>();
+  const events: string[] = [];
+  let attempts = 0;
+  const recovery = new RemoteInitializationRecovery({
+    initialize: () => {
+      attempts++;
+      if (failIdentity) throw new RemoteIdentityError(RemoteInitializationFailure.IdentityUnreadable);
+      context.remoteBridge = {}; events.push('remote:start');
+    },
+    canRetry: () => true, changed: () => {}, report: () => {},
+  });
+  const context = vm.createContext({
+    remoteInitialization: recovery, remoteBridge: null, RemoteInitializationError, RemoteInitializationFailure,
+    initializeSessionExecutionCore: () => events.push('core:ready'),
+    initializeRemoteControl: () => events.push('settings:ready'),
+    getCoworkStore: () => ({
+      remote: { needsSecurityRecovery: () => false },
+      resetRunningSessions: () => { events.push('sessions:recovered'); return 0; },
+      backfillEmptyAgentModels: () => { events.push('agents:backfilled'); return 0; },
+    }),
+    setStoreGetter: () => events.push('providers:store'), setAuthTokensGetter: () => events.push('providers:auth'),
+    setServerBaseUrlGetter: () => events.push('providers:route'),
+    getAuthTokens: () => ({ accessToken: 'fixture-token' }), getServerApiBaseUrl: () => 'https://fixture.invalid',
+    runStartupCacheWarmup: () => { events.push('models:loading'); return warmup.promise; },
+    resolveDefaultAgentModelRef: () => 'fixture/model', buildAvailableOpenClawProviders: () => ({}),
+    getAgentManager: () => ({ listAgents: () => [] }),
+    migrateAgentModelRefs: () => { events.push('agents:migrated'); return 0; },
+    syncOpenClawConfig: () => { events.push('config:syncing'); return configuration.promise; },
+    resolveOpenClawStartupConfigReady: () => events.push('config:attempted'),
+    profiler: { mark: () => {}, measure: () => {} }, app: { getVersion: () => 'fixture' },
+    fetchWithAuth: () => {}, appendKeyfromQuery: () => {}, cachedSubscriptionStatus: null,
+    cachedMediaGenerationEntitled: false, t: (key: string) => key,
+  });
+  const compiled = ts.transpileModule(`
+${statements.get('remoteStartupReady')?.getText(ast) ?? ''}
+${statements.get('initializeRemoteBridge')!.getText(ast)}
+globalThis.initialize = initializeRemoteBridge;
+globalThis.gcEnabled = ${gcEnabled!.getText(ast)};
+globalThis.startup = async () => { ${selected.map(node => node.getText(ast)).join('\n')} };
+`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  vm.runInContext(compiled, context);
+  const harness = context as unknown as { initialize(manual?: boolean): unknown; gcEnabled(): boolean; startup(): Promise<void> };
+  return { events, harness, attempts: () => attempts, recovery,
+    finishWarmup: () => warmup.resolve({ subscriptionStatus: null, mediaGenerationEntitled: false }),
+    finishConfiguration: (success = true) => configuration.resolve({ success }),
+  };
+}
+
+test.each([true, false])('remote startup waits for model and config initialization (config success: %s)', async success => {
+  const fixture = startupReadinessFixture();
+  try {
+    const startup = fixture.harness.startup();
+    expect(fixture.events).toEqual(['core:ready', 'settings:ready', 'sessions:recovered',
+      'providers:store', 'providers:auth', 'providers:route', 'models:loading']);
+    expect(() => fixture.harness.initialize()).toThrow(RemoteInitializationFailure.DependencyUnavailable);
+    expect(() => fixture.harness.initialize(true)).toThrow(RemoteInitializationFailure.DependencyUnavailable);
+    expect(fixture.recovery.failure).toBeUndefined();
+    expect(fixture.attempts()).toBe(0);
+    expect(fixture.harness.gcEnabled()).toBe(false);
+    fixture.finishWarmup(); await settle();
+    expect(fixture.events.slice(-3)).toEqual(['agents:backfilled', 'agents:migrated', 'config:syncing']);
+    expect(() => fixture.harness.initialize()).toThrow(RemoteInitializationFailure.DependencyUnavailable);
+    expect(fixture.attempts()).toBe(0);
+    fixture.finishConfiguration(success); await startup;
+    expect(fixture.events.slice(-2)).toEqual(['config:attempted', 'remote:start']);
+    expect(fixture.harness.gcEnabled()).toBe(true);
+    expect(fixture.attempts()).toBe(1);
+    expect(() => fixture.harness.initialize()).not.toThrow();
+    expect(fixture.attempts()).toBe(1);
+  } finally { fixture.recovery.dispose(); }
+});
+
+
+test('startup readiness does not enable remote GC when original identity initialization fails', async () => {
+  const fixture = startupReadinessFixture(true);
+  try {
+    const startup = fixture.harness.startup();
+    expect(fixture.harness.gcEnabled()).toBe(false);
+    fixture.finishWarmup(); await settle();
+    fixture.finishConfiguration(); await startup;
+    expect(fixture.attempts()).toBe(1);
+    expect(fixture.recovery.failure).toBe(RemoteInitializationFailure.IdentityUnreadable);
+    expect(fixture.events).not.toContain('remote:start');
+    expect(fixture.harness.gcEnabled()).toBe(false);
+  } finally { fixture.recovery.dispose(); }
 });

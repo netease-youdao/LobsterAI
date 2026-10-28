@@ -494,9 +494,10 @@ it.each([undefined, ModelPresetId.Balanced, ModelPresetId.Ultimate])(
     const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
     // The server freezes this published identity for keep_session and rejects a different model.
     expect(prepared.resolvedInput.model).toEqual({ modelRef: summary!.modelRef, version: summary!.version });
-    expect(prepared.resolvedInput.options.thinkingLevel).toBe(summary!.thinkingLevel);
+    expect(prepared.resolvedInput.options.thinkingLevel ?? null).toBe(summary!.thinkingLevel);
     const published = f.deps.models.resolve(owner, 'pc', summary!.modelRef as string, summary!.version as string);
-    expect(published.item.thinking.options).toContain(summary!.thinkingLevel);
+    if (summary!.thinkingLevel) expect(published.item.thinking.options).toContain(summary!.thinkingLevel);
+    expect(published.local.runtimeRef).toBe(presetId ? `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}` : 'provider/model');
     const options = await f.service.executionOptions(prepared, () => undefined);
     expect(options).toMatchObject({ modelOverride: 'provider/model', thinkingLevel: 'low' });
     expect(f.deps.store.getSession('local', 0)?.modelPresetId).toBe(presetId);

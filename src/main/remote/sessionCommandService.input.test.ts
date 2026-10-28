@@ -53,7 +53,7 @@ function fixture(create = false, initialTargetId: string | null = null, initialM
   const preparations = { read: () => manifest, validate: vi.fn(), bind: vi.fn(), executionOptions: async () => ({ prompt: 'hello', modelOverride: 'provider/new', thinkingLevel: 'high', imageAttachments: [] }) } as unknown as InputPreparationService;
   const resolveModel = vi.fn(() => {
     if (targetId !== initialTargetId) throw new Error('Old model reference is unavailable on the current target');
-    return { item: { modelRef: 'new-model', version: '1', source: 'custom', displayName: 'Chat', providerLabel: 'Custom' } };
+    return { item: { modelRef: 'new-model', version: '1', source: 'custom', displayName: 'Chat', providerLabel: 'Custom', thinking: { options: ['low', 'high'], default: 'low' } } };
   });
   const resolveRuntimeModel = vi.fn(() => resolveModel());
   const models = { resolve: resolveModel, resolveRuntime: resolveRuntimeModel } as unknown as RemoteModelCatalog;
@@ -228,6 +228,7 @@ it('publishes the confirmed explicit model while the caller clears the previous 
   await f.service.patchConfiguration('local', { model: 'provider/new', thinkingLevel: 'high' });
   // The desktop IPC caller clears the old preset after patchConfiguration returns.
   f.store.updateSession('local', { modelPresetId: null });
+  f.service.recordCurrentInputModel('local');
   expect(f.resolveRuntimeModel).toHaveBeenLastCalledWith(owner, 'pc', 'provider/new');
   expect(f.remote.get('inputModel:local')).toMatchObject({ modelRef: 'new-model', thinkingLevel: 'high' });
 });

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 
+import { RemoteDeletion } from '../../shared/remote/deletions';
 import { payloadHash, sameOwner } from './canonical';
 import type { AvailabilityContext } from './remoteAvailabilityPublisher';
 import type { AvailabilityRequest, AvailabilitySession } from './remoteAvailabilityStore';
@@ -20,6 +21,36 @@ const digits = (value: unknown): value is string => typeof value === 'string' &&
 const binding = (context: AvailabilityContext, state: AvailabilitySession): AvailabilityDeletionBinding => ({
   scope: context.scope, sessionId: state.sessionId, deviceId: context.deviceId, writerGeneration: state.writerGeneration, controlEpoch: state.controlEpoch,
 });
+
+/** Mirror only the server-issued identity; legacy sequence/ACK and archived migration evidence remain immutable. */
+export function mirrorAvailabilityDeletionIdentity(store: RemoteStore, context: AvailabilityContext, state: AvailabilitySession): void {
+  store.db.transaction(() => {
+    const sync = store.sync(state.localId);
+    if (!context.controlDeletionSupported || !context.environment || !context.targetId || context.environment !== context.targetId
+      || state.scope !== `${context.targetId}:${context.owner.userId}:${context.owner.scopeKey}:${context.deviceId}`
+      || state.scope !== context.scope || state.phase === 'activating'
+      || typeof state.streamEpoch !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(state.streamEpoch)
+      || !sync || sync.session_id !== state.sessionId || sync.device_id !== context.deviceId
+      || !sync.sync_environment || !samePersistedRemoteEnvironment(store, context, sync.sync_environment, context.environment)
+      || !sameOwner(store.owner(state.localId), context.owner))
+      throw new Error('REMOTE_DELETION_IDENTITY_UNRESOLVED');
+    if (sync.stream_epoch !== null) {
+      if (sync.stream_epoch !== state.streamEpoch) throw new Error('REMOTE_DELETION_IDENTITY_CONFLICT');
+      return; // An existing identity requires no mutation or new execution admission.
+    }
+    if (sync.migration_frozen || store.needsSecurityRecovery() || !store.areControlsAdmitted() || !store.isTaskAdmitted(state.localId)
+      || store.isSyncClosed(state.localId) || store.get(`${AvailabilityDeletion.Prefix}${state.localId}`)
+      || store.get(`${RemoteDeletion.Fence}${state.localId}`)
+      || !store.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(state.localId))
+      throw new Error('REMOTE_DELETION_IDENTITY_UNRESOLVED');
+    const previousBinding = store.get(`${AvailabilityDeletion.Binding}${state.localId}`);
+    if (previousBinding && payloadHash(previousBinding) !== payloadHash(binding(context, state)))
+      throw new Error('REMOTE_DELETION_IDENTITY_CONFLICT');
+    store.db.prepare('UPDATE remote_sync SET stream_epoch=? WHERE local_id=? AND stream_epoch IS NULL').run(state.streamEpoch, state.localId);
+    // A crash must never expose a new epoch without its original control deletion proof.
+    rememberAvailabilityDeletionBinding(store, context, state);
+  })();
+}
 
 /** Optional publication mirrors identity while the original session exists; deletion never opens a sidecar. */
 export function rememberAvailabilityDeletionBinding(store: RemoteStore, context: AvailabilityContext, state: AvailabilitySession): void {
