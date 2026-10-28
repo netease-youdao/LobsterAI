@@ -503,3 +503,21 @@ describe('task recovery telemetry commits', () => {
       .toEqual([SyncTelemetry.Outcome.Started, SyncTelemetry.Outcome.Blocked]);
   });
 });
+
+it('quit resumes only healthy local deferrals and preserves server backoff and account scope', () => {
+  const f = fixture();
+  for (const id of ['local', 'failed', 'isolated', 'server']) f.add(id);
+  f.state.defer(context, 'local', 5000);
+  f.state.fail(context, 'failed', transport);
+  f.state.fail(context, 'isolated', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'invalid' });
+  f.state.fail(context, 'server', { ...transport, retryAfterMs: 60000 });
+  f.state.progress(context, 'server');
+  const failed = f.state.get(context, 'failed'), isolated = f.state.get(context, 'isolated'), server = f.state.get(context, 'server');
+  f.state.resumeLocalDeferral({ ...context, owner: { ...context.owner, userId: 'another' } }, 'local');
+  expect(f.state.eligible(context, 'local')).toBe(false);
+  for (const id of ['local', 'failed', 'isolated', 'server']) f.state.resumeLocalDeferral(context, id);
+  expect(f.state.eligible(context, 'local')).toBe(true);
+  expect(f.state.get(context, 'failed')).toEqual(failed);
+  expect(f.state.get(context, 'isolated')).toEqual(isolated);
+  expect(f.state.get(context, 'server')).toEqual(server);
+});

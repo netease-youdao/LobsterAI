@@ -191,10 +191,10 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     return this.runtime.getForkCompactionSummary(sessionId, beforeCreatedAt);
   }
 
-  async cancelSessionConfirmed(sessionId: string): Promise<boolean> {
+  async cancelSessionConfirmed(sessionId: string, timeoutMs?: number): Promise<boolean> {
     this.assertSessionAccess(sessionId);
     if (!this.runtime.cancelSessionConfirmed) return false;
-    return this.runtime.cancelSessionConfirmed(sessionId);
+    return this.runtime.cancelSessionConfirmed(sessionId, timeoutMs);
   }
 
   async respondToPermissionConfirmed(requestId: string, result: PermissionResult, options?: ApprovalDecisionOptions): Promise<ApprovalDecisionOutcome> {

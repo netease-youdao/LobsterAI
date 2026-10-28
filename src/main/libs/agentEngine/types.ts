@@ -49,7 +49,10 @@ export interface PermissionRequest {
 
 export const CoworkRuntimeDiagnosticEvent = { ExecutionAccepted: 'executionAccepted' } as const;
 
+export const CoworkRuntimeLifecycleEvent = { GatewayReady: 'gatewayReady' } as const;
+
 export interface CoworkRuntimeEvents {
+  [CoworkRuntimeLifecycleEvent.GatewayReady]: () => void;
   [CoworkRuntimeDiagnosticEvent.ExecutionAccepted]: (sessionId: string, gatewayRunId: string) => void;
   message: (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => void;
@@ -190,7 +193,7 @@ export interface CoworkRuntime {
   compactContext?(sessionId: string): Promise<{ compacted: boolean; reason?: string; usage?: CoworkContextUsage | null }>;
   getForkCompactionSummary?(sessionId: string, beforeCreatedAt?: number): Promise<CoworkForkCompactionSummary | null>;
   stopSession(sessionId: string): void;
-  cancelSessionConfirmed?(sessionId: string): Promise<boolean>;
+  cancelSessionConfirmed?(sessionId: string, timeoutMs?: number): Promise<boolean>;
   respondToPermissionConfirmed?(requestId: string, result: PermissionResult, options?: ApprovalDecisionOptions): Promise<ApprovalDecisionOutcome>;
   getPermissionState?(requestId: string): ApprovalState | null;
   listPendingPermissions?(): Array<{ sessionId: string; request: PermissionRequest }>;

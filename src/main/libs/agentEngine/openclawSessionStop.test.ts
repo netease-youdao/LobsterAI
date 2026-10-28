@@ -82,3 +82,20 @@ describe('confirmed OpenClaw session stop', () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 });
+
+
+test('quit abort and verification share the same deadline', async () => {
+  vi.useFakeTimers();
+  try {
+    const client = gateway();
+    client.request.mockImplementation(async method => {
+      if (method === OpenClawGatewayMethod.SessionsAbort) { await new Promise(resolve => setTimeout(resolve, 2500)); return { ok: true }; }
+      return { sessions: [idle] };
+    });
+    const stopping = confirmOpenClawSessionStopped(client, sessionKey, () => true, 3000);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(await stopping).toBe(true);
+    expect(client.request.mock.calls[0][2]).toEqual({ timeoutMs: 3000 });
+    expect(client.request.mock.calls[1][2]).toEqual({ timeoutMs: 500 });
+  } finally { vi.useRealTimers(); }
+});

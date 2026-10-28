@@ -24,6 +24,7 @@ import type { InboxEntry, RemoteCommand } from './remoteBridge';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import { RemoteQuestionError } from './remoteQuestionService';
+import { RemoteRunRecovery } from './remoteRunRecovery';
 import { remoteDiagnosticLog } from './remoteSyncLog';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
@@ -65,6 +66,7 @@ interface InputFence {
 
 /** All local/mobile submissions pass this account fence and per-session control lane. */
 export class SessionCommandService {
+  readonly recovery: RemoteRunRecovery;
   private readonly submitting = new Set<string>();
   private readonly telemetryAcceptedRuns = new Set<string>();
   private readonly configurationLane = new Map<string, string>();
@@ -281,7 +283,12 @@ export class SessionCommandService {
   private startHandler: ((options: any) => Promise<any>) | null = null;
   private continueHandler: ((options: any) => Promise<any>) | null = null;
   constructor(private readonly store: CoworkStore, private readonly runtime: CoworkRuntime, private readonly getOwner: () => RemoteOwner | null,
-    private readonly ownershipOptions: { gate?: OwnershipOperationGate; getGeneration?: () => number | string; onRecovered?: (sessionId: string) => void; onInputConfigurationChanged?: (sessionId: string) => void } = {}) {
+    private readonly ownershipOptions: { gate?: OwnershipOperationGate; getGeneration?: () => number | string; onRecovered?: (sessionId: string) => void; onInputConfigurationChanged?: (sessionId: string) => void; canRecover?: () => boolean; recoveryTarget?: () => string } = {}) {
+    this.recovery = new RemoteRunRecovery(store, runtime, {
+      owner: getOwner, generation: () => ownershipOptions.getGeneration?.(), targetId: () => ownershipOptions.recoveryTarget?.() ?? null,
+      canRecover: () => ownershipOptions.canRecover?.() ?? false,
+      reconcile: id => this.reconcileSession(id), changed: ownershipOptions.onRecovered,
+    });
     runtime.on('sessionStatus', (id, status) => this.observeControl(id, () => {
       if (status !== 'running' || !store.remote.db.prepare('SELECT 1 FROM cowork_sessions WHERE id=?').get(id)) return;
       // Anonymous tasks also need per-run approval identity; ownership still controls upload.
@@ -556,8 +563,7 @@ export class SessionCommandService {
         this.store.remote.updateRun(localId, 'cancelling');
         this.store.remote.afterCommit(() => telemetry.emit(RemoteTelemetryEvent.ActionDecided, { phase: 'decided', persistOutcome: 'committed' }));
         telemetry.emit(RemoteTelemetryEvent.ActionDispatched, { phase: 'attempted' });
-        const confirmed = await this.runtime.cancelSessionConfirmed(localId);
-        if (this.store.remote.run(localId)?.runId === entry.runId) this.store.remote.updateRun(localId, confirmed ? 'cancelled' : 'reconciling');
+        const confirmed = await this.recovery.requestStop(localId);
         telemetry.emit(RemoteTelemetryEvent.ActionReconciled, { phase: 'reconciled', outcome: confirmed ? 'confirmed' : 'unknown' });
         return { success: true };
       }

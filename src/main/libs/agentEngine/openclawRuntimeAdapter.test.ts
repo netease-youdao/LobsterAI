@@ -5,6 +5,7 @@ import path from 'node:path';
 import { expect, test, vi } from 'vitest';
 
 import { MediaGenerationTool } from '../../mediaGenerationPolicy';
+import { CoworkRuntimeLifecycleEvent } from './types';
 
 vi.mock('electron', () => ({
   app: {
@@ -12368,4 +12369,68 @@ test('account transition immediately cancels all old task callers waiting outsid
   await Promise.resolve();
   expect(h.clients).toHaveLength(0);
   expect(h.ensureGatewayStarted).not.toHaveBeenCalled();
+});
+
+
+test('quit fences new Gateway access but retains the live client for recovered stop confirmation', async () => {
+  const f = createRecoveredCancellationFixture(); const client = f.adapter.gatewayClient;
+  f.adapter.beginShutdown();
+  expect(f.adapter.gatewayClient).toBe(client);
+  await expect(f.adapter.querySessionRecovery(f.session.id, f.binding.runId)).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError);
+  expect(await f.adapter.cancelSessionConfirmed(f.session.id, 3000)).toBe(true);
+  expect(f.termination).toHaveBeenCalledWith(f.session.id, f.binding.runId, RemoteRunStatus.Cancelled);
+  expect(f.adapter.gatewayReconnectSuppressed).toBe(true);
+});
+
+test('quit cancels a preparing turn and prevents its delayed model ACK from dispatching a prompt', async () => {
+  const { adapter, session, requests, firstModelPatchStarted, releaseFirstModelPatch } = createRunTurnAdapter({ holdFirstModelPatch: true });
+  const turn = adapter.startSession(session.id, 'quit during preparation');
+  const cancelled = expect(turn).rejects.toBeInstanceOf(OpenClawAccountTransitionCancelledError);
+  await firstModelPatchStarted;
+  expect(adapter.beginShutdown()).toContain(session.id);
+  adapter.stopAllSessions(); await cancelled;
+  releaseFirstModelPatch(); await Promise.resolve(); await Promise.resolve();
+  expect(requests.filter(request => request.method === OpenClawGatewayMethod.ChatSend)).toHaveLength(0);
+  expect(session.status).toBe('idle');
+});
+
+test('both ordinary handshake and account recovery activation notify automatic run recovery', async () => {
+  const h = createAccountRecoveryAdapter(); const ready = vi.fn();
+  h.adapter.on(CoworkRuntimeLifecycleEvent.GatewayReady, ready);
+  await h.adapter.ensureReady(); expect(ready).toHaveBeenCalledTimes(1);
+  const token = h.adapter.prepareForAccountTransition();
+  await h.adapter.confirmAccountGatewayRecovery(token, () => true);
+  expect(ready).toHaveBeenCalledTimes(1);
+  h.adapter.finishAccountGatewayRecovery(token);
+  expect(ready).toHaveBeenCalledTimes(2);
+  h.adapter.disconnectGatewayClient();
+});
+
+
+test('a late recovery snapshot cannot restore a running observation after quit begins', () => {
+  const f = createRecoveredCancellationFixture();
+  f.adapter.beginShutdown();
+  expect(f.adapter.restoreSessionObservation(f.session.id, f.binding.remoteRunId, {
+    runId: f.binding.runId, sessionKey: f.sessionKey, gatewayBootId: 'current-boot', status: 'running', hasActiveRun: true,
+  })).toBe(false);
+  expect(f.adapter.activeTurns.size).toBe(0);
+});
+
+
+test('quit retains existing queued steer, goal continuation and permission cleanup', () => {
+  const f = createRecoveredCancellationFixture();
+  const turn = createActiveTurn(f.session.id, f.sessionKey, f.binding.runId);
+  turn.steerRunIds = new Set(['queued-steer']);
+  f.adapter.activeTurns.set(f.session.id, turn);
+  f.adapter.pendingGoalContinuations.set(f.session.id, { prompt: 'queued continuation' });
+  const permissions = vi.spyOn(f.adapter.approvalController, 'clearBySession');
+  const questions = vi.spyOn(f.adapter.questionController, 'cancelBySession');
+  f.adapter.beginShutdown(); f.adapter.stopAllSessions();
+  expect(f.request).toHaveBeenCalledWith(OpenClawGatewayMethod.ChatAbort, { sessionKey: f.sessionKey, runId: 'queued-steer' });
+  expect(f.request).toHaveBeenCalledWith(OpenClawGatewayMethod.ChatAbort, { sessionKey: f.sessionKey, runId: f.binding.runId });
+  expect(f.adapter.pendingGoalContinuations.has(f.session.id)).toBe(false);
+  expect(f.adapter.activeTurns.has(f.session.id)).toBe(false);
+  expect(permissions).toHaveBeenCalledWith(f.session.id);
+  expect(questions).toHaveBeenCalledWith(f.session.id);
+  expect(f.session.status).toBe('idle');
 });

@@ -256,7 +256,7 @@ import type {
   PermissionRequest,
   PermissionResult,
 } from './types';
-import { CoworkRuntimeDiagnosticEvent } from './types';
+import { CoworkRuntimeDiagnosticEvent, CoworkRuntimeLifecycleEvent } from './types';
 import { removeWorkspaceDeliveredInstructions } from './workspaceDeliveredInstructions';
 
 const OPENCLAW_BTW_SESSION_KEY_MAX_CHARS = 4_096;
@@ -2753,6 +2753,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   /** Set to true before intentionally stopping the client (e.g. version upgrade) to suppress auto-reconnect. */
   private gatewayStoppingIntentionally = false;
   private gatewayReconnectSuppressed = false;
+  private shuttingDown = false;
   private static readonly GATEWAY_RECONNECT_MAX_ATTEMPTS = 10;
   private static readonly GATEWAY_RECONNECT_DELAYS = [2_000, 5_000, 10_000, 15_000, 30_000]; // ms
 
@@ -4535,12 +4536,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
   }
 
-  /**
-   * Explicitly disconnect the gateway WebSocket client.
-   * Called before the OpenClaw gateway process is restarted so that the old
-   * client's async `onClose` handler cannot interfere with a subsequently
-   * created client.
-   */
+  /** Fence new work while retaining the client for stop confirmation. */
+  beginShutdown(): string[] {
+    this.shuttingDown = true;
+    this.gatewayReconnectSuppressed = true;
+    this.cancelGatewayReconnect();
+    this.stopChannelPolling();
+    this.cancelGatewayClientInit?.();
+    return [...new Set([...this.activeTurns.keys(), ...this.yieldedSessions.keys(), ...this.pendingTurns.keys(),
+      ...this.pendingGoalContinuations.keys(), ...Array.from(this.accountTurnOperations, operation => operation.sessionId)])];
+  }
+
+  /** Disconnect before process restart so old onClose callbacks cannot replace the new client. */
   disconnectGatewayClient(): void {
     console.log('[ChannelSync] disconnectGatewayClient: explicitly tearing down gateway client');
     this.gatewayReconnectSuppressed = true;
@@ -4602,12 +4609,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private assertAccountOperation(epoch: number): void {
-    if (epoch !== this.accountRecoveryEpoch || this.accountRecoveryActive) throw new OpenClawAccountTransitionCancelledError();
+    if (this.shuttingDown || epoch !== this.accountRecoveryEpoch || this.accountRecoveryActive) throw new OpenClawAccountTransitionCancelledError();
   }
 
   private assertAccountConnection(epoch: number, configurationOnly: boolean): void {
     const permit = this.accountRecoveryPermit;
-    if (epoch !== this.accountRecoveryEpoch || this.accountRecoveryActive
+    if (this.shuttingDown || epoch !== this.accountRecoveryEpoch || this.accountRecoveryActive
       && (!configurationOnly || permit?.token !== epoch || !permit.current())) {
       throw new OpenClawAccountTransitionCancelledError();
     }
@@ -4619,7 +4626,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * have been delivered via WebSocket events.
    */
   startChannelPolling(): void {
-    if (this.accountRecoveryActive) return;
+    if (this.shuttingDown || this.accountRecoveryActive) return;
     if (!this.channelSessionSync) {
       console.warn('[ChannelSync] startChannelPolling: no channelSessionSync set, skipping');
       return;
@@ -5492,7 +5499,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   restoreSessionObservation(sessionId: string, remoteRunId: string, snapshot: CoworkSessionRecoverySnapshot): boolean {
-    if (!this.store.canReadSession(sessionId, this.store.remoteCreationOwner())
+    if (this.shuttingDown || !this.store.canReadSession(sessionId, this.store.remoteCreationOwner())
       || this.store.remote.run(sessionId)?.runId !== remoteRunId || snapshot.status !== 'running'
       || !snapshot.runId || snapshot.gatewayBootId !== this.getRecoveryGatewayBootId()
       || snapshot.sessionKey !== this.resolveInteractiveSessionKey(sessionId, { requirePersistedChannelKey: true })) return false;
@@ -5603,7 +5610,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly stoppedRunEvidence = new Map<string, { sessionId: string; at: number }>();
   private readonly confirmedRemoteStops = new Map<string, { runId: string; resolve: (confirmed: boolean) => void }>();
 
-  async cancelSessionConfirmed(sessionId: string): Promise<boolean> {
+  async cancelSessionConfirmed(sessionId: string, timeoutMs?: number): Promise<boolean> {
+    // Ordinary stops retain 15s abort + 2s verification; quit/recovery supply a shared budget.
+    const deadline = Date.now() + (timeoutMs ?? 17000);
     const turn = this.activeTurns.get(sessionId);
     const client = this.gatewayClient;
     if (!client) return false;
@@ -5633,7 +5642,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
             && this.store.remote.deletionGuard(sessionId).version === guardVersion
             && payloadHash(this.store.remote.get(`gatewayRun:${sessionId}`)) === bindingHash
             && binding.sessionKey === this.resolveInteractiveSessionKey(sessionId, { requirePersistedChannelKey: true });
-          if (!await confirmOpenClawSessionStopped(client, binding.sessionKey, isCurrent) || !isCurrent()) return false;
+          if (!await confirmOpenClawSessionStopped(client, binding.sessionKey, isCurrent, timeoutMs) || !isCurrent()) return false;
           this.stopSession(sessionId);
           this.emit('runTermination', sessionId, binding.runId, RemoteRunStatus.Cancelled);
           return true;
@@ -5650,14 +5659,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         const result = await client.request(OpenClawGatewayMethod.SessionsAbort, {
           key: yielded.sessionKey,
           clearQueued: true,
-        }, { timeoutMs: 15_000 });
-        if (!isCurrentWait() || !isRecord(result) || result.ok !== true) return false;
+        }, { timeoutMs: Math.min(15000, timeoutMs ?? 15000) });
+        if (Date.now() >= deadline || !isCurrentWait() || !isRecord(result) || result.ok !== true) return false;
         // The parent already yielded: its old chat.abort event cannot prove
         // that the descendant writers and queued continuation have stopped.
         const snapshot = await client.request(OpenClawGatewayMethod.SessionsList, {
           search: yielded.sessionKey,
           limit: 50,
-        }, { timeoutMs: 2_000 });
+        }, { timeoutMs: Math.max(1, Math.min(2000, deadline - Date.now())) });
         const row = Array.isArray(snapshot.sessions)
           ? snapshot.sessions.find(value => isRecord(value) && value.key === yielded.sessionKey)
           : undefined;
@@ -5680,7 +5689,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const timeout = setTimeout(() => {
         this.confirmedRemoteStops.delete(sessionId);
         resolve(false);
-      }, 15000);
+      }, timeoutMs ?? 15000);
       this.confirmedRemoteStops.set(sessionId, { runId, resolve: confirmed => {
         clearTimeout(timeout); this.confirmedRemoteStops.delete(sessionId); resolve(confirmed);
       } });
@@ -5814,7 +5823,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   stopAllSessions(): void {
-    const activeSessionIds = [...new Set([...this.activeTurns.keys(), ...this.yieldedSessions.keys()])];
+    const activeSessionIds = this.shuttingDown ? this.beginShutdown()
+      : [...new Set([...this.activeTurns.keys(), ...this.yieldedSessions.keys()])];
+    if (this.shuttingDown) for (const operation of this.accountTurnOperations.values()) operation.cancel();
     activeSessionIds.forEach((sessionId) => {
       this.stopSession(sessionId);
     });
@@ -6883,7 +6894,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayReconnectAttempt = 0;
         this.resetGatewayRpcHealth();
         const activate = (notifyReady: boolean): void => {
-          if (clientGeneration !== this.gatewayClientGeneration || this.gatewayClient !== client || this.accountRecoveryActive) return;
+          if (this.shuttingDown || clientGeneration !== this.gatewayClientGeneration || this.gatewayClient !== client || this.accountRecoveryActive) return;
           this.gatewayReconnectSuppressed = false;
           this.subscribeToGatewaySessionEvents(client);
           if (this.channelSessionSync) this.startChannelPolling();
@@ -6894,6 +6905,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           }
           this.lastTickTimestamp = Date.now();
           this.startTickWatchdog();
+          this.emit(CoworkRuntimeLifecycleEvent.GatewayReady);
         };
         if (this.accountRecoveryActive) this.deferredGatewayActivation = activate;
         else activate(true);

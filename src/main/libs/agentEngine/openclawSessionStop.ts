@@ -11,20 +11,22 @@ export async function confirmOpenClawSessionStopped(
   client: GatewayClient,
   sessionKey: string,
   isCurrent: () => boolean,
+  timeoutMs = 17000,
 ): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
   try {
     if (!sessionKey.trim() || !isCurrent()) return false;
     const result = await client.request(OpenClawGatewayMethod.SessionsAbort, {
       key: sessionKey,
       clearQueued: true,
-    }, { timeoutMs: 15_000 });
-    if (!isCurrent() || !record(result) || result.ok !== true) return false;
+    }, { timeoutMs: Math.max(1, Math.min(15000, deadline - Date.now())) });
+    if (!isCurrent() || Date.now() >= deadline || !record(result) || result.ok !== true) return false;
     const snapshot = await client.request(OpenClawGatewayMethod.SessionsList, {
       search: sessionKey,
       limit: 50,
       archived: 'all',
-    }, { timeoutMs: 2_000 });
-    if (!isCurrent() || !record(snapshot) || !Array.isArray(snapshot.sessions)) return false;
+    }, { timeoutMs: Math.max(1, Math.min(2000, deadline - Date.now())) });
+    if (!isCurrent() || Date.now() > deadline || !record(snapshot) || !Array.isArray(snapshot.sessions)) return false;
     const matches = snapshot.sessions.filter((value): value is Record<string, unknown> => record(value) && value.key === sessionKey);
     if (matches.length !== 1) return false;
     const row = matches[0];
