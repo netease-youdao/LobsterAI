@@ -148,6 +148,8 @@ export class RemoteBridge {
   private socket: RemoteSocket | null = null;
   private generation: string | null = null;
   private stopped = false;
+  private shuttingDown = false;
+  private readonly quittingSessionIds = new Set<string>();
   private readonly syncSkipReasons = new Map<string, string>();
   private suspended = false;
   private running = false;
@@ -353,7 +355,7 @@ export class RemoteBridge {
         return response;
       } }) : null;
     this.ownershipAssociations = new OwnershipAssociationStore(deps.store);
-    deps.store.setWake((urgent?: boolean) => { this.availability.wake(); this.schedule(urgent ? 0 : this.replySupported ? REMOTE_REPLY_SYNC_DELAY_MS : 1000); });
+    deps.store.setWake((urgent?: boolean) => { this.availability.wake(); this.schedule(urgent || this.shuttingDown ? 0 : this.replySupported ? REMOTE_REPLY_SYNC_DELAY_MS : 1000); });
     this.agentCatalog = deps.agentOwnership && deps.getAgentWorkspace ? new RemoteAgentCatalog(deps.store, deps.agentOwnership, deps.getAgentWorkspace,
       (owner, deviceId, agentId) => this.inputCapabilities.includes(RemoteInputCapability.Schema) ? deps.getAgentDefaultInput?.(owner, deviceId, agentId) : undefined,
       () => this.getSyncTargetId()) : null;
@@ -389,7 +391,39 @@ export class RemoteBridge {
   }
   canCaptureRemoteFiles(): boolean { return !this.deps.store.needsSecurityRecovery() && this.files?.canCaptureInput() === true && this.settings().enabled; }
   getInputAgentCatalog(): RemoteAgentCatalog | null { return this.agentCatalog; }
-  stop(): void { this.contentSnapshot.stop(); this.displaySnapshot.stop(); this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
+  /** Keep publishers alive, but revoke admission even for commands already awaiting I/O. */
+  beginShutdown(): void { this.shuttingDown = true; }
+
+  /** Best effort during existing teardown; never wait for a remote acknowledgement. */
+  prioritizeRunUpdates(sessionIds: string[]): void {
+    if (!this.shuttingDown || !this.syncContext()()) return;
+    const previousCount = this.quittingSessionIds.size;
+    for (const id of sessionIds) {
+      const binding = this.deps.store.controlBinding(id);
+      if (binding?.session_id && binding.device_id === this.registration?.deviceId
+        && sameOwner(this.deps.store.owner(id), this.owner)) this.quittingSessionIds.add(id);
+    }
+    if (this.quittingSessionIds.size !== previousCount) remoteLogMessage('info', '[RemoteSync] Prioritizing quit run updates', {
+      sessionCount: this.quittingSessionIds.size, waitForReceipt: false,
+    });
+    this.deps.store.prioritizeProjections([...this.quittingSessionIds]);
+    this.availability.wake(); this.schedule(0);
+  }
+
+  private quittingSyncRows(context: TaskSyncContext): SyncRow[] {
+    const rows: SyncRow[] = [];
+    for (const id of this.quittingSessionIds) {
+      const row = this.deps.store.sync(id);
+      if (!row || row.device_id !== context.deviceId || !sameOwner(this.deps.store.owner(id), context.owner)) continue;
+      // Only remove a healthy local deferral. Server backoff, isolation and projection
+      // publication checks still apply inside the normal sync path.
+      this.taskSync.resumeLocalDeferral(context, id);
+      if (this.taskSync.eligible(context, id)) rows.push(row);
+    }
+    return rows;
+  }
+
+  stop(): void { this.quittingSessionIds.clear(); this.deps.store.prioritizeProjections([]); this.contentSnapshot.stop(); this.displaySnapshot.stop(); this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.fileTimer) clearInterval(this.fileTimer); this.fileTimer = null; this.files?.pause(); this.disconnect(); }
   accountChanged(): void { this.ensureAccount(); this.schedule(0); }
   private changed(): void { try { remotePerformance.sync(RemotePerformanceStage.StateNotify, () => this.deps.onStateChange?.()); } catch { remoteLogMessage('warn', '[RemoteSync] State notification deferred', {}); } }
@@ -1578,15 +1612,18 @@ export class RemoteBridge {
         remoteLogMessage('warn', '[RemoteSync] Projection scheduler deferred', remoteSyncErrorMetadata(error));
       }).finally(() => {
         if (this.projectionWork === work) this.projectionWork = null;
-        if (!this.historyWork) this.scheduleHistorySync(current);
+        if (this.shuttingDown && current()) this.schedule(500);
+        else if (!this.historyWork) this.scheduleHistorySync(current);
       });
       this.projectionWork = work;
     }
-    const rows = remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => stepwise ? this.prioritizeExpiringImports(this.taskSync.candidates(context)) : this.deps.store.sessions(context.owner));
+    const rows = remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => this.shuttingDown ? this.quittingSyncRows(context)
+      : stepwise ? this.prioritizeExpiringImports(this.taskSync.candidates(context)) : this.deps.store.sessions(context.owner));
     let cursor = 0, sharedFailure = false;
     const worker = async (): Promise<void> => {
       while (cursor < rows.length && current() && !sharedFailure && (!stepwise || Date.now() >= this.historyRetryAt)) {
         const row = rows[cursor++];
+        if (this.shuttingDown && !this.quittingSessionIds.has(row.local_id)) continue;
         try {
         if (!this.availability.legacyHistoryAllowed(row.local_id) || this.taskMemoryBlocks.has(row.local_id)) continue;
         if (!this.taskSync.eligible(context, row.local_id)) {
@@ -1680,7 +1717,7 @@ export class RemoteBridge {
     }
     const publishing = this.deps.store.projectionPublishing(id);
     if (publishing) {
-      this.taskSync.defer(context, id, 5000);
+      this.taskSync.defer(context, id, this.quittingSessionIds.has(id) ? 500 : 5000);
       this.logSyncSkipped(row, 'projection_publishing', this.taskSync.get(context, id)?.next_retry_at ?? null);
       return;
     }
@@ -2308,6 +2345,7 @@ export class RemoteBridge {
     this.deferCommandTask(entry.command);
   }
   private startInputRecovery(): void {
+    if (this.shuttingDown) return;
     if (!this.generation || !this.deps.input || !this.inputCapabilities.includes(RemoteInputCapability.Schema)) return;
     const scope = stableJson([this.accountGeneration, this.targetId, this.registration?.deviceId, this.generation, this.deps.getApiBaseUrl()]);
     if (scope !== this.inputRecoveryScope) { this.inputRecoveryScope = scope; this.inputRecoveryFallbackUntil = 0; }
@@ -2510,7 +2548,7 @@ export class RemoteBridge {
   }
   private commandAdmitted(command: RemoteCommand, localSessionId?: string | null): boolean {
     const store = this.deps.store;
-    if (!store.areControlsAdmitted()) return false;
+    if (this.shuttingDown || !store.areControlsAdmitted()) return false;
     const boundSessionId = command.sessionId ? store.localSessionId(command.sessionId) : null;
     if (boundSessionId && store.isRunIsolated(boundSessionId) || localSessionId && store.isRunIsolated(localSessionId)) return false;
     return (!boundSessionId || store.isTaskAdmitted(boundSessionId)) && (!localSessionId || store.isTaskAdmitted(localSessionId));
@@ -2591,7 +2629,7 @@ export class RemoteBridge {
   }
   private async claim(): Promise<boolean> {
     const generation = this.generation;
-    if (!generation || this.syncPaused() || !this.deps.store.areControlsAdmitted()) return false;
+    if (this.shuttingDown || !generation || this.syncPaused() || !this.deps.store.areControlsAdmitted()) return false;
     const result = await this.api(`/devices/${this.registration!.deviceId}/commands/claim`, 'POST', { connectionGeneration: generation, limit: 10 });
     const items = (Array.isArray(result) ? result : result.items || []).slice(0, 10);
     await this.commandBatch(items, async envelope => {

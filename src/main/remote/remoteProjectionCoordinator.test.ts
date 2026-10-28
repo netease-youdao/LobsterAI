@@ -336,3 +336,24 @@ describe('desktop core and remote projection isolation', () => {
     expect(() => reopened.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Still editable' WHERE id='task'").run())).not.toThrow();
   });
 });
+
+it('quit projection priority retains ownership and retry guards and is reversible', () => {
+  const f = fixture(false);
+  f.store.transaction(() => {
+    for (const id of ['quit', 'foreign']) {
+      f.db.prepare("INSERT INTO cowork_sessions VALUES(?,?,2,2,'idle')").run(id, id);
+      f.store.assignNew(id, id === 'foreign' ? { ...owner, userId: 'B' } : owner, 'local_create');
+    }
+  });
+  f.store.refreshProjectionHints();
+  f.db.prepare('UPDATE remote_session_revisions SET dirty_at=1 WHERE session_id=?').run('task');
+  f.db.prepare('UPDATE remote_session_revisions SET dirty_at=2 WHERE session_id=?').run('quit');
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+  f.store.prioritizeProjections(['foreign', 'quit']);
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('quit');
+  f.db.prepare('INSERT INTO remote_projection_worker_budget VALUES(?,?,1,0,?)').run('quit', 'budget', Date.now() + 60000);
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+  f.db.prepare('DELETE FROM remote_projection_worker_budget WHERE session_id=?').run('quit');
+  f.store.prioritizeProjections([]);
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+});

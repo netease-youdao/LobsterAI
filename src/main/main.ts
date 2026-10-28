@@ -333,6 +333,7 @@ import {
   CoworkEngineRouter,
   OpenClawRuntimeAdapter,
 } from './libs/agentEngine';
+import { CoworkRuntimeLifecycleEvent } from './libs/agentEngine/types';
 import {
   APP_QUIT_CONFIRMATION_STORE_KEY,
   appQuitConfirmationGate,
@@ -6645,8 +6646,13 @@ if (!gotTheLock) {
     remoteSessionCommands = new SessionCommandService(getCoworkStore(), getCoworkEngineRouter(), getCurrentRemoteOwner,
       { getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}`,
         onRecovered: notifySessionConfigurationChanged,
-        onInputConfigurationChanged: notifySessionConfigurationChanged });
+        onInputConfigurationChanged: notifySessionConfigurationChanged,
+        recoveryTarget: getServerApiBaseUrl,
+        canRecover: () => !isQuitting && !isDataMigrationRestoreInProgress && !openClawAccountRecovery?.active
+          && !!openClawRuntimeAdapter?.getRecoveryGatewayBootId() });
     remoteSessionCommands.configure(submitStart, submitContinue);
+    openClawRuntimeAdapter?.on(CoworkRuntimeLifecycleEvent.GatewayReady, () => remoteSessionCommands?.recovery.gatewayReady());
+    remoteSessionCommands.recovery.gatewayReady();
     ownershipAssociations = new OwnershipAssociationService({
       store: getCoworkStore(), gate: ownershipOperationGate,
       actor: () => {
@@ -12388,7 +12394,7 @@ if (!gotTheLock) {
       const store = getCoworkStore();
       store.remote.assertActor(sessionId, getCurrentRemoteOwner());
       // Opening history must not wait for remote transport or even a degraded local Gateway.
-      void remoteSessionCommands?.reconcileSession(sessionId).catch((): void => undefined);
+      if (!isQuitting && !isDataMigrationRestoreInProgress) void remoteSessionCommands?.reconcileSession(sessionId).catch((): void => undefined);
       const session = store.getSession(sessionId);
       if (session) {
         console.log(
@@ -16506,14 +16512,21 @@ if (!gotTheLock) {
   ): Promise<void> => {
     const cleanupStartedAt = Date.now();
     console.log(`[Main] App cleanup started for ${reason}`);
-    currentAppCleanupStep = 'sync-teardown';
+    currentAppCleanupStep = 'task-stop';
     remoteLocalGc?.stop();
     remoteInitialization.dispose();
-    remoteBridge?.stop();
-    void remoteTelemetryRuntime?.dispose();
-    remoteNetworkTransport.dispose();
-    remoteSettingsController?.dispose();
-    remotePerformance.stop();
+    remoteSessionCommands?.recovery.dispose();
+    remoteBridge?.beginShutdown();
+    const quittingSessions = openClawRuntimeAdapter?.beginShutdown() ?? [];
+    // Data restore uses the same cleanup but must not depend on remote delivery.
+    const confirmQuit = reason === 'quit' && !options.requireGatewayStopped;
+    if (confirmQuit) for (const id of quittingSessions) {
+      try { remoteSessionCommands?.recovery.rememberStop(id); }
+      catch (error) { console.warn('[Main] Could not persist quit stop intent:', error); }
+    }
+    // Keep the original cleanup of queued steer, continuations, permissions and questions.
+    try { coworkEngineRouter?.stopAllSessions(); }
+    catch (error) { console.warn('[Main] Local task stop cleanup failed:', error); }
     // Tear down companion windows, shortcut and monitors before the first await
     // so nothing re-shows a window that hideAppWindowsForQuit() just hid.
     desktopCompanionManager?.dispose();
@@ -16530,46 +16543,69 @@ if (!gotTheLock) {
     const browserHost = agentBrowserHost;
     agentBrowserHost = null;
 
-    if (browserHost) {
-      currentAppCleanupStep = 'agent-browser-storage';
-      await browserHost.dispose().catch(error => {
-        console.error('[AgentBrowserHost] Failed to flush persistent browser storage on quit:', error);
-      });
+    const prioritizeQuitUpdates = () => {
+      try { remoteBridge?.prioritizeRunUpdates(quittingSessions); }
+      catch (error) { console.warn('[Main] Quit result synchronization deferred:', error); }
+    };
+    try {
+      if (confirmQuit && quittingSessions.length) {
+        prioritizeQuitUpdates();
+        await remoteSessionCommands?.recovery.finishShutdown(quittingSessions, 3000).catch(error => {
+          console.warn('[Main] Quit stop confirmation deferred:', error);
+        });
+        prioritizeQuitUpdates();
+      }
+    } catch (error) {
+      console.warn('[Main] Quit task recovery deferred:', error);
+    } finally {
+      openClawRuntimeAdapter?.disconnectGatewayClient();
     }
+    const stopRemoteSync = () => {
+      currentAppCleanupStep = 'sync-teardown';
+      remoteBridge?.stop();
+      void remoteTelemetryRuntime?.dispose();
+      remoteNetworkTransport.dispose();
+      remoteSettingsController?.dispose();
+      remotePerformance.stop();
+    };
+    if (!confirmQuit) stopRemoteSync();
 
-    // Stop Cowork sessions without blocking shutdown.
-    if (coworkEngineRouter) {
-      console.log('[Main] Stopping cowork sessions...');
-      coworkEngineRouter.stopAllSessions();
-    }
-    if (openClawRuntimeAdapter) {
-      openClawRuntimeAdapter.disconnectGatewayClient();
-    }
+    // Use the existing cleanup window for delivery; never await a server receipt.
+    try {
+      if (browserHost) {
+        currentAppCleanupStep = 'agent-browser-storage';
+        await browserHost.dispose().catch(error => {
+          console.error('[AgentBrowserHost] Failed to flush persistent browser storage on quit:', error);
+        });
+      }
 
-    // Stop skill services.
-    currentAppCleanupStep = 'skill-services';
-    const skillServices = getSkillServiceManager();
-    await skillServices.stopAll();
+      // Stop skill services.
+      currentAppCleanupStep = 'skill-services';
+      const skillServices = getSkillServiceManager();
+      await skillServices.stopAll();
 
-    // Stop all IM gateways gracefully.
-    if (imGatewayManager) {
-      currentAppCleanupStep = 'im-gateways';
-      await imGatewayManager.stopAll().catch(err => {
-        console.error('[IM Gateway] Error stopping gateways on quit:', err);
-      });
-    }
+      // Stop all IM gateways gracefully.
+      if (imGatewayManager) {
+        currentAppCleanupStep = 'im-gateways';
+        await imGatewayManager.stopAll().catch(err => {
+          console.error('[IM Gateway] Error stopping gateways on quit:', err);
+        });
+      }
 
-    // Stop the gateway before closing the local HTTP proxies below: the
-    // gateway is their client, and closing a server first would leave it
-    // draining the gateway's keep-alive sockets.
-    if (openClawEngineManager) {
-      currentAppCleanupStep = 'openclaw-gateway';
-      await openClawEngineManager.stopGateway().catch(error => {
-        console.error('[OpenClaw] Failed to stop gateway on quit:', error);
-        // A restore replaces gateway state. Never write over it while an old
-        // process still owns it, even if ordinary app exit is best-effort.
-        if (options.requireGatewayStopped) throw error;
-      });
+      // Stop the gateway before closing the local HTTP proxies below: the
+      // gateway is their client, and closing a server first would leave it
+      // draining the gateway's keep-alive sockets.
+      if (openClawEngineManager) {
+        currentAppCleanupStep = 'openclaw-gateway';
+        await openClawEngineManager.stopGateway().catch(error => {
+          console.error('[OpenClaw] Failed to stop gateway on quit:', error);
+          // A restore replaces gateway state. Never write over it while an old
+          // process still owns it, even if ordinary app exit is best-effort.
+          if (options.requireGatewayStopped) throw error;
+        });
+      }
+    } finally {
+      if (confirmQuit) stopRemoteSync();
     }
 
     currentAppCleanupStep = 'copilot-loopback-proxy';
@@ -16617,7 +16653,8 @@ if (!gotTheLock) {
   // logs the step that was still in flight: a hung await here used to leave an
   // invisible zombie (tray destroyed, no window) that only Task Manager could
   // kill — and that zombie is what the installer later has to hunt down.
-  const APP_CLEANUP_WATCHDOG_MS = 10_000;
+  // Up to 3s for stop confirmation, retaining the existing 10s cleanup allowance.
+  const APP_CLEANUP_WATCHDOG_MS = 13_000;
 
   // While the quit confirmation is open on macOS, the parentless alert runs a
   // nested native loop: app.exit() only stops that modal session and the main

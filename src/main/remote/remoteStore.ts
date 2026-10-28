@@ -90,6 +90,7 @@ export class RemoteStore {
   private taskAdmission: ((id: string) => boolean) | null = null;
   private taskProjectionEligibility: ((id: string) => boolean) | null = null;
   private projectionCandidateOffset = 0;
+  private projectionPriorityIds: string[] = [];
   private readonly projectionFaultEpochs = new WeakMap<ProjectionWork, string | null>();
   setControlAdmission(check: () => boolean): void { this.controlAdmission = check; }
   areControlsAdmitted(): boolean { try { return this.controlAdmission?.() ?? true; } catch { return false; } }
@@ -433,9 +434,15 @@ export class RemoteStore {
     if (!healthy) this.securityRecoveryRequired = true;
     return healthy;
   }
+  /** In-memory ordering only; all ownership, retry and publication guards remain intact. */
+  prioritizeProjections(sessionIds: string[]): void {
+    this.projectionPriorityIds = [...new Set(sessionIds)];
+    this.projectionCandidateOffset = 0;
+  }
   nextProjectionWork(): ProjectionWork | null {
     if (!this.questionEvidenceHealthy()) return null;
     if (!this.enabledOwner || !this.options.deferredProjection || this.securityRecoveryRequired) return null;
+    const priority = this.projectionPriorityIds.length ? 'CASE WHEN d.session_id IN (SELECT value FROM json_each(?)) THEN 0 ELSE 1 END,' : '';
     const candidates = this.db.prepare(`SELECT d.session_id FROM (
       SELECT session_id FROM remote_dirty UNION SELECT session_id FROM remote_projection_publications
     ) d JOIN cowork_session_ownership o ON o.session_id=d.session_id
@@ -444,8 +451,9 @@ export class RemoteStore {
       WHERE o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=? AND s.migration_frozen=0
         AND NOT EXISTS (SELECT 1 FROM remote_projection_worker_budget b WHERE b.session_id=d.session_id AND b.next_retry>?)
         AND (f.session_id IS NULL OR (f.reason NOT IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID') AND f.revision<>r.revision) OR f.retry_at<=?)
-      ORDER BY r.dirty_at,d.session_id LIMIT 50 OFFSET ?`)
-      .all(this.enabledOwner.userId, this.enabledOwner.scopeKey, Date.now(), Date.now(), this.projectionCandidateOffset) as Array<{ session_id: string }>;
+      ORDER BY ${priority}
+        r.dirty_at,d.session_id LIMIT 50 OFFSET ?`)
+      .all(this.enabledOwner.userId, this.enabledOwner.scopeKey, Date.now(), Date.now(), ...(priority ? [JSON.stringify(this.projectionPriorityIds)] : []), this.projectionCandidateOffset) as Array<{ session_id: string }>;
     let skipped = 0;
     for (const { session_id: id } of candidates) {
       if (!this.canProjectTask(id)) { skipped++; continue; }

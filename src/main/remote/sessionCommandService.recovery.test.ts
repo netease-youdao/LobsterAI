@@ -36,12 +36,19 @@ function fixture() {
     });
   }, getAgent: () => ({ enabled: true, model: 'provider/old' }), assertAgentAccess: vi.fn(),
   agentOwnership: { get: () => ({ version: '1' }), canView: () => true } } as unknown as CoworkStore;
-  const runtime = Object.assign(new EventEmitter(), { isSessionActive: vi.fn(() => false),
+  const runtime = Object.assign(new EventEmitter(), { cancelSessionConfirmed: vi.fn(async () => true), isSessionActive: vi.fn(() => false),
     querySessionRecovery: vi.fn(async (): Promise<CoworkSessionRecoverySnapshot | null> => null),
     restoreSessionObservation: vi.fn(() => true), patchSession: vi.fn(async () => ({ modelOverride: 'provider/new' })),
     getRecoveryGatewayBootId: () => 'boot', getRecoveryGatewayProcessPid: () => 1234 });
   const onRecovered = vi.fn();
-  const createService = () => new SessionCommandService(store, runtime as unknown as CoworkRuntime, () => actor, { getGeneration: () => generation, onRecovered });
+  let ready = true;
+  let target = 'test';
+  const createService = () => {
+    const value = new SessionCommandService(store, runtime as unknown as CoworkRuntime, () => actor,
+      { getGeneration: () => generation, onRecovered, canRecover: () => ready, recoveryTarget: () => target });
+    dispose.push(() => value.recovery.dispose());
+    return value;
+  };
   const service = createService();
   const snapshot = (patch: Partial<CoworkSessionRecoverySnapshot> = {}): CoworkSessionRecoverySnapshot => ({
     gatewayBootId: 'boot', gatewayProcessPid: 1234, sessionKey: 'agent:main:lobsterai:task', runId: 'gateway-run',
@@ -55,6 +62,7 @@ function fixture() {
     expect(remote.run('task')?.status).toBe('reconciling');
   };
   return { db, remote, store, runtime, service, createService, snapshot, pendingRun, onRecovered,
+    setReady: (next: boolean) => { ready = next; }, setTarget: (next: string) => { target = next; },
     switchAccount: (next: RemoteOwner | null) => { actor = next; generation++; } };
 }
 
@@ -193,4 +201,121 @@ it('does not reinterpret a restored prepared record as proof of non-dispatch', a
   f.runtime.querySessionRecovery.mockResolvedValue(f.snapshot({ previousWriterStopped: true }));
   await expect(f.service.reconcileSession('task')).resolves.toBe(false);
   expect(f.remote.get('inputFence:task')).not.toBeNull();
+});
+
+
+it('automatically recovers after slow Gateway readiness, without opening history or sending again', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.pendingRun(); f.setReady(false);
+  f.service.recovery.gatewayReady(); await vi.advanceTimersByTimeAsync(10000);
+  expect(f.runtime.querySessionRecovery).not.toHaveBeenCalled();
+  f.runtime.querySessionRecovery.mockResolvedValue(f.snapshot({ status: 'succeeded' }));
+  f.setReady(true); f.service.recovery.gatewayReady(); await vi.advanceTimersByTimeAsync(0);
+  expect(f.remote.run('task')?.status).toBe('succeeded');
+  expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+});
+
+it('restarts an unfinished explicit stop automatically and retries a transient confirmation failure', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.pendingRun();
+  f.service.recovery.rememberStop('task'); f.service.recovery.dispose();
+  const restarted = f.createService();
+  f.runtime.querySessionRecovery.mockResolvedValue(f.snapshot());
+  f.runtime.cancelSessionConfirmed.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  restarted.recovery.gatewayReady(); await vi.advanceTimersByTimeAsync(0);
+  expect(f.remote.run('task')?.status).toBe('reconciling');
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(f.remote.run('task')?.status).toBe('cancelled');
+  expect(f.runtime.cancelSessionConfirmed).toHaveBeenCalledTimes(2);
+  expect(f.remote.get('pendingRunStop:task')).toBeNull();
+});
+
+it('ordinary reconnection restores a live run without cancelling or replaying it', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.pendingRun();
+  f.runtime.querySessionRecovery.mockResolvedValue(f.snapshot({ status: 'running', hasActiveRun: true }));
+  f.service.recovery.gatewayReady(); f.service.recovery.gatewayReady();
+  await vi.advanceTimersByTimeAsync(30000);
+  expect(f.remote.run('task')?.status).toBe('running');
+  expect(f.runtime.restoreSessionObservation).toHaveBeenCalledTimes(1);
+  expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+});
+
+it('keeps retry attempts bounded and allows a later readiness event to retry again', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.pendingRun();
+  f.service.recovery.gatewayReady(); await vi.advanceTimersByTimeAsync(60000);
+  expect(f.runtime.querySessionRecovery).toHaveBeenCalledTimes(4);
+  expect(f.remote.run('task')?.status).toBe('reconciling');
+  f.service.recovery.gatewayReady(); await vi.advanceTimersByTimeAsync(0);
+  expect(f.runtime.querySessionRecovery).toHaveBeenCalledTimes(5);
+});
+
+it('deduplicates concurrent stop requests and preserves natural completion', async () => {
+  const f = fixture(); f.pendingRun();
+  const response = Promise.withResolvers<boolean>(); f.runtime.cancelSessionConfirmed.mockReturnValue(response.promise);
+  const first = f.service.recovery.requestStop('task');
+  const second = f.service.recovery.requestStop('task');
+  expect(f.runtime.cancelSessionConfirmed).toHaveBeenCalledTimes(1);
+  f.runtime.emit('complete', 'task'); response.resolve(true);
+  await Promise.all([first, second]);
+  expect(f.remote.run('task')?.status).toBe('succeeded');
+});
+
+it.each(['account', 'target', 'run'])('rejects a stop result after changing %s', async change => {
+  const f = fixture(); f.pendingRun();
+  const response = Promise.withResolvers<boolean>(); f.runtime.cancelSessionConfirmed.mockReturnValue(response.promise);
+  const stopping = f.service.recovery.requestStop('task');
+  if (change === 'account') f.switchAccount({ userId: 'B', scopeKey: 'personal' });
+  else if (change === 'target') f.setTarget('other');
+  else { f.remote.updateRun('task', 'succeeded'); f.remote.beginRun('task', 'new-run'); }
+  response.resolve(true); await expect(stopping).resolves.toBe(false);
+  expect(f.remote.run('task')?.status).toBe(change === 'run' ? 'starting' : 'reconciling');
+});
+
+it('does not resume a stop intent from another service environment', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.pendingRun(); f.service.recovery.rememberStop('task');
+  f.setTarget('other'); f.service.recovery.gatewayReady(); await vi.advanceTimersByTimeAsync(0);
+  expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+});
+
+it('bounds quit confirmation and retains intent for next startup without letting late results mutate state', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.pendingRun(); f.service.recovery.rememberStop('task');
+  f.service.recovery.dispose(); const response = Promise.withResolvers<boolean>();
+  f.runtime.cancelSessionConfirmed.mockReturnValue(response.promise);
+  const quit = f.service.recovery.finishShutdown(['task'], 3000);
+  await vi.advanceTimersByTimeAsync(3000); await quit;
+  expect(f.remote.get('pendingRunStop:task')).toMatchObject({ runId: 'original-run' });
+  await vi.advanceTimersByTimeAsync(1); response.resolve(true); await Promise.resolve(); await Promise.resolve();
+  expect(f.remote.run('task')?.status).toBe('reconciling');
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+
+it.each([{}, { owner: {} }, { owner: null }, { owner, targetId: 123 }])('ignores incomplete persisted stop intent %j', async fields => {
+  vi.useFakeTimers(); const f = fixture(); f.pendingRun();
+  f.remote.put('pendingRunStop:task', { runId: 'original-run', ...fields });
+  f.service.recovery.gatewayReady(); await vi.advanceTimersByTimeAsync(60000);
+  expect(f.runtime.cancelSessionConfirmed).not.toHaveBeenCalled();
+  expect(f.remote.run('task')?.status).toBe('reconciling');
+});
+
+it('yields between history pages and still reaches the pending stop', async () => {
+  const f = fixture(); f.pendingRun(); f.service.recovery.rememberStop('task');
+  for (let index = 0; index < 70; index++) {
+    f.remote.put(`run:history-${index}`, { runId: `old-${index}`, status: 'succeeded' });
+  }
+  const scan = f.remote.scanEntries.bind(f.remote);
+  let yielded = false, pages = 0;
+  const subsequentPageYields: boolean[] = [];
+  const spy = vi.spyOn(f.remote, 'scanEntries').mockImplementation((...args) => {
+    if (args[0] === 'run:') {
+      if (++pages === 1) setImmediate(() => { yielded = true; });
+      else subsequentPageYields.push(yielded);
+    }
+    return scan(...args);
+  });
+  try {
+    f.service.recovery.gatewayReady();
+    await vi.waitFor(() => expect(f.remote.run('task')?.status).toBe('cancelled'));
+    expect(pages).toBeGreaterThan(1);
+    expect(subsequentPageYields.every(Boolean)).toBe(true);
+    expect(f.runtime.cancelSessionConfirmed).toHaveBeenCalledTimes(1);
+  } finally { spy.mockRestore(); }
 });

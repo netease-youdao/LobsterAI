@@ -1290,3 +1290,55 @@ describe('isolated command recovery compatibility', () => {
     expect(paths[2]).not.toContain('cursor='); f.bridge.stop();
   });
 });
+
+
+describe('quit keeps synchronization alive without accepting new work', () => {
+  it('blocks new claims but does not stop the publisher or transport', async () => {
+    const f = fixture(); const stop = vi.spyOn(f.bridge.availability, 'stop');
+    f.bridge.beginShutdown();
+    expect(await f.bridge.claim()).toBe(false);
+    expect(f.bridge.commandAdmitted(f.envelope.command || f.envelope)).toBe(false);
+    expect(f.requestApi).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+    expect(f.bridge.stopped).toBe(false); expect(stop).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+
+  it('revokes a prepared command when quit starts while its received receipt is in flight', async () => {
+    const f = fixture(); const original = f.requestApi.getMockImplementation()!;
+    f.requestApi.mockImplementation(async (...args) => {
+      const response = await original(...args);
+      if (args[1].endsWith('/ack') && JSON.parse(String(args[2].body)).status === 'received') f.bridge.beginShutdown();
+      return response;
+    });
+    await f.bridge.claim();
+    expect(f.execute).not.toHaveBeenCalled(); f.bridge.stop();
+  });
+});
+
+
+it('quit prioritizes only owned bound sessions and removes local delays without bypassing failures', async () => {
+  const f = fixture();
+  f.store.transaction(() => {
+    for (const id of ['quitting', 'other', 'failed']) {
+      f.store.db.prepare("INSERT INTO cowork_sessions VALUES(?,?,1,1,'idle')").run(id, id);
+      f.store.assignNew(id, owner, 'local_create'); f.store.bindRemote(id, id + '-remote', 'desktop');
+    }
+  });
+  vi.spyOn(f.bridge, 'schedule').mockImplementation(() => {});
+  vi.spyOn(f.bridge.availability, 'wake').mockImplementation(() => {});
+  const context = f.bridge.taskContext();
+  f.bridge.taskSync.defer(context, 'quitting', 5000);
+  f.bridge.taskSync.fail(context, 'failed', { phase: 'backoff', scope: 'service', reason: 'offline', retryAfterMs: 60000 });
+  f.bridge.prioritizeRunUpdates(['quitting']);
+  expect(f.bridge.quittingSessionIds.size).toBe(0); // Ordinary operation is unchanged.
+  f.bridge.beginShutdown(); f.bridge.prioritizeRunUpdates(['quitting', 'failed', 'missing']);
+  expect(f.bridge.quittingSyncRows(context).map((row: { local_id: string }) => row.local_id)).toEqual(['quitting']);
+  expect(f.bridge.taskSync.eligible(context, 'failed')).toBe(false);
+  vi.spyOn(f.bridge.availability, 'legacyHistoryAllowed').mockReturnValue(true);
+  const sync = vi.spyOn(f.bridge, 'syncSession').mockResolvedValue(undefined);
+  vi.spyOn(f.bridge, 'ensureRetentionFence').mockResolvedValue(undefined);
+  vi.spyOn(f.store, 'flushProjections').mockResolvedValue(undefined);
+  await f.bridge.syncSessions(true);
+  expect(sync.mock.calls.map(args => (args[0] as { local_id: string }).local_id)).toEqual(['quitting']);
+  expect(f.execute).not.toHaveBeenCalled();
+  f.bridge.stop(); expect(f.bridge.quittingSessionIds.size).toBe(0);
+});

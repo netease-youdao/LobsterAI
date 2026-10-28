@@ -180,6 +180,12 @@ export class RemoteTaskSyncState {
     this.ensure(context, id);
     this.db.prepare("UPDATE remote_sync_task_state SET next_retry_at=MAX(?,next_retry_at,server_retry_at) WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=? AND phase NOT IN ('isolated','closed')").run(this.now() + delayMs, ...this.args(context, id));
   }
+  /** Quit may expedite healthy local work, never a failed request or server deadline. */
+  resumeLocalDeferral(context: TaskSyncContext, id: string): void {
+    this.db.prepare(`UPDATE remote_sync_task_state SET next_retry_at=server_retry_at
+      WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
+        AND phase='ready' AND failure_count=0`).run(...this.args(context, id));
+  }
   /** A successful state query is not a publication ACK and must not reset a failure or repair budget. */
   resumeAfterVerification(context: TaskSyncContext, id: string): void {
     this.ensure(context, id);
