@@ -6,10 +6,12 @@ import { RemoteSyncHealthStatus, RemoteSyncLaneStatus } from '../../shared/remot
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
 import { payloadHash } from './canonical';
+import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { ReplyModelDisplayVersion } from './remoteAvailabilityStore';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteDisplayHealthStatus } from './remoteDisplayHealth';
+import { RemoteLiveEncoderVersion } from './remoteLiveMetadata';
 import { recordRemoteSessionDeletion } from './remoteLocalGc';
 import { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
@@ -1211,5 +1213,164 @@ describe('acknowledged reply model display repair', () => {
     expect(encode).toHaveBeenCalledTimes(7);
     expect(f.request.mock.calls.filter(call => call[0] === '/sync/live-projections')).toHaveLength(1);
     expect(f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2].objectId).toBe('message');
+  });
+});
+
+describe('acknowledged annotation display repair', () => {
+  const metadata = { browserAnnotations: [{ pageTitle: 'index.html', annotations: [{ comment: '改成点我' }] }] };
+  const prepare = async (annotation: Record<string, unknown> = metadata) => {
+    const f = fixture(); f.context.publicationResolutionSupported = true;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET type='user',content='',metadata=? WHERE id='message'").run(JSON.stringify(annotation)));
+    await f.controls();
+    const revision = String((f.db.prepare("SELECT revision FROM remote_live_revisions WHERE object_id='message'").get() as { revision: number }).revision);
+    f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)').run(f.context.scope, 'local', 'message:message', revision,
+      JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete', replyModelDisplayVersion: ReplyModelDisplayVersion }));
+    f.request.mockClear();
+    return { ...f, revision };
+  };
+
+  it('repairs an acknowledged empty message with CAS without changing source identity or leaking local evidence', async () => {
+    const f = await prepare(), source = f.store.sync('local')!.source_seq;
+    await f.live();
+    const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(body).toMatchObject({ representation: 'repair', objectId: 'message', sourceObjectRevision: f.revision, expectedProjectionRevision: '41' });
+    expect(body.payload.blocks[0].text).toContain('改成点我');
+    expect(body).not.toHaveProperty('hasAnnotationText');
+    expect(body).not.toHaveProperty('annotationDisplayVersion');
+    expect(body).not.toHaveProperty('annotationRepair');
+    expect(body.payload).not.toHaveProperty('revision');
+    expect(body.payloadHash).toBe(payloadHash(body.payload));
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.annotationDisplayVersion).toBe(RemoteAnnotationDisplayVersion);
+    expect(f.store.sync('local')!.source_seq).toBe(source);
+    expect(f.db.prepare("SELECT revision FROM remote_live_revisions WHERE object_id='message'").get()).toEqual({ revision: Number(f.revision) });
+    f.request.mockClear(); (f.publisher as any).liveScan.clear();
+    for (let turn = 0; turn < 4; turn++) await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('finds acknowledged annotations beyond the recent window with bounded encoding', async () => {
+    const f = await prepare();
+    for (let index = 0; index < 80; index++) {
+      const id = `a-${String(index).padStart(3, '0')}`;
+      f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(id, 'local', 'assistant', 'Reply', '{}', index + 3, index + 2));
+      f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)').run(f.context.scope, 'local', `message:${id}`, '1',
+        JSON.stringify({ state: 'accepted', projectionRevision: '41', replyModelDisplayVersion: ReplyModelDisplayVersion }));
+    }
+    const encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    for (let turn = 0; turn < 8; turn++) await f.live();
+    expect(encode).toHaveBeenCalledTimes(1);
+    const bodies = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').map(call => call[2]);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ objectId: 'message', representation: 'repair', sourceObjectRevision: f.revision });
+  });
+
+  it('records no-annotation inspections without republishing ordinary messages', async () => {
+    const f = await prepare({}), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    for (let turn = 0; turn < 6; turn++) { (f.publisher as any).liveScan.clear(); await f.live(); }
+    expect(encode).toHaveBeenCalledTimes(1);
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).toMatchObject({
+      state: 'accepted', projectionRevision: '41', annotationDisplayVersion: RemoteAnnotationDisplayVersion,
+    });
+  });
+
+  it('requires publication resolution support and current session ownership', async () => {
+    const f = await prepare(), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    f.context.publicationResolutionSupported = false;
+    await f.live();
+    f.context.publicationResolutionSupported = true;
+    f.db.prepare("UPDATE cowork_session_ownership SET owner_user_id='different' WHERE session_id='local'").run();
+    await f.live();
+    expect(encode).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('resolves the original pending publication before sealing a new repair', async () => {
+    const f = await prepare(), state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const body = { publicationId: 'old-annotation', objectKind: 'message', objectId: 'message', sourceObjectRevision: f.revision,
+      writerGeneration: state.writerGeneration, sessionId: state.sessionId, representation: 'complete', payload: { blocks: [] } };
+    f.publisher.ledger.saveRequest({ key: body.publicationId, lane: 'live', scope: f.context.scope, localId: 'local',
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: '/sync/live-projections/old-annotation', lookupVersion: 3,
+      attempted: true, createdAt: 1, body });
+    await f.live();
+    const first = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(first).toHaveLength(1); expect(first[0][2]).toEqual({ ...body, connectionGeneration: f.context.generation });
+    for (let turn = 0; turn < 5; turn++) await f.live();
+    const repaired = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').at(-1)![2];
+    expect(repaired).toMatchObject({ representation: 'repair', expectedProjectionRevision: '900' });
+    expect(repaired.publicationId).not.toBe(body.publicationId);
+  });
+
+  it.each(['sessionId', 'writerGeneration', 'objectKind', 'objectId', 'sourceObjectRevision'] as const)(
+    'rejects an incomplete %s receipt when model inspection discovers annotations', async missing => {
+      const f = await prepare(), original = f.request.getMockImplementation()!;
+      // Force the ordinary recent-message turn: annotation discovery happens after model encoding,
+      // without a history annotation candidate or pre-existing recovery fault.
+      (f.publisher as any).recoveryFirst = true;
+      f.publisher.ledger.db.prepare('UPDATE availability_objects SET result=? WHERE scope=? AND local_id=? AND object_id=?')
+        .run(JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete' }), f.context.scope, 'local', 'message:message');
+      f.request.mockImplementation(async (...args) => {
+        const result = await original(...args);
+        if (args[0] !== '/sync/live-projections') return result;
+        const incomplete = { ...result }; delete incomplete[missing];
+        return incomplete;
+      });
+      await f.live();
+      const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+      expect(body).toMatchObject({ representation: 'repair', expectedProjectionRevision: '41' });
+      expect(f.publisher.ledger.request(body.publicationId)).toMatchObject({
+        annotationRepair: true, liveEncoderVersion: RemoteLiveEncoderVersion,
+      });
+      expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(true);
+      expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).toMatchObject({
+        state: 'accepted', projectionRevision: '41',
+      });
+      expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
+    },
+  );
+
+  it('backs off a sealed annotation conflict by source revision while allowing a real subsequent edit', async () => {
+    const f = await prepare(), original = f.request.getMockImplementation()!, state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && args[2].representation === 'repair')
+        throw Object.assign(new Error('Projection changed'), { httpStatus: 409 });
+      if (args[0].endsWith('/resolve')) {
+        const publicationId = args[0].split('/')[3];
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: 'sealed_unpublished', publicationId, sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          sealId: 'annotation-seal', resolutionRequestHash: payloadHash({ ...business, publicationId }) };
+      }
+      return original(...args);
+    });
+    await f.live();
+    const repair = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(false);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
+    expect(f.publisher.ledger.db.prepare("SELECT 1 FROM availability_faults WHERE object_key='message:message'").get()).toBeDefined();
+    f.request.mockClear(); (f.publisher as any).liveScan.clear();
+    for (let turn = 0; turn < 4; turn++) await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET content='Additional request' WHERE id='message'").run());
+    await f.live();
+    const next = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(next).toMatchObject({ representation: 'complete', sourceObjectRevision: String(Number(f.revision) + 1) });
+    expect(next.publicationId).not.toBe(repair.publicationId);
+    expect(next).not.toHaveProperty('expectedProjectionRevision');
+  });
+
+  it('retains an unknown conflicting repair without marking its annotation display recovered', async () => {
+    const f = await prepare(), original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') throw Object.assign(new Error('Projection changed'), { httpStatus: 409 });
+      return original(...args);
+    });
+    await f.live();
+    const first = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    const saved = f.publisher.ledger.request(first.publicationId)!;
+    (f.publisher as any).failures.clear(); (f.publisher as any).liveScan.clear(); await f.live();
+    const attempts = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(attempts).toHaveLength(2); expect(attempts[1][2]).toEqual(first);
+    expect(f.publisher.ledger.request(first.publicationId)).toEqual(saved);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
   });
 });

@@ -26,6 +26,17 @@ function fixture(presetId?: ModelPresetId | null): RemoteStore {
 function userMessage(store: RemoteStore): void {
   store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('m','s','user',?, ?,2,1)").run('Analyze\nFile: /private/secret/report.txt', JSON.stringify({ remoteRunId: 'run' })));
 }
+it.each([false, true])('projects annotations through the legacy/v4 path (reply=%s)', reply => {
+  const store = fixture(); store.setReplyProjectionSupported(reply);
+  store.put('desktopInputRun:run', { owner, text: '', attachments: [] });
+  store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('m','s','user',?,?,2,1)").run('engine-only prompt',
+    JSON.stringify({ remoteRunId: 'run', browserAnnotations: [{ pageTitle: 'index.html', annotations: [{ comment: '改成点我' }] }] })));
+  const message = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(message.blocks[0].type).toBe('text'); expect(message.blocks[0].text).toContain('改成点我');
+  expect(message.preview).toContain('改成点我'); expect(JSON.stringify(message)).not.toContain('engine-only prompt');
+  expect(reply ? message.blocks[0].blockId : undefined).toEqual(reply ? expect.stringMatching(/^[a-f0-9]{32}$/u) : undefined);
+});
+
 it('projects mobile attachment references and original text without generated local file paths', () => {
   const store = fixture();
   store.put('inputRun:run', { input: { text: 'Analyze', attachments: [{ assetId: 'asset', version: '1', fileName: 'report.txt', mimeType: 'text/plain', sizeBytes: '12', intent: 'file' }] }, inputModel: null });

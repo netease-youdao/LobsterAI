@@ -21,7 +21,7 @@ function prepare(db: Database.Database, sql: string): Database.Statement {
   return statement;
 }
 type Probe = { fingerprint: string; encoder_version: number; manual_retry_at: number };
-export type RecoveryCandidate = RemoteLiveCandidate & { repair?: boolean };
+export type RecoveryCandidate = RemoteLiveCandidate & { repair?: boolean; annotationCheck?: boolean };
 
 /** Persistent, bounded recovery admission; source revisions and sealed publications are never rewritten. */
 export class RemoteLiveRecovery {

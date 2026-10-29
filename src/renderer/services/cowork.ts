@@ -1130,11 +1130,11 @@ class CoworkService {
     return this.openClawStatus;
   }
 
-  async startSession(options: CoworkStartOptions): Promise<{ session: CoworkSession | null; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }> {
+  async startSession(options: CoworkStartOptions): Promise<{ success: boolean; session: CoworkSession | null; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }> {
     const cowork = window.electron?.cowork;
     if (!cowork) {
       console.error('Cowork API not available');
-      return { session: null, error: 'Cowork API not available', code: UsageFailureCode.ApiUnavailable };
+      return { success: false, session: null, error: 'Cowork API not available', code: UsageFailureCode.ApiUnavailable };
     }
 
     store.dispatch(setStreaming(true));
@@ -1155,8 +1155,9 @@ class CoworkService {
       if (result.session.status !== 'running') {
         store.dispatch(setStreaming(false));
       }
-      return { session: result.session };
+      return { success: true, session: result.session };
     }
+    if (result.session) store.dispatch(addSession(result.session));
 
     if (result.engineStatus) {
       this.notifyOpenClawStatus(result.engineStatus);
@@ -1172,7 +1173,7 @@ class CoworkService {
 
     store.dispatch(setStreaming(false));
     console.error('Failed to start session:', result.error);
-    return { session: null, error: result.error, code: result.code, engineStatus: result.engineStatus };
+    return { success: false, session: result.session ?? null, error: result.error, code: result.code, engineStatus: result.engineStatus };
   }
 
   async continueSession(options: CoworkContinueOptions): Promise<boolean> {

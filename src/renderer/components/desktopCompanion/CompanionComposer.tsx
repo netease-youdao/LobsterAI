@@ -248,8 +248,8 @@ export default function CompanionComposer() {
         browserAnnotations,
       });
       failureStage = CompanionTaskFailureStage.SessionStart;
-      const { session, error, code, engineStatus: rejectedStatus } = await coworkService.startSession(plan.options);
-      if (!session) {
+      const { success, session, error, code, engineStatus: rejectedStatus } = await coworkService.startSession(plan.options);
+      if (!success || !session) {
         finish(false, companionTaskFailure({ error, code, engineStatus: rejectedStatus }, failureStage));
         showToast(error ? t('coworkErrorSessionStartFailed').replace('{error}', error) : t('desktopCompanionRequestFailed'));
         return false;

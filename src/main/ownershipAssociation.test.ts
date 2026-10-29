@@ -6,10 +6,12 @@ import { OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, Ownershi
 import type { OwnershipCommitRequest, OwnershipPreview, OwnershipTarget } from '../shared/ownership/types';
 import type { RemoteOwner } from '../shared/remote/constants';
 import { AgentOwnerStore } from './agentOwnership';
-import { type OwnershipActor,OwnershipAssociationService } from './ownershipAssociation';
+import { SubagentTracker } from './libs/agentEngine/subagent/tracker';
+import { type OwnershipActor, OwnershipAssociationBlockReason, OwnershipAssociationService } from './ownershipAssociation';
 import { OwnershipAssociationStore } from './ownershipAssociationStore';
 import { OwnershipOperationGate } from './ownershipOperationGate';
 import { RemoteStore } from './remote/remoteStore';
+import { SubagentRunStore } from './subagentRunStore';
 
 const a = { userId: 'a', scopeKey: 'personal' };
 const b = { userId: 'b', scopeKey: 'personal' };
@@ -23,7 +25,7 @@ function fixture() {
   db.exec(`CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT,created_at INTEGER,updated_at INTEGER,subagent_allow_agent_ids TEXT);
     CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,agent_id TEXT,parent_session_id TEXT,status TEXT,created_at INTEGER,updated_at INTEGER,cwd TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);
-    CREATE TABLE subagent_runs(id TEXT PRIMARY KEY,parent_session_id TEXT,child_cowork_session_id TEXT,agent_id TEXT,status TEXT);
+    CREATE TABLE subagent_runs(id TEXT PRIMARY KEY,parent_session_id TEXT,child_cowork_session_id TEXT,agent_id TEXT,status TEXT,session_key TEXT,task TEXT,label TEXT,created_at INTEGER,ended_at INTEGER,messages_persisted INTEGER DEFAULT 0);
     INSERT INTO agents VALUES('main','Main',1,1,'[]'),('office','Office',1,1,'[]'),('other','Other',1,1,'[]');`);
   const remote = new RemoteStore(db);
   const agents = new AgentOwnerStore(db);
@@ -40,8 +42,8 @@ function fixture() {
       remote.assignNew(id, owner, 'local_create');
     });
   };
-  const link = (parent: string, child: string | null, agentId = 'office', status = 'done') => {
-    db.prepare('INSERT INTO subagent_runs VALUES (?,?,?,?,?)').run(`run-${parent}-${child}`, parent, child, agentId, status);
+  const link = (parent: string, child: string | null, agentId = 'office', status = 'done', sessionKey: string | null = null) => {
+    db.prepare('INSERT INTO subagent_runs(id,parent_session_id,child_cowork_session_id,agent_id,status,session_key) VALUES (?,?,?,?,?,?)').run(`run-${parent}-${child}`, parent, child, agentId, status, sessionKey);
   };
   const input = (preview: OwnershipPreview): OwnershipCommitRequest => ({ planId: preview.planId, planVersion: preview.planVersion,
     accountGeneration: preview.accountGeneration, requestId: `request-${++requests}` });
@@ -150,6 +152,100 @@ describe('historical ownership association', () => {
     if (problem === 'cycle') f.link('child', 'parent');
     if (problem === 'multiple') { f.create('different'); f.link('different', 'child'); }
     expect(f.service.preview(task('child'))).toMatchObject({ eligible: false, reason: OwnershipErrorCode.NotAssociable });
+  });
+
+  it('associates after the real tracker records a forbidden spawn with a display-only agent label', () => {
+    const f = fixture(); f.create('parent');
+    expect(f.service.preview(agent()).eligible).toBe(true);
+    const runs = new SubagentRunStore(f.db);
+    const tracker = new SubagentTracker(runs, null, () => null);
+    const args = { taskName: 'essay-writer-1', task: 'Write an essay' };
+    tracker.onToolStart('call-forbidden', args, 'parent');
+    tracker.onSpawnResult('call-forbidden', JSON.stringify({ status: 'forbidden', error: 'Explicit agentId is required.' }), args);
+    expect(runs.getSubagentRun('call-forbidden')).toMatchObject({
+      agentId: 'essay-writer-1', status: 'error', sessionKey: null, childCoworkSessionId: null,
+    });
+    expect(f.service.preview(agent())).toMatchObject({ eligible: true, anonymousTaskCount: 1 });
+    f.commit(agent());
+    expect(f.remote.owner('parent')).toEqual(a);
+    expect(f.agents.get('office')?.owner).toEqual(a);
+    expect(runs.getSubagentRun('call-forbidden')?.agentId).toBe('essay-writer-1');
+  });
+
+  it.each([agent(), task('parent')])('keeps a failed spawn without an execution identity from blocking association: %s', target => {
+    const f = fixture(); f.create('parent');
+    f.link('parent', null, 'essay-writer-1', 'error');
+    const before = f.db.prepare('SELECT * FROM subagent_runs').all();
+    expect(f.service.preview(target)).toMatchObject({ eligible: true, anonymousTaskCount: 1 });
+    f.commit(target);
+    expect(f.remote.owner('parent')).toEqual(a);
+    expect(f.db.prepare('SELECT * FROM subagent_runs').all()).toEqual(before);
+  });
+
+  it.each([
+    { status: 'error', sessionKey: 'agent:unknown:subagent:run', child: null },
+    { status: 'error', sessionKey: null, child: 'child' },
+    { status: 'error', sessionKey: '', child: null },
+    { status: 'error', sessionKey: ' ', child: null },
+    { status: 'running', sessionKey: null, child: null },
+    { status: 'done', sessionKey: null, child: null },
+  ])('keeps real, unresolved and malformed execution references protected: %s', ({ status, sessionKey, child }) => {
+    const f = fixture(); f.create('parent');
+    if (child) f.create(child, 'office', null, 'parent');
+    f.link('parent', child, 'unavailable-agent', status, sessionKey);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(f.service.preview(agent())).toMatchObject({ eligible: false, reason: OwnershipErrorCode.NotAssociable, tasks: [] });
+    expect(warn).toHaveBeenCalledWith('[Ownership] Association blocked', { reason: OwnershipAssociationBlockReason.ExecutionAgentUnavailable });
+    expect(f.remote.owner('parent')).toBeNull();
+    expect(f.agents.get('office')?.ownerKind).toBe(AgentOwnerKind.Anonymous);
+  });
+
+  it.each(['foreign', 'missing'])('still checks the %s parent of a spawn that never created an execution', parent => {
+    const f = fixture(); f.create('current');
+    if (parent === 'foreign') f.create(parent, 'other', b);
+    f.link(parent, null, 'office', 'error');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(f.service.preview(agent())).toMatchObject({ eligible: false, reason: OwnershipErrorCode.NotAssociable, tasks: [] });
+    expect(warn).toHaveBeenCalledWith('[Ownership] Association blocked', { reason: parent === 'foreign'
+      ? OwnershipAssociationBlockReason.ForeignOwnership : OwnershipAssociationBlockReason.MissingTask });
+    expect(f.remote.owner('current')).toBeNull();
+  });
+
+  it('invalidates an approved plan if a real session key arrives without any other relationship changing', () => {
+    const f = fixture(); f.create('parent'); f.link('parent', null, 'office', 'error');
+    const preview = f.service.preview(agent()); expect(preview.eligible).toBe(true);
+    const input = f.input(preview);
+    f.db.prepare("UPDATE subagent_runs SET session_key='agent:office:subagent:late'").run();
+    expect(() => f.service.commit(input)).toThrow(OwnershipErrorCode.PlanChanged);
+    expect(f.remote.owner('parent')).toBeNull();
+    expect(f.service.getResult({ requestId: input.requestId })).toEqual({ status: OwnershipResultStatus.NotCommitted });
+  });
+
+  it.each([true, false])('logs a fixed private rejection reason with a trusted fixture update=%s', trusted => {
+    const f = fixture(); f.create('secret-parent-id', 'office', b);
+    const updateTitle = () => f.db.prepare("UPDATE cowork_sessions SET title='secret-title'").run();
+    if (trusted) f.remote.transaction(updateTitle); else updateTitle();
+    expect(f.remote.ownershipRecord('secret-parent-id')?.ownership_status).toBe(trusted ? 'confirmed' : 'quarantined');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const preview = f.service.preview(agent());
+    expect(preview).toMatchObject({ eligible: false, reason: OwnershipErrorCode.NotAssociable, tasks: [], anonymousTaskCount: 0 });
+    expect(warn.mock.calls).toEqual([['[Ownership] Association blocked', { reason: trusted
+      ? OwnershipAssociationBlockReason.ForeignOwnership : OwnershipAssociationBlockReason.UnconfirmedOwnership }]]);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/secret-parent-id|secret-title|office|userId|sessionId|count/u);
+  });
+
+  it('preserves preview and commit rejection semantics when the diagnostic sink fails', () => {
+    const f = fixture(); f.create('parent');
+    const input = f.input(f.service.preview(agent()));
+    f.remote.transaction(() => f.remote.associateHistorical('parent', b, 500));
+    const before = f.remote.ownershipRecord('parent');
+    vi.spyOn(console, 'warn').mockImplementation(() => { throw new Error('diagnostic sink unavailable'); });
+    expect(f.service.preview(agent())).toMatchObject({ eligible: false, reason: OwnershipErrorCode.NotAssociable });
+    expect(f.service.preview(agent('main'))).toMatchObject({ eligible: false, reason: OwnershipErrorCode.NotAssociable });
+    expect(() => f.service.commit(input)).toThrow(OwnershipErrorCode.NotAssociable);
+    expect(f.remote.ownershipRecord('parent')).toEqual(before);
+    expect(f.agents.get('office')?.ownerKind).toBe(AgentOwnerKind.Anonymous);
+    expect(f.service.getResult({ requestId: input.requestId })).toEqual({ status: OwnershipResultStatus.NotCommitted });
   });
 
   it.each(['run', 'local-approval', 'inbox', 'unmaterialized-child', 'reverse-allowlist'])('blocks unresolved execution work: %s', problem => {

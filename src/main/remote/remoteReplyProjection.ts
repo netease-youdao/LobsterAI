@@ -4,6 +4,7 @@ import { CoworkSystemMessageKind, isInternalCompactionSystemText } from '../../c
 import { formatCoworkErrorDetailText, parseCoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import { RemoteReply, type RemoteReplyBlock,RemoteReplyBlockType } from '../../shared/remote/reply';
 import { stableJson } from './canonical';
+import { buildRemoteAnnotationText } from './remoteAnnotationText';
 
 /** Match the renderer's hidden runtime notices rather than exposing internal compaction input. */
 export function isPublicReplyMessage(row: { type: string; content: string; metadata?: string | null }): boolean {
@@ -42,7 +43,12 @@ export function replyDisplay(metadata: Record<string, any>): RemoteReplyBlock['d
   }
   return Object.keys(display).length ? display : undefined;
 }
-export function replyBlocks(row: { id: string; type: string; content: string }, metadata: Record<string, any>, toolName?: string): RemoteReplyBlock[] {
+export function replyUserText(content: string, metadata: Record<string, unknown>, annotationText = buildRemoteAnnotationText(metadata)): string {
+  const text = redactReplyText(content || '');
+  const annotations = redactReplyText(annotationText);
+  return annotations && !text.includes(annotations) ? [text, annotations].filter(Boolean).join('\n\n') : text;
+}
+export function replyBlocks(row: { id: string; type: string; content: string }, metadata: Record<string, any>, toolName?: string, annotationText?: string): RemoteReplyBlock[] {
   const id = (part: string): string => replyBlockId(row.id, part);
   const text = redactReplyText(row.content || '');
   const toolCallId = String(metadata.toolUseId || metadata.toolCallId || row.id);
@@ -63,7 +69,7 @@ export function replyBlocks(row: { id: string; type: string; content: string }, 
       text: [text, typeof metadata.error === 'string' && metadata.error !== text ? redactReplyText(metadata.error) : '', redactReplyText(detailText)].filter(Boolean).join('\n\n'), ...(display ? { display } : {}) }];
   }
   if (metadata.isThinking === true) return [{ blockId: id('thinking:0'), type: RemoteReplyBlockType.Thinking, text }];
-  if (row.type === 'user') return [{ blockId: id('text:0'), type: RemoteReplyBlockType.Text, text }];
+  if (row.type === 'user') return [{ blockId: id('text:0'), type: RemoteReplyBlockType.Text, text: replyUserText(text, metadata, annotationText) }];
   const blocks: RemoteReplyBlock[] = [];
   const expression = /<think(?:ing)?>([\s\S]*?)(?:<\/think(?:ing)?>|$)/gi;
   const fenced: Array<{ start: number; end: number }> = [];

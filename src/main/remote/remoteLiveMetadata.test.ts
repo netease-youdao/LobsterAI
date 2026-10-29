@@ -12,6 +12,16 @@ const normalize = (value: unknown, message = row) => {
 };
 
 describe('bounded live metadata', () => {
+  it('keeps only the bounded annotation text and exposes it to the user block encoder', () => {
+    const message = { id: 'annotation', type: 'user', content: '' };
+    const result = normalize({ browserAnnotations: [{ pageTitle: 'index.html', annotations: [{ comment: '改成点我',
+      anchor: { selector: '#private', pageUrl: 'file:///private/index.html' }, screenshot: { status: 'ready', asset: { assetId: 'private' } } }] }] }, message);
+    expect(result.hasAnnotationText).toBe(true);
+    expect(result.blocks(message)[0]).toMatchObject({ type: 'text' });
+    expect(result.blocks(message)[0].text).toContain('改成点我');
+    expect(JSON.stringify(result.metadata)).not.toMatch(/private|browserAnnotations|screenshot|anchor/u);
+    expect(result.publicFieldsOmitted).toBe(false);
+  });
   it('drops large private diff/patch fields while preserving the public output and exact tool identity', () => {
     const value = { toolUseId: 'call', remoteRunId: 'run', isFinal: true, isError: false,
       toolResultDetails: { diff: '中'.repeat(11000), patch: '文'.repeat(11000), changed: true }, secret: 'private-secret' };

@@ -38,6 +38,20 @@ function fixture(filename = ':memory:') {
 }
 
 describe('live projections with bounded metadata', () => {
+  it('publishes annotation text after a desktop input overrides the raw prompt with empty text', () => {
+    const f = fixture(); f.message({ remoteRunId: 'run', browserAnnotations: [{ pageTitle: 'index.html',
+      annotations: [{ comment: 'Make the button blue' }] }], imageEdits: [{ operation: 'comment',
+      source: { title: 'photo.png' }, regions: [{ text: 'Make the sky blue' }] }] }, 'user', 'engine-only prompt');
+    f.state('desktopInputRun:run', { owner: f.input.owner, text: '', attachments: [] });
+    const result = projectLiveMessage(f.db, { ...f.input, annotationLanguage: 'en' })!;
+    expect(result.hasAnnotationText).toBe(true); expect(result.payload).not.toHaveProperty('hasAnnotationText');
+    expect(result.payload.blocks[0].text).toContain('File annotations');
+    expect(result.payload.blocks[0].text).toContain('Make the button blue');
+    expect(result.payload.blocks[0].text).toContain('Make the sky blue');
+    expect(result.payload.preview).toBe(result.payload.blocks[0].text);
+    expect(result.payload.originalContentBytes).toBe(String(Buffer.byteLength(stableJson(result.payload.blocks))));
+    expect(JSON.stringify(result.payload)).not.toContain('engine-only prompt');
+  });
   it('publishes a short tool result with large private metadata and returns only local tool-source evidence', () => {
     const f = fixture(); f.message({ toolUseId: 'call', remoteRunId: 'run', isFinal: true, isError: false,
       toolResultDetails: { diff: '中'.repeat(11000), patch: '文'.repeat(11000) } });

@@ -17,6 +17,16 @@ type OwnershipAssociationReceipt,   OwnershipAssociationStore, type OwnershipMan
 import { payloadHash, sameOwner, stableJson } from './remote/canonical';
 import type { RemoteStore, SessionOwnershipRecord } from './remote/remoteStore';
 
+/** Internal diagnostics only. Never attach account, task, Agent or execution identifiers. */
+export const OwnershipAssociationBlockReason = {
+  TargetNotAnonymous: 'target_not_anonymous', TaskAlreadyOwned: 'task_already_owned',
+  MissingTask: 'missing_task', ForeignOwnership: 'foreign_ownership', UnconfirmedOwnership: 'unconfirmed_ownership',
+  OrphanSync: 'orphan_sync', AgentUnavailable: 'agent_unavailable', MultipleParents: 'multiple_parents',
+  ParentMismatch: 'parent_mismatch', RelationshipCycle: 'relationship_cycle',
+  ExternalAnonymousRoot: 'external_anonymous_root', ExecutionAgentUnavailable: 'execution_agent_unavailable',
+} as const;
+type AssociationBlockReason = typeof OwnershipAssociationBlockReason[keyof typeof OwnershipAssociationBlockReason];
+
 export class OwnershipAssociationError extends Error {
   constructor(readonly code: OwnershipErrorCode) { super(code); this.name = 'OwnershipAssociationError'; }
 }
@@ -41,7 +51,7 @@ interface SessionRow {
 }
 interface RunRow {
   id: string; parent_session_id: string; child_cowork_session_id: string | null;
-  agent_id: string | null; status: string;
+  agent_id: string | null; status: string; session_key: string | null;
 }
 interface Scope {
   target: OwnershipTarget; targetTitle: string; agentId: string; resources: OwnershipResources;
@@ -52,10 +62,19 @@ interface Plan { preview: OwnershipPreview; owner: RemoteOwner; scope: Scope }
 const terminalRuns = new Set<string>([
   RemoteRunStatus.Succeeded, RemoteRunStatus.Failed, RemoteRunStatus.Cancelled, RemoteRunStatus.Interrupted,
 ]);
-const completeSubagentRuns = new Set(['done', 'error']);
+const SubagentTerminalStatus = { Done: 'done', Error: 'error' } as const;
+const completeSubagentRuns = new Set<string>(Object.values(SubagentTerminalStatus));
 const completeInbox = new Set(['applied', 'rejected']);
 const completeCommands = new Set(['applied', 'rejected', 'expired']);
 const fail = (code: OwnershipErrorCode): never => { throw new OwnershipAssociationError(code); };
+const logBlocked = (reason: AssociationBlockReason): void => {
+  try { console.warn('[Ownership] Association blocked', { reason }); }
+  catch { /* Optional diagnostics cannot change an ownership decision. */ }
+};
+const blocked = (reason: AssociationBlockReason): never => {
+  logBlocked(reason);
+  return fail(OwnershipErrorCode.NotAssociable);
+};
 const sorted = (ids: Iterable<string>): string[] => [...new Set(ids)].sort();
 
 /** Synchronous preview/commit. A commit is never enqueued after getResult reports not_committed. */
@@ -159,7 +178,10 @@ export class OwnershipAssociationService {
       tasks: [], agentWillAssociate: target.kind === OwnershipTargetKind.Agent,
     };
     if (!actor.owner) return { ...response, reason: OwnershipErrorCode.AuthRequired };
-    if (!detail.canAssociate) return { ...response, reason: OwnershipErrorCode.NotAssociable };
+    if (!detail.canAssociate) {
+      logBlocked(OwnershipAssociationBlockReason.TargetNotAnonymous);
+      return { ...response, reason: OwnershipErrorCode.NotAssociable };
+    }
     try {
       const scope = this.resolve(target, actor.owner);
       this.assertIdle(scope);
@@ -185,10 +207,10 @@ export class OwnershipAssociationService {
     const agentId = task?.agent_id || (task ? AgentId.Main : target.id);
     if (!this.agents.canView(agentId, actor)) return fail(OwnershipErrorCode.NotAvailable);
     if (target.kind === OwnershipTargetKind.Agent && this.agents.get(agentId)?.ownerKind !== AgentOwnerKind.Anonymous) {
-      return fail(OwnershipErrorCode.NotAssociable);
+      return blocked(OwnershipAssociationBlockReason.TargetNotAnonymous);
     }
-    if (task && this.remote.ownershipRecord(task.id)) return fail(OwnershipErrorCode.NotAssociable);
-    const runs = this.remote.db.prepare(`SELECT id,parent_session_id,child_cowork_session_id,agent_id,status FROM subagent_runs
+    if (task && this.remote.ownershipRecord(task.id)) return blocked(OwnershipAssociationBlockReason.TaskAlreadyOwned);
+    const runs = this.remote.db.prepare(`SELECT id,parent_session_id,child_cowork_session_id,agent_id,status,session_key FROM subagent_runs
       ORDER BY id`).all() as RunRow[];
     const parents = new Map<string, Set<string>>();
     const descendants = new Map<string, Set<string>>();
@@ -205,13 +227,17 @@ export class OwnershipAssociationService {
     const validate = (id: string): SessionRow => {
       const row = this.session(id);
       const owner = this.remote.ownershipRecord(id);
-      if (!row || !this.ownerMatches(owner, actor) || (!owner && this.remote.sync(id))) return fail(OwnershipErrorCode.NotAssociable);
+      if (!row) return blocked(OwnershipAssociationBlockReason.MissingTask);
+      if (!this.ownerMatches(owner, actor)) return blocked(owner?.ownership_status === 'confirmed'
+        ? OwnershipAssociationBlockReason.ForeignOwnership : OwnershipAssociationBlockReason.UnconfirmedOwnership);
+      if (!owner && this.remote.sync(id)) return blocked(OwnershipAssociationBlockReason.OrphanSync);
       const childAgent = row.agent_id || AgentId.Main;
-      if (!this.agents.canView(childAgent, actor)) return fail(OwnershipErrorCode.NotAssociable);
+      if (!this.agents.canView(childAgent, actor)) return blocked(OwnershipAssociationBlockReason.AgentUnavailable);
       references.set(id, row); agentIds.add(childAgent);
       const realParents = parents.get(id);
-      if (realParents && (realParents.size !== 1 || (row.parent_session_id && !realParents.has(row.parent_session_id)))) {
-        return fail(OwnershipErrorCode.NotAssociable);
+      if (realParents && realParents.size !== 1) return blocked(OwnershipAssociationBlockReason.MultipleParents);
+      if (realParents && row.parent_session_id && !realParents.has(row.parent_session_id)) {
+        return blocked(OwnershipAssociationBlockReason.ParentMismatch);
       }
       return row;
     };
@@ -220,14 +246,14 @@ export class OwnershipAssociationService {
       const seen = new Set<string>();
       let cursor: string | undefined = id;
       while (cursor) {
-        if (seen.has(cursor)) return fail(OwnershipErrorCode.NotAssociable);
+        if (seen.has(cursor)) return blocked(OwnershipAssociationBlockReason.RelationshipCycle);
         seen.add(cursor); validate(cursor); path.push(cursor);
         cursor = parents.get(cursor)?.values().next().value;
       }
       return path;
     };
     const includeTree = (id: string, visiting = new Set<string>()): void => {
-      if (visiting.has(id)) return fail(OwnershipErrorCode.NotAssociable);
+      if (visiting.has(id)) return blocked(OwnershipAssociationBlockReason.RelationshipCycle);
       if (selected.has(id)) return;
       const row = validate(id);
       visiting.add(id); selected.set(id, row);
@@ -244,7 +270,7 @@ export class OwnershipAssociationService {
       for (const row of direct) {
         const chain = parentChain(row.id);
         for (const parent of chain.slice(1)) {
-          if (!directIds.has(parent) && !this.remote.ownershipRecord(parent)) return fail(OwnershipErrorCode.NotAssociable);
+          if (!directIds.has(parent) && !this.remote.ownershipRecord(parent)) return blocked(OwnershipAssociationBlockReason.ExternalAnonymousRoot);
         }
         includeTree(row.id);
       }
@@ -256,8 +282,12 @@ export class OwnershipAssociationService {
       // An external execution reference must have a trustworthy visible parent too.
       validate(run.parent_session_id);
       if (run.child_cowork_session_id) validate(run.child_cowork_session_id);
-      if (run.agent_id) {
-        if (!this.agents.canView(run.agent_id, actor)) return fail(OwnershipErrorCode.NotAssociable);
+      // A rejected spawn may store taskName/label as agent_id even though no execution was created.
+      // Actual executions retain session_key when their local child is removed; never relax those references.
+      const failedBeforeExecution = run.status === SubagentTerminalStatus.Error
+        && run.session_key === null && run.child_cowork_session_id === null;
+      if (run.agent_id && !failedBeforeExecution) {
+        if (!this.agents.canView(run.agent_id, actor)) return blocked(OwnershipAssociationBlockReason.ExecutionAgentUnavailable);
         agentIds.add(run.agent_id);
       }
       if (!completeSubagentRuns.has(run.status)) return fail(OwnershipErrorCode.ResourceBusy);

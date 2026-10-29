@@ -36,6 +36,7 @@ function fixture(count = 10, size = 10) {
   db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
   const store = new RemoteStore(db); store.setEnabledOwner(owner);
+  store.publicationOrigins.setRouteProvider(() => 'https://example.com');
   store.transaction(() => { db.exec("INSERT INTO cowork_sessions VALUES('task','Task',1,1,'idle')"); store.assignNew('task', owner, 'local_create'); });
   store.bindRemote('task', store.sync('task')!.session_id, 'desktop');
   store.setProjectionIdentity(environment, owner, 'desktop'); store.setWake(() => {});
@@ -57,6 +58,7 @@ function bridgeFixture(f = fixture()) {
   bridge.importSnapshots = f.snapshots;
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' }; bridge.generation = '1';
   disposals.push(() => bridge.stop()); f.store.setWake(() => {});
+  f.store.publicationOrigins.confirm(owner, 'https://example.com', null, `legacy:${payloadHash([owner.userId, owner.scopeKey, 'desktop'])}`);
   return { ...f, bridge, request };
 }
 const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
@@ -218,6 +220,23 @@ describe('immutable import snapshot worker', () => {
     expect(f.store.get<any>('syncFailure:task')?.blocked).toBe(true);
     await f.bridge.syncSessions(); await f.bridge.syncSessions();
     expect(create).toHaveBeenCalledTimes(1); expect(f.request).not.toHaveBeenCalled();
+  });
+  it('quarantines a legacy task without source environment proof instead of entering import recovery', async () => {
+    const source = fixture();
+    source.db.prepare('DELETE FROM remote_publication_origins WHERE local_id=?').run('task');
+    const f = bridgeFixture(source), row = f.store.sync('task')!;
+    const target = f.bridge.targets.activateLegacy({ owner, deviceId: 'desktop', legacyStates: [{ localSessionId: row.local_id,
+      deviceId: row.device_id, sessionId: row.session_id, syncProtocolVersion: row.sync_protocol_version, streamEpoch: row.stream_epoch,
+      lastSourceSeq: String(row.ack_seq), lastSeq: row.server_seq, sourcePurgeSeq: row.source_purge_seq, eventPurgeSeq: row.event_purge_seq }] });
+    f.bridge.targetId = target.targetId;
+    f.store.setProjectionIdentity(target.targetId, owner, 'desktop'); f.store.setFileEnvironment(target.targetId);
+    const create = vi.spyOn(f.snapshots, 'create');
+    expect(f.db.prepare('SELECT admission FROM remote_sync_session_admissions WHERE local_session_id=?').get('task'))
+      .toEqual({ admission: 'quarantined' });
+    expect(f.bridge.sessionAdmitted('task')).toBe(false);
+    await f.bridge.syncSessions();
+    expect(create).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+    expect(f.store.sync('task')!.ack_seq).toBe(0);
   });
   it('rejects insufficient disk space in the actual worker before creating a materialization', async () => {
     const f = fixture(), wrapped = path.join(f.directory, 'budget-worker.cjs');

@@ -3,17 +3,18 @@ import { createHash } from 'crypto';
 
 import { isConversationArtifactFileName } from '../../shared/artifactPreview/displayPolicy';
 import type { RemoteOwner } from '../../shared/remote/constants';
+import type { LanguageType } from '../i18n';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { type ArtifactProjectionJob, projectRemoteArtifacts, type RemoteArtifactProjection } from './remoteArtifactProjection';
 import { liveMetadataToolId, normalizeLiveMetadata, RemoteLiveEncodingError, RemoteLiveEncodingLimits, RemoteLiveMetadataMode } from './remoteLiveMetadata';
 import { replyInputModel, replyModelLabel, type ReplyModelPresetNames } from './remoteReplyModel';
 import { redactReplyText, replyToolState } from './remoteReplyProjection';
 
-export interface LiveProjectionInput { database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames }
+export interface LiveProjectionInput { annotationLanguage?: LanguageType; database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames }
 export interface LiveToolSource { messageId: string; toolId: string; sourceRevision: string }
 /** Local diagnostics; tool values sum only the source rows actually read by this job. */
 export interface LiveEncodingStats { rawMetadataBytes: number; normalizedMetadataBytes: number }
-export interface LiveProjection { resolvedModelLabel?: string; toolSource?: LiveToolSource; encodingStats?: LiveEncodingStats; objectKind: 'message' | 'tool'; objectId: string; sourceObjectRevision: string; representation: 'complete' | 'desktop_only'; payloadHash: string; payload: Record<string, any> }
+export interface LiveProjection { hasAnnotationText?: boolean; resolvedModelLabel?: string; toolSource?: LiveToolSource; encodingStats?: LiveEncodingStats; objectKind: 'message' | 'tool'; objectId: string; sourceObjectRevision: string; representation: 'complete' | 'desktop_only'; payloadHash: string; payload: Record<string, any> }
 /** Read one bounded source object. No historic projection, outbox or NOS is consulted. */
 export function projectLiveMessage(db: Database.Database, input: LiveProjectionInput): LiveProjection | null {
   return db.transaction((): LiveProjection | null => {
@@ -32,7 +33,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
     if (!row || !['user', 'assistant', 'system', 'tool_use', 'tool_result'].includes(row.type)) return null;
     // Missing source bytes cannot be reported as a truthful canonical public-content size.
     if (row.content_bytes > RemoteLiveEncodingLimits.ContentBytes) throw new Error(RemoteLiveEncodingError.ContentSizeUnknown);
-    const normalized = normalizeLiveMetadata(row.metadata, row.metadata_bytes, RemoteLiveMetadataMode.Message, row);
+    const normalized = normalizeLiveMetadata(row.metadata, row.metadata_bytes, RemoteLiveMetadataMode.Message, row, input.annotationLanguage);
     const metadata = normalized.metadata;
     if (!normalized.isPublic(row)) return null;
     const toolSource = row.type === 'tool_use' || row.type === 'tool_result'
@@ -53,6 +54,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       else if (desktop && sameOwner(desktop.owner, input.owner)) content = redactReplyText(desktop.text);
     }
     const blocks: Record<string, any>[] = normalized.blocks({ ...row, content });
+    if (row.type === 'user') content = blocks[0]?.text || content;
     if (row.type === 'user' && prepared) for (const asset of prepared.input.attachments || []) blocks.push({ type: 'attachment',
       assetId: asset.assetId, version: asset.version, name: asset.fileName, mimeType: asset.mimeType, sizeBytes: asset.sizeBytes, availability: 'ready', intent: asset.intent });
     if (row.type === 'user' && desktop && sameOwner(desktop.owner, input.owner)) for (const [index, source] of (desktop.attachments || []).entries()) {
@@ -80,6 +82,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
     };
     const resolvedModelLabel = model && (row.type === 'user' || row.type === 'assistant') ? replyModelLabel(metadata, input.modelPresetNames) : null;
     return { objectKind: 'message', objectId: row.id, sourceObjectRevision: input.revision,
+      ...(row.type === 'user' && normalized.hasAnnotationText ? { hasAnnotationText: true } : {}),
       ...(resolvedModelLabel ? { resolvedModelLabel } : {}), ...(toolSource ? { toolSource } : {}),
       encodingStats: { rawMetadataBytes: row.metadata_bytes ?? 0, normalizedMetadataBytes: normalized.normalizedBytes },
       representation: omitted ? 'desktop_only' : 'complete', payloadHash: payloadHash(payload), payload };

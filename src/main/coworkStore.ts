@@ -64,6 +64,7 @@ import {
 import type { RemoteOwner } from '../shared/remote/constants';
 import { RemoteTelemetryEvent } from '../shared/remote/telemetry';
 import { AgentAccessError, AgentOwnerStore, sessionVisibilitySql } from './agentOwnership';
+import { t } from './i18n';
 import {
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
@@ -1078,6 +1079,32 @@ export class CoworkStore {
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  /** Only the creator may retain a failed admission before any input or run exists. */
+  recordLocalStartFailure(
+    sessionId: string,
+    owner: RemoteOwner | null,
+    input: { content: string; metadata?: CoworkMessageMetadata; timestamp: number },
+    assertCurrent: () => void,
+  ): CoworkSession | null {
+    return this.runSessionTransaction(() => {
+      assertCurrent();
+      const session = this.getSession(sessionId, 0);
+      if (!session || session.status !== 'idle' || session.claudeSessionId
+        || this.countSessionMessages(sessionId) > 0 || this.remote.run(sessionId)
+        || this.remote.messageRunBinding(sessionId)) return null;
+      this.remote.assertActor(sessionId, owner);
+      const actualOwner = this.remote.owner(sessionId);
+      if (owner === null ? actualOwner !== null : !sameOwner(owner, actualOwner)) {
+        throw new Error('Session owner changed');
+      }
+      this.remote.assertNoDeletionEffect(sessionId);
+      this.addMessage(sessionId, { type: 'user', content: input.content, metadata: input.metadata }, input.timestamp);
+      this.addMessage(sessionId, { type: 'system', content: t('coworkSessionAdmissionFailed') });
+      this.updateSession(sessionId, { status: 'error' });
+      return this.getSession(sessionId);
+    });
   }
 
   getSession(id: string, messageLimit = COWORK_MESSAGE_PAGE_SIZE): CoworkSession | null {

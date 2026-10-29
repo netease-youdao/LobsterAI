@@ -1,6 +1,8 @@
 import { parseCoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import type { RemoteReplyBlock } from '../../shared/remote/reply';
+import type { LanguageType } from '../i18n';
 import { stableJson } from './canonical';
+import { buildRemoteAnnotationText } from './remoteAnnotationText';
 import { isPublicReplyMessage, redactReplyText, replyBlocks, replyDisplay } from './remoteReplyProjection';
 
 /** Local encoder policy only; this does not change the public projection protocol. */
@@ -25,6 +27,7 @@ export interface NormalizedLiveMetadata {
   metadata: Record<string, any>;
   normalizedBytes: number;
   publicFieldsOmitted: boolean;
+  hasAnnotationText?: boolean;
   isPublic(row: Message): boolean;
   blocks(row: Message): RemoteReplyBlock[];
 }
@@ -63,7 +66,7 @@ function displaySource(value: unknown): Record<string, unknown> {
 /** Raw JSON is read only by the isolated worker; methods retain at most one bounded source object until encoding finishes. */
 export function normalizeLiveMetadata(raw: string | null, rawBytes: number | null,
   mode: typeof RemoteLiveMetadataMode[keyof typeof RemoteLiveMetadataMode] = RemoteLiveMetadataMode.Message,
-  message?: Pick<Message, 'type' | 'content'>): NormalizedLiveMetadata {
+  message?: Pick<Message, 'type' | 'content'>, annotationLanguage?: LanguageType): NormalizedLiveMetadata {
   const bytes = rawBytes ?? 0;
   if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > RemoteLiveEncodingLimits.RawMetadataBytes)
     fail(RemoteLiveEncodingError.RawMetadataBudget);
@@ -109,16 +112,18 @@ export function normalizeLiveMetadata(raw: string | null, rawBytes: number | nul
   if ((!message || message.type === 'tool_result' || message.type === 'system') && typeof source.error === 'string') projection.error = source.error;
   const errorDetail = !message || message.type === 'system' ? parseCoworkErrorDetail(source.errorDetail) : null;
   if (errorDetail) projection.errorDetail = errorDetail;
+  const annotationText = !message || message.type === 'user' ? buildRemoteAnnotationText(source, annotationLanguage) : '';
   checkStructure(projection);
   // Count only normalized public fields. Large private tool diff/patch payloads never enter this budget.
   const normalized: Record<string, any> = { ...metadata, display: replyDisplay(projection) ?? null };
   for (const key of ['toolInput', 'toolResult', 'error', 'errorDetail']) if (Object.hasOwn(projection, key)) normalized[key] = projection[key];
+  if (annotationText) normalized.annotationText = annotationText;
   const publicFieldsOmitted = Buffer.byteLength(stableJson(normalized)) > RemoteLiveEncodingLimits.MetadataBytes;
   const bounded = publicFieldsOmitted ? metadata : normalized;
   const normalizedBytes = Buffer.byteLength(stableJson(bounded));
   if (normalizedBytes > RemoteLiveEncodingLimits.MetadataBytes) fail(RemoteLiveEncodingError.MetadataBudget);
   // Keep the bounded original public fields for exact canonical block sizing even when the inline projection must be omitted.
-  return { metadata: bounded, normalizedBytes, publicFieldsOmitted,
+  return { metadata: bounded, normalizedBytes, publicFieldsOmitted, hasAnnotationText: Boolean(annotationText),
     isPublic: row => isPublicReplyMessage({ ...row, metadata: JSON.stringify({ kind: metadata.kind ?? null, error: metadata.error }) }),
-    blocks: row => replyBlocks(row, projection) };
+    blocks: row => replyBlocks(row, projection, undefined, annotationText) };
 }

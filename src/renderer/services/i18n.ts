@@ -1,6 +1,7 @@
 import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { remoteAnnotationTranslations } from '../../shared/remote/annotationCopy';
 import { configService } from './config';
 
 // 支持的语言类型
@@ -284,6 +285,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
     ...imageEditingTranslations.zh,
+    ...remoteAnnotationTranslations.zh,
     officeSaved: '已自动保存',
     officePending: '等待保存…',
     officeSaving: '正在保存…',
@@ -5233,6 +5235,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
     ...imageEditingTranslations.en,
+    ...remoteAnnotationTranslations.en,
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',
     officeSaving: 'Saving…',

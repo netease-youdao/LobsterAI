@@ -59,7 +59,7 @@ describe('account-bound task submissions', () => {
     store.dispatch(setCurrentSession(session()));
     store.dispatch(setStreaming(true));
     const currentSessions = store.getState().cowork.sessions;
-    response.resolve({ success, session: success ? { ...session(), id: 'old-session' } : undefined });
+    response.resolve({ success, session: { ...session(), id: 'old-session' } });
     await expect(pending).rejects.toThrow('accountSessionChanged');
     expect(store.getState().cowork.isStreaming).toBe(true);
     expect(store.getState().cowork.sessions).toEqual(currentSessions);
@@ -89,4 +89,23 @@ describe('account-bound task submissions', () => {
     expect(store.getState().cowork.isStreaming).toBe(false);
     expect(finishTaskSubmission).toHaveBeenCalledWith(expect.any(Object), undefined, expect.any(Error));
   });
+});
+
+
+test('retains a failed start session while reporting failure and stopping the optimistic spinner', async () => {
+  const failed = { ...session(), status: CoworkSessionStatusValue.Error, messages: [
+    { id: 'input', type: 'user' as const, content: 'Original input', timestamp: 1 },
+    { id: 'failure', type: 'system' as const, content: 'The session could not start.', timestamp: 2 },
+  ], totalMessages: 2 };
+  const dispatchEvent = vi.fn();
+  vi.stubGlobal('CustomEvent', class { constructor(public type: string, public options: unknown) {} });
+  vi.stubGlobal('window', { dispatchEvent, electron: { cowork: {
+    startSession: vi.fn().mockResolvedValue({ success: false, session: failed, error: 'The session could not start.' }),
+  } } });
+  const result = await coworkService.startSession({ prompt: 'Original input' });
+  expect(result).toMatchObject({ success: false, session: failed, error: 'The session could not start.' });
+  expect(store.getState().cowork.sessions.some(item => item.id === failed.id)).toBe(true);
+  expect(store.getState().cowork.isStreaming).toBe(false);
+  expect(finishTaskSubmission).toHaveBeenCalledWith(expect.any(Object), undefined, 'The session could not start.');
+  expect(dispatchEvent).toHaveBeenCalledOnce();
 });

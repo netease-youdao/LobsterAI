@@ -32,7 +32,9 @@ import {
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { ModelPresetId } from '../shared/modelPresets/constants';
+import { RemoteDeletion } from '../shared/remote/deletions';
 import { CoworkStore } from './coworkStore';
+import { setLanguage, t } from './i18n';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 import { ownershipOperationGate } from './ownershipOperationGate';
@@ -1865,4 +1867,65 @@ test('final-message telemetry observes the committed outer transaction and drops
     expect(new URL(uploaded[0]).searchParams.get('event_name')).toBe('desktop.message.final_persisted');
     expect(uploaded[0]).not.toContain('private');
   } finally { await shutdownRemoteTelemetry(); }
+});
+
+
+test.each(['zh', 'en'] as const)('retains a local admission failure atomically in %s without creating a run', language => {
+  setLanguage(language);
+  try {
+    const owner = { userId: 'owner', scopeKey: 'personal' };
+    const session = store.createSession('Task', '/work', '', 'local', [], 'main', '', { owner });
+    const assertCurrent = vi.fn();
+    const input = { content: 'Original input', metadata: { skillIds: ['skill'] }, timestamp: session.createdAt };
+    const retained = store.recordLocalStartFailure(session.id, owner, input, assertCurrent);
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(retained?.status).toBe('error');
+    expect(retained?.messages.map(message => [message.type, message.content])).toEqual([
+      ['user', input.content], ['system', t('coworkSessionAdmissionFailed')],
+    ]);
+    expect(retained?.messages[0].metadata?.skillIds).toEqual(['skill']);
+    expect(retained?.messages[0].timestamp).toBe(input.timestamp);
+    expect(retained?.messages.every(message => !message.metadata?.remoteRunId)).toBe(true);
+    expect(store.remote.run(session.id)).toBeNull();
+    expect(store.recordLocalStartFailure(session.id, owner, input, assertCurrent)).toBeNull();
+    expect(store.countSessionMessages(session.id)).toBe(2);
+  } finally { setLanguage('zh'); }
+});
+
+test.each(['message', 'run', 'running', 'deleted'] as const)('does not retain a failure over existing %s state', existing => {
+  const session = store.createSession('Task', '/work');
+  if (existing === 'message') store.addMessage(session.id, { type: 'user', content: 'Existing input' });
+  if (existing === 'run') store.remote.beginRun(session.id);
+  if (existing === 'running') store.updateSession(session.id, { status: 'running' });
+  if (existing === 'deleted') store.deleteSession(session.id);
+  const before = store.getSession(session.id);
+  expect(store.recordLocalStartFailure(session.id, null, { content: 'Rejected input', timestamp: 1 }, () => {})).toBeNull();
+  expect(store.getSession(session.id)).toEqual(before);
+});
+
+test.each(['account', 'owner', 'deletion'] as const)('rejects a changed %s before saving a failed input', change => {
+  const owner = { userId: 'owner', scopeKey: 'personal' };
+  const session = store.createSession('Task', '/work', '', 'local', [], 'main', '', { owner });
+  if (change === 'deletion') store.remote.put(`${RemoteDeletion.Closed}${session.id}`, true);
+  const actor = change === 'owner' ? { userId: 'other', scopeKey: 'personal' } : owner;
+  expect(() => store.recordLocalStartFailure(session.id, actor, { content: 'Private input', timestamp: 1 }, () => {
+    if (change === 'account') throw new Error('Account epoch changed');
+  })).toThrow();
+  expect(store.countSessionMessages(session.id)).toBe(0);
+  expect(store.getSession(session.id)?.status).toBe('idle');
+});
+
+test('rolls back the user message when persisting the fixed failure message fails', () => {
+  const session = store.createSession('Task', '/work');
+  const add = store.addMessage.bind(store);
+  const spy = vi.spyOn(store, 'addMessage').mockImplementation((...args) => {
+    if (args[1].type === 'system') throw new Error('Storage unavailable');
+    return add(...args);
+  });
+  try {
+    expect(() => store.recordLocalStartFailure(session.id, null, { content: 'Private input', timestamp: 1 }, () => {}))
+      .toThrow('Storage unavailable');
+    expect(store.countSessionMessages(session.id)).toBe(0);
+    expect(store.getSession(session.id)?.status).toBe('idle');
+  } finally { spy.mockRestore(); }
 });

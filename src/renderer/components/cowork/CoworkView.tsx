@@ -506,7 +506,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       logCoworkViewModel(
         `creating session with model ${currentAgentSelectedModelRef || 'default'}; agent model is ${currentAgent?.model || 'empty'}; server quota model is ${homeModelUsesServerQuota}`,
       );
-      const { session: startedSession, error: startError } = await coworkService.startSession(startPlan.options);
+      const { success: startSucceeded, session: startedSession, error: startError } = await coworkService.startSession(startPlan.options);
 
       if (!startedSession && startError) {
         // Show the error as a system message in the temp session
@@ -535,6 +535,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           `skipped temp session replacement for ${startedSession.id}; `
           + `current=${currentSessionIdRef.current ?? 'none'} temp=${tempSessionId}`,
         );
+      }
+      if (!startSucceeded) {
+        // Retained failures have a real ID, but must not trigger successful-start effects.
+        if (isPendingStartCancelled() && getPendingCancellationAction() === 'delete') {
+          await coworkService.deleteSession(startedSession.id);
+        }
+        return false;
       }
       if (optimisticGoal !== undefined) {
         const startedGoal = applyOptimisticGoalCommand(prompt, null, startedSession.id, Date.now());

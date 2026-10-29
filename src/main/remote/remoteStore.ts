@@ -10,6 +10,7 @@ import { RemoteFileReason } from '../../shared/remote/files';
 import { type LocalQuestionState, RemoteQuestion, type RemoteQuestionState } from '../../shared/remote/questions';
 import { RemoteReply, RemoteReplyBlockType, type RemoteReplyContentRef, type RemoteReplyFormat, type RemoteReplyUpload } from '../../shared/remote/reply';
 import { RemoteRetention } from '../../shared/remote/retention';
+import { getLanguage } from '../i18n';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import type { DesktopInputRun } from './desktopInputMetadata';
 import { type RemoteArtifactProjection,remoteArtifactReasons } from './remoteArtifactProjection';
@@ -31,7 +32,7 @@ import type { ProjectionWork } from './remoteProjectionWorker';
 import { RemotePublicationKind, RemotePublicationOrigins } from './remotePublicationOrigins';
 import { type QuestionEvidenceAuthenticator,questionIdSql,questionSessionSql, RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
 import { replyInputModel, type ReplyModelPresetNames,replyModelPresetNames } from './remoteReplyModel';
-import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState } from './remoteReplyProjection';
+import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState, replyUserText } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
 import { remoteDiagnosticLog, remoteLogMessage, remoteSyncErrorMetadata } from './remoteSyncLog';
@@ -447,7 +448,7 @@ export class RemoteStore {
     if (!this.questionEvidenceHealthy()) return null;
     if (!this.enabledOwner || !this.options.deferredProjection || this.securityRecoveryRequired) return null;
     const priority = this.projectionPriorityIds.length ? 'CASE WHEN d.session_id IN (SELECT value FROM json_each(?)) THEN 0 ELSE 1 END,' : '';
-    const candidates = this.db.prepare(`SELECT d.session_id FROM (
+    const query = this.db.prepare(`SELECT d.session_id FROM (
       SELECT session_id FROM remote_dirty UNION SELECT session_id FROM remote_projection_publications
     ) d JOIN cowork_session_ownership o ON o.session_id=d.session_id
       JOIN remote_sync s ON s.local_id=d.session_id LEFT JOIN remote_projection_failures f ON f.session_id=d.session_id
@@ -456,8 +457,14 @@ export class RemoteStore {
         AND NOT EXISTS (SELECT 1 FROM remote_projection_worker_budget b WHERE b.session_id=d.session_id AND b.next_retry>?)
         AND (f.session_id IS NULL OR (f.reason NOT IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID') AND f.revision<>r.revision) OR f.retry_at<=?)
       ORDER BY ${priority}
-        r.dirty_at,d.session_id LIMIT 50 OFFSET ?`)
-      .all(this.enabledOwner.userId, this.enabledOwner.scopeKey, Date.now(), Date.now(), ...(priority ? [JSON.stringify(this.projectionPriorityIds)] : []), this.projectionCandidateOffset) as Array<{ session_id: string }>;
+        r.dirty_at,d.session_id LIMIT 50 OFFSET ?`);
+    const readCandidates = (): Array<{ session_id: string }> => query.all(this.enabledOwner!.userId, this.enabledOwner!.scopeKey,
+      Date.now(), Date.now(), ...(priority ? [JSON.stringify(this.projectionPriorityIds)] : []), this.projectionCandidateOffset) as Array<{ session_id: string }>;
+    let candidates = readCandidates();
+    if (!candidates.length && this.projectionCandidateOffset > 0) {
+      this.projectionCandidateOffset = 0;
+      candidates = readCandidates();
+    }
     let skipped = 0;
     for (const { session_id: id } of candidates) {
       if (!this.canProjectTask(id)) { skipped++; continue; }
@@ -488,13 +495,15 @@ export class RemoteStore {
         }
         if (this.deletionProjectionSupported) this.deletionGuard(id);
         if (!this.questionEvidenceHealthy(id)) return null;
-        const work: ProjectionWork = { modelPresetNames: replyModelPresetNames(), questionEvidenceDigest: remoteQuestionEvidenceDigest(this.db), database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
+        const work: ProjectionWork = { annotationLanguage: getLanguage(), modelPresetNames: replyModelPresetNames(), questionEvidenceDigest: remoteQuestionEvidenceDigest(this.db), database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
           deviceId: this.projectionIdentity?.deviceId || sync.device_id, environment: this.fileEnvironment || this.projectionIdentity?.environment || null,
           agent: this.agentSummary?.(id, this.enabledOwner) || null, approval: this.approvalProjectionSupported, questions: this.questionProjectionSupported,
           input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, deletions: this.deletionProjectionSupported };
         this.projectionTargetContexts.set(work, stableJson(activeRemoteSyncTargetContext(this, work.owner)));
         this.projectionFaultEpochs.set(work, projectionFault(this.db, id)?.epoch ?? null);
-        this.projectionCandidateOffset = 0;
+        // Rotate after service: a continuously dirty old task must not monopolize
+        // the single projection worker. Explicit quit priority keeps its existing order.
+        this.projectionCandidateOffset = this.projectionPriorityIds.length ? 0 : this.projectionCandidateOffset + skipped + 1;
         return work;
       } catch (error) {
         if (typeof (error as { code?: unknown })?.code === 'string' && /^SQLITE_(?:CORRUPT|NOTADB|FULL|IOERR)/u.test(String((error as { code: string }).code))) throw error;
@@ -513,6 +522,7 @@ export class RemoteStore {
     return (!this.projectionFaultEpochs.has(work) || this.projectionFaultEpochs.get(work) === (projectionFault(this.db, work.sessionId)?.epoch ?? null))
       && (!this.projectionTargetContexts.has(work) || this.projectionTargetContexts.get(work) === stableJson(activeRemoteSyncTargetContext(this, work.owner)))
       && this.canProjectTask(work.sessionId) && !this.isSyncClosed(work.sessionId) && sameOwner(work.owner, this.enabledOwner) && sameOwner(this.owner(work.sessionId), work.owner)
+      && (!work.annotationLanguage || work.annotationLanguage === getLanguage())
       && (!work.modelPresetNames || stableJson(work.modelPresetNames) === stableJson(replyModelPresetNames()))
       && work.approval === this.approvalProjectionSupported && work.questions === this.questionProjectionSupported && work.input === this.inputProjectionSupported
       && work.files === this.fileProjectionSupported && work.reply === this.replyProjectionSupported && (work.deletions === true) === this.deletionProjectionSupported
@@ -558,6 +568,7 @@ export class RemoteStore {
   setProjectionIdentity(environment: string, owner: RemoteOwner, deviceId: string): void {
     const key = `projectionMode:${JSON.stringify([environment, owner.userId, owner.scopeKey, deviceId])}`;
     if (this.projectionIdentity?.key === key) return;
+    this.projectionCandidateOffset = 0;
     this.projectionIdentity = { key, environment, owner: { ...owner }, deviceId };
     this.db.prepare(`UPDATE remote_sync SET sync_environment=? WHERE sync_environment IS NULL AND (device_id='' OR device_id=?)
       AND local_id IN (SELECT session_id FROM cowork_session_ownership WHERE owner_user_id=? AND owner_scope_key=?)`).run(environment, deviceId, owner.userId, owner.scopeKey);
@@ -645,7 +656,10 @@ export class RemoteStore {
       if (!chunkRefs.has(row.sha256)) this.db.prepare('DELETE FROM remote_reply_chunks WHERE session_id=? AND sha256=?').run(sessionId, row.sha256);
     }
   }
-  setEnabledOwner(owner: RemoteOwner | null): void { this.enabledOwner = owner; }
+  setEnabledOwner(owner: RemoteOwner | null): void {
+    if (!sameOwner(this.enabledOwner, owner)) this.projectionCandidateOffset = 0;
+    this.enabledOwner = owner;
+  }
   setApprovalProjectionSupported(supported: boolean): void { this.approvalProjectionSupported = supported; }
   setQuestionProjectionSupported(supported: boolean): void {
     const key = `questionProjectionMode:${this.projectionIdentity?.key || 'default'}`;
@@ -1579,13 +1593,15 @@ export class RemoteStore {
       const ownDesktopInput = desktopInput && sameOwner(desktopInput.owner, this.owner(sessionId))
         && (foreignHistory || !desktopInput.attachments.some(source => source.preparedSource)) ? desktopInput : null;
       const rawContent = m.type === 'user' ? inputRun?.input.text ?? ownDesktopInput?.text ?? m.content : m.content;
-      const content = this.replyProjectionSupported ? redactReplyText(rawContent || '') : publicText(rawContent);
+      let content = this.replyProjectionSupported ? redactReplyText(rawContent || '') : publicText(rawContent);
+      if (m.type === 'user' && !this.replyProjectionSupported) content = replyUserText(content, metadata);
       const previousTool = tools.get(toolId)?.payload.tool;
       const storedTool = this.db.prepare('SELECT record_json FROM remote_projection WHERE session_id=? AND object_key=?').get(sessionId, `tool:${toolId}`) as { record_json: string } | undefined;
       const knownTool = previousTool || (storedTool ? JSON.parse(storedTool.record_json).payload.tool : null);
       const toolName = shortName(metadata.toolName || knownTool?.name || 'tool');
       const blocks: any[] = this.replyProjectionSupported ? replyBlocks({ ...m, content }, metadata, isTool ? toolName : undefined)
         : isTool ? [{ type: 'tool', toolCallId: toolId }] : [{ type: m.type === 'user' ? 'text' : 'markdown', text: content }];
+      if (m.type === 'user' && this.replyProjectionSupported) content = blocks[0]?.text || content;
       if (m.type === 'user' && inputRun) {
         for (const [index, asset] of inputRun.input.attachments.entries()) {
           if (foreignHistory && ownDesktopInput?.attachments.some(source => source.preparedSource?.attachmentIndex === index)) continue;

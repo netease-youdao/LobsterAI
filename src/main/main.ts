@@ -11348,7 +11348,19 @@ if (!gotTheLock) {
         const execution = currentRemoteExecution();
         assertRemoteExecutionPermit();
         if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
-        let session = (execution?.preparedSessionId ? coworkStoreInstance.getSession(execution.preparedSessionId, 0) : null) || coworkStoreInstance.createSession(
+        const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(options.imageAttachments);
+        const messageMetadata = buildCoworkUserSelectionMetadata({
+          prompt,
+          skillIds: options.activeSkillIds,
+          kitIds: options.kitIds,
+          kitReferences: options.kitReferences,
+          resolvedKitCapabilities: options.resolvedKitCapabilities,
+          selectedTextSnippets,
+          browserAnnotations,
+          imageAttachmentPreviews,
+        });
+        const preparedSession = execution?.preparedSessionId ? coworkStoreInstance.getSession(execution.preparedSessionId, 0) : null;
+        let session = preparedSession || coworkStoreInstance.createSession(
           title,
           taskWorkingDirectory,
           persistedSystemPrompt,
@@ -11359,29 +11371,52 @@ if (!gotTheLock) {
           { thinkingLevel: thinkingLevel || '', owner: execution?.owner ?? null },
         );
 
+        const retainLocalAdmissionFailure = () => {
+          // Remote prepared inputs own their message/run lifecycle separately.
+          if (preparedSession || execution?.preparedSessionId || execution?.runId || execution?.commandId) return null;
+          return coworkStoreInstance.recordLocalStartFailure(session.id, execution?.owner ?? null, {
+            content: prompt,
+            metadata: { ...messageMetadata, ...imageEditMessageMetadata(options.mediaReferences) },
+            timestamp: ipcStartedAtMs,
+          }, () => {
+            if (requestAccountEpoch !== `${ownershipAccountEpoch}:${authAccountGeneration}`
+              || !isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())
+              || !canViewCoworkSession(session.id)) throw new Error(t('authAccountChanged'));
+            assertRemoteExecutionPermit();
+            coworkStoreInstance.remote.assertActor(session.id, execution?.owner ?? null);
+          });
+        };
+
         if (options.modelPresetId !== undefined) {
           const presetId = parseModelPresetId(options.modelPresetId);
           if (!presetId) throw new Error(t('modelPresetInvalidSession'));
+          let engineStatus: OpenClawEngineStatus;
           try {
             session = await modelPresetSelection.choose(session.id, presetId, Boolean(options.imageAttachments?.length), true);
             const modelRunGate = await ensureServerModelReadyForRun(session.modelOverride);
             if (modelRunGate.allowed === false) throw new Error(modelRunGate.error);
             // Admission must inspect the resolved model, not the agent's default.
-            const engineStatus = await ensureOpenClawRunningForCowork({ taskModelRef: session.modelOverride });
+            engineStatus = await ensureOpenClawRunningForCowork({ taskModelRef: session.modelOverride });
             assertRemoteExecutionPermit();
             coworkStoreInstance.remote.assertActor(session.id, execution?.owner ?? null);
-            if (engineStatus.phase !== 'running') {
-              coworkStoreInstance.updateSession(session.id, { status: 'error' });
-              return getEngineNotReadyResponse(engineStatus);
-            }
             if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
               throw new Error(t('authAccountChanged'));
             }
           } catch (error) {
-            if (requestAccountEpoch === `${ownershipAccountEpoch}:${authAccountGeneration}` && canViewCoworkSession(session.id)) {
+            const failedSession = retainLocalAdmissionFailure();
+            if (failedSession) return { success: false, error: error instanceof Error ? error.message : 'Failed to start session', session: failedSession };
+            if ((execution?.preparedSessionId || execution?.runId || execution?.commandId)
+              && requestAccountEpoch === `${ownershipAccountEpoch}:${authAccountGeneration}` && canViewCoworkSession(session.id)) {
               coworkStoreInstance.updateSession(session.id, { status: 'error' });
             }
             throw error;
+          }
+          if (engineStatus.phase !== 'running') {
+            const failedSession = retainLocalAdmissionFailure();
+            if (execution?.preparedSessionId || execution?.runId || execution?.commandId) {
+              coworkStoreInstance.updateSession(session.id, { status: 'error' });
+            }
+            return { ...getEngineNotReadyResponse(engineStatus), ...(failedSession ? { session: failedSession } : {}) };
           }
         }
 
@@ -11434,17 +11469,6 @@ if (!gotTheLock) {
             })),
           });
         }
-        const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(options.imageAttachments);
-        const messageMetadata = buildCoworkUserSelectionMetadata({
-          prompt,
-          skillIds: options.activeSkillIds,
-          kitIds: options.kitIds,
-          kitReferences: options.kitReferences,
-          resolvedKitCapabilities: options.resolvedKitCapabilities,
-          selectedTextSnippets,
-          browserAnnotations,
-          imageAttachmentPreviews,
-        });
         if (!execution?.runId) {
           coworkStoreInstance.remote.beginRun(session.id);
           coworkStoreInstance.remote.prepareLocalDispatch(session.id, { prompt });

@@ -15,6 +15,7 @@
 import { desktopCompanionTranslations } from '../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../shared/imageEditing/copy';
 import { mediaTranslations } from '../shared/media/copy';
+import { remoteAnnotationTranslations } from '../shared/remote/annotationCopy';
 
 export type LanguageType = 'zh' | 'en';
 
@@ -63,10 +64,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelPresetSessionBusy: '请等待当前回复结束后再切换模型。',
     modelPresetModelMismatch: '实际模型与所选模型不一致，请重新选择。',
     modelPresetAccountChanged: '账号已切换，请重新选择模型。',
+    coworkSessionAdmissionFailed: '会话未能启动，请检查模型或运行环境后重试。',
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
     ...imageEditingTranslations.zh,
+    ...remoteAnnotationTranslations.zh,
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
     browserPasskeyUnnamedAccount: '已保存的账号',
@@ -515,10 +518,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelPresetSessionBusy: 'Wait for the current reply to finish before switching models.',
     modelPresetModelMismatch: 'The resolved model differs from your selection. Please select again.',
     modelPresetAccountChanged: 'The account changed. Please select a model again.',
+    coworkSessionAdmissionFailed: 'The session could not start. Check the model or runtime and try again.',
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
     ...imageEditingTranslations.en,
+    ...remoteAnnotationTranslations.en,
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
     openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
     browserPasskeyChooseAccountTitle: 'Use a passkey',

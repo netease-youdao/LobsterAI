@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 
 import { payloadHash, stableJson } from './canonical';
+import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
 import { advanceAvailabilityMigration, AvailabilityMigration } from './remoteAvailabilityMigration';
 import { assertRemoteSidecarHeadroom } from './remoteSidecarHeadroom';
 import { emitCommittedTelemetry, observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
@@ -19,6 +20,8 @@ export interface AvailabilityRequest {
   key: string; lane: 'control' | 'live'; scope: string; localId: string; method: string; pathname: string; version: number;
   body: Record<string, any>; lookup: string | null; lookupVersion: number; createdAt: number; attempted: boolean;
   replyModelDisplayVersion?: number;
+  annotationDisplayVersion?: number;
+  annotationRepair?: boolean;
   liveEncoderVersion?: number;
 }
 export const ReplyModelDisplayVersion = 1;
@@ -105,6 +108,8 @@ export class RemoteAvailabilityStore {
         CREATE TABLE IF NOT EXISTS availability_encoding_probes(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_key TEXT NOT NULL,
           fingerprint TEXT NOT NULL,encoder_version INTEGER NOT NULL,manual_retry_at INTEGER NOT NULL DEFAULT -1,
           PRIMARY KEY(scope,local_id,object_key));
+        CREATE TABLE IF NOT EXISTS availability_annotation_scan(scope TEXT NOT NULL,local_id TEXT NOT NULL,
+          writer_generation TEXT NOT NULL,object_cursor TEXT NOT NULL,PRIMARY KEY(scope,local_id));
         CREATE TABLE IF NOT EXISTS availability_tool_refresh(scope TEXT NOT NULL,local_id TEXT NOT NULL,tool_id TEXT NOT NULL,
           PRIMARY KEY(scope,local_id,tool_id));
         CREATE TABLE IF NOT EXISTS availability_faults(scope TEXT NOT NULL,local_id TEXT NOT NULL,object_key TEXT NOT NULL,
@@ -349,6 +354,13 @@ export class RemoteAvailabilityStore {
     this.db.prepare('UPDATE availability_objects SET result=? WHERE scope=? AND local_id=? AND object_id=? AND source_revision=?')
       .run(stableJson({ ...previous.result, replyModelDisplayVersion: ReplyModelDisplayVersion }), scope, localId, objectKey, sourceRevision);
   }
+  markAnnotationDisplayChecked(scope: string, localId: string, objectKey: string, sourceRevision: string): void {
+    const previous = this.object(scope, localId, objectKey);
+    if (!previous || previous.sourceRevision !== sourceRevision) return;
+    assertRemoteSidecarHeadroom(this.db.name, 128, 0);
+    this.db.prepare('UPDATE availability_objects SET result=? WHERE scope=? AND local_id=? AND object_id=? AND source_revision=?')
+      .run(stableJson({ ...previous.result, annotationDisplayVersion: RemoteAnnotationDisplayVersion }), scope, localId, objectKey, sourceRevision);
+  }
   skipObject(scope: string, localId: string, objectKey: string, sourceRevision: string): void {
     assertRemoteSidecarHeadroom(this.db.name, Buffer.byteLength(objectKey) + 256, RECEIPT_RESERVE_BYTES);
     this.db.prepare(`INSERT INTO availability_objects VALUES(?,?,?,?,?) ON CONFLICT(scope,local_id,object_id)
@@ -365,7 +377,10 @@ export class RemoteAvailabilityStore {
           `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, stableJson({ ...result,
             representation: request.body.representation === 'repair' ? request.body.objectKind === 'tool' ? 'complete' : request.body.payload?.contentState || 'unknown' : request.body.representation,
             ...(request.replyModelDisplayVersion === ReplyModelDisplayVersion && ['accepted', 'superseded'].includes(result.state)
-              ? { replyModelDisplayVersion: ReplyModelDisplayVersion } : {}) }));
+              ? { replyModelDisplayVersion: ReplyModelDisplayVersion } : {}),
+            ...(request.annotationDisplayVersion === RemoteAnnotationDisplayVersion && (result.state === 'accepted'
+              || result.state === 'superseded' && result.reason === 'ALREADY_REPRESENTED')
+              ? { annotationDisplayVersion: RemoteAnnotationDisplayVersion } : {}) }));
       if (result.state === 'accepted' || result.state === 'superseded') {
         const objectKey = `${request.body.objectKind}:${request.body.objectId}`;
         this.db.prepare('DELETE FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?').run(request.scope, request.localId, objectKey);

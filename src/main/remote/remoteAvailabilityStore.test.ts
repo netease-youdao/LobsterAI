@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
 import { advanceAvailabilityMigration, AvailabilityMigration } from './remoteAvailabilityMigration';
 import { type AvailabilityRequest, RemoteAvailabilityStore, ReplyModelDisplayVersion } from './remoteAvailabilityStore';
 
@@ -219,5 +220,30 @@ describe('reply model display evidence', () => {
     expect(ledger.object(request.scope, request.localId, 'message:message')?.result).toMatchObject({
       state: 'accepted', projectionRevision: '12', replyModelDisplayVersion: ReplyModelDisplayVersion,
     });
+  });
+});
+
+
+describe('annotation display evidence', () => {
+  it('persists only confirmed display repairs and leaves immutable business bodies unchanged', () => {
+    const { ledger } = fixture();
+    const request: AvailabilityRequest = { ...pending, annotationDisplayVersion: RemoteAnnotationDisplayVersion,
+      body: { objectKind: 'message', objectId: 'message', sourceObjectRevision: '8', representation: 'repair', payload: { contentState: 'complete' } } };
+    ledger.saveRequest(request);
+    expect(ledger.request(request.key)?.body).not.toHaveProperty('annotationDisplayVersion');
+    ledger.completeObject(request, { state: 'accepted', projectionRevision: '12' });
+    ledger.close();
+    expect(ledger.object(request.scope, request.localId, 'message:message')?.result).toMatchObject({
+      state: 'accepted', projectionRevision: '12', annotationDisplayVersion: RemoteAnnotationDisplayVersion,
+    });
+  });
+
+  it('does not mark rejected or changed-source messages as checked', () => {
+    const { ledger } = fixture();
+    const request: AvailabilityRequest = { ...pending, annotationDisplayVersion: RemoteAnnotationDisplayVersion,
+      body: { objectKind: 'message', objectId: 'message', sourceObjectRevision: '8', representation: 'repair' } };
+    ledger.saveRequest(request); ledger.completeObject(request, { state: 'rejected' });
+    ledger.markAnnotationDisplayChecked(request.scope, request.localId, 'message:message', '7');
+    expect(ledger.object(request.scope, request.localId, 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
   });
 });

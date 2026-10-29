@@ -2,7 +2,10 @@ import { randomUUID } from 'crypto';
 
 import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
+import { getLanguage } from '../i18n';
 import { payloadHash, sameOwner, stableJson } from './canonical';
+import { annotationRepairCandidates } from './remoteAnnotationRepair';
+import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
 import { acknowledgeAvailabilityDeletion, AvailabilityDeletion, availabilityDeletion, mirrorAvailabilityDeletionIdentity, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
 import { availabilitySourceHealth, recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
 import { type ControlReconciliationPage,RemoteAvailabilityReconcile } from './remoteAvailabilityReconcile';
@@ -68,6 +71,7 @@ export class RemoteAvailabilityPublisher {
   private readonly failures = new Map<string, { count: number; retryAt: number }>();
   private readonly liveScan = new Map<string, number>();
   private recoveryFirst = false;
+  private annotationFirst = false;
   private readonly scanOffsets = new Map<string, number>();
   private readonly contentRepresentations = new Map<string, string>();
   constructor(private readonly deps: Dependencies) {
@@ -299,11 +303,12 @@ export class RemoteAvailabilityPublisher {
       mode: 'online', writerGeneration: state.writerGeneration };
   }
   private save(context: AvailabilityContext, state: AvailabilitySession, key: string, lane: 'control' | 'live', path: string,
-    body: Record<string, any>, version: number, lookup: string | null, lookupVersion = version, method = 'POST', liveEncoderVersion?: number): AvailabilityRequest {
+    body: Record<string, any>, version: number, lookup: string | null, lookupVersion = version, method = 'POST', liveEncoderVersion?: number, annotationDisplayVersion?: number): AvailabilityRequest {
     this.assertCurrent(context);
     return this.ledger.saveRequest({ key, lane, scope: context.scope, localId: state.localId, method, pathname: path, version,
       body: { ...this.body(context, state), ...body }, lookup, lookupVersion, attempted: false, createdAt: Date.now(),
-      ...(liveEncoderVersion === undefined ? {} : { liveEncoderVersion }) });
+      ...(liveEncoderVersion === undefined ? {} : { liveEncoderVersion }),
+      ...(annotationDisplayVersion === undefined ? {} : { annotationDisplayVersion }) });
   }
   private async send(context: AvailabilityContext, request: AvailabilityRequest): Promise<any> {
     context = this.capture(context);
@@ -994,6 +999,7 @@ export class RemoteAvailabilityPublisher {
     if (!this.current(context)) return;
     if (!this.eligible(`${context.scope}:live`)) return;
     const recoveryFirst = (this.recoveryFirst = !this.recoveryFirst);
+    const annotationFirst = recoveryFirst ? (this.annotationFirst = !this.annotationFirst) : false;
     const epoch = this.timerEpoch, current = (): boolean => epoch === this.timerEpoch && this.current(context);
     let scanned = 0, turnStarted = performance.now();
     const yieldIfNeeded = (): Promise<void> | null => {
@@ -1035,7 +1041,10 @@ export class RemoteAvailabilityPublisher {
         const rowStart = sent;
         const recent = recentLiveCandidates(this.deps.store.db, row.local_id);
         // Do not consume a recovery page on turns reserved for recent messages.
-        const recovery = recoveryFirst ? this.liveRecovery.candidates(this.deps.store.db, context.scope, row.local_id) : [];
+        const faults = recoveryFirst ? this.liveRecovery.candidates(this.deps.store.db, context.scope, row.local_id) : [];
+        const annotations = recoveryFirst && context.publicationResolutionSupported === true
+          ? annotationRepairCandidates(this.deps.store.db, this.ledger, context.scope, row.local_id, state.writerGeneration) : [];
+        const recovery = annotationFirst ? [...annotations, ...faults] : [...faults, ...annotations];
         // Give current work and old faults a turn each; neither an archived fault nor a busy tail can starve the other.
         const merged: RecoveryCandidate[] = [];
         for (let index = 0; index < Math.max(recent.length, recovery.length); index++) {
@@ -1045,7 +1054,8 @@ export class RemoteAvailabilityPublisher {
         const unique = new Map<string, RecoveryCandidate>();
         for (const candidate of merged) {
           const key = `${candidate.kind}:${candidate.object_id}`, previous = unique.get(key);
-          unique.set(key, { ...candidate, ...(previous?.repair || candidate.repair ? { repair: true } : {}) });
+          unique.set(key, { ...candidate, ...(previous?.repair || candidate.repair ? { repair: true } : {}),
+            ...(previous?.annotationCheck || candidate.annotationCheck ? { annotationCheck: true } : {}) });
         }
         const candidates = [...unique.values()];
         // Corrupt body bytes cannot hide the original operation or let a newer version bypass it.
@@ -1108,10 +1118,12 @@ export class RemoteAvailabilityPublisher {
               || (this.liveScan.get(key) || 0) > Date.now()) continue;
             const acknowledged = this.ledger.object(context.scope, row.local_id, objectKey);
             const sameSource = acknowledged?.sourceRevision === String(candidate.revision);
-            const repairModelLabel = sameSource && candidate.kind === 'message' && context.publicationResolutionSupported === true
-              && acknowledged.result.replyModelDisplayVersion !== ReplyModelDisplayVersion
+            const repairableMessage = sameSource && candidate.kind === 'message' && context.publicationResolutionSupported === true
               && (acknowledged.result.state === 'accepted' || acknowledged.result.state === 'superseded' && acknowledged.result.reason === 'ALREADY_REPRESENTED')
               && /^[1-9][0-9]*$/u.test(String(acknowledged.result.projectionRevision));
+            let repairModelLabel = repairableMessage && acknowledged.result.replyModelDisplayVersion !== ReplyModelDisplayVersion;
+            let repairAnnotation = repairableMessage && candidate.annotationCheck === true
+              && acknowledged.result.annotationDisplayVersion !== RemoteAnnotationDisplayVersion;
             const repairTool = sameSource && candidate.kind === 'tool' && candidate.repair === true
               && context.publicationResolutionSupported === true
               && (acknowledged.result.state === 'accepted' || acknowledged.result.state === 'superseded' && acknowledged.result.reason === 'ALREADY_REPRESENTED')
@@ -1119,15 +1131,15 @@ export class RemoteAvailabilityPublisher {
             const fault = this.ledger.db.prepare('SELECT 1 FROM availability_faults WHERE scope=? AND local_id=? AND object_key=?')
               .get(context.scope, row.local_id, objectKey);
             const retryRejected = sameSource && acknowledged.result.state === 'rejected' && !!fault;
-            if (sameSource && !repairModelLabel && !repairTool && !retryRejected) {
+            if (sameSource && !repairModelLabel && !repairAnnotation && !repairTool && !retryRejected) {
               recordAvailabilityObjectHealth(this.deps.store, context.scope, row.local_id, objectKey, String(candidate.revision), acknowledged.result.representation || 'unknown');
               continue;
             }
             if (this.ledger.hasPendingObject(context.scope, row.local_id, candidate.kind, candidate.object_id)) continue;
-            const recoveryPublication = candidate.repair || !!fault;
+            const recoveryPublication = candidate.repair || repairAnnotation || !!fault;
             if (!this.liveRecovery.claim(context.scope, row.local_id, objectKey, fingerprint)) continue;
             encoding = true; encoded++;
-            const projection = await this.encoder.project(this.deps.store.db, { database: this.deps.store.db.name, modelPresetNames: replyModelPresetNames(),
+            const projection = await this.encoder.project(this.deps.store.db, { database: this.deps.store.db.name, modelPresetNames: replyModelPresetNames(), annotationLanguage: getLanguage(),
               localId: row.local_id, sessionId: row.session_id, deviceId: context.deviceId, owner: context.owner,
               environment: context.environment, objectId: candidate.object_id, objectKind: candidate.kind, revision: String(candidate.revision) });
             encoding = false;
@@ -1150,8 +1162,17 @@ export class RemoteAvailabilityPublisher {
             if (repairModelLabel && (!projection?.resolvedModelLabel
               || projection.payload.inputModel?.displayName !== projection.resolvedModelLabel)) {
               this.ledger.markReplyModelDisplayChecked(context.scope, row.local_id, objectKey, String(candidate.revision));
-              continue;
+              repairModelLabel = false;
             }
+            // A model-display inspection may discover annotations after an old pending request completes.
+            // Reuse that bounded encoding rather than delaying a known repair behind the scan throttle.
+            if (repairableMessage && projection?.hasAnnotationText
+              && acknowledged.result.annotationDisplayVersion !== RemoteAnnotationDisplayVersion) repairAnnotation = true;
+            if (repairAnnotation && !projection?.hasAnnotationText) {
+              this.ledger.markAnnotationDisplayChecked(context.scope, row.local_id, objectKey, String(candidate.revision));
+              repairAnnotation = false;
+            }
+            if (sameSource && !repairModelLabel && !repairAnnotation && !repairTool && !retryRejected) continue;
             if (!projection) {
               this.ledger.skipObject(context.scope, row.local_id, objectKey, String(candidate.revision));
               recordAvailabilityObjectHealth(this.deps.store, context.scope, row.local_id, objectKey, String(candidate.revision), 'local_only');
@@ -1165,14 +1186,16 @@ export class RemoteAvailabilityPublisher {
               contentUnavailableReason: projection.payload.contentUnavailableReason });
             const publicationId = randomUUID();
             // Encoder evidence and the format marker remain local. A same-source change uses the server's CAS repair.
-            const { resolvedModelLabel: _resolvedModelLabel, toolSource: _toolSource, encodingStats: _encodingStats, ...wireProjection } = projection;
+            const { hasAnnotationText: _hasAnnotationText, resolvedModelLabel: _resolvedModelLabel, toolSource: _toolSource, encodingStats: _encodingStats, ...wireProjection } = projection;
             const request = this.ledger.saveRequest({ key: publicationId, lane: 'live', scope: context.scope, localId: state.localId,
               method: 'POST', pathname: '/sync/live-projections', version: 3, lookupVersion: 3, attempted: false, createdAt: Date.now(),
               lookup: `/sync/live-projections/${publicationId}?sessionId=${encodeURIComponent(row.session_id)}&writerGeneration=${encodeURIComponent(state.writerGeneration)}`,
               replyModelDisplayVersion: ReplyModelDisplayVersion,
-              ...(recoveryPublication ? { liveEncoderVersion: RemoteLiveEncoderVersion } : {}),
+              ...(candidate.kind === 'message' ? { annotationDisplayVersion: RemoteAnnotationDisplayVersion } : {}),
+              ...(repairAnnotation ? { annotationRepair: true } : {}),
+              ...(recoveryPublication || repairAnnotation ? { liveEncoderVersion: RemoteLiveEncoderVersion } : {}),
               body: { ...this.body(context, state), publicationId, ...wireProjection, policyVersion: '1',
-                ...(repairModelLabel || repairTool ? { representation: 'repair', expectedProjectionRevision: acknowledged.result.projectionRevision } : {}) } });
+                ...(repairModelLabel || repairAnnotation || repairTool ? { representation: 'repair', expectedProjectionRevision: acknowledged.result.projectionRevision } : {}) } });
             remoteDiagnosticLog('remote.publication.sealed', { operationId: publicationId, localSessionId: row.local_id, objectId: candidate.object_id, lane: 'live' });
             sent++; await this.publishLive(context, request); if (current()) this.failures.delete(key);
           } catch (error) {
@@ -1244,15 +1267,17 @@ export class RemoteAvailabilityPublisher {
       // retain the bytes, and let a later source revision publish normally.
       await this.resolveLive(context, state, request.key);
       this.assertCurrent(context);
-      if (request.body.objectKind === 'tool') {
-        this.liveRecovery.fault(context.scope, request.localId, `tool:${request.body.objectId}`,
-          payloadHash({ kind: 'tool', objectId: request.body.objectId, revision: request.body.sourceObjectRevision }));
-        throw error;
+      if (request.body.objectKind === 'tool' || request.annotationRepair === true) {
+        this.liveRecovery.fault(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`,
+          payloadHash({ kind: request.body.objectKind, objectId: request.body.objectId, revision: request.body.sourceObjectRevision }));
+        if (request.body.objectKind === 'tool') throw error;
+        // The persistent source-specific fault defers this annotation repair without blocking a real new revision.
+        return;
       }
       this.ledger.markReplyModelDisplayChecked(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision);
       return;
     }
-    assertLiveReceipt(request.body, result, request.liveEncoderVersion === RemoteLiveEncoderVersion);
+    assertLiveReceipt(request.body, result, request.annotationRepair === true || request.liveEncoderVersion === RemoteLiveEncoderVersion);
     if (result.state === 'rejected') this.ledger.objectFault(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`,
       payloadHash({ kind: request.body.objectKind, objectId: request.body.objectId, revision: request.body.sourceObjectRevision }));
     if (result.state === 'rejected' && request.body.representation === 'complete' && request.body.objectKind === 'message') {
@@ -1265,7 +1290,7 @@ export class RemoteAvailabilityPublisher {
           objectId: request.body.objectId, sourceObjectRevision: request.body.sourceObjectRevision, representation: 'desktop_only',
           policyVersion: '1', payload, payloadHash: payloadHash(payload) }, 3,
         `/sync/live-projections/${publicationId}?sessionId=${encodeURIComponent(state.sessionId)}&writerGeneration=${encodeURIComponent(state.writerGeneration)}`,
-        3, 'POST', request.liveEncoderVersion);
+        3, 'POST', request.liveEncoderVersion, request.annotationDisplayVersion);
         this.ledger.completeObject(request, result);
       })());
       telemetry.emit(SyncTelemetry.Event.Acknowledged, { publicationKind: SyncTelemetry.Kind.Live,

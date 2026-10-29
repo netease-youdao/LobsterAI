@@ -8,6 +8,7 @@ import path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { initializeLibraryTables } from '../library/libraryMigrations';
+import { RemoteImportSnapshots } from './remoteImportSnapshots';
 import { isTransientProjectionFailure, RemoteProjectionFailure } from './remoteProjectionCoordinator';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
@@ -66,6 +67,32 @@ describe('desktop core and remote projection isolation', () => {
     expect(f.store.sync('task')!.source_seq).toBeGreaterThan(0);
     expect(f.db.prepare('SELECT * FROM remote_dirty').all()).toEqual([]);
     expect(fs.readdirSync(path.join(f.directory, 'remote-projection-staging'))).toEqual([]);
+  });
+  it.each(['message', 'verification'])('publishes a new task within bounded turns while an old task keeps receiving %s updates', async change => {
+    const f = fixture(true, true);
+    addArtifact(f.db, 'old-artifact', 'task', 'message');
+    f.store.transaction(() => {
+      f.db.exec("INSERT INTO cowork_sessions VALUES('new-task','New task',2,2,'completed')");
+      f.store.assignNew('new-task', owner, 'local_create');
+      f.db.exec("INSERT INTO cowork_messages VALUES('new-message','new-task','assistant','New result','{}',2,1)");
+    });
+    for (const id of ['task', 'new-task']) f.store.bindRemote(id, f.store.sync(id)!.session_id, 'desktop');
+    f.store.setProjectionIdentity('environment', owner, 'desktop');
+    f.db.prepare('UPDATE remote_session_revisions SET dirty_at=1 WHERE session_id=?').run('task');
+    f.db.prepare('UPDATE remote_session_revisions SET dirty_at=2 WHERE session_id=?').run('new-task');
+    for (let turn = 0; turn < 4 && f.store.sync('new-task')!.source_seq === 0; turn++) {
+      if (change === 'message') f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run(`Old update ${turn}`, 'message'));
+      else f.db.prepare('UPDATE library_local_artifacts SET last_verified_at=? WHERE id=?').run(turn + 10, 'old-artifact');
+      await f.store.flushProjections();
+    }
+    const snapshot = f.store.snapshot('new-task');
+    expect(snapshot.records.filter(record => record.eventType === 'session.upsert')).toHaveLength(1);
+    expect(snapshot.records.find(record => record.payload.message)?.payload.message.blocks[0].text).toBe('New result');
+    const identity = new RemoteImportSnapshots(f.store).identity('new-task', owner, 'desktop', 'environment');
+    expect(Number(identity.sourceSeq)).toBeGreaterThan(0);
+    // Scheduling gives no cloud acknowledgement or execution permission.
+    expect(f.store.sync('new-task')!.ack_seq).toBe(0);
+    expect(f.store.sync('task')!.ack_seq).toBe(0);
   });
   it('recovers an isolated task after real current-revision publication without waiting for an impossible cloud ACK', async () => {
     const f = fixture(), tasks = new RemoteTaskSyncState(f.db);
@@ -335,6 +362,86 @@ describe('desktop core and remote projection isolation', () => {
     expect(f.db.prepare('SELECT key FROM remote_corrupt_state ORDER BY key').all()).toEqual([{ key: 'replyProjectionMode' }, { key: 'run:task' }]);
     expect(() => reopened.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Still editable' WHERE id='task'").run())).not.toThrow();
   });
+});
+
+it('rotates across more than fifty continuously dirty tasks without bypassing admission', () => {
+  const f = fixture(false);
+  f.store.transaction(() => {
+    for (let i = 0; i < 60; i++) {
+      const id = `pending-${String(i).padStart(2, '0')}`;
+      f.db.prepare("INSERT INTO cowork_sessions VALUES(?,?,2,2,'idle')").run(id, id);
+      f.store.assignNew(id, owner, 'local_create');
+      f.db.prepare('UPDATE remote_session_revisions SET dirty_at=? WHERE session_id=?').run(i + 2, id);
+    }
+  });
+  f.db.prepare('UPDATE remote_session_revisions SET dirty_at=1 WHERE session_id=?').run('task');
+  f.store.setTaskAdmission(id => id !== 'pending-00');
+  f.store.refreshProjectionHints();
+  const served = new Set<string>();
+  for (let turn = 0; turn < 60; turn++) {
+    const work = f.store.nextProjectionWork();
+    expect(work).not.toBeNull();
+    served.add(work!.sessionId);
+  }
+  expect(served.size).toBe(60);
+  expect(served.has('pending-00')).toBe(false);
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+});
+
+it('wraps after completed candidates disappear without leaving a skipped task behind', () => {
+  const f = fixture(false);
+  f.store.transaction(() => {
+    for (const [id, time] of [['second', 2], ['third', 3]] as const) {
+      f.db.prepare("INSERT INTO cowork_sessions VALUES(?,?,2,2,'idle')").run(id, id);
+      f.store.assignNew(id, owner, 'local_create');
+      f.db.prepare('UPDATE remote_session_revisions SET dirty_at=? WHERE session_id=?').run(time, id);
+    }
+  });
+  f.db.prepare('UPDATE remote_session_revisions SET dirty_at=1 WHERE session_id=?').run('task');
+  f.store.refreshProjectionHints();
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+  f.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run('task');
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('third');
+  f.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run('third');
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('second');
+});
+
+it('resets rotation when the owner is disabled or changed', () => {
+  const f = fixture(false), other = { ...owner, userId: 'B' };
+  f.store.transaction(() => {
+    for (const id of ['other-first', 'other-second']) {
+      f.db.prepare("INSERT INTO cowork_sessions VALUES(?,?,2,2,'idle')").run(id, id);
+      f.store.assignNew(id, other, 'local_create');
+    }
+  });
+  f.store.refreshProjectionHints();
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+  f.store.setEnabledOwner(null);
+  expect(f.store.nextProjectionWork()).toBeNull();
+  f.store.setEnabledOwner(owner);
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+  f.store.setEnabledOwner(other);
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('other-first');
+});
+
+it('resets rotation on same-owner environment changes while retaining admission checks', () => {
+  const f = fixture(false);
+  f.store.transaction(() => {
+    for (const id of ['target-first', 'target-second']) {
+      f.db.prepare("INSERT INTO cowork_sessions VALUES(?,?,2,2,'idle')").run(id, id);
+      f.store.assignNew(id, owner, 'local_create');
+      f.db.prepare('UPDATE remote_sync SET sync_environment=? WHERE local_id=?').run('second-environment', id);
+    }
+  });
+  let admittedEnvironment = 'first-environment';
+  f.store.setTaskAdmission(id => f.store.sync(id)?.sync_environment === admittedEnvironment);
+  f.store.setProjectionIdentity(admittedEnvironment, owner, 'desktop');
+  f.store.refreshProjectionHints();
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('task');
+  f.db.prepare('DELETE FROM remote_dirty WHERE session_id=?').run('task');
+  admittedEnvironment = 'second-environment';
+  f.store.setProjectionIdentity(admittedEnvironment, owner, 'desktop');
+  expect(f.store.nextProjectionWork()?.sessionId).toBe('target-first');
 });
 
 it('quit projection priority retains ownership and retry guards and is reversible', () => {

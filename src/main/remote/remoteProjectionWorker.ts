@@ -5,6 +5,7 @@ import path from 'path';
 import { parentPort, workerData } from 'worker_threads';
 
 import type { RemoteAgentSummary, RemoteOwner } from '../../shared/remote/constants';
+import { type LanguageType,setLanguage } from '../i18n';
 import { sameOwner } from './canonical';
 import { type ArtifactProjectionJob,projectRemoteArtifacts } from './remoteArtifactProjection';
 import { questionSessionSql, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
@@ -12,6 +13,7 @@ import type { ReplyModelPresetNames } from './remoteReplyModel';
 import { RemoteStore } from './remoteStore';
 
 export interface ProjectionWork {
+  annotationLanguage?: LanguageType;
   database: string; target: string; sessionId: string; owner: RemoteOwner; deviceId: string; environment: string | null;
   questionEvidenceDigest?: string;
   modelPresetNames?: ReplyModelPresetNames;
@@ -90,6 +92,7 @@ function materialize(work: ProjectionWork): { revision: number; sourceSeq: numbe
     })();
     source.close(); budget();
     target.exec('CREATE TABLE projection_original_state AS SELECT * FROM remote_state');
+    if (work.annotationLanguage) setLanguage(work.annotationLanguage);
     const store = new RemoteStore(target, { deferredProjection: true, restoreRuns: false });
     store.configureDetachedProjection(work);
     for (const row of target.prepare("SELECT object_key,revision,record_json FROM remote_object_state WHERE session_id=? AND object_key NOT LIKE 'question:%'").all(work.sessionId) as Iterable<{ object_key: string; revision: number; record_json: string }>) {
