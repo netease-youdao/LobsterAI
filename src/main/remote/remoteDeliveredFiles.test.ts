@@ -4,7 +4,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { captureDeliveryBaseline, changedDeliveredFile, deliveredFileDeclarations, deliveredFileLinks, RemoteFileDeliveryKind } from './remoteDeliveredFiles';
+import { captureDeliveryBaseline, changedDeliveredFile, deliveredFileDeclarations, deliveredFileLinks, REMOTE_DELIVERY_BASELINE_BUDGET_MS, RemoteFileDeliveryKind } from './remoteDeliveredFiles';
 
 const roots: string[] = [];
 const current = (): boolean => true;
@@ -101,13 +101,105 @@ describe('remote delivered file evidence', () => {
     const pending = captureDeliveryBaseline([root], current);
     let settled = false;
     void pending.then(() => { settled = true; });
-    await vi.advanceTimersByTimeAsync(79);
+    await vi.advanceTimersByTimeAsync(REMOTE_DELIVERY_BASELINE_BUDGET_MS - 1);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(2);
     const baseline = await pending;
     expect(baseline.directories).toHaveLength(0);
     release!(stat); await Promise.resolve(); await Promise.resolve();
     expect(baseline.directories).toHaveLength(0);
+  });
+
+  it('accepts a complete unchanged scan taking longer than the former 80 ms deadline', async () => {
+    const root = directory(), lstat = fs.promises.lstat.bind(fs.promises);
+    vi.spyOn(fs.promises, 'lstat').mockImplementationOnce(async target => {
+      await new Promise(resolve => setTimeout(resolve, 120)); return lstat(target);
+    });
+    const baseline = await captureDeliveryBaseline([root], current);
+    expect(baseline.directories.map(item => item.path)).toEqual([root]);
+    const output = path.join(root, 'deck.pptx'); fs.writeFileSync(output, 'new output');
+    expect(await changedDeliveredFile(baseline, output, Date.now() + 1, current)).not.toBeNull();
+  });
+
+  it('retains the healthy Desktop scan when cwd I/O hangs and ignores its late result', async () => {
+    const cwd = directory(), desktop = directory(), lstat = fs.promises.lstat.bind(fs.promises);
+    let release!: (value: fs.Stats) => void;
+    const waiting = new Promise<fs.Stats>(resolve => { release = resolve; });
+    vi.spyOn(fs.promises, 'lstat').mockImplementation(target => String(target) === cwd ? waiting : lstat(target));
+    const baseline = await captureDeliveryBaseline([cwd, desktop], current);
+    expect(baseline.directories.map(item => item.path)).toEqual([desktop]);
+    release(fs.statSync(cwd)); await new Promise(resolve => setTimeout(resolve, 10));
+    expect(baseline.directories.map(item => item.path)).toEqual([desktop]);
+    const output = path.join(desktop, 'new.md'); fs.writeFileSync(output, 'output');
+    expect(await changedDeliveredFile(baseline, output, Date.now() + 1, current)).not.toBeNull();
+  });
+
+  it('preserves root priority when the second directory completes first', async () => {
+    const first = directory(), second = directory(), lstat = fs.promises.lstat.bind(fs.promises);
+    let release!: (value: fs.Stats) => void;
+    const delayed = new Promise<fs.Stats>(resolve => { release = resolve; });
+    vi.spyOn(fs.promises, 'lstat').mockImplementationOnce(() => delayed);
+    const realpath = vi.spyOn(fs.promises, 'realpath');
+    const pending = captureDeliveryBaseline([first, second], current);
+    // The second realpath check is the last I/O in a successful root scan.
+    await vi.waitFor(() => expect(realpath.mock.calls.filter(([target]) => target === second)).toHaveLength(2));
+    release(await lstat(first));
+    expect((await pending).directories.map(item => item.path)).toEqual([first, second]);
+  });
+
+  it.each(['io-error', 'changed-root'])('isolates a %s from the other authorized directory', async failure => {
+    const cwd = directory(), desktop = directory(), lstat = fs.promises.lstat.bind(fs.promises);
+    let cwdReads = 0;
+    vi.spyOn(fs.promises, 'lstat').mockImplementation(async target => {
+      if (String(target) === cwd && failure === 'io-error') throw new Error('EIO');
+      const stat = await lstat(target);
+      if (String(target) === cwd && ++cwdReads === 2) stat.mtimeMs += 1;
+      return stat;
+    });
+    const baseline = await captureDeliveryBaseline([cwd, desktop], current);
+    expect(baseline.directories.map(item => item.path)).toEqual([desktop]);
+    const unverified = path.join(cwd, 'unverified.md'); fs.writeFileSync(unverified, 'must stay local');
+    expect(await changedDeliveredFile(baseline, unverified, Date.now() + 1, current)).toBeNull();
+  });
+
+  it.each([false, true])('discards even a completed root when authorization is revoked during the other scan (throws=%s)', async throws => {
+    const cwd = directory(), desktop = directory();
+    let allowed = true, release!: (value: fs.Stats) => void;
+    const delayed = new Promise<fs.Stats>(resolve => { release = resolve; });
+    vi.spyOn(fs.promises, 'lstat').mockImplementationOnce(() => delayed);
+    const realpath = vi.spyOn(fs.promises, 'realpath');
+    const pending = captureDeliveryBaseline([cwd, desktop], () => {
+      if (!allowed && throws) throw new Error('revoked');
+      return allowed;
+    });
+    await vi.waitFor(() => expect(realpath.mock.calls.filter(([target]) => target === desktop)).toHaveLength(2));
+    allowed = false; release(fs.statSync(cwd));
+    expect((await pending).directories).toEqual([]);
+  });
+
+  it('closes an in-progress iterator after late I/O and never exposes a partial directory baseline', async () => {
+    const root = directory(), file = path.join(root, 'partial.md'); fs.writeFileSync(file, 'existing');
+    const lstat = fs.promises.lstat.bind(fs.promises);
+    let release!: (value: fs.Stats) => void, started!: () => void, closed!: () => void;
+    const delayed = new Promise<fs.Stats>(resolve => { release = resolve; });
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    const finished = new Promise<void>(resolve => { closed = resolve; });
+    const entries = (async function* () {
+      try { yield { name: 'partial.md' }; } finally { closed(); }
+    })();
+    vi.spyOn(fs.promises, 'opendir').mockResolvedValue(entries as unknown as fs.Dir);
+    vi.spyOn(fs.promises, 'lstat').mockImplementation(target => {
+      if (String(target) === file) { started(); return delayed; }
+      return lstat(target);
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pending = captureDeliveryBaseline([root], current);
+    await reading;
+    await vi.advanceTimersByTimeAsync(REMOTE_DELIVERY_BASELINE_BUDGET_MS);
+    const baseline = await pending;
+    expect(baseline.directories).toEqual([]);
+    release(fs.statSync(file)); await finished;
+    expect(baseline.directories).toEqual([]);
   });
 
   it('invalidates the original owner epoch and rejects changes after the delivery boundary', async () => {

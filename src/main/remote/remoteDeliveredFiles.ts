@@ -9,7 +9,7 @@ import { type DeliveryRejectionDiagnostic, reportDeliveryRejection } from './rem
 const MAX_DIRECTORY_ENTRIES = 256;
 const MAX_ROOTS = 2;
 const MAX_DELIVERY_DEPTH = 32;
-const BASELINE_BUDGET_MS = 80;
+export const REMOTE_DELIVERY_BASELINE_BUDGET_MS = 1000;
 const MAX_DELIVERED_FILES = 20;
 const IMAGE_DELIVERY_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 const fileIdentity = (stat: fs.Stats): string => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
@@ -32,53 +32,54 @@ export interface DeliveryBaseline {
 
 /** Only complete, stable directory scans may establish that an output did not exist. */
 export async function captureDeliveryBaseline(roots: string[], current: () => boolean, observedBefore?: number, diagnostic?: DeliveryRejectionDiagnostic): Promise<DeliveryBaseline> {
-  const directories: DeliveryDirectory[] = [];
-  const deadline = performance.now() + BASELINE_BUDGET_MS;
+  const directories: Array<DeliveryDirectory | undefined> = [];
+  const deadline = performance.now() + REMOTE_DELIVERY_BASELINE_BUDGET_MS;
   let accepting = true;
   const active = (): boolean => accepting && performance.now() < deadline && permitted(current);
   const predatesDispatch = (stat: fs.Stats): boolean => observedBefore === undefined || stat.mtimeMs <= observedBefore && stat.ctimeMs <= observedBefore;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const scan = async (): Promise<void> => {
-    for (const root of new Set(roots.slice(0, MAX_ROOTS).filter(value => path.isAbsolute(value)).map(value => path.resolve(value)))) {
-      if (!active()) { reportDeliveryRejection(diagnostic, 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED'); break; }
-      try {
-        const before = await fs.promises.lstat(root);
-        if (!active() || !before.isDirectory() || before.isSymbolicLink() || !predatesDispatch(before)) {
-          reportDeliveryRejection(diagnostic, !active() ? 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED' : !predatesDispatch(before) ? 'ROOT_CHANGED_AFTER_DISPATCH' : 'ROOT_NOT_PLAIN_DIRECTORY'); continue;
+  // Each root makes independent progress: a slow cwd must not starve Desktop.
+  // Keep one bounded deadline and accept only complete, unchanged directory scans.
+  const scan = async (root: string, index: number): Promise<void> => {
+    if (!active()) { reportDeliveryRejection(diagnostic, 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED'); return; }
+    try {
+      const before = await fs.promises.lstat(root);
+      if (!active() || !before.isDirectory() || before.isSymbolicLink() || !predatesDispatch(before)) {
+        reportDeliveryRejection(diagnostic, !active() ? 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED' : !predatesDispatch(before) ? 'ROOT_CHANGED_AFTER_DISPATCH' : 'ROOT_NOT_PLAIN_DIRECTORY'); return;
+      }
+      if (await fs.promises.realpath(root) !== root || !active()) { reportDeliveryRejection(diagnostic, 'ROOT_NOT_CANONICAL_OR_CONTEXT_EXPIRED'); return; }
+      const files: Record<string, string | null> = Object.create(null);
+      const directory = await fs.promises.opendir(root, { bufferSize: 32 });
+      let count = 0;
+      let complete = true;
+      for await (const entry of directory) {
+        if (!active() || ++count > MAX_DIRECTORY_ENTRIES) {
+          reportDeliveryRejection(diagnostic, count > MAX_DIRECTORY_ENTRIES ? 'BASELINE_ENTRY_LIMIT' : 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED'); complete = false; break;
         }
-        if (await fs.promises.realpath(root) !== root || !active()) { reportDeliveryRejection(diagnostic, 'ROOT_NOT_CANONICAL_OR_CONTEXT_EXPIRED'); continue; }
-        const files: Record<string, string | null> = Object.create(null);
-        const directory = await fs.promises.opendir(root, { bufferSize: 32 });
-        let count = 0;
-        let complete = true;
-        for await (const entry of directory) {
-          if (!active() || ++count > MAX_DIRECTORY_ENTRIES) {
-            reportDeliveryRejection(diagnostic, count > MAX_DIRECTORY_ENTRIES ? 'BASELINE_ENTRY_LIMIT' : 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED'); complete = false; break;
-          }
-          if (remoteFileLocalLimit(entry.name, true) === null) continue;
-          const stat = await fs.promises.lstat(path.join(root, entry.name));
-          if (!active() || !predatesDispatch(stat)) {
-            reportDeliveryRejection(diagnostic, !active() ? 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED' : 'BASELINE_FILE_CHANGED_AFTER_DISPATCH'); complete = false; break;
-          }
-          files[entry.name] = stat.isFile() && !stat.isSymbolicLink() ? fileIdentity(stat) : null;
+        if (remoteFileLocalLimit(entry.name, true) === null) continue;
+        const stat = await fs.promises.lstat(path.join(root, entry.name));
+        if (!active() || !predatesDispatch(stat)) {
+          reportDeliveryRejection(diagnostic, !active() ? 'BASELINE_BUDGET_OR_CONTEXT_EXPIRED' : 'BASELINE_FILE_CHANGED_AFTER_DISPATCH'); complete = false; break;
         }
-        if (!complete || !active()) continue;
-        const after = await fs.promises.lstat(root);
-        if (!active() || !after.isDirectory() || after.isSymbolicLink() || !predatesDispatch(after)
-          || fileIdentity(before) !== fileIdentity(after) || await fs.promises.realpath(root) !== root || !active()) {
-          reportDeliveryRejection(diagnostic, 'BASELINE_ROOT_CHANGED_OR_CONTEXT_EXPIRED'); continue;
-        }
-        directories.push({ path: root, identity: directoryIdentity(after), files });
-      } catch { reportDeliveryRejection(diagnostic, 'BASELINE_IO_FAILED'); }
-    }
+        files[entry.name] = stat.isFile() && !stat.isSymbolicLink() ? fileIdentity(stat) : null;
+      }
+      if (!complete || !active()) return;
+      const after = await fs.promises.lstat(root);
+      if (!active() || !after.isDirectory() || after.isSymbolicLink() || !predatesDispatch(after)
+        || fileIdentity(before) !== fileIdentity(after) || await fs.promises.realpath(root) !== root || !active()) {
+        reportDeliveryRejection(diagnostic, 'BASELINE_ROOT_CHANGED_OR_CONTEXT_EXPIRED'); return;
+      }
+      directories[index] = { path: root, identity: directoryIdentity(after), files };
+    } catch { reportDeliveryRejection(diagnostic, 'BASELINE_IO_FAILED'); }
   };
   try {
-    await Promise.race([scan(), new Promise<void>(resolve => { timer = setTimeout(resolve, BASELINE_BUDGET_MS); })]);
+    const selected = [...new Set(roots.slice(0, MAX_ROOTS).filter(value => path.isAbsolute(value)).map(value => path.resolve(value)))];
+    await Promise.race([Promise.all(selected.map(scan)), new Promise<void>(resolve => { timer = setTimeout(resolve, REMOTE_DELIVERY_BASELINE_BUDGET_MS); })]);
   } finally {
     accepting = false;
     if (timer) clearTimeout(timer);
   }
-  return { directories: permitted(current) ? directories.slice() : [], current };
+  return { directories: permitted(current) ? directories.filter((value): value is DeliveryDirectory => value !== undefined) : [], current };
 }
 
 /** A receipt proves current stable bytes, never historical terminal bytes. Only an explicit MEDIA declaration may retain an unchanged baseline file. */
