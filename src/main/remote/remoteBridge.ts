@@ -41,6 +41,7 @@ import { RemoteOwnershipContentCache } from './remoteOwnershipContentCache';
 import { type OwnershipContentSyncSnapshot, unknownOwnershipContentSync } from './remoteOwnershipContentSync';
 import { remotePerformance, RemotePerformanceEvent, RemotePerformanceOutcome, RemotePerformanceReason, RemotePerformanceStage } from './remotePerformanceLog';
 import { isTransientProjectionFailure } from './remoteProjectionCoordinator';
+import { remotePublicationForeign, remotePublicationTargetSpace } from './remotePublicationOrigins';
 import { RemoteQuestionError } from './remoteQuestionService';
 import type { RegistrationIdentities, RemoteRegistrationIdentity } from './remoteRegistrationIdentity';
 import { RemoteReplyTransport } from './remoteReplyTransport';
@@ -253,6 +254,15 @@ export class RemoteBridge {
   private readonly importSnapshots: RemoteImportSnapshots;
   private fileTimer: ReturnType<typeof setInterval> | null = null;
   constructor(private readonly deps: BridgeDependencies) {
+    deps.store.publicationOrigins.setRouteProvider(deps.getApiBaseUrl);
+    deps.agentOwnership?.publicationOrigins?.setRouteProvider(deps.getApiBaseUrl);
+    const publicationTarget = () => {
+      const space = this.targetId && remotePublicationTargetSpace(deps.store.db, this.targetId);
+      return this.owner && this.registration && space && this.accountRoute === deps.getApiBaseUrl() && this.accountRouteEpoch === (deps.getRouteEpoch?.() ?? 0) && sameOwner(this.owner, deps.getOwner())
+        ? { owner: this.owner, route: this.accountRoute, dataSpaceId: space } : null;
+    };
+    deps.store.publicationOrigins.setCurrentTargetProvider(publicationTarget);
+    deps.agentOwnership?.publicationOrigins?.setCurrentTargetProvider(publicationTarget);
     this.accountRoute = deps.getApiBaseUrl();
     this.accountRouteEpoch = deps.getRouteEpoch?.() ?? 0;
     this.displaySnapshot = new RemoteDisplaySnapshot({
@@ -1258,6 +1268,7 @@ export class RemoteBridge {
       const current = (): boolean => epoch === this.accountGeneration && this.accountRoute === this.deps.getApiBaseUrl()
         && sameOwner(this.owner, this.deps.getOwner()) && this.registration === result;
       if (!current()) throw new Error('Account changed during target negotiation');
+      this.deps.store.publicationOrigins.confirm(this.owner!, this.accountRoute, target, target ? undefined : `legacy:${payloadHash([this.owner!.userId, this.owner!.scopeKey, result.deviceId])}`);
       const prior = this.targets.active(this.owner!);
       const distinct = !!target && !!prior?.syncTarget && target.dataSpaceId !== prior.syncTarget.dataSpaceId;
       const legacyStates: RetentionState[] = [];
@@ -1266,6 +1277,7 @@ export class RemoteBridge {
         syncTarget: target, registrationScope: this.registrationIdentity().registrationScope, bootstrap: distinct, legacyStates, allowPartialLegacy: true })
         : this.targets.activateLegacy({ owner: this.owner!, deviceId: result.deviceId, registrationScope: this.registrationIdentity().registrationScope, legacyStates, allowPartialLegacy: true });
       this.targetId = activated.targetId;
+      this.deps.store.publicationOrigins.confirm(this.owner!, this.accountRoute, target, activated.targetId);
       const recoveryKey = `registrationSettings:${this.owner!.userId}:${this.owner!.scopeKey}`;
       const recovery = this.deps.store.get<{ route: string; previousInstallationId: string; settings: LocalSettings }>(recoveryKey);
       if (recovery?.route === this.accountRoute && recovery.previousInstallationId !== this.registrationIdentity().installationId) {
@@ -1684,6 +1696,7 @@ export class RemoteBridge {
   }
   private async syncSession(row: SyncRow, current: () => boolean, context: TaskSyncContext, stepwise: boolean): Promise<void> {
     const id = row.local_id;
+    if (remotePublicationForeign(this.deps.store.db, id, context.owner, context.target)) return;
     const telemetry = captureRemoteTelemetry({ localSessionId: id, sessionId: row.session_id, deviceId: context.deviceId,
       remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey, lane: 'history', publicationKind: 'legacy_batch', operationKind: 'legacy_batch' });
     if (!this.availability.legacyHistoryAllowed(id)) return;

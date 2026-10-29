@@ -6,6 +6,7 @@ import { AgentId, AgentOwnerKind } from '../../shared/agent/constants';
 import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, type RemoteAgentCatalogItem, RemoteAgentReason, RemoteAgentState, type RemoteAgentSummary, type RemoteOwner } from '../../shared/remote/constants';
 import type { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash, sameOwner } from './canonical';
+import { remotePublicationAllowed,RemotePublicationKind } from './remotePublicationOrigins';
 import type { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
@@ -48,6 +49,10 @@ export class RemoteAgentCatalog {
   private scope(parts: string[]): string { return JSON.stringify([...(this.getTargetId ? [this.targetId()] : []), ...parts]); }
   private key(owner: RemoteOwner, deviceId: string): string { return `agentCatalog:${this.scope([owner.userId, owner.scopeKey, deviceId])}`; }
   private workspaceKey(owner: RemoteOwner, deviceId: string, agentId: string): string { return `agentWorkspaces:${this.scope([owner.userId, owner.scopeKey, deviceId, agentId])}`; }
+  private canPublishHere(agentId: string, owner: RemoteOwner): boolean {
+    const targetId = this.getTargetId?.();
+    return !this.getTargetId || !!targetId && remotePublicationAllowed(this.store.db, RemotePublicationKind.Agent, agentId, owner, targetId);
+  }
   private row(agentId: string): AgentRow | undefined { return this.store.db.prepare('SELECT id,name,icon,enabled FROM agents WHERE id=?').get(agentId) as AgentRow | undefined; }
   summary(sessionId: string, actor: RemoteOwner): RemoteAgentSummary | null {
     if (!sameOwner(this.store.owner(sessionId), actor)) return null;
@@ -56,6 +61,7 @@ export class RemoteAgentCatalog {
     return this.agentSummary(session.agent_id || AgentId.Main, actor);
   }
   private agentSummary(agentId: string, actor: RemoteOwner): RemoteAgentSummary | null {
+    if (!this.canPublishHere(agentId, actor)) return null;
     const identity = this.ownership.get(agentId);
     if (!identity || identity.ownerKind === AgentOwnerKind.Quarantined
       || identity.ownerKind === AgentOwnerKind.Owned && !sameOwner(identity.owner, actor)) return null;
@@ -76,7 +82,7 @@ export class RemoteAgentCatalog {
     for (const identity of this.ownership.list()) {
       if (!this.ownership.canView(identity.agentId, owner)) continue;
       this.agentSummary(identity.agentId, owner);
-      if (!this.ownership.canPublish(identity.agentId, owner) || !canPublishAgent(identity.agentId)) continue;
+      if (!this.ownership.canPublish(identity.agentId, owner) || !this.canPublishHere(identity.agentId, owner) || !canPublishAgent(identity.agentId)) continue;
       const beforeVersion = this.ownership.get(identity.agentId)!.version;
       let workspace: AgentWorkspace | null = null;
       try { workspace = await this.getWorkspace(identity.agentId); } catch { /* Publish unavailability, never substitute another Agent's path. */ }
@@ -110,7 +116,7 @@ export class RemoteAgentCatalog {
     return items.sort((a, b) => a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0);
   }
   resolve(owner: RemoteOwner, deviceId: string, agentId: string, version: string, workspaceId: string): string {
-    if (!this.ownership.canPublish(agentId, owner)) throw remoteAgentFailure('NOT_SELECTABLE');
+    if (!this.ownership.canPublish(agentId, owner) || !this.canPublishHere(agentId, owner)) throw remoteAgentFailure('NOT_SELECTABLE');
     const identity = this.ownership.get(agentId)!;
     if (identity.version !== version) throw new RemoteAgentError(AGENT_VERSION_CONFLICT, 'AGENT_VERSION_CONFLICT', 'VERSION_CHANGED');
     if (!this.row(agentId)?.enabled) throw remoteAgentFailure('DISABLED');
@@ -126,7 +132,7 @@ export class RemoteAgentCatalog {
     if (!state?.syncedItems || state.syncedHash !== payloadHash(state.syncedItems)) return false;
     const identity = this.ownership.get(agentId);
     const item = state.syncedItems.find(value => value.agentId === agentId);
-    return this.ownership.canPublish(agentId, owner) && Boolean(item && item.version === identity?.version && item.kind === identity.ownerKind);
+    return this.ownership.canPublish(agentId, owner) && this.canPublishHere(agentId, owner) && Boolean(item && item.version === identity?.version && item.kind === identity.ownerKind);
   }
   private retireRejectedPublication(owner: RemoteOwner, deviceId: string, state: CatalogState,
     current: { deviceId: string; catalogVersion: string; items: RemoteAgentCatalogItem[] }): void {
@@ -170,6 +176,7 @@ export class RemoteAgentCatalog {
     // GET first proves whether a previous uncertain PUT committed, including after WS reconnect.
     const current = await api(path);
     if (!isCurrent()) throw new Error('Account changed');
+    if (targetId && current.deviceId === deviceId && Array.isArray(current.items)) this.store.publicationOrigins.claimLegacyAgents(owner, deviceId, targetId, current.items);
     if (state.pending && current.lastPublicationId === state.pending.publicationId) {
       const operationId = state.pending.publicationId;
       state = { catalogVersion: current.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null };
@@ -196,7 +203,7 @@ export class RemoteAgentCatalog {
         phase: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed, businessStatus: 'pending', recordCount: items.length });
     }
     // Pending content is immutable. A different admission context may delay it, never filter/rewrite its ID.
-    if (state.pending.items.some(item => !canPublishAgent(item.agentId))) throw new Error('Agent ownership synchronization is waiting for server support');
+    if (state.pending.items.some(item => !this.canPublishHere(item.agentId, owner) || !canPublishAgent(item.agentId))) throw new Error('Agent ownership synchronization is waiting for server support');
     let result;
     try { result = await api(path, 'PUT', { ...state.pending, connectionGeneration: generation }); }
     catch (error) {

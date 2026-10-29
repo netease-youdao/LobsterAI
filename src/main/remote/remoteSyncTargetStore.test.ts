@@ -161,14 +161,14 @@ describe('active synchronization target working sets', () => {
     const rawImport = f.db.prepare("SELECT value FROM remote_state WHERE key='import:s'").get();
     const second = f.activate(spaceB, { bootstrap: true });
     expect(second.kind).toBe(RemoteSyncTargetActivationKind.Created);
-    expect(f.store.sync('s')).toMatchObject({ source_seq: 0, ack_seq: 0, server_seq: '0', stream_epoch: null, device_id: 'device-b' });
-    expect(f.store.sync('s')!.session_id).not.toBe(original.session_id);
+    expect(f.store.sync('s')).toBeNull();
     expect(f.store.pending('s')).toEqual([]); expect(f.store.get('import:s')).toBeNull();
     expect(f.store.get('desktopAsset:m:0')).toBeNull();
     expect(f.store.get<any>('inbox:old').targetId).toBe(first.targetId);
     expect(f.store.get('sessionDeletion:operation')).toEqual({ target: { serviceScope: first.targetId }, receiptDigest: 'immutable-deletion' });
     expect(archivedRemoteSyncReferences(f.store)).toEqual({ paths: new Set(['/cache/a']), importFileSets: new Set(['spool-a']) });
-    f.store.put('import:s', { importId: 'pending-b', fileSet: 'spool-b' });
+    f.add('b-session');
+    f.store.put('import:b-session', { importId: 'pending-b', fileSet: 'spool-b' });
     const restored = f.activate(spaceA);
     expect(restored.kind).toBe(RemoteSyncTargetActivationKind.Restored);
     expect(f.store.sync('s')).toEqual({ ...original, needs_snapshot: 1 });
@@ -303,14 +303,14 @@ describe('active synchronization target working sets', () => {
   test('rolls back archives, working sets, execution tags and active identity together on disk failure', () => {
     const f = fixture(); f.add(); const first = f.activate(); f.bind('s', first.targetId);
     f.store.put('import:s', { importId: 'keep' }); const original = f.store.sync('s');
-    f.db.exec("CREATE TRIGGER fail_target BEFORE INSERT ON remote_sync WHEN NEW.device_id='device-b' BEGIN SELECT RAISE(ABORT,'disk unavailable'); END;");
+    f.db.exec(`CREATE TRIGGER fail_target BEFORE INSERT ON remote_sync_target_active WHEN NEW.target_id='${remoteSyncTargetId(spaceB, owner)}' BEGIN SELECT RAISE(ABORT,'disk unavailable'); END;`);
     expect(() => f.activate(spaceB, { bootstrap: true })).toThrow('disk unavailable');
     expect(f.targets.active(owner)!.targetId).toBe(first.targetId); expect(f.store.sync('s')).toEqual(original);
     expect(f.store.get('import:s')).toEqual({ importId: 'keep' });
     expect(f.db.prepare('SELECT count(*) AS n FROM remote_sync_target_archives').get()).toEqual({ n: 0 });
   });
 
-  test('new target preserves history text without old execution, input or attachment identities', () => {
+  test('new target retains old history locally without publishing its content or execution identities', () => {
     const f = fixture(); f.add(); const first = f.activate();
     const run = f.store.beginRun('s', 'old-run', 'old-command');
     f.store.put(`inputRun:${run.runId}`, { input: { text: 'original input', attachments: [{ assetId: 'old-asset', version: '1', fileName: 'source.pdf' }] }, inputModel: { candidateId: 'old-model' } });
@@ -321,15 +321,10 @@ describe('active synchronization target working sets', () => {
     f.store.transaction(() => f.db.prepare("INSERT INTO cowork_messages VALUES ('orphan','s','assistant','orphan history',?,3,2)")
       .run(stableJson({ remoteCommandId: 'old-command-without-run' })));
     f.activate(spaceB, { bootstrap: true });
-    f.store.setInputProjectionSupported(true); f.store.project('s');
-    const snapshot = f.store.snapshot('s');
-    const message = snapshot.records.find(record => record.eventType === 'message.upsert')!.payload.message;
-    expect(message.blocks[0].text).toBe('original input');
-    expect(message.blocks[1].text).toContain('source.pdf');
-    expect(message.runId).toBeNull(); expect(message.commandId).toBeNull();
-    expect(JSON.stringify(snapshot)).not.toMatch(/old-asset|old-model|old-workspace|old-command/u);
-    expect(snapshot.records.some(record => ['run.updated', 'approval.updated'].includes(record.eventType))).toBe(false);
-    expect(snapshot.records.find(record => record.payload.message?.messageId === 'orphan')!.payload.message.commandId).toBeNull();
+    expect(f.store.sync('s')).toBeNull();
+    expect(f.db.prepare("SELECT content FROM cowork_messages WHERE id='m'").get()).toEqual({ content: 'raw prompt' });
+    expect(f.db.prepare("SELECT content FROM cowork_messages WHERE id='orphan'").get()).toEqual({ content: 'orphan history' });
+    expect(f.store.pending('s')).toEqual([]);
     expect(f.store.run('s')!.runId).toBe(run.runId);
     expect(f.store.get(`syncRunTarget:${run.runId}`)).toBe(first.targetId);
     expect(f.store.get<any>(`approval:s:approval`).remoteAllowed).toBe(true);
@@ -348,6 +343,9 @@ describe('active synchronization target working sets', () => {
     f.store.put('import:s', { importId: 'pending-a', expectedStreamEpoch: before.stream_epoch, environment: first.targetId });
     f.db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', 'session', 'old', 1, stableJson({ eventType: 'session.upsert', payload: { session: { title: 'historical' } } }));
     f.activate(spaceB, { bootstrap: true });
+    // Seed a pre-fix copied mapping to preserve recovery coverage for already duplicated history.
+    f.db.prepare('INSERT INTO remote_sync(local_id,session_id,device_id,sync_environment) VALUES (?,?,?,?)')
+      .run('s', 'legacy-copied-b', 'device-b', remoteSyncTargetId(spaceB, owner));
     const second = f.store.sync('s')!;
     const closed = { receiptId: 'b-receipt', receiptDigest: 'b-hash', ackSourceSeq: 0 };
     f.store.put('deletionClosed:s', closed);
@@ -389,12 +387,15 @@ describe('active synchronization target working sets', () => {
     }
   });
 
-  test('distinguishes a valid empty archive from missing recovery evidence and initializes only later local sessions', () => {
+  test('distinguishes a valid empty archive without copying later sessions from the other target', () => {
     const f = fixture(); const first = f.activate(); f.activate(spaceB, { bootstrap: true });
     expect(f.db.prepare('SELECT row_count FROM remote_sync_target_archive_manifests WHERE target_id=?').get(first.targetId)).toEqual({ row_count: 0 });
     f.add('later');
+    const later = f.store.sync('later');
     expect(f.activate(spaceA).kind).toBe(RemoteSyncTargetActivationKind.Restored);
-    expect(f.store.sync('later')).toMatchObject({ device_id: 'device-a', source_seq: 0, ack_seq: 0, sync_environment: first.targetId });
+    expect(f.store.sync('later')).toBeNull();
+    f.activate(spaceB);
+    expect(f.store.sync('later')).toEqual({ ...later, sync_environment: remoteSyncTargetId(spaceB, owner) });
   });
 });
 

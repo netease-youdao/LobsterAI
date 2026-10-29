@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { AgentAccessErrorCode, AgentId, AgentOwnerKind } from '../shared/agent/constants';
 import type { RemoteOwner } from '../shared/remote/constants';
 import { t } from './i18n';
+import { RemotePublicationKind, RemotePublicationOrigins } from './remote/remotePublicationOrigins';
 
 export interface AgentOwnershipRecord {
   agentId: string;
@@ -38,10 +39,12 @@ export function sessionVisibilitySql(actor: RemoteOwner | null | undefined, alia
 
 /** Ownership survives Agent deletion. Runtime raw reads must not be used for UI authorization. */
 export class AgentOwnerStore {
+  readonly publicationOrigins: RemotePublicationOrigins;
   private depth = 0;
   private readonly listeners = new Set<(agentId: string) => void>();
 
   constructor(private readonly db: Database.Database) {
+    this.publicationOrigins = new RemotePublicationOrigins(db);
     db.transaction(() => {
       const migrated = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_ownership'").get());
       db.exec(`
@@ -130,6 +133,7 @@ export class AgentOwnerStore {
     if (!record || record.deletedAt !== null || record.ownerKind !== AgentOwnerKind.Quarantined) {
       throw new AgentAccessError(AgentAccessErrorCode.IdentityReused);
     }
+    this.publicationOrigins.capture(RemotePublicationKind.Agent, agentId, actor);
     this.db.prepare('UPDATE agent_ownership SET owner_kind=?,owner_user_id=?,owner_scope_key=? WHERE agent_id=?')
       .run(actor ? AgentOwnerKind.Owned : AgentOwnerKind.Anonymous, actor?.userId ?? null, actor?.scopeKey ?? null, agentId);
   }
@@ -141,6 +145,7 @@ export class AgentOwnerStore {
       || !record || record.deletedAt !== null || record.ownerKind !== AgentOwnerKind.Anonymous) {
       throw new AgentAccessError(AgentAccessErrorCode.IdentityReused);
     }
+    this.publicationOrigins.associate(RemotePublicationKind.Agent, agentId, actor);
     this.db.prepare(`UPDATE agent_ownership SET owner_kind=?,owner_user_id=?,owner_scope_key=?,
       version=version+1,updated_at=? WHERE agent_id=?`)
       .run(AgentOwnerKind.Owned, actor.userId, actor.scopeKey, associatedAt, agentId);

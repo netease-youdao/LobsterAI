@@ -2747,6 +2747,8 @@ const getCoworkStore = () => {
   if (!coworkStore) {
     const sqliteStore = getStore();
     coworkStore = new CoworkStore(sqliteStore.getDatabase(), { deferRemoteSynchronization: true });
+    coworkStore.remote.publicationOrigins.setRouteProvider(getServerApiBaseUrl);
+    coworkStore.agentOwnership.publicationOrigins.setRouteProvider(getServerApiBaseUrl);
     const cleaned = coworkStore.autoDeleteNonPersonalMemories();
     if (cleaned > 0) {
       console.info(`[cowork-memory] Auto-deleted ${cleaned} non-personal/procedural memories`);

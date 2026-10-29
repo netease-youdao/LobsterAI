@@ -28,6 +28,7 @@ import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
 import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
 import type { ProjectionWork } from './remoteProjectionWorker';
+import { RemotePublicationKind, RemotePublicationOrigins } from './remotePublicationOrigins';
 import { type QuestionEvidenceAuthenticator,questionIdSql,questionSessionSql, RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
 import { replyInputModel, type ReplyModelPresetNames,replyModelPresetNames } from './remoteReplyModel';
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState } from './remoteReplyProjection';
@@ -193,10 +194,12 @@ export class RemoteStore {
   private urgentReplyChange = false;
   private agentSummary: ((sessionId: string, owner: RemoteOwner) => RemoteAgentSummary | null) | null = null;
 
+  readonly publicationOrigins: RemotePublicationOrigins;
   private readonly databaseHealth: RemoteDatabaseHealth | null;
   private projector: RemoteProjectionCoordinator | null = null;
   private readonly projectionTargetContexts = new WeakMap<ProjectionWork, string>();
   constructor(readonly db: Database.Database, private readonly options: { deferredProjection?: boolean; restoreRuns?: boolean; projectionWorkerPath?: string; deferSynchronization?: boolean } = {}) {
+    this.publicationOrigins = new RemotePublicationOrigins(db);
     this.history = new RemoteHistoryStore(this);
     this.databaseHealth = options.deferredProjection && db.name !== ':memory:' && options.restoreRuns !== false ? new RemoteDatabaseHealth(db.name) : null;
     // Core ownership, execution, ACK/identity and source revisions migrate atomically.
@@ -960,6 +963,7 @@ export class RemoteStore {
     this.db.prepare('INSERT INTO cowork_session_ownership VALUES (?,?,?,?,?,?)')
       .run(sessionId, owner.userId, owner.scopeKey, 'confirmed', OWNERSHIP_MANUAL_SOURCE, associatedAt);
     this.signOwnership(sessionId, owner);
+    this.publicationOrigins.associate(RemotePublicationKind.Session, sessionId, owner);
     this.db.prepare('INSERT INTO remote_sync(local_id,session_id) VALUES (?,?)').run(sessionId, randomUUID());
     this.markProjectionDirty(sessionId);
   }
@@ -985,14 +989,15 @@ export class RemoteStore {
     const run = this.run(sessionId);
     if (!run || run.runId !== binding.runId || terminal.has(run.status)) throw new Error('REMOTE_QUARANTINE_STOP_UNVERIFIED');
   }
-  assignNew(sessionId: string, owner: RemoteOwner | null, source: string): void {
+  assignNew(sessionId: string, owner: RemoteOwner | null, source: string, parentId?: string): void {
+    if (owner && (!this.db.inTransaction || this.depth === 0)) throw new Error('Ownership must be recorded in the creation transaction');
+    this.publicationOrigins.capture(RemotePublicationKind.Session, sessionId, owner, parentId);
     if (!owner) return;
-    if (!this.db.inTransaction || this.depth === 0) throw new Error('Ownership must be recorded in the creation transaction');
     this.db.prepare('INSERT INTO cowork_session_ownership VALUES (?,?,?,?,?,?)').run(sessionId, owner.userId, owner.scopeKey, 'confirmed', source, Date.now());
     this.signOwnership(sessionId, owner);
     this.db.prepare('INSERT INTO remote_sync(local_id,session_id) VALUES (?,?)').run(sessionId, randomUUID());
   }
-  inheritNew(sessionId: string, parentId: string): void { this.assignNew(sessionId, this.owner(parentId), 'inherited_parent'); }
+  inheritNew(sessionId: string, parentId: string): void { this.assignNew(sessionId, this.owner(parentId), 'inherited_parent', parentId); }
   bindSource(sourceId: string, owner: RemoteOwner | null): void {
     if (!owner) return;
     this.db.prepare('INSERT OR IGNORE INTO remote_source_owner VALUES (?,?)').run(sourceId, stableJson(owner));

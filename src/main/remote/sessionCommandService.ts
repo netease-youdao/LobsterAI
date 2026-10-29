@@ -23,6 +23,7 @@ import { RemoteApprovalError } from './remoteApproval';
 import type { InboxEntry, RemoteCommand } from './remoteBridge';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
+import { remotePublicationAllowed,RemotePublicationKind } from './remotePublicationOrigins';
 import { RemoteQuestionError } from './remoteQuestionService';
 import { RemoteRunRecovery } from './remoteRunRecovery';
 import { remoteDiagnosticLog } from './remoteSyncLog';
@@ -381,6 +382,8 @@ export class SessionCommandService {
     } finally { if (id) this.submitting.delete(id); release(); }
   }
   private validateAgent(agentId: string, owner: RemoteOwner, expectedVersion?: string, selectable = false): void {
+    const targetId = this.input?.getTargetId?.();
+    if (targetId && !remotePublicationAllowed(this.store.remote.db, RemotePublicationKind.Agent, agentId, owner, targetId)) throw remoteAgentFailure('NOT_SELECTABLE');
     const identity = this.store.agentOwnership.get(agentId);
     if (!identity || identity.deletedAt !== null) throw remoteAgentFailure('DELETED');
     try { this.store.assertAgentAccess(agentId, owner); } catch { throw remoteAgentFailure('NOT_SELECTABLE'); }

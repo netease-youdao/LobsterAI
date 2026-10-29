@@ -1,6 +1,7 @@
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { sameOwner, stableJson } from './canonical';
 import { admissionBudget, type AdmissionJob, controlPrefixes, invalidInboxSql, readRemoteAdmissionAssociatedStates, readRemoteSessionAdmission, readRemoteSessionPristine, RemoteSessionAdmission, RemoteSyncAdmissionBudgetError, stateIdentitySql, taskPrefixes } from './remoteDisplayHealthAdmission';
+import { remotePublicationPendingSql } from './remotePublicationOrigins';
 import { RemoteSyncStateError } from './remoteRetention';
 import type { RemoteStore, SyncRow } from './remoteStore';
 
@@ -148,27 +149,24 @@ export class RemoteSyncAdmissionStore {
       .get(targetId, owner.userId, owner.scopeKey);
   }
   pending(owner: RemoteOwner, targetId: string): boolean {
-    if (!this.ownsTarget(owner, targetId)) return false;
-    return !!this.store.db.prepare(`SELECT 1 FROM remote_sync_session_admissions WHERE target_id=? AND owner_user_id=?
-      AND owner_scope_key=? AND admission<>? LIMIT 1`).get(targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified)
-      || !!this.store.db.prepare(`SELECT 1 FROM remote_sync_admission_evidence e WHERE archive_id=? AND table_name='remote_sync'
-        AND NOT EXISTS(SELECT 1 FROM remote_sync_session_admissions a WHERE a.target_id=? AND a.local_session_id=e.row_key
-          AND a.owner_user_id=? AND a.owner_scope_key=? AND a.admission=?) LIMIT 1`)
-        .get(`admission:${targetId}`, targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified);
+    return this.pendingIds(owner, targetId, '', 1).length > 0;
   }
   pendingIds(owner: RemoteOwner, targetId: string, after = '', limit = 50): string[] {
     if (!this.ownsTarget(owner, targetId)) return [];
     const size = Number.isFinite(limit) ? Math.min(50, Math.max(1, Math.floor(limit))) : 50;
+    const admission = remotePublicationPendingSql(this.store.db, owner, targetId, 'local_session_id');
+    const evidence = remotePublicationPendingSql(this.store.db, owner, targetId, 'e.row_key');
     return (this.store.db.prepare(`SELECT local_session_id FROM remote_sync_session_admissions
-      WHERE target_id=? AND owner_user_id=? AND owner_scope_key=? AND admission<>? AND local_session_id>?
+      WHERE target_id=? AND owner_user_id=? AND owner_scope_key=? AND admission<>? AND local_session_id>? AND ${admission.sql}
       UNION SELECT e.row_key AS local_session_id FROM remote_sync_admission_evidence e
-      WHERE archive_id=? AND table_name='remote_sync' AND row_key>?
+      WHERE archive_id=? AND table_name='remote_sync' AND row_key>? AND ${evidence.sql}
         AND NOT EXISTS(SELECT 1 FROM remote_sync_session_admissions a WHERE a.target_id=? AND a.local_session_id=e.row_key
           AND a.owner_user_id=? AND a.owner_scope_key=? AND a.admission=?)
-      ORDER BY local_session_id LIMIT ?`).all(targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified, after,
-      `admission:${targetId}`, after, targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified, size) as Array<{ local_session_id: string }>)
-      .map(row => row.local_session_id);
+      ORDER BY local_session_id LIMIT ?`).all(targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified, after, ...admission.params,
+      `admission:${targetId}`, after, ...evidence.params, targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified, size) as Array<{ local_session_id: string }>).
+      map(row => row.local_session_id);
   }
+
   admitted(owner: RemoteOwner, deviceId: string, targetId: string, localSessionId: string): boolean {
     return readRemoteSessionAdmission(this.store.db, owner, deviceId, targetId, localSessionId);
   }

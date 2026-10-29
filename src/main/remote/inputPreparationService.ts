@@ -14,6 +14,7 @@ import type { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { captureRemoteFileTelemetry, remoteFileRequestFailure, remoteFileRequestFailureFields, RemoteFileTelemetry as Telemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
 import type { RemoteImageContext } from './remoteImageDecoder';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
+import { remotePublicationAllowed,RemotePublicationKind } from './remotePublicationOrigins';
 import { remoteDiagnosticLog,RemoteInputDiagnostic } from './remoteSyncLog';
 import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
 
@@ -196,7 +197,9 @@ export class InputPreparationService {
       const session = sessionId ? store.getSession(sessionId, 0) : null;
       if (continuation && (!session || !sameOwner(store.remote.owner(session.id), owner))) throw new RemoteInputError(RemoteInputReason.Account);
       if (session && (request.expectedInputVersion !== this.sessionInputVersion(session.id) || request.expectedControlVersion !== store.remote.controlVersion(session.id))) throw new RemoteInputError(RemoteInputReason.Version);
+      if (session && !store.remote.isTaskAdmitted(session.id)) throw new RemoteInputError(RemoteInputReason.Stale);
       const agentId = session?.agentId || request.input.agent?.agentId || AgentId.Main;
+      if (targetId && !remotePublicationAllowed(store.remote.db, RemotePublicationKind.Agent, agentId, owner, targetId)) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
       store.assertAgentAccess(agentId, owner);
       const agent = store.getAgent(agentId);
       const ownership = store.agentOwnership.get(agentId);
@@ -387,6 +390,9 @@ export class InputPreparationService {
     if (prepared.cacheCleanup || !sameOwner(prepared.owner, owner) || !sameOwner(owner, this.deps.getOwner()) || prepared.deviceId !== deviceId
       || (!bound && prepared.expiresAt <= Date.now()) || payloadHash(prepared.resolvedInput) !== prepared.inputDigest) throw new RemoteInputError(RemoteInputReason.Stale);
     const input = prepared.resolvedInput;
+    const targetId = this.deps.getTargetId?.();
+    if (targetId && !remotePublicationAllowed(this.deps.store.remote.db, RemotePublicationKind.Agent, input.agentId, owner, targetId)) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
+    if (prepared.sessionId && !this.deps.store.remote.isTaskAdmitted(prepared.sessionId)) throw new RemoteInputError(RemoteInputReason.Stale);
     const model = this.deps.models.resolve(owner, deviceId, input.model.modelRef, input.model.version);
     if (prepared.presetBinding) {
       const binding = prepared.presetBinding;

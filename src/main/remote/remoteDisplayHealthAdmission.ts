@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
+import { remotePublicationAllowed,RemotePublicationKind } from './remotePublicationOrigins';
 import { RemoteSyncStateError } from './remoteRetention';
 import type { SyncRow } from './remoteStore';
 
@@ -25,6 +26,7 @@ export const stateIdentitySql = (field: string): string => `CASE WHEN json_valid
 export const invalidInboxSql = "CASE WHEN json_valid(value) THEN json_type(value)<>'object' ELSE 1 END";
 
 export function readRemoteSessionAdmission(db: Database.Database, owner: RemoteOwner, deviceId: string, targetId: string, localSessionId: string): boolean {
+  if (!remotePublicationAllowed(db, RemotePublicationKind.Session, localSessionId, owner, targetId)) return false;
   const saved = db.prepare('SELECT * FROM remote_sync_session_admissions WHERE target_id=? AND local_session_id=?')
     .get(targetId, localSessionId) as { owner_user_id: string; owner_scope_key: string; device_id: string; remote_session_id: string; admission: string } | undefined;
   const row = db.prepare(`SELECT * FROM remote_sync WHERE local_id=? AND local_id IN (${owned})`)

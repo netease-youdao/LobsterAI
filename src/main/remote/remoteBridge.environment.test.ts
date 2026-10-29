@@ -122,15 +122,15 @@ describe('remote synchronization follows the effective service', () => {
     await expect(f.bridge.api('/devices/desktop/settings', 'PATCH', {})).rejects.toThrow('route changed');
     expect(f.request).not.toHaveBeenCalled();
   });
-  it('starts an independent mapping on a new space and restores the previous ACK on return', async () => {
+  it('leaves source history out of a new space and restores the previous ACK on return', async () => {
     const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
     await f.bridge.syncSessions(true);
     const targetId = f.bridge.getSyncTargetId();
     f.switchRoute('https://other.example.com', targetB, 'desktop-b');
     await f.bridge.ensureRegistration();
     expect(f.bridge.getSyncTargetId()).not.toBe(targetId);
-    expect(f.store.sync('local')).toMatchObject({ device_id: 'desktop-b', ack_seq: 0, source_seq: 0, server_seq: '0', needs_snapshot: 1 });
-    expect(f.store.sync('local')?.session_id).not.toBe('remote-local');
+    expect(f.store.sync('local')).toBeNull();
+    expect(f.bridge.sessionAdmitted('local')).toBe(false);
     f.switchRoute('https://first.example.com', targetA, 'desktop'); await f.bridge.ensureRegistration();
     expect(f.bridge.getSyncTargetId()).toBe(targetId);
     expect(f.store.sync('local')).toMatchObject({ session_id: 'remote-local', ack_seq: 9, source_seq: 12, server_seq: '10', needs_snapshot: 1 });
@@ -406,5 +406,54 @@ describe('remote synchronization follows the effective service', () => {
       ? Promise.resolve(response({ ...owner, deviceId: 'desktop', metadataVersion: '1', syncTarget: targetB })) : original(actor, pathname, init));
     await expect(f.bridge.ensureRegistration()).rejects.toThrow('does not match discovery');
     expect(f.bridge.getSyncTargetId()).toBeNull();
+  });
+});
+
+
+describe('source provenance through real bridge registration', () => {
+  const create = (f: ReturnType<typeof fixture>, id: string) => f.store.transaction(() => {
+    f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run(id, id, 'idle');
+    f.store.assignNew(id, owner, 'local_create');
+  });
+
+  it('admits a first local session on its original legacy server without syncTarget support', async () => {
+    const f = fixture(null); create(f, 'first-legacy');
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).toMatch(/^legacy:/u);
+    expect(f.bridge.sessionAdmitted('first-legacy')).toBe(true);
+    expect(f.store.isTaskAdmitted('first-legacy')).toBe(true);
+    expect(f.store.sync('first-legacy')).not.toBeNull();
+  });
+
+  it('admits new local work created after original legacy-server registration', async () => {
+    const f = fixture(null); await f.bridge.ensureRegistration();
+    create(f, 'new-on-legacy');
+    expect(f.bridge.sessionAdmitted('new-on-legacy')).toBe(true);
+    expect(f.store.isTaskAdmitted('new-on-legacy')).toBe(true);
+  });
+
+  it('keeps a task created before registration out of the first production login', async () => {
+    const f = fixture(); create(f, 'offline-test');
+    f.switchRoute('https://production.example.com', targetB, 'desktop-b');
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.sessionAdmitted('offline-test')).toBe(false);
+    f.request.mockClear();
+    await f.bridge.syncSessions(true);
+    expect(f.request.mock.calls.some(([, path]) => /\/sync\/(imports|batches)/u.test(path))).toBe(false);
+    expect(f.deps.execute).not.toHaveBeenCalled();
+  });
+
+  it('binds newly created work to a confirmed replacement data space at the same URL', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration(); create(f, 'before-replacement');
+    const originalTarget = f.bridge.getSyncTargetId();
+    f.switchRoute('https://first.example.com', targetB, 'desktop-b');
+    // Same URL does not notify a route change; the current target is rediscovered on registration.
+    f.bridge.registration = null;
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).not.toBe(originalTarget);
+    create(f, 'after-replacement');
+    expect(f.bridge.sessionAdmitted('before-replacement')).toBe(false);
+    expect(f.bridge.sessionAdmitted('after-replacement')).toBe(true);
+    expect(f.store.isTaskAdmitted('after-replacement')).toBe(true);
   });
 });

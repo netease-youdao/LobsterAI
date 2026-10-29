@@ -8,6 +8,7 @@ import { payloadHash, sameOwner, stableJson } from './canonical';
 import { RemoteDeletionSyncKind } from './remoteDeletionSyncPolicy';
 import { migrateVerifiedRemoteTargetCatalogRouting, migrateVerifiedRemoteTargetFileRouting } from './remoteEnvironmentMigration';
 import { materializeRemotePreparedInputSources } from './remotePreparedInputSnapshots';
+import { remotePublicationAllowed,RemotePublicationKind, RemotePublicationOrigins } from './remotePublicationOrigins';
 import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
 import type { RemoteStore, SyncRow } from './remoteStore';
 import { AdmissionJobPhase, RemoteSessionAdmission, RemoteSyncAdmissionBudgetError, RemoteSyncAdmissionStore } from './remoteSyncAdmission';
@@ -92,7 +93,9 @@ export function archivedRemoteSyncReferences(store: Store, projectionOnly = fals
 /** One active working set per account; archives never participate in normal delivery queries. */
 export class RemoteSyncTargetStore {
   private readonly admissions: RemoteSyncAdmissionStore;
+  private readonly origins: RemotePublicationOrigins;
   constructor(private readonly store: Store) {
+    this.origins = new RemotePublicationOrigins(store.db);
     store.db.exec(`CREATE TABLE IF NOT EXISTS remote_sync_targets(
       target_id TEXT PRIMARY KEY,owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,device_id TEXT NOT NULL,sync_target_json TEXT);
       CREATE TABLE IF NOT EXISTS remote_sync_target_active(
@@ -277,6 +280,8 @@ export class RemoteSyncTargetStore {
   }
   private claim(owner: RemoteOwner, targetId: string, verifiedStates: RetentionState[], previousId?: string, selected?: Set<string>): void {
     const claimedRows = this.rows(owner).filter(row => !selected || selected.has(row.local_id));
+    for (const row of claimedRows) if (!this.origins.claimSession(row.local_id, owner, targetId, verifiedStates.some(state => state.localSessionId === row.local_id)))
+      throw new RemoteSyncStateError('Session publication origin does not match the service');
     const environments = new Set(claimedRows.map(row => row.sync_environment).filter((value): value is string => value !== null));
     if (previousId) environments.add(previousId);
     const device = this.store.db.prepare('SELECT device_id FROM remote_sync_targets WHERE target_id=?').get(targetId) as { device_id: string };
@@ -466,6 +471,7 @@ export class RemoteSyncTargetStore {
     const job = this.admissions.job(input.targetId);
     if (job && job.phase !== AdmissionJobPhase.Complete) throw new RemoteSyncAdmissionBudgetError(input.targetId);
     return this.store.db.transaction(() => {
+      this.origins.inferLegacy(input.owner);
       const active = this.active(input.owner);
       if (active?.targetId === input.targetId) {
         this.register(input);
@@ -497,7 +503,9 @@ export class RemoteSyncTargetStore {
         const available = this.store.db.prepare(`SELECT o.session_id FROM cowork_session_ownership o JOIN cowork_sessions s ON s.id=o.session_id
           WHERE o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed'
           AND NOT EXISTS(SELECT 1 FROM remote_state WHERE key='localGcDeleted:'||o.session_id OR key='deletionClosed:'||o.session_id)`).all(input.owner.userId, input.owner.scopeKey) as Array<{ session_id: string }>;
-        for (const row of available) this.store.db.prepare('INSERT OR IGNORE INTO remote_sync(local_id,session_id,device_id,sync_environment) VALUES (?,?,?,?)')
+        for (const row of available.filter(row => this.origins.isEnabled()
+          ? remotePublicationAllowed(this.store.db, RemotePublicationKind.Session, row.session_id, input.owner, input.targetId)
+          : active?.syncTarget?.dataSpaceId === input.syncTarget?.dataSpaceId)) this.store.db.prepare('INSERT OR IGNORE INTO remote_sync(local_id,session_id,device_id,sync_environment) VALUES (?,?,?,?)')
           .run(row.session_id, randomUUID(), input.deviceId, input.targetId);
         this.store.db.prepare(`UPDATE remote_sync SET needs_snapshot=1 WHERE local_id IN (${ownSessions})
           AND local_id IN (SELECT id FROM cowork_sessions)`).run(input.owner.userId, input.owner.scopeKey);

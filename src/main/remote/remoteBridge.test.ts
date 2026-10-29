@@ -523,6 +523,7 @@ describe('session synchronization recovery', () => {
     const { bridge, store, requestApi } = value;
     const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
     bridge.targetId = target.targetId;
+    store.publicationOrigins.confirm(owner, 'https://example.com', null, target.targetId);
     store.setProjectionIdentity(target.targetId, owner, 'desktop');
     store.setFileEnvironment(target.targetId);
     bridges.push(bridge); store.setWake(() => {}); store.setEnabledOwner(owner);

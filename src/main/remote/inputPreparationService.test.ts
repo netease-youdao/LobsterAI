@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
@@ -17,6 +18,7 @@ import { InputPreparationService, type LocalPreparedInput,RemoteAttachmentError 
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { RemoteFileTelemetry as Telemetry } from './remoteFileTelemetry';
 import { RemoteModelCatalog } from './remoteModelCatalog';
+import { RemotePublicationKind, RemotePublicationOrigins } from './remotePublicationOrigins';
 import * as syncLog from './remoteSyncLog';
 import * as telemetryApi from './remoteTelemetry';
 import { SessionCommandService } from './sessionCommandService';
@@ -54,6 +56,7 @@ function fixture(getTargetId?: () => string | null, presetId?: ModelPresetId) {
     countKeys: (prefix: string, limit: number) => Math.min(limit, [...values.keys()].filter(key => key.startsWith(prefix)).length),
     entries: (prefix: string, after = '', limit = 50) => [...values.entries()].filter(([key]) => key.startsWith(prefix) && key > after).sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([key, value]) => ({ key, value })),
     setApprovalLifecycle: vi.fn(),
+    isTaskAdmitted: () => true,
     setInputModel: (id: string, model: unknown) => { values.set(`inputModel:${id}`, model); return '0'; },
     owner: () => owner, localSessionId: () => session?.id, inputVersion: () => '0', controlVersion: () => '4' };
   const store = { remote, assertAgentAccess: vi.fn(), getAgent: () => ({ model: 'provider/model', thinkingLevel: 'high', enabled }),
@@ -503,3 +506,27 @@ it.each([undefined, ModelPresetId.Balanced, ModelPresetId.Ultimate])(
     expect(f.deps.store.getSession('local', 0)?.modelPresetId).toBe(presetId);
   },
 );
+
+
+it('rejects a cached preparation selecting a foreign-origin Agent before model or execution admission', async () => {
+  const { service, deps, claim } = fixture(() => Target.Second);
+  const db = new Database(':memory:');
+  try {
+    db.exec('CREATE TABLE remote_sync_targets(target_id TEXT PRIMARY KEY,sync_target_json TEXT); CREATE TABLE cowork_session_ownership(session_id TEXT,owner_user_id TEXT,owner_scope_key TEXT,ownership_status TEXT)');
+    db.prepare('INSERT INTO remote_sync_targets VALUES (?,?)').run(Target.Second, JSON.stringify({ version: 1, dataSpaceId: 'production-space', dataGeneration: '1' }));
+    const origins = new RemotePublicationOrigins(db);
+    origins.setRouteProvider(() => 'https://test.example');
+    origins.capture(RemotePublicationKind.Agent, 'test-agent', owner);
+    origins.confirm(owner, 'https://test.example', { version: 1, dataSpaceId: 'test-space', dataGeneration: '1' });
+    Object.assign(deps.store.remote, { db });
+    const main = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+    expect(() => service.validate(main, owner, 'pc', true)).not.toThrow();
+    // Represents a pre-fix production preparation that already selected the test Agent.
+    const cached = structuredClone(main);
+    cached.resolvedInput.agentId = 'test-agent';
+    cached.inputDigest = payloadHash(cached.resolvedInput);
+    const resolve = vi.spyOn(deps.models, 'resolve');
+    expect(() => service.validate(cached, owner, 'pc', true)).toThrow(RemoteInputReason.AgentUnavailable);
+    expect(resolve).not.toHaveBeenCalled();
+  } finally { db.close(); }
+});
