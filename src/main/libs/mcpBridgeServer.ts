@@ -34,6 +34,8 @@ export type AskUserRequest = {
   createdAt: number;
   expiresAt: number;
   sessionKey?: string;
+  /** Main-process consent that must not be published as a remote question. */
+  localOnly?: boolean;
   mediaConfirmation?: MediaConfirmationState;
   questions: Array<{
     id?: string;
@@ -56,6 +58,7 @@ export type AskUserResponse = Omit<MediaConfirmationResponse, 'reason'> & {
 };
 export interface AskUserOptions {
   sessionKey?: string;
+  localOnly?: boolean;
   recoverableMedia?: RecoverableMediaConfirmation;
 }
 
@@ -235,6 +238,9 @@ export class McpBridgeServer {
     this.pendingAskUser.delete(requestId);
     const terminal = Date.now() >= pending.expiresAt
       ? { behavior: 'deny' as const, reason: AskUserResponseReason.Timeout } : response;
+    console.debug('[McpBridge:HTTP] Settled AskUser request', {
+      requestId, behavior: terminal.behavior, reason: terminal.reason,
+    });
     pending.resolve(terminal);
     // A derived authority/projection failure must never strand the local question.
     try { this.onAskUserSettledCallback?.(requestId, terminal); }
@@ -280,7 +286,9 @@ export class McpBridgeServer {
       this.pendingAskUser.set(requestId, { requestId, expiresAt, resolve, timer });
 
       if (this.onAskUserCallback) {
-        this.onAskUserCallback({ requestId, questions, sessionKey, createdAt, expiresAt });
+        this.onAskUserCallback({ requestId, questions, sessionKey, createdAt, expiresAt,
+          ...(options.localOnly ? { localOnly: true } : {}),
+        });
       } else {
         log('WARN', 'AskUser callback not registered, denying (internal)');
         this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });

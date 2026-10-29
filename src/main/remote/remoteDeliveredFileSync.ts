@@ -8,6 +8,7 @@ import { type RemoteFilePolicy, RemoteFileReason, remoteFileRule } from '../../s
 import type { LibraryIndexedFile } from '../library/libraryLocalStore';
 import { sameOwner } from './canonical';
 import { captureDeliveryBaseline, changedDeliveredFile, deliveredFileDeclarations, type DeliveryBaseline, RemoteFileDeliveryKind } from './remoteDeliveredFiles';
+import { remoteFileDiagnostic, remoteFileDiagnosticKey } from './remoteFileDiagnostics';
 import { captureRemoteFileSnapshot, type RemoteFileSnapshot } from './remoteFileSnapshots';
 import type { RemoteStore } from './remoteStore';
 
@@ -40,7 +41,10 @@ const MAX_FINAL_AGE_MS = 10 * 60_000;
 export class RemoteDeliveredFileSync {
   private readonly pending = new Map<string, PendingRun>();
   constructor(private readonly deps: DeliveredFileDependencies) {}
-  clear(): void { this.pending.clear(); }
+  clear(): void {
+    for (const [sessionId, entry] of this.pending) remoteFileDiagnostic('delivery_discarded', { sessionId, runId: entry.runId, reason: 'CONNECTION_RESET' });
+    this.pending.clear();
+  }
 
   /** Optional discovery never delays engine dispatch; only metadata predating this boundary can authorize discovery. */
   startPreparation(sessionId: string, roots: string[], owner: RemoteOwner, validEpoch: () => boolean): void {
@@ -48,14 +52,22 @@ export class RemoteDeliveredFileSync {
     void this.prepare(sessionId,roots,owner,validEpoch,observedBefore).catch(() => { /* Discovery is optional. */ });
   }
   async prepare(sessionId: string, roots: string[], owner: RemoteOwner, validEpoch: () => boolean, observedBefore?: number): Promise<void> {
-    if (!this.deps.recordArtifact || !validEpoch() || !sameOwner(owner, this.deps.store.owner(sessionId))) return;
+    if (!this.deps.recordArtifact || !validEpoch() || !sameOwner(owner, this.deps.store.owner(sessionId))) {
+      remoteFileDiagnostic('prepare_skipped', { sessionId, reason: !this.deps.recordArtifact ? 'INDEXER_UNAVAILABLE' : 'CONTEXT_INVALID' }); return;
+    }
     const telemetry = captureRemoteFileTelemetry(owner, { local_session_id: sessionId, direction: Telemetry.Artifact, operation_kind: 'file_publication' });
     const run = this.deps.store.run(sessionId);
     const ordinal = this.deps.store.get<string>(`fileRunOrdinal:${sessionId}`);
-    if (!run || terminal.has(run.status) || !ordinal) return;
+    if (!run || terminal.has(run.status) || !ordinal) {
+      remoteFileDiagnostic('prepare_skipped', { sessionId, runId: run?.runId, reason: !run ? 'RUN_MISSING' : !ordinal ? 'ORDINAL_MISSING' : 'RUN_ALREADY_TERMINAL' }); return;
+    }
     // A continuation of the same run must retain its pre-execution baseline.
     if (this.pending.get(sessionId)?.runId === run.runId) return;
-    if (this.pending.size >= MAX_PENDING_RUNS) this.pending.delete(this.pending.keys().next().value!);
+    if (this.pending.size >= MAX_PENDING_RUNS) {
+      const evicted = this.pending.keys().next().value!;
+      remoteFileDiagnostic('delivery_discarded', { sessionId: evicted, runId: this.pending.get(evicted)?.runId, reason: 'PENDING_RUN_LIMIT' });
+      this.pending.delete(evicted);
+    }
     const entry: PendingRun = {
       owner, runId: run.runId, retryAt: 0, captured: new Set(),
       // The first requested root is the session cwd, even if only the Desktop scan succeeds.
@@ -65,15 +77,20 @@ export class RemoteDeliveredFileSync {
         && this.deps.store.get<string>(`fileRunOrdinal:${sessionId}`) === ordinal,
     };
     this.pending.set(sessionId, entry);
+    remoteFileDiagnostic('prepare_started', { sessionId, runId: run.runId, rootCount: Math.min(roots.length, 2), asynchronous: observedBefore !== undefined });
     try {
-      const baseline = await captureDeliveryBaseline(roots.slice(0, 2), entry.current, observedBefore);
+      const baseline = await captureDeliveryBaseline(roots.slice(0, 2), entry.current, observedBefore,
+        reason => remoteFileDiagnostic('baseline_rejected', { sessionId, runId: run.runId, reason }));
+      remoteFileDiagnostic('baseline_finished', { sessionId, runId: run.runId, directoryCount: baseline.directories.length, current: entry.current() });
       if (!entry.current() || terminal.has(this.deps.store.run(sessionId)!.status) || !baseline.directories.length) {
+        remoteFileDiagnostic('delivery_discarded', { sessionId, runId: run.runId, reason: !entry.current() ? 'CONTEXT_CHANGED' : !baseline.directories.length ? 'BASELINE_EMPTY' : 'RUN_FINISHED_DURING_PREPARATION' });
         if (this.pending.get(sessionId) === entry) this.pending.delete(sessionId);
         return;
       }
       entry.baseline = baseline;
       telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Succeeded, run_id: run.runId });
     } catch (error) { if (this.pending.get(sessionId) === entry) this.pending.delete(sessionId);
+      remoteFileDiagnostic('prepare_failed', { sessionId, runId: run.runId, reason: remoteFileTelemetryReason(error) });
       telemetry.emit(Telemetry.Stage, { stage: Telemetry.Discovery, outcome: Telemetry.Failed, run_id: run.runId, reason: remoteFileTelemetryReason(error) }); }
   }
 
@@ -118,23 +135,34 @@ export class RemoteDeliveredFileSync {
     if (!policy.features.artifactPublish || !this.deps.recordArtifact) return;
     for (const [sessionId, entry] of [...this.pending].slice(0, MAX_PENDING_RUNS)) {
       const telemetry = captureRemoteFileTelemetry(owner, { local_session_id: sessionId, run_id: entry.runId, direction: Telemetry.Artifact, operation_kind: 'file_publication' });
-      if (!entry.current() || !current(sessionId) || !sameOwner(owner, entry.owner)) { this.pending.delete(sessionId); continue; }
+      if (!entry.current() || !sameOwner(owner, entry.owner)) {
+        remoteFileDiagnostic('delivery_discarded', { sessionId, runId: entry.runId, reason: 'CONTEXT_CHANGED' }); this.pending.delete(sessionId); continue;
+      }
+      // A stale collector must leave authorized run discovery for the new connection.
+      if (!current(sessionId)) continue;
       const run = this.deps.store.run(sessionId)!;
       if (!terminal.has(run.status) || !entry.baseline || Date.now() < entry.retryAt) continue;
       const finishedAt = Date.parse(run.finishedAt || '');
       if (run.status !== 'succeeded' || !Number.isFinite(finishedAt) || Date.now() - finishedAt > MAX_FINAL_AGE_MS) {
+        remoteFileDiagnostic('delivery_discarded', { sessionId, runId: entry.runId, reason: run.status !== 'succeeded' ? 'RUN_NOT_SUCCEEDED' : 'FINISH_TIME_INVALID_OR_EXPIRED' });
         this.pending.delete(sessionId); continue;
       }
       const messages = this.messages(sessionId, run.runId);
       const final = messages.find(message => message.type === 'assistant' && message.metadata.isThinking !== true
         && message.metadata.isStreaming !== true);
       // An oversized latest reply is not a truncated declaration or permission to replay an earlier reply.
-      if (!final || final.content === null) { this.pending.delete(sessionId); continue; }
+      if (!final || final.content === null) {
+        remoteFileDiagnostic('delivery_discarded', { sessionId, runId: entry.runId, reason: !final ? 'FINAL_REPLY_MISSING' : 'FINAL_REPLY_TOO_LARGE', messageCount: messages.length });
+        this.pending.delete(sessionId); continue;
+      }
       const produced = this.hasSuccessfulProducer(messages);
       let retry = false;
-      for (const delivery of deliveredFileDeclarations(final.content, entry.cwd).slice(0, Math.min(20, policy.limits.maxTaskArtifactCount))) {
+      const declarations = deliveredFileDeclarations(final.content, entry.cwd);
+      remoteFileDiagnostic('delivery_scan', { sessionId, runId: run.runId, messageId: final.id, messageCount: messages.length, declarationCount: declarations.length, produced });
+      for (const delivery of declarations.slice(0, Math.min(20, policy.limits.maxTaskArtifactCount))) {
         const explicitMedia = delivery.kind === RemoteFileDeliveryKind.Media, filePath = delivery.filePath;
-        if (!explicitMedia && !produced) continue;
+        const context = { sessionId, runId: run.runId, messageId: final.id, fileKey: remoteFileDiagnosticKey(filePath), explicitMedia };
+        if (!explicitMedia && !produced) { remoteFileDiagnostic('delivery_skipped', { ...context, reason: 'SUCCESSFUL_PRODUCER_MISSING' }); continue; }
         if (entry.captured.has(filePath)) continue;
         const valid = (): boolean => entry.current() && current(sessionId)
           && this.deps.store.run(sessionId)?.finishedAt === run.finishedAt
@@ -146,9 +174,12 @@ export class RemoteDeliveredFileSync {
           const lease = this.deps.access(filePath);
           const assert = (): void => { if (!valid()) throw new Error(RemoteFileReason.Access); lease.assertAllowed(); };
           assert();
-          const receipt = await changedDeliveredFile(entry.baseline, filePath, finishedAt + 1, valid, explicitMedia);
+          const receipt = await changedDeliveredFile(entry.baseline, filePath, finishedAt + 1, valid, explicitMedia,
+            reason => remoteFileDiagnostic('delivery_skipped', { ...context, reason }));
           const detectedType = getLibraryArtifactTypeForExtension(path.extname(filePath));
-          if (!receipt || !detectedType || remoteFileRule(policy, path.basename(filePath), receipt.sizeBytes, true)) continue;
+          if (!receipt) continue;
+          const policyReason = remoteFileRule(policy, path.basename(filePath), receipt.sizeBytes, true);
+          if (!detectedType || policyReason) { remoteFileDiagnostic('delivery_skipped', { ...context, reason: policyReason || 'ARTIFACT_TYPE_UNKNOWN' }); continue; }
           snapshot = await captureRemoteFileSnapshot(filePath, this.deps.cacheRoot, owner, 30 * 1024 * 1024, assert);
           assert();
           if (snapshot.identity !== receipt.identity) throw new Error(RemoteFileReason.Source);
@@ -171,11 +202,14 @@ export class RemoteDeliveredFileSync {
           if (!recorded || !accept(sessionId, final.id, run.runId, filePath, snapshot)) throw new Error(RemoteFileReason.Source);
           retained = true;
           entry.captured.add(filePath);
+          remoteFileDiagnostic('delivery_enqueued', { ...context, sizeBytes: snapshot.sizeBytes });
           telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Succeeded });
-        } catch (error) { retry = true; telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); /* Retry privately; never reject the local task or alter ordinary file references. */ }
+        } catch (error) { retry = true; remoteFileDiagnostic('delivery_retry', { ...context, reason: remoteFileTelemetryReason(error) }); telemetry.emit(Telemetry.Stage, { stage: Telemetry.Snapshot, outcome: Telemetry.Deferred, reason: remoteFileTelemetryReason(error) }); /* Retry privately; never reject the local task or alter ordinary file references. */ }
         finally { if (snapshot && !retained) await fs.promises.rm(snapshot.path, { force: true }).catch((): void => undefined); }
       }
       if (this.pending.get(sessionId) !== entry) continue;
+      if (!current(sessionId)) continue;
+      remoteFileDiagnostic('delivery_scan_finished', { sessionId, runId: run.runId, capturedCount: entry.captured.size, retry });
       if (retry && entry.current()) entry.retryAt = Date.now() + 60_000;
       else this.pending.delete(sessionId);
     }

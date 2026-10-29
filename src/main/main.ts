@@ -558,6 +558,7 @@ import { OpenClawImConfigRestartTracker } from './libs/openclawImConfigRestart';
 import {
   getCoworkParentSessionId,
   resolveCoworkSessionIdByOpenClawSessionKey,
+  resolveOpenClawSessionKeyForCoworkSession,
 } from './libs/openclawLocalSessionResolver';
 import { OPENCLAW_LOOPBACK_STATE_FILE, OpenClawLoopbackService, OpenClawLoopbackState } from './libs/openclawLoopbackState';
 import {
@@ -2410,7 +2411,7 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
       resolveSessionKey: sessionId => {
         const normalizedSessionId = sessionId?.trim();
         if (!normalizedSessionId) return undefined;
-        return getCoworkStore().getSession(normalizedSessionId, 0)?.claudeSessionId ?? undefined;
+        return resolveOpenClawSessionKeyForCoworkSession(getCoworkStore().getSession(normalizedSessionId, 0));
       },
       getLanguage,
     });
@@ -4131,6 +4132,7 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
 
 const coworkPermissionSessions = new Map<string, string>();
 const coworkRuntimePermissionIds = new Set<string>();
+let captureCoworkPermissionAccount: () => () => boolean = () => () => false;
 
 const canViewCoworkSession = (sessionId: string): boolean => {
   try {
@@ -4570,6 +4572,7 @@ const getMcpRuntime = (): McpRuntime => {
   if (!mcpRuntime) {
     mcpRuntime = new McpRuntime({
       permissionSessions: coworkPermissionSessions,
+      captureAccountSnapshot: () => captureCoworkPermissionAccount(),
       getStore,
       syncOpenClawConfig,
       registerQuestion: request => getCoworkEngineRouter().registerQuestion?.(request) ?? null,
@@ -6575,6 +6578,11 @@ if (!gotTheLock) {
     return remoteBridge!;
   };
   const getRemoteAccountEpoch = (): string => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`;
+  captureCoworkPermissionAccount = () => {
+    const epoch = getRemoteAccountEpoch();
+    const owner = JSON.stringify(getCurrentRemoteOwner());
+    return () => epoch === getRemoteAccountEpoch() && owner === JSON.stringify(getCurrentRemoteOwner());
+  };
   const readRemoteState = (): RemoteSettingsState => {
     const owner = remoteDisplayOwner;
     try {
@@ -12857,6 +12865,7 @@ if (!gotTheLock) {
         sessionForRequest: requestId => coworkPermissionSessions.get(requestId),
         isRuntimeRequest: requestId => coworkRuntimePermissionIds.has(requestId),
         canAccessSession: canViewCoworkSession,
+        canAccessLocalQuestion: requestId => getMcpRuntime().canAccessLocalQuestion(requestId),
         accountKey: () => JSON.stringify(getCurrentRemoteOwner()),
         resolveQuestion: (requestId, result) => {
           const updatedInput = result.behavior === 'allow' && result.updatedInput && typeof result.updatedInput === 'object'

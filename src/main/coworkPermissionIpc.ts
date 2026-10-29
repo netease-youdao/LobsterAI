@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 
 import type { ApprovalDecisionOutcome } from '../shared/cowork/approval';
+import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../shared/cowork/constants';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import type { QuestionDecisionOutcome } from '../shared/remote/questions';
 import type { CoworkRuntime, PermissionResult } from './libs/agentEngine/types';
@@ -18,6 +19,7 @@ interface PermissionIpcDependencies {
   sessionForRequest: (requestId: string) => string | undefined;
   isRuntimeRequest: (requestId: string) => boolean;
   canAccessSession: (sessionId: string) => boolean;
+  canAccessLocalQuestion: (requestId: string) => boolean;
   accountKey: () => string;
   resolveQuestion: (requestId: string, result: PermissionResult) => void;
 }
@@ -35,8 +37,14 @@ export async function submitCoworkPermission(
   const question = deps.runtime.getQuestionState?.(request.requestId);
   const sessionId = question?.sessionId ?? snapshot?.sessionId ?? deps.sessionForRequest(request.requestId);
   const accountKey = deps.accountKey();
+  const isLocalQuestion = !snapshot && !question && !deps.isRuntimeRequest(request.requestId)
+    && !request.requestId.startsWith(OpenClawQuestion.RequestIdPrefix);
   const assertAccess = (): void => {
-    if (!sessionId || !deps.canAccessSession(sessionId) || deps.accountKey() !== accountKey) {
+    const accessible = isLocalQuestion
+      ? !!sessionId && deps.canAccessLocalQuestion(request.requestId)
+        && (sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID || deps.canAccessSession(sessionId))
+      : !!sessionId && deps.canAccessSession(sessionId);
+    if (!accessible || deps.accountKey() !== accountKey) {
       throw new Error('APPROVAL_ACCESS_DENIED');
     }
   };

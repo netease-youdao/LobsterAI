@@ -27,7 +27,7 @@ export interface BrowserCredentialApprovalDeps {
   askUser: (
     questions: AskUserRequest['questions'],
     timeoutMs: number,
-    options: { sessionKey?: string },
+    options: { sessionKey?: string; localOnly: true },
   ) => Promise<AskUserResponse | null>;
   translate: (key: string, params?: Record<string, string | number>) => string;
 }
@@ -60,7 +60,7 @@ export class BrowserCredentialApprovalService {
     const response = await this.deps.askUser(
       [question],
       APPROVAL_TIMEOUT_MS,
-      { sessionKey: request.sessionKey },
+      { sessionKey: request.sessionKey, localOnly: true },
     );
     if (!response || response.behavior !== 'allow') {
       return { approved: false };

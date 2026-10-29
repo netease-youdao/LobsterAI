@@ -1,6 +1,15 @@
 import type Database from 'better-sqlite3';
 
-import { parseManagedSessionKey } from './openclawChannelSessionSync';
+import type { CoworkSession } from '../coworkStore';
+import { buildManagedSessionKey, parseManagedSessionKey } from './openclawChannelSessionSync';
+
+/** New desktop sessions may not yet have a persisted gateway session key. */
+export function resolveOpenClawSessionKeyForCoworkSession(
+  session: Pick<CoworkSession, 'id' | 'agentId' | 'claudeSessionId'> | null,
+): string | undefined {
+  if (!session) return undefined;
+  return session.claudeSessionId?.trim() || buildManagedSessionKey(session.id, session.agentId);
+}
 
 const MAX_PARENT_LOOKUP_DEPTH = 16;
 

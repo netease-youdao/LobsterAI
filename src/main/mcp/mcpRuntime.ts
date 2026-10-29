@@ -92,6 +92,8 @@ function buildGatewayChildPath(): string {
 export interface McpRuntimeDeps {
   /** Shared with the IPC ownership check; only live question IDs are registered here. */
   permissionSessions: Map<string, string>;
+  /** Capture the account generation when a local question is created. */
+  captureAccountSnapshot?: () => () => boolean;
   getStore: () => SqliteStore;
   syncOpenClawConfig: (options: {
     reason: string;
@@ -117,6 +119,11 @@ export class McpRuntime {
   private bridgeServer: McpBridgeServer | null = null;
   private readonly bridgeSecret: string;
   private readonly remoteQuestions = new Map<string, { request: AskUserRequest; terminal?: AskUserResponse }>();
+  private readonly localQuestionAccess = new Map<string, {
+    sessionId: string;
+    expiresAt: number;
+    isCurrentAccount: () => boolean;
+  }>();
   private resolvedServersCache: ResolvedMcpServer[] = [];
   private mediaGenerationHandler:
     | ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>)
@@ -244,6 +251,22 @@ export class McpRuntime {
         return;
       }
       this.deps.permissionSessions.set(request.requestId, sessionId);
+      try {
+        const isCurrentAccount = this.deps.captureAccountSnapshot?.();
+        if (!isCurrentAccount || !isCurrentAccount()) {
+          console.warn('[AskUser] Request account is unavailable', { requestId: request.requestId });
+          this.resolveAskUser(request.requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+          return;
+        }
+        this.localQuestionAccess.set(request.requestId, { sessionId, expiresAt: request.expiresAt, isCurrentAccount });
+      } catch (error) {
+        console.error('[AskUser] Failed to capture request account', { requestId: request.requestId }, error);
+        this.resolveAskUser(request.requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+        return;
+      }
+      console.debug('[AskUser] Registered desktop question', {
+        requestId: request.requestId, sessionId, localOnly: request.localOnly === true, expiresAt: request.expiresAt,
+      });
       this.registerQuestion(sessionId, request);
       const windows = BrowserWindow.getAllWindows();
       let delivered = false;
@@ -289,7 +312,9 @@ export class McpRuntime {
     });
 
     this.bridgeServer.onAskUserDismiss(requestId => {
+      this.localQuestionAccess.delete(requestId);
       this.deps.permissionSessions.delete(requestId);
+      console.debug('[AskUser] Dismissed desktop question', { requestId });
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (win.isDestroyed()) return;
@@ -333,7 +358,7 @@ export class McpRuntime {
   /** Only a verified desktop session may publish a legacy form to remote control. */
   private registerQuestion(sessionId: string, request: AskUserRequest): void {
     // Recoverable paid-media consent requires its revision-aware desktop protocol.
-    if (request.mediaConfirmation || !this.deps.registerQuestion || !request.sessionKey
+    if (request.localOnly || request.mediaConfirmation || !this.deps.registerQuestion || !request.sessionKey
       || sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID) return;
     try {
       // Do not discard a secret marker while adapting the ordinary form contract.
@@ -377,6 +402,12 @@ export class McpRuntime {
       this.remoteQuestions.delete(request.requestId);
       console.warn('[AskUser] remote question registration unavailable; local form remains usable', error instanceof Error ? error.name : 'Error');
     }
+  }
+
+  canAccessLocalQuestion(requestId: string): boolean {
+    const access = this.localQuestionAccess.get(requestId);
+    return !!access && this.deps.permissionSessions.get(requestId) === access.sessionId
+      && Date.now() < access.expiresAt && access.isCurrentAccount();
   }
 
   async askUserInternal(

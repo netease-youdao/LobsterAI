@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
-import { remotePublicationAllowed,RemotePublicationKind } from './remotePublicationOrigins';
+import { isUnpublishedDesktopInputJob } from './remoteDesktopInputAdmission';
+import { remotePublicationAllowed, RemotePublicationKind } from './remotePublicationOrigins';
 import { RemoteSyncStateError } from './remoteRetention';
 import type { SyncRow } from './remoteStore';
 
@@ -60,6 +61,7 @@ export function readRemoteSessionPristine(db: Database.Database, row: SyncRow, t
     }
     if (!sharedPrefixes.some(prefix => item.key.startsWith(prefix))) continue;
     const value = parse(item.value);
+    if (isUnpublishedDesktopInputJob(db, item.key, value, row)) continue;
     if (record(value) && (value.localSessionId === row.local_id || value.remoteSessionId === row.session_id || value.sessionId === row.session_id)) return false;
   }
   return true;
