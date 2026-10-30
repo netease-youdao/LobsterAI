@@ -254,7 +254,7 @@
     "@univerjs/sheets-conditional-formatting": "1.0.2",
     "@univerjs/sheets-conditional-formatting-ui": "1.0.2",
     "@univerjs/sheets-data-validation": "1.0.2",
-    "@univerjs/sheets-data-validation-ui": "1.0.2",
+    "@univerjs/sheets-data-validation-ui": "1.0.3",
     "@univerjs/sheets-drawing": "1.0.2",
     "@univerjs/sheets-drawing-ui": "1.0.2",
     "@univerjs/sheets-filter": "1.0.2",
