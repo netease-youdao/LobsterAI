@@ -1,8 +1,8 @@
 ---
 name: web-search
-description: Real-time web search using Playwright-controlled browser. Use this skill when you need current information, latest documentation, recent news, or any data beyond your knowledge cutoff (January 2025).
+description: Real-time web search using a browser or optional anonymous Parallel Search MCP. Use this skill when you need current information, latest documentation, recent news, or any data beyond your knowledge cutoff (January 2025).
 official: true
-version: 1.0.2
+version: 1.0.3
 ---
 
 # Web Search Skill
@@ -42,8 +42,8 @@ Use the web-search skill when you need:
 1. **CLI Script** - Simple bash interface for Claude
 2. **Bridge Server** - Express HTTP API (auto-started by Electron)
 3. **Playwright Manager** - Browser connection and session management
-4. **Search Engine Layer** - Google primary, Bing fallback
-5. **Chrome Browser** - Visible browser window (all operations transparent)
+4. **Search Engine Layer** - Google primary, Bing fallback; explicit Parallel uses Search MCP without Chrome
+5. **Chrome Browser** - Visible browser window for Google/Bing searches
 
 ## Basic Usage
 
@@ -101,6 +101,39 @@ TypeScript 5.0 introduces decorators, const type parameters...
 
 ## (More results...)
 ```
+
+### Optional Parallel Search
+
+Select Parallel explicitly through the same CLI:
+
+```bash
+WEB_SEARCH_ENGINE=parallel bash "$SKILLS_ROOT/web-search/scripts/search.sh" "TypeScript release notes" 5
+```
+
+No Parallel account, API key, Chrome installation, browser connection, or browser
+cookies are needed. The local bridge uses the maintained MCP SDK to discover
+and call `web_search` at `https://search.parallel.ai/mcp`. It sends the query as
+both `objective` and a single `search_queries` entry to Parallel for third-party
+processing. Optional conversation/model metadata is omitted because this CLI
+does not expose that context. Free anonymous access is rate limited; there is
+no unlimited allowance or SLA. See [public setup guidance](https://docs.parallel.ai/integrations/mcp/search-mcp),
+[Customer Terms](https://parallel.ai/customer-terms), and [Privacy Policy](https://parallel.ai/privacy-policy).
+
+`WEB_SEARCH_ENGINE` accepts `auto` (default), `google`, `bing`, or `parallel`.
+Auto continues to try Google then Bing and makes no Parallel requests. Explicit
+Parallel failures are reported with no provider fallback or automatic retry.
+Result count is limited locally, not sent as an unsupported MCP argument.
+Parallel accepts non-empty queries up to 200 characters and result counts from
+1 to 50. Searches have a maximum 30-second deadline, each MCP response is capped
+at 1 MiB before buffering, and returned evidence is limited to 25,000 characters
+with bounded titles/excerpts and a visible truncation warning. Source URLs are
+preserved. This provider supports search only; page/content operations still
+use the existing browser path.
+
+The outbound project-wide `User-Agent` is `LobsterAI-WebSearch/<skill version>`
+(currently `LobsterAI-WebSearch/1.0.3`) so Parallel can measure aggregate project
+usage. It contains no user or installation identifier. The service may process
+other request metadata under its policies.
 
 ### Workflow Example
 
@@ -368,10 +401,10 @@ The search output is Markdown. Extract:
 
 ### Privacy Considerations
 
-- Search queries go through Google and/or Bing depending on availability
+- Auto search queries go through Google and/or Bing depending on availability; explicit Parallel queries go to Parallel
 - Google/Bing may track searches (their standard privacy policies apply)
 - No local storage of search history by the skill
-- User can observe all browser activity in real-time
+- User can observe Google/Bing browser activity in real-time; Parallel runs without browser activity
 
 ## Limitations
 
@@ -527,8 +560,8 @@ bash "$SKILLS_ROOT/web-search/scripts/search.sh" "Vite vs webpack 2026 compariso
 
 ### System Requirements
 
-- Node.js 18+
-- Google Chrome or Chromium installed
+- Node.js 18+ for Google/Bing; Node.js 20.3+ for Parallel (LobsterAI bundles its runtime)
+- Google Chrome or Chromium installed for Google/Bing (not needed for Parallel)
 - Internet connection for searches
 - ~100MB RAM for Bridge Server
 - ~200MB RAM for Chrome instance
