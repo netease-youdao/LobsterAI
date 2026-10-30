@@ -337,7 +337,16 @@ function normalizeAppLabel(value) {
 }
 
 function appKey(value) {
-  return String(value || '').trim().toLowerCase();
+  const key = String(value || '').trim().toLowerCase();
+  if (!IS_MAC) {
+    const executablePath = key.startsWith('process:') ? key.slice('process:'.length) : key;
+    // A Windows window uses process:<path>, while launch_app can use the same
+    // executable path directly. Do not merge unrelated display names or app IDs.
+    if (path.win32.isAbsolute(executablePath)) {
+      return path.win32.normalize(executablePath);
+    }
+  }
+  return key;
 }
 
 function isDeniedApp(...labels) {
