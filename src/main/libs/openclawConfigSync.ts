@@ -2002,7 +2002,12 @@ type OpenClawConfigSyncDeps = {
   getProxyAuthToken?: () => string | null;
   getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   getAgents?: () => Agent[];
-  getUserPlugins?: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
+  getUserPlugins?: () => Array<{
+    pluginId: string;
+    enabled: boolean;
+    config?: Record<string, unknown>;
+    hooks?: Record<string, unknown>;
+  }>;
   canUseMediaGeneration?: () => boolean;
   /** Overrides from openclaw.user.json, merged on top of every rendered config. */
   userConfigOverlay?: OpenClawUserConfigOverlaySource;
@@ -2040,7 +2045,12 @@ export class OpenClawConfigSync {
   private readonly getProxyAuthToken?: () => string | null;
   private readonly getSkillsList?: () => Array<{ id: string; name: string; enabled: boolean }>;
   private readonly getAgents?: () => Agent[];
-  private readonly getUserPlugins: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
+  private readonly getUserPlugins: () => Array<{
+    pluginId: string;
+    enabled: boolean;
+    config?: Record<string, unknown>;
+    hooks?: Record<string, unknown>;
+  }>;
   private readonly canUseMediaGeneration: () => boolean;
   private readonly userConfigOverlay?: OpenClawUserConfigOverlaySource;
   private previousBindingsJson?: string;
@@ -2801,13 +2811,22 @@ export class OpenClawConfigSync {
           // exists, otherwise it becomes a stale entry on every startup.
           ...(hasQwenProvider && qwenPortalAuthPluginId ? { [qwenPortalAuthPluginId]: { enabled: true } } : {}),
           ...(hasXaiPlugin ? { xai: { enabled: true } } : {}),
-          // User-installed plugins: merge enabled state and config from user_plugins table
+          // User-installed plugins: merge enabled / config / hooks from user_plugins table
           ...Object.fromEntries(
-            userPlugins.map(p => [p.pluginId, {
-              enabled: p.pluginId === WeixinPlugin.Id && hasPreinstalledPlugin(WeixinPlugin.Id)
-                ? weixinPluginEnabled : p.enabled,
-              ...(p.config && Object.keys(p.config).length > 0 ? { config: p.config } : {}),
-            }]),
+            userPlugins.map(p => {
+              const existing = cleanedExistingEntries[p.pluginId] as Record<string, unknown> | undefined;
+              const existingHooks = existing?.hooks;
+              const hooks = p.hooks
+                ?? (existingHooks && typeof existingHooks === 'object' && !Array.isArray(existingHooks)
+                  ? existingHooks as Record<string, unknown>
+                  : undefined);
+              return [p.pluginId, {
+                enabled: p.pluginId === WeixinPlugin.Id && hasPreinstalledPlugin(WeixinPlugin.Id)
+                  ? weixinPluginEnabled : p.enabled,
+                ...(p.config && Object.keys(p.config).length > 0 ? { config: p.config } : {}),
+                ...(hooks && Object.keys(hooks).length > 0 ? { hooks } : {}),
+              }];
+            }),
           ),
           // Disable acpx (ACP agent runtime) — LobsterAI does not use ACP and
           // the embedded probe adds ~11s to gateway startup while it waits for

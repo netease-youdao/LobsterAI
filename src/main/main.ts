@@ -2888,7 +2888,12 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
         getCoworkStore()
           .listUserPlugins()
           .filter(p => !isHiddenUserPluginId(p.pluginId))
-          .map(p => ({ pluginId: p.pluginId, enabled: p.enabled, config: p.config })),
+          .map(p => ({
+            pluginId: p.pluginId,
+            enabled: p.enabled,
+            config: p.config,
+            hooks: p.hooks,
+          })),
       canUseMediaGeneration: () => cachedMediaGenerationEntitled,
       userConfigOverlay: getOpenClawUserConfigOverlay(),
     });
