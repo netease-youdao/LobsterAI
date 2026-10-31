@@ -1059,6 +1059,11 @@ export class CoworkStore {
     };
   }
 
+  /** Existence check for polling loops; getSession also loads a page of messages. */
+  sessionExists(id: string): boolean {
+    return this.getOne<{ found: number }>('SELECT 1 AS found FROM cowork_sessions WHERE id = ?', [id]) !== undefined;
+  }
+
   getSession(id: string, messageLimit = COWORK_MESSAGE_PAGE_SIZE): CoworkSession | null {
     interface SessionRow {
       id: string;
