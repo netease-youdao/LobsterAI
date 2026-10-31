@@ -18,7 +18,12 @@ const BuildEnv = {
 // commands can never leak into a build.
 const CHANNEL_SCOPED_ENV_VARS = Object.values(BuildEnv);
 
+// Shared by the outer release wrapper and nested build processes. Unlike
+// channel flags, the isolated output directory must survive channel scoping.
+const PackagingEnv = { OutputDir: 'LOBSTERAI_BUILD_OUTPUT_DIR' };
+
 module.exports = {
   BuildEnv,
   CHANNEL_SCOPED_ENV_VARS,
+  PackagingEnv,
 };
