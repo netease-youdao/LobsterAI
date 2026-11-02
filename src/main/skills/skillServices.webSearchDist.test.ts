@@ -32,6 +32,7 @@ type WebSearchRuntimeInternals = {
 const REPO_WEB_SEARCH = path.resolve(process.cwd(), 'SKILLs', 'web-search');
 const START_SERVER_SCRIPT = path.join(REPO_WEB_SEARCH, 'scripts', 'start-server.sh');
 const SERVER_ENTRY = path.join('dist', 'server', 'index.js');
+const ICONV_SENTINEL = path.join('node_modules', 'iconv-lite', 'encodings', 'index.js');
 const SOURCE_FILES = [path.join('server', 'index.ts'), path.join('server', 'search', 'types.ts')];
 const LEGACY_SERVER_ENTRY = [
   'function scoreDecodedJsonText() {}',
@@ -64,7 +65,7 @@ const writeFile = (filePath: string, content: string): void => {
 const writeBundledSkill = (skillPath: string): void => {
   fs.cpSync(path.join(REPO_WEB_SEARCH, 'scripts'), path.join(skillPath, 'scripts'), { recursive: true });
   writeFile(path.join(skillPath, 'package.json'), '{"name":"@lobsterai/skill-web-search"}\n');
-  writeFile(path.join(skillPath, 'node_modules', 'iconv-lite', 'encodings', 'index.js'), 'module.exports = {};\n');
+  writeFile(path.join(skillPath, ICONV_SENTINEL), 'module.exports = {};\n');
   for (const source of SOURCE_FILES) writeFile(path.join(skillPath, source), 'export {};\n');
   writeFile(path.join(skillPath, SERVER_ENTRY), "'use strict';\n");
   setMtime(skillPath, SOURCE_FILES, CHECKOUT_TIME);
@@ -126,6 +127,32 @@ describe('web-search dist staleness after copying the bundled skill', () => {
     expect(childProcessMocks.execSync).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ['the user copy', () => userSkill],
+    ['the app bundle itself', () => bundledSkill],
+  ])('a packaged runtime the bundle cannot fix fails without npm in %s', (_label, skillPath) => {
+    electronApp.isPackaged = true;
+    cpRecursiveSync(bundledSkill, userSkill, { dereference: true });
+    fs.rmSync(path.join(bundledSkill, 'dist'), { recursive: true, force: true });
+    fs.rmSync(path.join(userSkill, 'dist'), { recursive: true, force: true });
+
+    expect(() => internals().ensureWebSearchRuntimeReady(skillPath()))
+      .toThrow('still unhealthy after restoring it from bundled resources');
+    expect(childProcessMocks.execSync).not.toHaveBeenCalled();
+  });
+
+  test('a source checkout still installs and rebuilds a missing dist', () => {
+    writeFile(path.join(bundledSkill, 'tsconfig.json'), '{}\n');
+    fs.rmSync(path.join(bundledSkill, 'dist'), { recursive: true, force: true });
+    childProcessMocks.execSync.mockImplementation((command: string) => {
+      if (command === 'npm run build') writeFile(path.join(bundledSkill, SERVER_ENTRY), "'use strict';\n");
+    });
+
+    internals().ensureWebSearchRuntimeReady(bundledSkill);
+
+    expect(childProcessMocks.execSync.mock.calls.map(([command]) => command)).toEqual(['npm install', 'npm run build']);
+  });
+
   test('a prebuilt copy without tsconfig.json is not rebuilt in development either', () => {
     makeSourcesNewerThanDist(bundledSkill);
 
@@ -150,30 +177,115 @@ describe('web-search dist staleness after copying the bundled skill', () => {
   });
 });
 
-describe.skipIf(process.platform === 'win32')('start-server.sh is_server_build_outdated', () => {
-  const runCheck = (skillPath: string): boolean => {
+describe.skipIf(process.platform === 'win32')('start-server.sh', () => {
+  const BUILD_FUNCTIONS = ['ensure_npm_available', 'can_rebuild_server', 'is_server_build_outdated', 'ensure_server_build'];
+  const DEPENDENCY_FUNCTIONS = [
+    'resolve_node_runtime',
+    'ensure_npm_available',
+    'install_dependencies',
+    'repair_iconv_lite',
+    'verify_iconv_runtime',
+    'ensure_dependencies',
+  ];
+  const BUILD_NPM = 'mkdir -p dist/server && : > dist/server/index.js';
+  const OFFLINE_NPM = 'exit 1';
+
+  /** Runs `call` with the named start-server.sh functions and a fake npm that logs its arguments. */
+  const runStartServer = (skillPath: string, functions: string[], call: string, npmBody: string) => {
     const script = fs.readFileSync(START_SERVER_SCRIPT, 'utf-8');
-    const check = script.match(/^is_server_build_outdated\(\) \{[\s\S]*?^\}$/m)?.[0];
-    expect(check).toBeDefined();
-    const result = spawnSync('bash', ['-c', `${check}\nSERVER_ENTRY="dist/server/index.js"\nis_server_build_outdated`], {
-      cwd: skillPath,
+    const bodies = functions.map((name) => {
+      const body = script.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}$`, 'm'))?.[0];
+      expect(body, name).toBeDefined();
+      return body;
     });
-    expect([0, 1]).toContain(result.status);
-    return result.status === 0;
+    const bin = path.join(root, 'bin');
+    const npmLog = path.join(root, 'npm.log');
+    writeFile(path.join(bin, 'npm'), ['#!/bin/sh', `echo "$*" >> "${npmLog}"`, npmBody].join('\n'));
+    fs.chmodSync(path.join(bin, 'npm'), 0o755);
+    const preamble = [`SERVER_ENTRY="${SERVER_ENTRY}"`, `ICONV_SENTINEL="${ICONV_SENTINEL}"`];
+    const result = spawnSync('bash', ['-c', [...bodies, ...preamble, call].join('\n')], {
+      cwd: skillPath,
+      encoding: 'utf-8',
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    const npmCalls = fs.existsSync(npmLog) ? fs.readFileSync(npmLog, 'utf-8').trim().split('\n') : [];
+    return { status: result.status, stdout: result.stdout, npmCalls };
   };
 
-  test('matches the main-process rule for prebuilt copies and source checkouts', () => {
+  const isOutdated = (skillPath: string): boolean => {
+    const { status } = runStartServer(skillPath, BUILD_FUNCTIONS, 'is_server_build_outdated', BUILD_NPM);
+    expect([0, 1]).toContain(status);
+    return status === 0;
+  };
+
+  /** Like iconv-lite, the package loads its encodings only when it decodes. */
+  const writeIconvLite = (packageDir: string): void => {
+    writeFile(path.join(packageDir, 'lib', 'index.js'), "exports.decode = (buf) => { require('../encodings'); return String(buf); };\n");
+    writeFile(path.join(packageDir, 'encodings', 'index.js'), "require('./utf7');\n");
+    writeFile(path.join(packageDir, 'encodings', 'utf7.js'), 'module.exports = {};\n');
+  };
+
+  test('staleness matches the main-process rule for prebuilt copies and source checkouts', () => {
     makeSourcesNewerThanDist(bundledSkill);
-    expect(runCheck(bundledSkill)).toBe(false);
+    expect(isOutdated(bundledSkill)).toBe(false);
 
     writeFile(path.join(bundledSkill, 'tsconfig.json'), '{}\n');
     makeSourcesNewerThanDist(bundledSkill);
-    expect(runCheck(bundledSkill)).toBe(true);
+    expect(isOutdated(bundledSkill)).toBe(true);
   });
 
   test('still flags a legacy dist without tsconfig.json', () => {
     writeFile(path.join(bundledSkill, SERVER_ENTRY), LEGACY_SERVER_ENTRY);
 
-    expect(runCheck(bundledSkill)).toBe(true);
+    expect(isOutdated(bundledSkill)).toBe(true);
+  });
+
+  test('a packaged copy with a missing dist fails without calling npm', () => {
+    fs.rmSync(path.join(bundledSkill, 'dist'), { recursive: true, force: true });
+
+    const result = runStartServer(bundledSkill, BUILD_FUNCTIONS, 'ensure_server_build', BUILD_NPM);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('Restart LobsterAI');
+    expect(result.npmCalls).toEqual([]);
+  });
+
+  test('a source checkout with a missing dist rebuilds it', () => {
+    writeFile(path.join(bundledSkill, 'tsconfig.json'), '{}\n');
+    fs.rmSync(path.join(bundledSkill, 'dist'), { recursive: true, force: true });
+
+    const result = runStartServer(bundledSkill, BUILD_FUNCTIONS, 'ensure_server_build', BUILD_NPM);
+
+    expect(result.status).toBe(0);
+    expect(result.npmCalls).toEqual(['run build']);
+    expect(fs.existsSync(path.join(bundledSkill, SERVER_ENTRY))).toBe(true);
+  });
+
+  test('a healthy iconv-lite is kept without npm, even when npm is offline', () => {
+    const iconvDir = path.join(bundledSkill, 'node_modules', 'iconv-lite');
+    writeIconvLite(iconvDir);
+
+    const result = runStartServer(bundledSkill, DEPENDENCY_FUNCTIONS, 'resolve_node_runtime && ensure_dependencies', OFFLINE_NPM);
+
+    expect(result.status).toBe(0);
+    expect(result.npmCalls).toEqual([]);
+    expect(fs.existsSync(path.join(iconvDir, 'encodings', 'utf7.js'))).toBe(true);
+  });
+
+  test('iconv-lite with missing encodings is reinstalled', () => {
+    const template = path.join(root, 'iconv-lite-template');
+    writeIconvLite(template);
+    writeIconvLite(path.join(bundledSkill, 'node_modules', 'iconv-lite'));
+    fs.rmSync(path.join(bundledSkill, 'node_modules', 'iconv-lite', 'encodings', 'utf7.js'));
+
+    const result = runStartServer(
+      bundledSkill,
+      DEPENDENCY_FUNCTIONS,
+      'resolve_node_runtime && ensure_dependencies',
+      `cp -R "${template}" node_modules/iconv-lite`,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.npmCalls).toEqual(['install --no-save iconv-lite']);
   });
 });

@@ -258,6 +258,13 @@ export class SkillServiceManager {
       return;
     }
 
+    // Restoring from the bundle is the only repair for a packaged copy: it has no
+    // tsconfig.json, so `npm run build` always fails there, and a blocking npm install
+    // would freeze the main process (or write into the app bundle) for nothing.
+    if (!this.canRebuildWebSearchDist(skillPath)) {
+      throw new Error(`Web-search runtime is still unhealthy after restoring it from bundled resources: ${skillPath}`);
+    }
+
     const nodeModules = path.join(skillPath, 'node_modules');
     const distDir = path.join(skillPath, 'dist');
     const env = this.skillEnv as NodeJS.ProcessEnv ?? process.env;
