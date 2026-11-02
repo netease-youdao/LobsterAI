@@ -116,6 +116,17 @@ const WINDOWS_RUNTIME_TARGET_PREFIX = 'win-';
 // Build-only koffi content that its runtime loader never reads.
 const KOFFI_BUILD_ONLY_PATHS = ['doc', 'vendor', 'CHANGELOG.md', 'cnoke.cjs'];
 
+// Paths under node_modules that the gateway never loads.
+const RUNTIME_UNUSED_PATHS = [
+  // OpenClaw loads only tree-sitter-bash.wasm (via web-tree-sitter); the
+  // grammar C sources and per-platform native prebuilds are dead weight.
+  'tree-sitter-bash/src',
+  'tree-sitter-bash/prebuilds',
+  // Type-only packages with no runtime code.
+  '@cloudflare/workers-types',
+  'bun-types',
+];
+
 function readRuntimeTarget(runtimeRoot) {
   try {
     const info = JSON.parse(fs.readFileSync(path.join(runtimeRoot, 'runtime-build-info.json'), 'utf8'));
@@ -154,6 +165,19 @@ function trimKoffiBuildFiles(nodeModulesDir, stats) {
     fs.rmSync(target, { recursive: true, force: true });
     stats.bytesFreed += size;
     if (isDirectory) stats.dirsRemoved++; else stats.filesRemoved++;
+    removed.push(relative);
+  }
+  return removed;
+}
+
+function removeRuntimeUnusedPaths(nodeModulesDir, stats) {
+  const removed = [];
+  for (const relative of RUNTIME_UNUSED_PATHS) {
+    const target = path.join(nodeModulesDir, relative);
+    if (!fs.existsSync(target)) continue;
+    stats.bytesFreed += getPathSize(target);
+    fs.rmSync(target, { recursive: true, force: true });
+    stats.dirsRemoved++;
     removed.push(relative);
   }
   return removed;
@@ -427,6 +451,12 @@ function main() {
     }
   }
 
+  // Step 2d: Remove package content the gateway never loads
+  const unusedRemoved = removeRuntimeUnusedPaths(nodeModulesDir, stats);
+  if (unusedRemoved.length > 0) {
+    console.log(`[prune-openclaw-runtime] Removed unused runtime paths: ${unusedRemoved.join(', ')}`);
+  }
+
   // Step 3: Clean unnecessary files from node_modules only
   cleanDir(nodeModulesDir, stats);
 
@@ -470,8 +500,10 @@ module.exports = {
   KOFFI_BUILD_ONLY_PATHS,
   KOFFI_PACKAGE,
   PACKAGES_TO_STUB,
+  RUNTIME_UNUSED_PATHS,
   isWindowsRuntimeTarget,
   readRuntimeTarget,
+  removeRuntimeUnusedPaths,
   resolvePackagesToStub,
   shouldKeepBundledExtension,
   trimKoffiBuildFiles,

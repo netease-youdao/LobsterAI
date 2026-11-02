@@ -10,8 +10,10 @@ const {
   KOFFI_BUILD_ONLY_PATHS,
   KOFFI_PACKAGE,
   PACKAGES_TO_STUB,
+  RUNTIME_UNUSED_PATHS,
   isWindowsRuntimeTarget,
   readRuntimeTarget,
+  removeRuntimeUnusedPaths,
   resolvePackagesToStub,
   shouldKeepBundledExtension,
   trimKoffiBuildFiles,
@@ -91,4 +93,25 @@ test('pruneOpenClawRuntime trims only build-time koffi content and keeps the loa
   expect(stats.bytesFreed).toBeGreaterThan(0);
   expect(trimKoffiBuildFiles(nodeModules, stats)).toEqual([]);
   expect(trimKoffiBuildFiles(path.join(root, 'missing'), stats)).toEqual([]);
+});
+
+test('pruneOpenClawRuntime keeps the tree-sitter-bash wasm and drops unused package content', () => {
+  const root = tempDir();
+  const nodeModules = path.join(root, 'node_modules');
+  const kept = [
+    'tree-sitter-bash/package.json', 'tree-sitter-bash/tree-sitter-bash.wasm',
+    'tree-sitter-bash/bindings/node/index.js', 'hono/package.json',
+  ];
+  const removed = [
+    'tree-sitter-bash/src/parser.c', 'tree-sitter-bash/prebuilds/darwin-arm64/tree-sitter-bash.node',
+    '@cloudflare/workers-types/index.ts', 'bun-types/package.json',
+  ];
+  for (const relative of [...kept, ...removed]) write(nodeModules, relative);
+  const stats = { filesRemoved: 0, dirsRemoved: 0, bytesFreed: 0 };
+  expect([...removeRuntimeUnusedPaths(nodeModules, stats)].sort()).toEqual([...RUNTIME_UNUSED_PATHS].sort());
+  for (const relative of kept) expect(fs.existsSync(path.join(nodeModules, relative))).toBe(true);
+  for (const relative of removed) expect(fs.existsSync(path.join(nodeModules, relative))).toBe(false);
+  expect(stats.dirsRemoved).toBe(RUNTIME_UNUSED_PATHS.length);
+  expect(stats.bytesFreed).toBeGreaterThan(0);
+  expect(removeRuntimeUnusedPaths(nodeModules, stats)).toEqual([]);
 });
