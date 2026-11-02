@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 
+import { CoworkSystemMessageKind } from '../../common/coworkSystemMessages';
 import type { CoworkMessage,CoworkStore } from '../coworkStore';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
 import { DEFAULT_IM_EMPTY_REPLY, stripThinkingBlocks } from './imReplyGuard';
@@ -142,7 +143,7 @@ export class IMCoworkHandler extends EventEmitter {
     if (accumulator) {
       accumulator.messages.push(message);
       accumulator.seenMessageIds?.add(message.id);
-      if (message.type === 'user' || message.type === 'system') {
+      if (this.isInputMessage(message)) {
         accumulator.inboundMessageId = message.id;
       }
     }
@@ -472,6 +473,10 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   private isInputMessage(message: CoworkMessage): boolean {
+    // A reconnect row is progress inside the turn; as a boundary it would cut the reply short.
+    if (message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ModelReconnect) {
+      return false;
+    }
     return message.type === 'user' || message.type === 'system';
   }
 

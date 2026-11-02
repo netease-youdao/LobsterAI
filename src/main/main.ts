@@ -473,7 +473,11 @@ import {
 } from './libs/mainWindowLoadRecovery';
 import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
-import { MediaTaskStore, type MediaTaskTracker as PersistedMediaTaskTracker } from './libs/mediaTaskStore';
+import {
+  MEDIA_INTENT_RETRY_WINDOW_MS,
+  MediaTaskStore,
+  type MediaTaskTracker as PersistedMediaTaskTracker,
+} from './libs/mediaTaskStore';
 import { MediaUsageAnalytics } from './libs/mediaUsageAnalytics';
 import { MediaUsageStore } from './libs/mediaUsageStore';
 import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
@@ -7178,12 +7182,13 @@ if (!gotTheLock) {
       if (mediaType === 'video' && request.signal?.aborted) {
         return videoConfirmationFailure({ behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.Interrupted }, t);
       }
+      const requestBody = JSON.stringify({ ...generateReq, ...(useDurableTasks ? { mediaType } : {}) });
       const intent = useDurableTasks && sessionId ? getMediaTaskStore().beginIntent({
         callKey: `${sessionId}:${request.context.toolCallId}`,
         ownerAccountKey: requestAccountScope.ownerAccountKey,
         serverBaseUrl, sessionId, mediaType, model: selectedModel, toolCallId: request.context.toolCallId,
         imageEdit,
-        requestBody: JSON.stringify({ ...generateReq, mediaType }),
+        requestBody,
       }) : undefined;
       const clientStartedAt = intent?.createdAt ?? Date.now();
       mediaUsage.submitting(request.context.toolCallId, useDurableTasks ? MediaProtocol.Durable : MediaProtocol.Legacy, selectedModel);
@@ -7195,7 +7200,7 @@ if (!gotTheLock) {
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey,
         },
-        body: intent?.requestBody ?? JSON.stringify({ ...generateReq, ...(useDurableTasks ? { mediaType } : {}) }),
+        body: requestBody,
         signal: AbortSignal.timeout(useDurableTasks ? 30_000 : 150_000),
       });
       console.log(`[MediaGeneration] server returned HTTP ${resp.status} for ${mediaType} generate request.`);
@@ -7795,17 +7800,22 @@ if (!gotTheLock) {
         if (fs.existsSync(asset.filePath)) (tracker.mediaType === 'image' ? persistedGeneratedImageAssetsByUrl : persistedGeneratedVideoAssetsByUrl)
           .set(`${tracker.sessionId}:${asset.originalUrl || asset.url}`, asset);
       }
-      if (!tracker.delivered && !pendingMediaTasks.has(tracker.taskId) && getCoworkStore().getSession(tracker.sessionId)) {
+      if (!tracker.delivered && !pendingMediaTasks.has(tracker.taskId) && getCoworkStore().sessionExists(tracker.sessionId)) {
         registerMediaTaskForPolling({ ...tracker, accountGeneration: scope.accountGeneration });
       }
     }
+    // Task records are never removed, so ids seen here stay tracked; misses re-read the store.
+    const trackedTaskIds = new Set(getMediaTaskStore().tasks()
+      .filter(task => task.serverBaseUrl === serverBaseUrl)
+      .map(task => task.taskId));
     for (const intent of getMediaTaskStore().intents()) {
       if (intent.rejected || intent.ownerAccountKey !== scope.ownerAccountKey || intent.serverBaseUrl !== serverBaseUrl
-        || !getCoworkStore().getSession(intent.sessionId)) continue;
+        || !getCoworkStore().sessionExists(intent.sessionId)) continue;
       if (intent.taskId) {
         mediaUsage.accept(intent.toolCallId, { taskId: intent.taskId, protocolVersion: MediaProtocol.Durable });
-        const exists = getMediaTaskStore().tasks().some(task => task.taskId === intent.taskId && task.serverBaseUrl === serverBaseUrl);
-        if (!exists && getCoworkStore().getSession(intent.sessionId)) registerMediaTaskForPolling({
+        const tracked = trackedTaskIds.has(intent.taskId)
+          || getMediaTaskStore().tasks().some(task => task.taskId === intent.taskId && task.serverBaseUrl === serverBaseUrl);
+        if (!tracked) registerMediaTaskForPolling({
           taskId: intent.taskId, sessionId: intent.sessionId, mediaType: intent.mediaType, model: intent.model,
           imageEdit: intent.imageEdit,
           ownerAccountKey: intent.ownerAccountKey, accountGeneration: scope.accountGeneration,
@@ -7814,12 +7824,20 @@ if (!gotTheLock) {
         });
         continue;
       }
-      if (Date.now() - (intent.lastAttemptAt ?? intent.createdAt) < 30_000 || Date.now() - intent.createdAt > 86_400_000) continue;
+      if (Date.now() - (intent.lastAttemptAt ?? intent.createdAt) < 30_000
+        || Date.now() - intent.createdAt > MEDIA_INTENT_RETRY_WINDOW_MS) continue;
+      const requestBody = getMediaTaskStore().intentRequestBody(intent);
+      if (requestBody === undefined) {
+        // Without the original payload the submission cannot be replayed under the same idempotency key.
+        console.warn(`[MediaGeneration] Intent ${intent.key} has no stored request body; it will not be resubmitted.`);
+        getMediaTaskStore().saveIntent({ ...intent, rejected: true });
+        continue;
+      }
       getMediaTaskStore().saveIntent({ ...intent, lastAttemptAt: Date.now() });
       try {
         const response = await fetchWithAuth(`${serverBaseUrl}${MEDIA_V2_TASKS_PATH}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': intent.key },
-          body: intent.requestBody, signal: AbortSignal.timeout(30_000),
+          body: requestBody, signal: AbortSignal.timeout(30_000),
         });
         const body = await response.json() as { code: number; data?: { taskId?: string | number }; message?: string };
         if (!isMediaAccountScopeCurrent(scope, getCurrentMediaAccountScope())) return;
@@ -15823,6 +15841,10 @@ if (!gotTheLock) {
       catch { console.warn('[UsageTitle] could not persist pending title.'); }
     });
 
+    // Older builds kept request bodies inline in the intent index; compact it before any window
+    // opens so the one-time cost is not paid during a recovery tick while the user is typing.
+    try { getMediaTaskStore().intents(); }
+    catch (error) { console.warn('[MediaGeneration] Media intent index compaction failed:', error); }
     let mediaRecoveryInFlight = false;
     const mediaRecoveryTimer = setInterval(() => {
       if (mediaRecoveryInFlight) return;

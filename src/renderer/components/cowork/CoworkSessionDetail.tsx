@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { isModelStreamInterruptedError } from '../../../common/coworkSystemMessages';
 import { stripGoalCommandPrefixForDisplay } from '../../../common/sessionTitle';
 import {
   BrowserDisplayMode,
@@ -1925,6 +1926,22 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       messageId,
     }));
   }, [confirmExecutionSkillPrompt, currentSession?.id, currentSession?.status, dispatch, isSessionBusy, latestProposedPlan, onContinue]);
+
+  const handleContinueAfterStreamInterruption = useCallback(async () => {
+    if (!currentSession?.id) return;
+    if (isSessionBusy || currentSession.status === CoworkSessionStatusValue.Running) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkSessionStillRunning'),
+      }));
+      return;
+    }
+    window.electron?.log?.fromRenderer?.(
+      'debug',
+      'CoworkSessionDetail',
+      `Continuing session ${currentSession.id} after a dropped model stream.`,
+    );
+    await onContinue(i18nService.t('coworkModelReconnectContinuePrompt'));
+  }, [currentSession?.id, currentSession?.status, isSessionBusy, onContinue]);
 
   const handleAdjustPlan = useCallback((messageId: string) => {
     if (!currentSession?.id || !latestProposedPlan || latestProposedPlan.messageId !== messageId) return;
@@ -6047,6 +6064,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   )
     ? latestProposedPlan.messageId
     : null;
+  // Continuing only makes sense right after the failed turn, while nothing runs.
+  const lastSessionMessage = currentSession.messages[currentSession.messages.length - 1];
+  const streamInterruptedErrorMessageId = (
+    !isSessionBusy
+    && !remoteManaged
+    && lastSessionMessage?.type === 'system'
+    && isModelStreamInterruptedError(lastSessionMessage.metadata)
+  )
+    ? lastSessionMessage.id
+    : null;
 
   const renderConversationTurns = () => {
     let railCounter = 0;
@@ -6185,6 +6212,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 searchTargetMessageId={activeConversationSearchMatch?.messageId}
                 isStreamingTurn={isStreaming && isLastTurn}
                 hasRunningSubagents={turnHasRunningSubagents}
+                streamInterruptedErrorMessageId={streamInterruptedErrorMessageId}
+                onContinueAfterStreamInterruption={handleContinueAfterStreamInterruption}
               />
             </div>
           )}

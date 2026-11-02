@@ -21,6 +21,8 @@ import { classifyErrorKey } from '../../../common/coworkErrorClassify';
 import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
+  MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY,
+  ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
 import { buildScheduledTaskEnginePrompt } from '../../../scheduledTask/enginePrompt';
 import {
@@ -8343,6 +8345,143 @@ test('chat error clears context maintenance after compaction starts', () => {
     message.type === 'system'
     && message.content.includes('模型响应超时')
   ))).toBe(true);
+});
+
+const modelReconnectMessages = (messages: Array<{ metadata?: Record<string, unknown> }>) => messages.filter(
+  (message) => message.metadata?.kind === CoworkSystemMessageKind.ModelReconnect,
+);
+
+test('model retry events show one reconnect row that settles when the resumed call streams', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'fix the build', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const messageSpy = vi.fn();
+  const messageUpdateSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('message', messageSpy);
+  adapter.on('messageUpdate', messageUpdateSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-reconnect'));
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 1, maxAttempts: 5, delayMs: 1000, error: 'terminated', errorCode: 'UND_ERR_SOCKET' },
+  }, 1);
+
+  const rows = modelReconnectMessages(session.messages);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].metadata).toMatchObject({
+    status: ModelReconnectStatus.Retrying,
+    attempt: 1,
+    maxAttempts: 5,
+    errorCode: 'UND_ERR_SOCKET',
+  });
+  expect(messageSpy).toHaveBeenCalledWith(session.id, rows[0]);
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 2, maxAttempts: 5, delayMs: 2000, error: 'terminated' },
+  }, 2);
+
+  expect(modelReconnectMessages(session.messages)).toHaveLength(1);
+  expect(rows[0].metadata).toMatchObject({ status: ModelReconnectStatus.Retrying, attempt: 2 });
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect',
+    sessionKey,
+    stream: 'thinking',
+    data: { text: 'Resumed reasoning.' },
+  }, 3);
+
+  expect(rows[0].metadata).toMatchObject({ status: ModelReconnectStatus.Recovered, attempt: 2 });
+  expect(messageUpdateSpy).toHaveBeenLastCalledWith(
+    session.id,
+    rows[0].id,
+    expect.any(String),
+    expect.objectContaining({ status: ModelReconnectStatus.Recovered }),
+  );
+  expect(adapter.activeTurns.has(session.id)).toBe(true);
+  expect(session.status).toBe('running');
+});
+
+test('a turn that ends after reconnects run out says the connection kept dropping', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'fix the build', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errorSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('error', errorSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-reconnect-exhausted'));
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect-exhausted',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 5, maxAttempts: 5, error: 'terminated' },
+  }, 1);
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect-exhausted',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'exhausted', attempt: 5, maxAttempts: 5, error: 'terminated', errorCode: 'UND_ERR_SOCKET' },
+  }, 2);
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-reconnect-exhausted',
+    sessionKey,
+    errorMessage: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+  }, 3);
+
+  const expectedMessage = t('coworkErrorModelStreamInterrupted', { attempts: 5 });
+  expect(errorSpy).toHaveBeenCalledWith(session.id, expectedMessage);
+  const errorMessage = session.messages.find((message) => (
+    message.type === 'system' && message.metadata?.error === expectedMessage
+  ));
+  expect(errorMessage?.metadata?.[MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY]).toBe(true);
+  expect(errorMessage?.metadata?.errorDetail?.rawErrorMessage).toContain('reconnectAttempts=5/5');
+  expect(errorMessage?.metadata?.errorDetail?.rawErrorMessage).toContain('code=UND_ERR_SOCKET');
+  const rows = modelReconnectMessages(session.messages);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].metadata?.status).toBe(ModelReconnectStatus.Failed);
+  expect(session.status).toBe('error');
+});
+
+test('a reconnect that is still pending settles as failed when an unrelated error ends the turn', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'fix the build', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+
+  session.status = 'running';
+  adapter.on('error', vi.fn());
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-reconnect-other-error'));
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect-other-error',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 1, maxAttempts: 5, error: 'terminated' },
+  }, 1);
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-reconnect-other-error',
+    sessionKey,
+    errorMessage: '401 invalid api key',
+  }, 2);
+
+  const errorMessage = session.messages.find((message) => message.type === 'system' && message.metadata?.error);
+  expect(errorMessage?.metadata?.[MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY]).toBeUndefined();
+  expect(modelReconnectMessages(session.messages)[0].metadata?.status).toBe(ModelReconnectStatus.Failed);
 });
 
 test('chat error prevents stale empty final history sync from restarting context maintenance', async () => {
