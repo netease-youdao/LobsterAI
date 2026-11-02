@@ -9,6 +9,8 @@ import {
   ContextCompactionMode,
   ContextCompactionStatus,
   CoworkSystemMessageKind,
+  MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY,
+  ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
 import { buildGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
 import {
@@ -169,6 +171,14 @@ import { buildCoworkWorkspaceRehydrationBridge } from './coworkWorkspaceRehydrat
 import { extractCronDeliveredTarget } from './cronDeliveryTarget';
 import { buildEmptyResponseHintMetadata, findRecoveredEmptyResponseHintIds } from './emptyResponseHint';
 import { buildMediaGenerationTurnInstruction } from './mediaGenerationTurnInstruction';
+import {
+  applyModelRetryEvent,
+  buildModelReconnectMetadata,
+  getModelReconnectContent,
+  type ModelReconnectState,
+  parseModelRetryEvent,
+  resolveModelReconnectErrorOverride,
+} from './modelReconnect';
 import { OpenClawApprovalController } from './openclawApprovalController';
 import {
   applyLocalTimestampsToEntries,
@@ -787,6 +797,8 @@ type ActiveTurn = {
    * needed to surface an honest error message instead.
    */
   toolLoopBlockReason?: string;
+  /** The runtime is retrying, or gave up on, a model stream that dropped mid-reply. */
+  modelReconnect?: ModelReconnectState;
   mediaStatusPollCountByToolCallId: Map<string, number>;
   mediaStatusPollCountByTaskId: Map<string, number>;
   mediaStatusPollBaseByToolCallId: Map<string, number>;
@@ -1821,6 +1833,8 @@ export function resolveOpenClawRuntimeErrorMessage(
 export type ResolvedOpenClawRuntimeError = {
   message: string;
   enterpriseQuotaError: EnterpriseQuotaErrorDetails | null;
+  /** Reconnecting a dropped model stream failed; the user can continue the turn. */
+  modelStreamInterrupted?: boolean;
 };
 
 const getEnterpriseQuotaErrorMessage = (
@@ -1998,6 +2012,7 @@ export const buildRuntimeErrorMetadata = (
 ): CoworkMessageMetadata => ({
   error: resolvedError.message,
   ...(resolvedError.errorDetail ? { errorDetail: resolvedError.errorDetail } : {}),
+  ...(resolvedError.modelStreamInterrupted ? { [MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY]: true } : {}),
   ...(resolvedError.enterpriseQuotaError
     ? {
       [EnterpriseQuotaMessageMetadataKey.ErrorCode]: resolvedError.enterpriseQuotaError.code,
@@ -7136,15 +7151,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     detailRawErrorMessage: string;
   } {
     const toolLoopOverride = resolveOpenClawToolLoopErrorOverride(turn?.toolLoopBlockReason, rawErrorMessage);
-    const planOverride = toolLoopOverride
+    const reconnectOverride = toolLoopOverride
+      ? null
+      : resolveModelReconnectErrorOverride(turn?.modelReconnect, rawErrorMessage);
+    const planOverride = toolLoopOverride || reconnectOverride
       ? null
       : resolvePlanModelSubstitutionErrorOverride(turn?.model, rawErrorMessage, metadata);
     // The plan call's quota capture belongs to this error; keep it from labeling the next one.
     if (planOverride) consumeRecentOpenClawTokenProxyQuotaError();
-    const override = toolLoopOverride ?? planOverride;
+    const override = toolLoopOverride ?? reconnectOverride ?? planOverride;
     if (override) {
       return {
-        resolvedError: buildResolvedRuntimeError(override.errorMessage),
+        resolvedError: {
+          ...buildResolvedRuntimeError(override.errorMessage),
+          ...(override === reconnectOverride ? { modelStreamInterrupted: true } : {}),
+        },
         detailRawErrorMessage: override.detailRawErrorMessage,
       };
     }
@@ -8245,6 +8266,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.cancelLifecycleEndFallback(sessionId, turn, 'agent stream continued');
     }
 
+    // Model output after a retry event means the resumed call got through.
+    if (turn.modelReconnect?.status === ModelReconnectStatus.Retrying
+      && (stream === 'assistant' || stream === 'thinking' || stream === 'tool' || stream === 'tools')) {
+      this.settleModelReconnect(sessionId, turn, ModelReconnectStatus.Recovered);
+    }
+
     // Fast-path: skip assistant-stream events — they carry the same text as
     // chat deltas and dispatchAgentEvent() has no handler for stream=assistant.
     if (stream === 'assistant') {
@@ -8260,6 +8287,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       || stream === 'tools'
       || stream === 'thinking'
       || stream === 'compaction'
+      || stream === AgentEventStream.ModelRetry
       || (!stream && isRecord(agentPayload.data) && typeof agentPayload.data.toolCallId === 'string')
       || (stream === 'lifecycle' && getAgentLifecyclePhase(agentPayload.data) !== AgentLifecyclePhase.End);
     if (shouldKeepRunningAfterFinal) {
@@ -8312,6 +8340,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.thinkingController.handleStream(sessionId, turn, agentPayload.data);
       return;
     }
+    if (stream === AgentEventStream.ModelRetry) {
+      this.handleModelRetryEvent(sessionId, turn, agentPayload.data);
+      return;
+    }
   }
 
   private enqueuePendingAgentEvent(runId: string, payload: AgentEventPayload, seq?: number): void {
@@ -8329,6 +8361,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       || stream === 'thinking'
       || stream === 'lifecycle'
       || stream === 'compaction'
+      || stream === AgentEventStream.ModelRetry
       || (!stream && hasToolShape);
     if (!isSupportedStream) return;
 
@@ -9078,6 +9111,56 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.refreshAndEmitContextUsage(sessionId);
       }, 1500);
     }
+  }
+
+  private handleModelRetryEvent(sessionId: string, turn: ActiveTurn, data: unknown): void {
+    const event = parseModelRetryEvent(data);
+    if (!event) {
+      console.warn(`[OpenClawRuntime] ignored a model retry event for session ${sessionId} because the payload was invalid.`);
+      return;
+    }
+    const startsNewDrop = turn.modelReconnect?.status !== ModelReconnectStatus.Retrying;
+    if (startsNewDrop) {
+      // Output of the resumed call belongs after the reconnect row, not inside
+      // the reasoning the dropped call had streamed.
+      this.splitAssistantSegmentBeforeTool(sessionId, turn);
+      turn.agentAssistantTextLength = 0;
+    }
+    const now = Date.now();
+    turn.modelReconnect = applyModelRetryEvent(turn.modelReconnect, event, now);
+    this.upsertModelReconnectMessage(sessionId, turn, now);
+    console.warn(
+      `[OpenClawRuntime] model stream dropped for session ${sessionId}:`,
+      `phase=${event.phase}`,
+      `attempt=${event.attempt}/${event.maxAttempts}`,
+      `delayMs=${event.delayMs ?? 'none'}`,
+      `error=${event.error ?? 'unknown'}`,
+      `code=${event.errorCode ?? 'none'}.`,
+    );
+  }
+
+  private settleModelReconnect(sessionId: string, turn: ActiveTurn, status: ModelReconnectStatus): void {
+    const state = turn.modelReconnect;
+    if (!state || state.status !== ModelReconnectStatus.Retrying) return;
+    turn.modelReconnect = { ...state, status };
+    this.upsertModelReconnectMessage(sessionId, turn, Date.now());
+    console.log(`[OpenClawRuntime] model reconnect for session ${sessionId} settled as ${status} after attempt ${state.attempt}/${state.maxAttempts}.`);
+  }
+
+  private upsertModelReconnectMessage(sessionId: string, turn: ActiveTurn, now: number): void {
+    const state = turn.modelReconnect;
+    if (!state) return;
+    const metadata = buildModelReconnectMetadata(state, turn.runId, now);
+    const content = getModelReconnectContent(state);
+    const existingMessage = this.getSessionMessage(sessionId, state.messageId ?? undefined);
+    if (existingMessage) {
+      this.store.updateMessage(sessionId, existingMessage.id, { content, metadata });
+      this.emit('messageUpdate', sessionId, existingMessage.id, content, metadata);
+      return;
+    }
+    const message = this.store.addMessage(sessionId, { type: 'system', content, metadata }, now);
+    state.messageId = message.id;
+    this.emit('message', sessionId, message);
   }
 
   private refreshAndEmitContextUsage(sessionId: string): void {
@@ -12445,6 +12528,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           `[OpenClawRuntime] finalized a running context compaction message as failed during turn cleanup for session ${sessionId}.`,
         );
       }
+      // A turn that ends while a reconnect is pending was stopped or failed;
+      // the row must not keep saying it is reconnecting.
+      this.settleModelReconnect(
+        sessionId,
+        turn,
+        turn.stopRequested ? ModelReconnectStatus.Stopped : ModelReconnectStatus.Failed,
+      );
       // Cancel any pending throttled messageUpdate timer for this turn
       if (turn.assistantMessageId) {
         this.clearPendingMessageUpdate(turn.assistantMessageId);

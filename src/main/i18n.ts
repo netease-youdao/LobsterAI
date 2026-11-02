@@ -175,6 +175,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
     coworkErrorToolLoopBlocked:
       '检测到 AI 在重复执行同一个工具调用且没有新的进展（通常是在等待一个耗时较长的后台任务），本轮已被安全停止。后台任务可能仍在运行，可以继续发消息让 AI 接着处理。',
+    coworkErrorModelStreamInterrupted:
+      '回复过程中与模型服务的连接反复中断，已自动重连 {attempts} 次仍未成功。之前已完成的步骤都已保留，发送“继续”即可接着完成。',
     coworkErrorModelRoutedToPlan:
       '当前任务选择的模型是「{requested}」，但 AI 引擎把它解析成了套餐模型「{resolved}」。为避免误用套餐额度，这条消息没有发送。请重新选择模型后重试；如果仍然出现，请重启 LobsterAI。',
     coworkErrorRunUsedPlanModel:
@@ -602,6 +604,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Content did not pass the safety review. Please modify and try again.',
     coworkErrorToolLoopBlocked:
       'This turn was stopped safely because the AI kept repeating the same tool call with no new progress (usually while waiting on a slow background task). The background task may still be running — send another message to continue.',
+    coworkErrorModelStreamInterrupted:
+      'The connection to the model service kept dropping during the reply, and {attempts} automatic reconnects did not get through. Steps already completed are kept — send "continue" to pick up where it left off.',
     coworkErrorModelRoutedToPlan:
       'This task is set to {requested}, but the AI engine resolved it to the plan model {resolved}. The message was not sent, so your plan quota is not used by mistake. Reselect the model and try again; if this keeps happening, restart LobsterAI.',
     coworkErrorRunUsedPlanModel:

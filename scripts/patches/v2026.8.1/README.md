@@ -1055,3 +1055,71 @@ keeps its old runtime until restarted. Historical usage rows are unchanged;
 actual token savings require a new execution against the rebuilt runtime.
 Remove the patch when upstream provides equivalent trace ownership, late
 completion checks and scoped context reduction.
+
+## Model streams that drop before delivering output
+
+`zzz-openclaw-stream-drop-reconnect.patch` resumes a turn whose model stream
+was cut off before it delivered any visible text or tool call. Before this
+patch the turn simply ended.
+
+Why: the LobsterAI token proxy aborts its downstream response when the
+upstream SSE stream fails (for example `net::ERR_HTTP2_PROTOCOL_ERROR` or
+`net::ERR_NETWORK_CHANGED`) or ends without a terminal packet. undici then
+reports `TypeError: terminated`. v2026.8.1 has two problems with this:
+
+- It already resumes such drops after a settled tool batch, but only when the
+  errored assistant carries a `provider_transport_failure` diagnostic, and
+  only the ChatGPT Responses transport records one. OpenAI-compatible
+  completions, which LobsterAI's own models use, never resumed.
+- A drop on the first model call of a turn is never resumed either, because
+  `openclaw-skip-turn-replay-after-model-call.patch` closes the outer replay
+  once a model call has started.
+
+Users saw "Agent couldn't generate a response. Note: some tool actions may have
+already been executed" when the drop came after tools, and "LLM request timed
+out." (shown as a response timeout) when it came on the first call. One user's
+logs from 2026-10-30 show six such drops in 30 minutes, all
+`ERR_HTTP2_PROTOCOL_ERROR`. Replying "continue" finished each turn.
+
+What the patch changes:
+
+- The shared `assignTransportErrorDetails` records the diagnostic for any
+  transport that fails through it. It does so when the error, or one of its
+  causes, is a transient socket failure (undici `terminated`,
+  `UND_ERR_SOCKET`, `ECONNRESET`, and similar) and the output has no visible
+  text or tool call. Reasoning that already streamed does not count, because
+  errored assistant turns are dropped from replay. The diagnostic reuses the
+  redacted terminal message and adds `transportErrorCode`.
+- `attempt-recovery.ts` resumes the drop from the committed transcript with a
+  model-only continuation prompt. Nothing from the failed call is resubmitted
+  and no tool reruns. This also covers:
+  - a drop before any tool batch of the turn, once the user request is
+    persisted;
+  - a resumed attempt that drops again before running tools. A recovery-state
+    flag marks the resume, because that attempt has no lifecycle evidence of
+    its own for the batch.
+- While a resumed attempt is still recovering (it ran no tools), any
+  retryable failure before output also continues the chain, for example the
+  proxy's `502 ... net::ERR_NETWORK_CHANGED` while the network settles.
+  Non-retryable failures (auth, quota, bad request) still end the turn.
+- Retries: up to 5 consecutive continuations, with backoff of about
+  1, 2, 4, 8 and 16 s (±20% jitter). A stop during the backoff aborts the run.
+  A completed tool batch restarts the budget.
+- Each continuation emits a `model_retry` agent event with
+  `{ phase: "retrying", attempt, maxAttempts, delayMs, error, errorCode }`.
+  When the budget runs out it emits `{ phase: "exhausted" }`. LobsterAI shows
+  these as a reconnect row, and a turn that ends after an exhausted reconnect
+  gets a localized error with a Continue button. Once the budget runs out, the
+  existing incomplete-turn or timeout error still ends the run.
+
+Verify with:
+
+```sh
+node_modules/.bin/vitest run packages/ai/src/transports/transport-drop-evidence.test.ts packages/ai/src/transports/transport-stream-shared.test.ts src/agents/embedded-agent-runner/run/attempt-recovery.test.ts src/agents/embedded-agent-runner/run.transport-drop-continuation.integration.test.ts src/agents/embedded-agent-runner/run.malformed-tool-call-continuation.integration.test.ts
+```
+
+Then rebuild the runtime. After a drop, the gateway log shows
+`provider transport dropped before the model reply was delivered; continuing
+from the transcript attempt=N/5`. Remove this patch when the pinned upstream
+records transport failures for reasoning-only output and resumes first-call
+drops.

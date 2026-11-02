@@ -68,6 +68,7 @@ import {
   getConsolidatedItemKey,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
+  getModelReconnectMessageLabel,
   getRetainedMediaPollCount,
   getStreamingTextSignature,
   getThinkingPhaseLabels,
@@ -88,10 +89,12 @@ import {
   isContextCompactionMessage,
   isDuplicateGeneratedVideoAssistantMessage,
   isModelChangeMessage,
+  isModelReconnectMessage,
   type ToolGroupItem,
   withTurnModelPreset,
 } from './messageDisplayUtils';
 import ModelChangeDivider from './ModelChangeDivider';
+import ModelReconnectStatusLine from './ModelReconnectStatusLine';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
 import TurnUsageChip from './TurnUsageChip';
@@ -562,6 +565,9 @@ const AssistantTurnBlock: React.FC<{
   isStreamingTurn?: boolean;
   /** True while subagents spawned in this turn are still running; keeps the process unfolded. */
   hasRunningSubagents?: boolean;
+  /** Error message whose card offers to continue a turn cut short by a dropped model stream. */
+  streamInterruptedErrorMessageId?: string | null;
+  onContinueAfterStreamInterruption?: () => void;
 }> = ({
   turn,
   mediaTaskPresentations,
@@ -589,6 +595,8 @@ const AssistantTurnBlock: React.FC<{
   searchTargetMessageId,
   isStreamingTurn = false,
   hasRunningSubagents = false,
+  streamInterruptedErrorMessageId,
+  onContinueAfterStreamInterruption,
 }) => {
   const creditQuotaSnapshot = useSelector((state: RootState) => state.auth.creditQuotaSnapshot);
   const hideCreditQuotaBanner = !creditQuotaSnapshot || creditQuotaSnapshot.creditsRemaining > 0;
@@ -718,6 +726,14 @@ const AssistantTurnBlock: React.FC<{
     if (message.id === hiddenSystemMessageId) {
       return null;
     }
+    if (isModelReconnectMessage(message)) {
+      return (
+        <ModelReconnectStatusLine
+          label={getModelReconnectMessageLabel(message)}
+          status={message.metadata?.status}
+        />
+      );
+    }
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
     const rawContent = hasText(message.content)
       ? message.content
@@ -767,6 +783,17 @@ const AssistantTurnBlock: React.FC<{
           <div className="mt-1 pl-6 text-xs text-muted">{errorModelLine}</div>
         )}
         {errorDetail && <SystemErrorTechnicalDetail detail={errorDetail} />}
+        {onContinueAfterStreamInterruption && message.id === streamInterruptedErrorMessageId && (
+          <div className="mt-2 pl-6">
+            <button
+              type="button"
+              onClick={onContinueAfterStreamInterruption}
+              className="inline-flex h-7 items-center justify-center rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
+            >
+              {i18nService.t('coworkModelReconnectContinueAction')}
+            </button>
+          </div>
+        )}
       </div>
     );
   };

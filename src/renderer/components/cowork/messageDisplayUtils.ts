@@ -7,6 +7,7 @@ import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
   isInternalCompactionSystemText,
+  ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
 import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
 import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
@@ -617,6 +618,10 @@ export const isSilentAssistantMessage = (message: CoworkMessage): boolean => (
   message.type === 'assistant' && SILENT_TOKEN_RE.test(message.content.trim())
 );
 
+export const isModelReconnectMessage = (message: CoworkMessage): boolean => (
+  message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ModelReconnect
+);
+
 export const isContextCompactionMessage = (message: CoworkMessage): boolean => (
   message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ContextCompaction
 );
@@ -1008,6 +1013,30 @@ export const getContextCompactionMessageLabel = (message: CoworkMessage, fallbac
       return fallbackContent.trim()
         ? fallbackContent
         : i18nService.t('coworkContextCompactionCompleted');
+  }
+};
+
+// ── Model reconnect helpers ──────────────────────────────────────────────────
+
+const readReconnectCount = (value: unknown): string => (
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? String(Math.floor(value)) : '?'
+);
+
+export const getModelReconnectMessageLabel = (message: CoworkMessage): string => {
+  const attempt = readReconnectCount(message.metadata?.attempt);
+  const max = readReconnectCount(message.metadata?.maxAttempts);
+  switch (message.metadata?.status) {
+    case ModelReconnectStatus.Recovered:
+      return i18nService.t('coworkModelReconnectRecovered');
+    case ModelReconnectStatus.Failed:
+      return i18nService.t('coworkModelReconnectFailed').replace('{attempt}', attempt);
+    case ModelReconnectStatus.Stopped:
+      return i18nService.t('coworkModelReconnectStopped');
+    case ModelReconnectStatus.Retrying:
+    default:
+      return i18nService.t('coworkModelReconnectRetrying')
+        .replace('{attempt}', attempt)
+        .replace('{max}', max);
   }
 };
 
@@ -1549,7 +1578,8 @@ export const getTurnAnswerStartIndex = (chunks: ConsolidatedRenderChunk[]): numb
     const chunk = chunks[index - 1];
     if (chunk.kind !== 'item') break;
     const item = chunk.item;
-    const isAnswerItem = item.type === 'system'
+    // A reconnect row is process detail and folds away with the steps around it.
+    const isAnswerItem = (item.type === 'system' && !isModelReconnectMessage(item.message))
       || (item.type === 'assistant' && item.message.metadata?.isThinking !== true);
     if (!isAnswerItem) break;
     index -= 1;

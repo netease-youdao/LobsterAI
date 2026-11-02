@@ -2640,6 +2640,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkContextCompactionCompleted: '上下文压缩已完成',
     coworkContextCompactionRetrying: '上下文压缩已完成，正在继续任务',
     coworkContextCompactionFailed: '上下文压缩未完成',
+    coworkModelReconnectRetrying: '连接中断，正在重新连接 {attempt}/{max}',
+    coworkModelReconnectRecovered: '连接中断，已自动重连',
+    coworkModelReconnectFailed: '连接反复中断，自动重连 {attempt} 次未成功',
+    coworkModelReconnectStopped: '已停止重新连接',
+    coworkModelReconnectContinueAction: '继续',
+    coworkModelReconnectContinuePrompt: '继续',
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
@@ -7471,6 +7477,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkContextCompactionCompleted: 'Context compaction completed',
     coworkContextCompactionRetrying: 'Context compaction completed, continuing task',
     coworkContextCompactionFailed: 'Context compaction did not complete',
+    coworkModelReconnectRetrying: 'Connection dropped, reconnecting {attempt}/{max}',
+    coworkModelReconnectRecovered: 'Connection dropped, reconnected automatically',
+    coworkModelReconnectFailed: 'Connection kept dropping, {attempt} reconnects did not get through',
+    coworkModelReconnectStopped: 'Reconnect stopped',
+    coworkModelReconnectContinueAction: 'Continue',
+    coworkModelReconnectContinuePrompt: 'Continue',
 
     // Cowork error messages
     coworkErrorAuthInvalid:
