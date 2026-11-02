@@ -109,12 +109,19 @@ is_server_build_outdated() {
     return 0
   fi
 
-  if [ -n "$(find server -type f -name '*.ts' -newer "$SERVER_ENTRY" -print -quit 2>/dev/null)" ]; then
+  # Legacy dist builds used a score-based encoding heuristic that can corrupt CJK.
+  if grep -q "function scoreDecodedJsonText" "$SERVER_ENTRY" 2>/dev/null; then
     return 0
   fi
 
-  # Legacy dist builds used a score-based encoding heuristic that can corrupt CJK.
-  if grep -q "function scoreDecodedJsonText" "$SERVER_ENTRY" 2>/dev/null; then
+  # Packaged copies ship a prebuilt dist without tsconfig.json, so `npm run build`
+  # cannot run there, and copying resets mtimes. Only compare mtimes in a source
+  # checkout that can rebuild itself.
+  if [ ! -f "tsconfig.json" ]; then
+    return 1
+  fi
+
+  if [ -n "$(find server -type f -name '*.ts' -newer "$SERVER_ENTRY" -print -quit 2>/dev/null)" ]; then
     return 0
   fi
 

@@ -124,6 +124,17 @@ export class SkillServiceManager {
     }
   }
 
+  /**
+   * Only a source checkout can rebuild dist: `npm run build` runs tsc, which needs
+   * tsconfig.json. Packaged skills ship a prebuilt dist without tsconfig.json, and
+   * every copy (packaging, bundled sync, repair) resets mtimes in `dist` before
+   * `server` order, so their source mtimes say nothing about staleness.
+   * Mirrors is_server_build_outdated in SKILLs/web-search/scripts/start-server.sh.
+   */
+  private canRebuildWebSearchDist(skillPath: string): boolean {
+    return !app.isPackaged && fs.existsSync(path.join(skillPath, 'tsconfig.json'));
+  }
+
   private isWebSearchDistOutdated(skillPath: string): boolean {
     const serverEntry = path.join(skillPath, 'dist', 'server', 'index.js');
     if (!fs.existsSync(serverEntry)) {
@@ -132,6 +143,10 @@ export class SkillServiceManager {
 
     if (this.hasLegacyWebSearchEncodingHeuristic(serverEntry)) {
       return true;
+    }
+
+    if (!this.canRebuildWebSearchDist(skillPath)) {
+      return false;
     }
 
     const sourceDir = path.join(skillPath, 'server');
