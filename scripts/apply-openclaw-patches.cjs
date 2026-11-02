@@ -1596,6 +1596,32 @@ v20260801StrongPatchValidators['openclaw-heartbeat-cost-isolation.patch'] = [
   },
 ];
 
+v20260801StrongPatchValidators['zzz-openclaw-stream-drop-reconnect.patch'] = [
+  {
+    file: 'packages/ai/src/transports/transport-drop-evidence.ts',
+    snippets: [
+      'export function readTransientTransportErrorCode',
+      'export function recordSilentTransportDrop',
+    ],
+  },
+  {
+    file: 'packages/ai/src/transports/transport-stream-shared.ts',
+    snippets: ['recordSilentTransportDrop(output, error, projection);'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-recovery.ts',
+    snippets: [
+      'export const MAX_TRANSPORT_DROP_CONTINUATIONS = 5;',
+      'export const MODEL_RETRY_AGENT_EVENT_STREAM = "model_retry";',
+      'recoveryState.transportDropRetryPending = true;',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/context-recovery-state.ts',
+    snippets: ['transportDropRetryPending: false,'],
+  },
+];
+
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators
   : legacyStrongPatchValidators;
