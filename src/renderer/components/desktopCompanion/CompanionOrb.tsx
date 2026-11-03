@@ -140,11 +140,13 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
           if (event.button !== 0) return;
           pointer.current = { x: event.screenX, y: event.screenY, dragging: false };
           event.currentTarget.setPointerCapture(event.pointerId);
-          api.drag(DesktopCompanionDragPhase.Start);
+          api.drag(DesktopCompanionDragPhase.Start, { x: event.clientX / window.innerWidth, y: event.clientY / window.innerHeight });
         }}
         onPointerMove={event => {
           const start = pointer.current;
           if (!start) return;
+          // The release never reached this window; stop instead of following a free pointer.
+          if ((event.buttons & 1) === 0) { finishDrag(event, true); return; }
           if (!start.dragging && Math.hypot(event.screenX - start.x, event.screenY - start.y) > DRAG_THRESHOLD) {
             start.dragging = true;
             setMoving(true);
@@ -153,6 +155,7 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
         }}
         onPointerUp={event => finishDrag(event)}
         onPointerCancel={event => finishDrag(event, true)}
+        onLostPointerCapture={event => finishDrag(event, true)}
         onClick={event => { if (event.detail === 0) void toggle(); }}
         onContextMenu={event => { event.preventDefault(); void api.showContextMenu(); }}
       >

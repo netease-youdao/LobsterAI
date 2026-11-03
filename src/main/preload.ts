@@ -197,7 +197,7 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(DesktopCompanionIpc.MainPageRequested, handler);
     },
     showContextMenu: () => ipcRenderer.invoke(DesktopCompanionIpc.ContextMenu),
-    drag: phase => ipcRenderer.send(DesktopCompanionIpc.Drag, phase),
+    drag: (phase, grab) => ipcRenderer.send(DesktopCompanionIpc.Drag, { phase, grab }),
     orbFileDrag: (phase, kinds) => ipcRenderer.send(DesktopCompanionIpc.OrbFileDrag, { phase, kinds }),
     taskStarted: sessionId => ipcRenderer.invoke(DesktopCompanionIpc.TaskStarted, sessionId),
     taskUpdated: () => ipcRenderer.send(DesktopCompanionIpc.TaskUpdated),

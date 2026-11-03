@@ -166,6 +166,10 @@ function orb() {
   return mocks.windows[1];
 }
 
+function emitDrag(phase: DesktopCompanionDragPhase, grab?: { x: number; y: number }) {
+  ipcMain.emit(DesktopCompanionIpc.Drag, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, { phase, grab });
+}
+
 function dragOverOrb(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[] = []) {
   ipcMain.emit(DesktopCompanionIpc.OrbFileDrag,
     { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, { phase, kinds });
@@ -279,8 +283,11 @@ describe('orb edge snapping', () => {
   const rightEdge = 1280 - DesktopCompanionSize.BrandOrb.width;
   const drag = (phase: DesktopCompanionDragPhase, x: number, y = 330) => {
     vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x, y });
-    ipcMain.emit(DesktopCompanionIpc.Drag,
-      { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, phase);
+    // Like the renderer, a press reports where it landed in the orb window.
+    const { bounds } = orb();
+    emitDrag(phase, phase === DesktopCompanionDragPhase.Start
+      ? { x: (x - bounds.x) / bounds.width, y: (y - bounds.y) / bounds.height }
+      : undefined);
   };
 
   beforeEach(() => {
@@ -333,6 +340,31 @@ describe('orb edge snapping', () => {
     drag(DesktopCompanionDragPhase.Cancel, x + 30);
     expect(orb().bounds).toMatchObject({ x, y: 300 });
     expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x, y: 300 });
+  });
+
+  test('keeps the pressed point under the pointer when the press arrives after the cursor moved on', () => {
+    create();
+    // Pressed at the orb's center, but the cursor is 100px further by the time the press arrives.
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: 330, y: 330 });
+    emitDrag(DesktopCompanionDragPhase.Start, { x: 0.5, y: 0.5 });
+    drag(DesktopCompanionDragPhase.Move, 430);
+    expect(orb().bounds).toMatchObject({ x: 400, y: 300 });
+    drag(DesktopCompanionDragPhase.End, 430);
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 400, y: 300 });
+  });
+
+  test('does not move the orb again for pointer events while the cursor stays still', () => {
+    create();
+    drag(DesktopCompanionDragPhase.Start, 230);
+    drag(DesktopCompanionDragPhase.Move, 330);
+    expect(orb().bounds).toMatchObject({ x: 300, y: 300 });
+    // The window moves under the still cursor, which reports pointer events of its own.
+    orb().bounds = { ...orb().bounds, x: 200 };
+    const setBounds = vi.spyOn(orb(), 'setBounds');
+    drag(DesktopCompanionDragPhase.Move, 330);
+    expect(setBounds).not.toHaveBeenCalled();
+    drag(DesktopCompanionDragPhase.Move, 340);
+    expect(orb().bounds).toMatchObject({ x: 310, y: 300 });
   });
 
   test.each([
@@ -472,7 +504,7 @@ describe('desktop companion lifecycle', () => {
     invoke(DesktopCompanionIpc.SetPreferences, { enabled: true });
     invoke(DesktopCompanionIpc.GetState);
     invoke(DesktopCompanionIpc.SetDraft, { prompt: 'secret', attachments: [] });
-    ipcMain.emit(DesktopCompanionIpc.Drag, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Move);
+    emitDrag(DesktopCompanionDragPhase.Move);
     const changes = reportAnalytics.mock.calls.map(([event]) => event).filter(event => event.action === AnalyticsAction.SettingChanged);
     expect(changes).toEqual([{ action: AnalyticsAction.SettingChanged, source: AnalyticsSource.Settings, setting: CompanionAnalyticsSetting.Enabled, enabled: true }]);
     expect(JSON.stringify(reportAnalytics.mock.calls)).not.toContain('secret');
@@ -1183,11 +1215,9 @@ describe('desktop companion lifecycle', () => {
 });
 
 describe('orb surface toggle', () => {
-  const press = () => ipcMain.emit(DesktopCompanionIpc.Drag,
-    { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Start);
+  const press = () => emitDrag(DesktopCompanionDragPhase.Start, { x: 0.5, y: 0.5 });
   const release = () => {
-    ipcMain.emit(DesktopCompanionIpc.Drag,
-      { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Cancel);
+    emitDrag(DesktopCompanionDragPhase.Cancel);
     invoke(DesktopCompanionIpc.ToggleOrb, true, orb().webContents);
   };
 
@@ -1251,8 +1281,7 @@ describe('orb surface toggle', () => {
     invoke(DesktopCompanionIpc.ToggleOrb, undefined, orb().webContents);
     readyPanel();
     press();
-    ipcMain.emit(DesktopCompanionIpc.Drag,
-      { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Cancel);
+    emitDrag(DesktopCompanionDragPhase.Cancel);
     mocks.windows.at(-1).blur();
     vi.advanceTimersByTime(200);
     invoke(DesktopCompanionIpc.ToggleOrb, undefined, orb().webContents);
@@ -1939,7 +1968,7 @@ describe('stage: hints and drops', () => {
     expect(panel.bounds.width).toBe(cardWidth + DesktopCompanionSize.ComposerSideRoom);
     const drag = (phase: DesktopCompanionDragPhase, x: number) => {
       vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x, y: 800 });
-      ipcMain.emit(DesktopCompanionIpc.Drag, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, phase);
+      emitDrag(phase);
     };
     drag(DesktopCompanionDragPhase.Start, 1200);
     drag(DesktopCompanionDragPhase.Move, 200);
