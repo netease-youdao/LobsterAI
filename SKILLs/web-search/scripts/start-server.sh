@@ -36,6 +36,17 @@ resolve_node_runtime() {
   return 1
 }
 
+# Not via `env`: the one on PATH may not be coreutils. uv's installer adds
+# ~/.local/bin/env, which ignores its arguments and silently runs nothing.
+run_node() {
+  (
+    if [ ${#NODE_ENV_PREFIX[@]} -gt 0 ]; then
+      export "${NODE_ENV_PREFIX[@]}"
+    fi
+    exec "$NODE_CMD" "${NODE_ARGS[@]}" "$@"
+  )
+}
+
 http_get() {
   local URL="$1"
 
@@ -55,7 +66,7 @@ http_get() {
     return 127
   fi
 
-  env "${NODE_ENV_PREFIX[@]}" "$NODE_CMD" "${NODE_ARGS[@]}" - "$URL" <<'NODE'
+  run_node - "$URL" <<'NODE'
 const [url] = process.argv.slice(2);
 
 (async () => {
@@ -105,7 +116,7 @@ repair_iconv_lite() {
 # Decoding loads iconv-lite's encodings lazily, as body-parser does; a bare require
 # succeeds even when they are broken.
 verify_iconv_runtime() {
-  env "${NODE_ENV_PREFIX[@]}" "$NODE_CMD" "${NODE_ARGS[@]}" -e "require('./node_modules/iconv-lite/lib/index.js').decode(Buffer.from('ok'), 'utf8')" > /dev/null 2>&1
+  run_node -e "require('./node_modules/iconv-lite/lib/index.js').decode(Buffer.from('ok'), 'utf8')" > /dev/null 2>&1
 }
 
 # Only reinstall what is actually broken: npm may be missing or offline, and
@@ -314,8 +325,12 @@ if ! ensure_server_build; then
   exit 1
 fi
 
-# Start server in background
-nohup env "${NODE_ENV_PREFIX[@]}" "$NODE_CMD" "${NODE_ARGS[@]}" "$SERVER_ENTRY" > "$LOG_FILE" 2>&1 &
+# Start server in background. Export instead of using run_node, whose subshell
+# would make $! a wrapper rather than the server process.
+if [ ${#NODE_ENV_PREFIX[@]} -gt 0 ]; then
+  export "${NODE_ENV_PREFIX[@]}"
+fi
+nohup "$NODE_CMD" "${NODE_ARGS[@]}" "$SERVER_ENTRY" > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 
 # Save PID
