@@ -74,6 +74,7 @@ const RETAINED_PATCHES = [
   'openclaw-web-fetch-proxy.patch',
   'openclaw-web-login-channel-routing.patch',
   'openclaw-windows-file-path-redaction.patch',
+  'openclaw-windows-native-plugin-require.patch',
   'openclaw-windows-private-directory-native.patch',
   'openclaw-windows-process-identity.patch',
   'openclaw-workspace-attestation-quarantine.patch',
@@ -125,6 +126,15 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+        activeProcessRuntimeFacts,',
       '+        capabilityToolNames: toolSearchRunPlan.capabilityToolNames,',
       'carries background process snapshots as hidden runtime context, not system prompt',
+    ]);
+  });
+
+  test('loads Windows plugin file URLs natively and evicts them on reload', () => {
+    expectPatchContains('openclaw-windows-native-plugin-require.patch', [
+      '+  return modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;',
+      '+    return { ok: true, moduleExport: requireWithOptionalAliases(requirePath, options.aliasMap) };',
+      '+    const resolved = nodeRequire.resolve(toRequirePath(modulePath));',
+      '+  it("clears modules loaded through file URL targets", () => {',
     ]);
   });
 
