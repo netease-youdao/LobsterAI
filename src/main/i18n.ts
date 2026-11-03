@@ -149,6 +149,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelServiceUnavailable: '该模型服务暂不可用，请切换模型或稍后重试。',
     coworkErrorProviderCooldown: '模型凭据暂时处于冷却期，请稍后重试或切换其他服务商。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
+    coworkErrorContextRecoveryFailed: '上下文超出模型限制，自动压缩未能恢复本轮，会话记录已保留。请缩短本次输入，或在新会话中分批发送。',
     coworkErrorMessageTooLarge:
       '本次消息过大，请减少附件、压缩图片或拆分提交。（单次整体需小于 30MB）',
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。',
@@ -576,6 +577,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelServiceUnavailable: 'This model service is temporarily unavailable. Switch models or try again later.',
     coworkErrorProviderCooldown: 'The model credentials are temporarily in cooldown. Try again later or switch providers.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
+    coworkErrorContextRecoveryFailed: 'The context exceeds the model limit and automatic compaction could not recover this turn. Your conversation history has been kept. Shorten this input, or split it across a new conversation.',
     coworkErrorMessageTooLarge:
       'This message is too large. Reduce attachments, compress images, or split it up. (Keep each message under about 30 MB.)',
     coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file.',

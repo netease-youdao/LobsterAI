@@ -1,0 +1,62 @@
+diff --git a/src/agents/compaction.ts b/src/agents/compaction.ts
+--- a/src/agents/compaction.ts
++++ b/src/agents/compaction.ts
+@@ -23,6 +23,7 @@
+ } from "./compaction-planning.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+ import { isTimeoutError } from "./failover-error.js";
++import { isContextOverflowError } from "./failover/context-overflow.js";
+ import type {
+   AgentMessage,
+   CompactionSummaryPrompt,
+@@ -157,10 +158,12 @@
+           // Backoff must honor caller cancellation; otherwise an abort during
+           // the sleep would stall compaction until the full delay elapses.
+           sleep: (ms) => sleepWithAbort(ms, params.signal),
+-          // Caller aborts and transport timeouts are terminal; provider-side
+-          // AbortErrors without caller cancellation remain retryable.
++          // Repeating an oversized summary request cannot reduce its context.
++          // Provider-side AbortErrors without caller cancellation remain retryable.
+           shouldRetry: (err) =>
+-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
++            !params.signal.aborted &&
++            !isContextOverflowError(formatErrorMessage(err)) &&
++            (isAbortError(err) || !isTimeoutError(err)),
+         },
+       );
+     } catch (err) {
+diff --git a/src/agents/compaction.summarize-fallback.test.ts b/src/agents/compaction.summarize-fallback.test.ts
+--- a/src/agents/compaction.summarize-fallback.test.ts
++++ b/src/agents/compaction.summarize-fallback.test.ts
+@@ -66,4 +66,31 @@
+     ).rejects.toThrow("All summarization attempts failed for 1 messages");
+     // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
+     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
++  });
++
++  it("does not retry the same summary input after a provider context overflow", async () => {
++    agentSessionMocks.generateSummary.mockRejectedValue(
++      new Error(
++        "Summarization failed: This model's maximum context length is 1048576 tokens. " +
++          "However, you requested 1202038 tokens (1202038 in the messages, 0 in the completion).",
++      ),
++    );
++    // The local estimate may fit even when the provider's tokenizer rejects it.
++    const messages: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 }];
++    const originalMessages = structuredClone(messages);
++
++    await expect(
++      summarizeWithFallback({
++        messages,
++        model: testModel,
++        apiKey: "test-key", // pragma: allowlist secret
++        signal: new AbortController().signal,
++        reserveTokens: 1000,
++        maxChunkTokens: 50_000,
++        contextWindow: 200_000,
++      }),
++    ).rejects.toBeInstanceOf(CompactionError);
++
++    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
++    expect(messages).toEqual(originalMessages);
+   });

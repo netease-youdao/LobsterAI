@@ -1,5 +1,21 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Stop identical compaction retries after context overflow
+
+`zzzz-openclaw-compaction-context-overflow-retry.patch` stops `generateSummary`
+backoff retries when the provider explicitly rejects the context length. The
+local estimate can fit while the provider tokenizer rejects the same input;
+resending it three times cannot recover. Smaller-input fallback and existing
+transport/cancellation handling remain in place, and a failed compaction keeps
+the original session history. This retry decision is inside native compaction
+and has no LobsterAI adapter hook.
+
+The regression test asserts one summary attempt and unchanged messages;
+existing tests cover transient recovery and cancellation.
+
+Rebuild the runtime after applying the patch. Remove it when the pinned upstream
+excludes deterministic context overflows from identical summary retries.
+
 ## Stable prefixes across LobsterAI tasks
 
 `zzz-openclaw-session-prefix-cache.patch` moves sessionKey/sessionId/sessionUrl
