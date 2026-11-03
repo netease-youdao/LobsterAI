@@ -6,10 +6,14 @@ import React, { useEffect, useState } from 'react';
 import { MediaBillingStatus, MediaDeliveryStatus, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { i18nService } from '../../services/i18n';
 
+export const hasRecoveredMediaAssets = (details: Record<string, unknown> | undefined): boolean =>
+  Array.isArray(details?.assets) && details.assets.some(asset => asset?.savedToRecoveryDirectory === true);
+
 export const mediaTaskLabelKey = (details: Record<string, unknown>): string => {
   if (details.deliveryStatus === MediaDeliveryStatus.Failed) return 'imageEditFailed';
   if (details.deliveryStatus === MediaDeliveryStatus.Retrying) return 'mediaTaskDownloadRetry';
   if (details.deliveryStatus === MediaDeliveryStatus.Pending) return 'mediaTaskFetching';
+  if (details.deliveryStatus === MediaDeliveryStatus.Saved && hasRecoveredMediaAssets(details)) return 'mediaImageSavedToRecovery';
   switch (details.status) {
     case MediaTaskStatus.Succeeded: return 'mediaTaskSaved';
     case MediaTaskStatus.Failed: return 'mediaTaskFailed';

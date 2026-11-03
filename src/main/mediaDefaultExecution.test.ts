@@ -37,3 +37,16 @@ test('a trusted two-asset skin workflow receives two serial automatic attempts',
   expect(budget.needsConfirmation(skin, 'emblem')).toBe(false);
   expect(budget.needsConfirmation(skin, 'extra-retry')).toBe(true);
 });
+
+test('declining additional images blocks this turn and descendants but not a new user turn', () => {
+  const budget = new MediaDefaultImageBudget();
+  const snapshot = defaults();
+  budget.needsConfirmation(snapshot, 'first');
+  expect(budget.wasDeclined(snapshot)).toBe(false);
+  budget.decline(snapshot);
+  expect(budget.wasDeclined(snapshot)).toBe(true);
+  expect(budget.needsConfirmation(snapshot, 'model-retry')).toBe(true);
+  expect(budget.wasDeclined(snapshot)).toBe(true);
+  expect(budget.wasDeclined(defaults())).toBe(false);
+  expect(budget.wasDeclined(undefined)).toBe(false);
+});

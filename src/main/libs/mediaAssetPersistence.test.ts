@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import {
   type FetchResponseLike,
@@ -37,6 +37,71 @@ function makeResponse(buffer: Buffer, contentType: string, ok = true): FetchResp
 }
 
 describe('mediaAssetPersistence', () => {
+  test('recovers a local destination failure without downloading again or overwriting files', async () => {
+    const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-image-recovery-'));
+    const cwd = path.join(directory, 'unavailable');
+    const recoveryDirectory = path.join(directory, 'recovered');
+    await fs.promises.writeFile(cwd, 'a file occupies the former directory');
+    await fs.promises.mkdir(recoveryDirectory);
+    await fs.promises.writeFile(path.join(recoveryDirectory, 'result.png'), 'keep existing image');
+    const fetchAsset = vi.fn(async () => makeResponse(pngBuffer, 'image/png'));
+    const result = await persistGeneratedImageAssets({
+      cwd, recoveryDirectory, fetchAsset,
+      assets: [{ type: 'image', url: 'https://example.com/result', filename: 'result.png', outputIndex: 2 }],
+    });
+    expect(fetchAsset).toHaveBeenCalledTimes(1);
+    expect(result.failed).toEqual([]);
+    expect(result.saved).toEqual([expect.objectContaining({
+      filePath: path.join(recoveryDirectory, 'result-2.png'), savedToRecoveryDirectory: true, outputIndex: 2,
+    })]);
+    expect(await fs.promises.readFile(result.saved[0].filePath)).toEqual(pngBuffer);
+    expect(await fs.promises.readFile(path.join(recoveryDirectory, 'result.png'), 'utf8')).toBe('keep existing image');
+    expect(await fs.promises.readFile(cwd, 'utf8')).toBe('a file occupies the former directory');
+  });
+
+  test('a conflicting temporary file is preserved when image saving recovers elsewhere', async () => {
+    const cwd = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-image-write-recovery-'));
+    const recoveryDirectory = path.join(cwd, 'recovered');
+    const pendingFile = path.join(cwd, 'result.png.download');
+    await fs.promises.writeFile(pendingFile, 'another writer owns this file');
+    const result = await persistGeneratedImageAssets({
+      cwd, recoveryDirectory,
+      assets: [{ type: 'image', url: 'https://example.com/result', filename: 'result.png' }],
+      fetchAsset: async () => makeResponse(pngBuffer, 'image/png'),
+    });
+    expect(result.failed).toEqual([]);
+    expect(result.saved[0].filePath).toBe(path.join(recoveryDirectory, 'result.png'));
+    expect(await fs.promises.readFile(pendingFile, 'utf8')).toBe('another writer owns this file');
+  });
+
+  test('download errors do not switch directories, including filesystem-shaped transport errors', async () => {
+    const cwd = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-image-transport-'));
+    const recoveryDirectory = path.join(cwd, 'recovered');
+    const fetchAsset = vi.fn(async () => { throw Object.assign(new Error('Transport denied'), { code: 'EPERM' }); });
+    const result = await persistGeneratedImageAssets({
+      cwd, recoveryDirectory, fetchAsset,
+      assets: [{ type: 'image', url: 'https://example.com/result' }],
+    });
+    expect(fetchAsset).toHaveBeenCalledTimes(1);
+    expect(result.saved).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(await fs.promises.readdir(cwd)).toEqual([]);
+  });
+
+  test('an unavailable recovery directory remains a delivery failure', async () => {
+    const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lobster-image-recovery-failed-'));
+    const cwd = path.join(directory, 'blocked');
+    const recoveryDirectory = path.join(directory, 'also-blocked');
+    await fs.promises.writeFile(cwd, 'keep');
+    await fs.promises.writeFile(recoveryDirectory, 'keep');
+    const result = await persistGeneratedImageAssets({
+      cwd, recoveryDirectory, assets: [{ type: 'image', url: 'https://example.com/result' }],
+      fetchAsset: async () => makeResponse(pngBuffer, 'image/png'),
+    });
+    expect(result.saved).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+  });
+
   test('sanitizes generated image filenames', () => {
     expect(sanitizeGeneratedImageFileName('bad:name?.png', 'generated-image', '.png')).toBe('bad-name-.png');
     expect(sanitizeGeneratedImageFileName('no-extension', 'generated-image', '.webp')).toBe('no-extension.webp');

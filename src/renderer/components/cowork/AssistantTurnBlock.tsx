@@ -46,7 +46,7 @@ import AssistantMessageItem from './AssistantMessageItem';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
-import { isMediaTaskSettled } from './MediaTaskCard';
+import { hasRecoveredMediaAssets, isMediaTaskSettled } from './MediaTaskCard';
 import { buildMediaTaskPresentations, isMediaGenerationToolName, type MediaTaskPresentations } from './mediaTaskPresentation';
 import { MessageCopyButton } from './MessageActionButton';
 import {
@@ -739,7 +739,9 @@ const AssistantTurnBlock: React.FC<{
       ? message.content
       : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');
     if (getMediaCompletionDisplayText(message, rawContent)) {
-      return null;
+      return hasRecoveredMediaAssets(message.metadata?.toolResultDetails as Record<string, unknown> | undefined)
+        ? <p role="status" className="text-xs text-secondary">{i18nService.t('mediaImageSavedToRecovery')}</p>
+        : null;
     }
     const normalizedContent = getScheduledReminderDisplayText(rawContent) ?? rawContent;
     const errorKey = getSystemMessageErrorKey(message, normalizedContent);
