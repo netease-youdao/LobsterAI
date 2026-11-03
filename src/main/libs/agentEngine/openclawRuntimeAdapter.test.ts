@@ -5744,6 +5744,41 @@ test('reconcileWithHistory: missing assistant message — triggers replace', asy
   ]);
 });
 
+test('reconcileWithHistory: restores truncated history previews instead of replacing full local text', async () => {
+  const fullReply = 'x'.repeat(9_000);
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: fullReply, timestamp: 2, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const request = vi.fn(async (method: string) => {
+    if (method === 'chat.message.get') {
+      return { ok: true, message: { role: 'assistant', content: fullReply, __openclaw: { id: 'entry-2' } } };
+    }
+    return {
+      messages: [
+        { role: 'user', content: 'Hello' },
+        {
+          role: 'assistant',
+          content: `${fullReply.slice(0, 8_000)}\n...(truncated)...`,
+          __openclaw: { id: 'entry-2', truncated: true, reason: 'display-cap' },
+        },
+      ],
+    };
+  });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+
+  await adapter.reconcileWithHistory(session.id, 'agent:main:feishu:group:test');
+
+  expect(request).toHaveBeenCalledWith(
+    'chat.message.get',
+    expect.objectContaining({ messageId: 'entry-2' }),
+    expect.anything(),
+  );
+  expect(getReplaceCallCount()).toBe(0);
+  expect(session.messages[1]?.content).toBe(fullReply);
+});
+
 test('reconcileWithHistory: syncs session_status model changes into the local session override', async () => {
   const sessionKey = 'agent:main:openclaw-weixin:bot-1:direct:user-1';
   const { session, store, getUpdateSessionCalls } = createReconcileStore([
@@ -7158,6 +7193,81 @@ test('chat final repairs managed session assistant text from history', async () 
 
     await vi.advanceTimersByTimeAsync(800);
     expect(session.status).toBe('completed');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+const LONG_REPLY = Array.from({ length: 600 }, (_, index) => `line ${index + 1}: long reply check`).join('\n');
+const LONG_REPLY_PREVIEW = `${LONG_REPLY.slice(0, 8_000)}\n...(truncated)...`;
+
+async function runLongReplyFinal(messageGet: (params: unknown) => Promise<unknown>) {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'print 600 lines', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: LONG_REPLY, timestamp: 2, metadata: { isStreaming: true } },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === 'chat.message.get') return messageGet(params);
+    return {
+      messages: [
+        { role: 'user', content: 'print 600 lines' },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: LONG_REPLY_PREVIEW }],
+          __openclaw: { id: 'entry-2', truncated: true, reason: 'display-cap' },
+        },
+      ],
+    };
+  });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+
+  const turn = createActiveTurn(session.id, sessionKey, 'run-1');
+  turn.assistantMessageId = 'msg-2';
+  turn.currentAssistantSegmentText = LONG_REPLY;
+  turn.currentText = LONG_REPLY;
+  turn.currentContentText = LONG_REPLY;
+  turn.currentContentBlocks = [LONG_REPLY];
+  adapter.activeTurns.set(session.id, turn);
+  adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+  adapter.handleChatEvent({
+    state: 'final',
+    runId: 'run-1',
+    sessionKey,
+    message: { role: 'assistant', content: LONG_REPLY },
+  }, 1);
+  await vi.advanceTimersByTimeAsync(0);
+
+  return { session, sessionKey, request };
+}
+
+test('chat final restores a truncated history preview from chat.message.get', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, sessionKey, request } = await runLongReplyFinal(async () => ({
+      ok: true,
+      message: { role: 'assistant', content: [{ type: 'text', text: LONG_REPLY }], __openclaw: { id: 'entry-2' } },
+    }));
+
+    expect(request).toHaveBeenCalledWith(
+      'chat.message.get',
+      { sessionKey, messageId: 'entry-2', maxChars: 1_000_000 },
+      { timeoutMs: 5_000 },
+    );
+    expect(session.messages.find((message) => message.id === 'msg-2')?.content).toBe(LONG_REPLY);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('chat final keeps the streamed text when the full history row is unavailable', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session } = await runLongReplyFinal(async () => ({ ok: false, unavailableReason: 'oversized' }));
+
+    expect(session.messages.find((message) => message.id === 'msg-2')?.content).toBe(LONG_REPLY);
   } finally {
     vi.useRealTimers();
   }
