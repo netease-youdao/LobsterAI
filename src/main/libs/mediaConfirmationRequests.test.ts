@@ -4,11 +4,13 @@ import {
   ConfirmationBehavior,
   MediaConfirmationAction as Action,
   type MediaConfirmationEvent,
+  MediaConfirmationKind,
   MediaConfirmationOutcome as Outcome,
   MediaConfirmationPolicy as Policy,
   MediaConfirmationReason as Reason,
   MediaConfirmationStatus as Status,
 } from '../../shared/media/confirmation';
+import { imageConfirmationQuestions } from '../mediaGenerationConfirmation';
 import { MediaConfirmationRequests } from './mediaConfirmationRequests';
 
 const questions = [
@@ -61,7 +63,31 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('recoverable video confirmation', () => {
+describe('recoverable media confirmation', () => {
+  test('an image remains confirmable after 120 seconds and a changed catalogue requires fresh consent', async () => {
+    const initial = imageConfirmationQuestions({ pricing: { billingUnit: 'per_image', costYuan: 0.22 } }, key => key);
+    const updated = imageConfirmationQuestions({ pricing: { billingUnit: 'per_image', costYuan: 0.25 } }, key => key);
+    const manager = new MediaConfirmationRequests({ publish: vi.fn(), dismiss: vi.fn() });
+    const resolved = vi.fn();
+    const refresh = vi.fn(async () => updated);
+    const promise = manager.request(initial, 'image-session', {
+      kind: MediaConfirmationKind.Image, isCurrent: () => true, refresh, onEvent: vi.fn(),
+    });
+    void promise.then(resolved);
+    const requestId = manager.list()[0].requestId;
+    expect(manager.list()[0].mediaConfirmation?.kind).toBe(MediaConfirmationKind.Image);
+    await manager.act({ requestId, revision: 0, action: Action.Shown });
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(resolved).not.toHaveBeenCalled();
+    const response = { behavior: ConfirmationBehavior.Allow, answers: { [initial[0].question]: initial[0].options[0].label } };
+    await manager.act({ requestId, revision: 0, action: Action.Respond, response });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(resolved).not.toHaveBeenCalled();
+    expect(manager.list()[0].mediaConfirmation?.revision).toBe(1);
+    expect(await manager.act({ requestId, revision: 0, action: Action.Respond, response })).toBe(false);
+    await manager.act({ requestId, revision: 1, action: Action.Respond, response });
+    expect(await promise).toMatchObject({ behavior: ConfirmationBehavior.Allow });
+  });
   test('a fresh quote submits on the first confirmation without re-reading prices', async () => {
     const s = setup();
     await vi.advanceTimersByTimeAsync(Policy.QuoteFreshMs * 3);

@@ -5,6 +5,7 @@ import {
   MediaConfirmationAction,
   type MediaConfirmationCommand,
   type MediaConfirmationEvent,
+  type MediaConfirmationKind,
   MediaConfirmationOutcome,
   MediaConfirmationPolicy,
   MediaConfirmationReason,
@@ -15,6 +16,7 @@ import {
 import type { AskUserRequest } from './mcpBridgeServer';
 
 export interface RecoverableMediaConfirmation {
+  kind?: MediaConfirmationKind;
   isCurrent: () => boolean;
   refresh: () => Promise<AskUserRequest['questions']>;
   onEvent: (event: MediaConfirmationEvent) => void;
@@ -36,11 +38,11 @@ interface Pending {
 /** What the user agreed to pay; a re-read catalogue with the same quote keeps their consent valid. */
 const quoteOf = (questions: AskUserRequest['questions']): string =>
   JSON.stringify(questions.map(question => [
-    question.subtitle ?? '', question.video?.estimatedCredits ?? null, question.video?.pricingNote ?? '',
+    question.subtitle ?? '', question.video?.estimatedCredits ?? null, question.video?.pricingNote ?? '', question.quoteKey ?? '',
   ]));
 
 /**
- * Paid video consent. There is no review deadline: a quote older than
+ * Paid media consent. There is no short review deadline: a quote older than
  * `QuoteFreshMs` is re-read when the user confirms, submitting at once if the
  * price is unchanged and asking again otherwise. Requests end after `RetentionMs`.
  */
@@ -72,7 +74,7 @@ export class MediaConfirmationRequests {
           questions,
           sessionKey,
           mediaConfirmation: {
-            kind: MediaConfirmationPolicy.Kind,
+            kind: options.kind ?? MediaConfirmationPolicy.Kind,
             revision: 0,
             sequence: 0,
             status: MediaConfirmationStatus.Waiting,

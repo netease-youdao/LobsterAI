@@ -17,6 +17,15 @@ export function applyMediaDefaultParameters(
 /** A turn's snapshot is shared by descendant sessions. Reserve before any await. */
 export class MediaDefaultImageBudget {
   private readonly attempts = new WeakMap<MediaDefaultModel, Map<string, boolean>>();
+  private readonly declined = new WeakSet<MediaDefaultModel>();
+
+  decline(defaults: MediaDefaultModel | undefined): void {
+    if (defaults) this.declined.add(defaults);
+  }
+
+  wasDeclined(defaults: MediaDefaultModel | undefined): boolean {
+    return defaults !== undefined && this.declined.has(defaults);
+  }
 
   needsConfirmation(defaults: MediaDefaultModel | undefined, callId: string): boolean {
     if (!defaults) return false;

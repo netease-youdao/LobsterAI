@@ -184,7 +184,7 @@ import {
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { LogIpc } from '../shared/logExport/constants';
-import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationReason } from '../shared/media/confirmation';
+import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
@@ -471,7 +471,7 @@ import {
   type DevelopmentMainWindowLoadRecovery,
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
-import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
+import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
 import {
   MEDIA_INTENT_RETRY_WINDOW_MS,
@@ -641,7 +641,7 @@ import {
 } from './mediaAccountIsolation';
 import { applyMediaDefaultParameters, MediaDefaultImageBudget } from './mediaDefaultExecution';
 import { MediaDefaultPolicyManager } from './mediaDefaultPolicyManager';
-import { isMediaGenerationConfirmed } from './mediaGenerationConfirmation';
+import { imageConfirmationFailure, imageConfirmationQuestions, isMediaGenerationConfirmed } from './mediaGenerationConfirmation';
 import {
   MediaGenerationGateReason,
   MediaGenerationTool,
@@ -6802,7 +6802,7 @@ if (!gotTheLock) {
             savedCount = persistResult.saved.length;
             detailsAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
-              `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
+              `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
             );
           } else {
             resultLines = composesImageEditLocally(statusImageEdit?.operation) ? []
@@ -7111,19 +7111,30 @@ if (!gotTheLock) {
 
       if (mediaType === MediaType.Image
         && defaultImageBudget.needsConfirmation(selection?.imageDefault, request.context.toolCallId)) {
+        const declined = { behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.UserCancelled };
+        if (defaultImageBudget.wasDeclined(selection?.imageDefault)) return imageConfirmationFailure(declined, t);
         const question = t('mediaExtraImageConfirmDescription');
-        const response = await getMcpRuntime().askUserInternal([{
-          question, title: t('mediaExtraImageConfirmTitle'),
-          subtitle: modelCapability.pricingDescription?.trim() || t('mediaVideoConfirmCostUnknown'),
-          options: [
-            { label: t('mediaVideoConfirmAccept'), description: t('mediaVideoConfirmStart') },
-            { label: t('mediaVideoConfirmCancel'), description: t('mediaVideoConfirmLater') },
-          ],
-        }], undefined, { sessionKey: request.context.sessionKey });
+        const response = await getMcpRuntime().askUserInternal(imageConfirmationQuestions(modelCapability, t), undefined, {
+          sessionKey: request.context.sessionKey,
+          recoverableMedia: {
+            kind: MediaConfirmationKind.Image,
+            isCurrent: () => isRequestAccountCurrent() && serverBaseUrl === getServerApiBaseUrl(),
+            signal: request.signal,
+            onEvent: event => mediaUsage.confirmationEvent(request.context.toolCallId, event, selectedModel),
+            refresh: async () => {
+              const response = await fetchWithAuth(serverBaseUrl + '/api/media/images/models', { signal: AbortSignal.timeout(15_000) });
+              const body = await response.json() as typeof modelBody;
+              const model = body.code === 0 && body.data?.find(item => canonicalizeMediaModelId(item.modelId) === selectedModel);
+              if (!response.ok || !model || !isRequestAccountCurrent()) throw new Error('Image confirmation refresh failed');
+              return imageConfirmationQuestions(model, t);
+            },
+          },
+        });
         if (!isRequestAccountCurrent()) return staleAccountResult();
-        if (!isMediaGenerationConfirmed(response, question, t('mediaVideoConfirmAccept'))) {
-          return { content: [{ type: 'text', text: t('mediaExtraImageDeclined') }], isError: true,
-            details: { status: 'cancelled', reason: 'USER_CANCELLED' } };
+        if (response.reason === MediaConfirmationReason.UserCancelled) defaultImageBudget.decline(selection?.imageDefault);
+        if (defaultImageBudget.wasDeclined(selection?.imageDefault)
+          || !isMediaGenerationConfirmed(response, question, t('mediaVideoConfirmAccept'))) {
+          return imageConfirmationFailure(defaultImageBudget.wasDeclined(selection?.imageDefault) ? declined : response, t);
         }
       }
 
@@ -7179,6 +7190,9 @@ if (!gotTheLock) {
         params: summarizeMediaGenerationParamsForLog(params),
       }));
       if (!isRequestAccountCurrent()) return staleAccountResult();
+      if (mediaType === MediaType.Image && request.signal?.aborted) {
+        return imageConfirmationFailure({ behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.Interrupted }, t);
+      }
       if (mediaType === 'video' && request.signal?.aborted) {
         return videoConfirmationFailure({ behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.Interrupted }, t);
       }
@@ -7340,7 +7354,7 @@ if (!gotTheLock) {
         if (persistResult && persistResult.saved.length > 0) {
           detailsAssets = persistResult.saved;
           const fileLines = persistResult.saved.map(asset =>
-            `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
+            `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
           );
           lines.push(`Results:\n${fileLines.join('\n')}`);
         } else if (assets.length > 0 && !composesImageEditLocally(imageEdit?.operation)) {
@@ -7624,7 +7638,7 @@ if (!gotTheLock) {
               continue;
             }
             const content = status === MediaTaskStatus.Succeeded
-              ? (saved?.saved ?? []).map(asset => `[${asset.filename}](${pathToFileURL(asset.filePath).toString()})`).join('\n')
+              ? (saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))).join('\n')
               : String(task.errorMessage || t(status === MediaTaskStatus.Timeout ? 'mediaTaskTimedOut'
                 : status === MediaTaskStatus.Cancelled ? 'mediaTaskCancelled' : 'mediaTaskFailed'));
             emitMediaTaskMessage(tracker.sessionId, content, { toolResultDetails: details }, tracker);
@@ -7640,7 +7654,7 @@ if (!gotTheLock) {
             }
             mediaUsage.save(taskId, persistResult?.saved.length ?? 0, assets.length);
             if (persistResult && persistResult.saved.length > 0) {
-              const fileLines = persistResult.saved.map(asset => `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`);
+              const fileLines = persistResult.saved.map(asset => `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`);
               emitMediaTaskMessage(
                 tracker.sessionId,
                 `Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
@@ -7948,11 +7962,15 @@ if (!gotTheLock) {
     try {
       const result = await persistGeneratedImageAssets({
         cwd: edit && composesImageEditLocally(edit.operation) ? await imageEditing.downloadDirectory(edit) : cwd,
+        recoveryDirectory: edit ? undefined : path.join(app.getPath('userData'), 'generated-images', sessionId),
         assets: pendingAssets,
         fetchAsset: url => session.defaultSession.fetch(url, { signal: AbortSignal.timeout(120_000) }),
       });
       for (const saved of result.saved) {
         persistedGeneratedImageAssetsByUrl.set(`${sessionId}:${saved.originalUrl || saved.url}`, saved);
+        if (saved.savedToRecoveryDirectory) {
+          console.warn('[MediaGeneration] saved image to recovery directory:', serializeForLog({ sessionId, reason: saved.recoveryReason, filePath: saved.filePath }));
+        }
       }
       for (const failed of result.failed) {
         console.warn('[MediaGeneration] failed to persist generated image:', serializeForLog({ sessionId, error: failed.error }));

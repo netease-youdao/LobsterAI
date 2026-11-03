@@ -4,6 +4,7 @@ import { expect, test, vi } from 'vitest';
 
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../../../shared/cowork/constants';
 import {
+  MediaConfirmationKind,
   MediaConfirmationPolicy,
   MediaConfirmationStatus,
 } from '../../../../shared/media/confirmation';
@@ -12,14 +13,14 @@ import { permissionDockRequest } from './questionDockModel';
 
 vi.mock('../../../services/i18n', () => ({ i18nService: { t: (key: string) => key } }));
 
-test('a request without structured details falls back to its prose and price line', () => {
+test.each([MediaConfirmationKind.Video, MediaConfirmationKind.Image])('a %s request without structured details falls back to its prose and price line', kind => {
   const request = permissionDockRequest({
     sessionId: 'session',
     requestId: 'request',
     toolName: ASK_USER_QUESTION_TOOL_NAME,
     toolInput: {
       mediaConfirmation: {
-        kind: MediaConfirmationPolicy.Kind,
+        kind,
         revision: 0,
         sequence: 1,
         status: MediaConfirmationStatus.Refreshing,
