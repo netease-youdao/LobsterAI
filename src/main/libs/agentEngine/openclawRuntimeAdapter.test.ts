@@ -2774,6 +2774,47 @@ test('pollChannelSessions clears stale override when channel row matches the age
   ]);
 });
 
+test('pollChannelSessions keeps the manual reply model of a scheduled-task conversation', async () => {
+  const jobKey = 'agent:main:cron:daily-brief';
+  const runKey = `${jobKey}:run:run-42`;
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    agentModel: 'lobsterai-server/yd-fast',
+    sessionId: 'cron-session-1',
+  });
+  session.modelOverride = 'lobsterai-server/deepseek-v4-flash-inhouse-YoudaoInner';
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { key: runKey, modelProvider: 'lobsterai-server', model: 'yd-fast' },
+            { key: jobKey, modelProvider: 'lobsterai-server', model: 'yd-fast', modelOverride: '' },
+          ],
+        };
+      }
+      return { messages: [] };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      ...store,
+      getSessionIdByScheduledTaskId: () => session.id,
+    } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo',
+  });
+  adapter.knownChannelSessionIds.add(session.id);
+  adapter.fullySyncedSessions.add(session.id);
+
+  await adapter.pollChannelSessions();
+
+  expect(session.modelOverride).toBe('lobsterai-server/deepseek-v4-flash-inhouse-YoudaoInner');
+  expect(getUpdateSessionCalls().filter(call => 'modelOverride' in call.patch)).toEqual([]);
+});
+
 const removedProviderCatalog = { qwen: { models: [{ id: 'qwen3.6-plus' }] } };
 
 test('pollChannelSessions resets an IM session pinned to a removed provider instead of mirroring it', async () => {

@@ -3975,6 +3975,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }): boolean {
     const { coworkSessionId, openClawSessionKey, state } = options;
     if (!state) return false;
+    // Cron rows carry the job's run model. Manual replies in a scheduled-task
+    // conversation run on the managed key, so the local override owns them.
+    if (isCronSessionKey(openClawSessionKey)) return false;
     const session = this.store.getSession(coworkSessionId);
     if (!session) return false;
 
@@ -3983,7 +3986,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (staleReason) {
       // Never mirror a model that can no longer run. Only a sessions.list row is
       // the entry OpenClaw runs with; history keeps the /model command from before.
-      if (state.explicitOverride && state.source === 'sessions-list' && !isCronSessionKey(openClawSessionKey)) {
+      if (state.explicitOverride && state.source === 'sessions-list') {
         void this.staleModelOverrides.reset({
           sessionId: coworkSessionId,
           sessionKey: openClawSessionKey,
