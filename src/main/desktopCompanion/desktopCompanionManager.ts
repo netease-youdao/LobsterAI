@@ -26,6 +26,7 @@ import {
   DEFAULT_DESKTOP_COMPANION_PREFERENCES,
   type DesktopCompanionAttachment,
   type DesktopCompanionDraft,
+  type DesktopCompanionDragEvent,
   DesktopCompanionDragPhase,
   type DesktopCompanionDropFile,
   DesktopCompanionDropSource,
@@ -57,7 +58,9 @@ import {
 import {
   clampCompanionBounds,
   type CompanionComposerLayout,
+  companionDragGrabOffset,
   type CompanionPoint,
+  type CompanionRect,
   companionStageOpensLeft,
   resolveCompanionBounds,
   resolveCompanionComposerLayout,
@@ -206,7 +209,8 @@ export class DesktopCompanionManager {
   private fileDragActive = false;
   private draggedFiles: DesktopCompanionDropFile[] = [];
   private foregroundAppId: string | null = null;
-  private dragOrigin: { cursor: CompanionPoint; position: CompanionPoint } | null = null;
+  /** Where the pointer holds the orb during a drag, and where the drag last placed it. */
+  private drag: { grab: CompanionPoint; placed: CompanionRect | null } | null = null;
   private draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private snoozeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly env: CompanionWindowEnvironment;
@@ -621,32 +625,39 @@ export class DesktopCompanionManager {
     this.options.store.set(DesktopCompanionStoreKey.Position, this.position);
   }
 
-  private move(phase: DesktopCompanionDragPhase): void {
+  private move(phase: DesktopCompanionDragPhase, grab?: unknown): void {
     if (!this.orb || this.orb.isDestroyed()) return;
-    if (phase === DesktopCompanionDragPhase.Cancel) { this.dragOrigin = null; return; }
+    if (phase === DesktopCompanionDragPhase.Cancel) { this.drag = null; return; }
     const cursor = screen.getCursorScreenPoint();
+    const size = this.orbSize();
     if (phase === DesktopCompanionDragPhase.Start) {
       // Capture before blur can hide the surface, using main-process state even during rapid clicks.
       this.orbPressVisible = this.panelVisible || this.results.state.visible;
+      // The cursor has often moved on by the time this message arrives. Measuring the drag
+      // from here would leave the orb behind the pointer, so use where the press landed.
       const start = this.orbBounds() ?? this.orb.getBounds();
-      this.dragOrigin = { cursor, position: { x: start.x, y: start.y } };
+      this.drag = {
+        grab: companionDragGrabOffset(grab, size) ?? { x: cursor.x - start.x, y: cursor.y - start.y },
+        placed: null,
+      };
       return;
     }
-    if (!this.dragOrigin) return;
+    if (!this.drag) return;
     const workArea = screen.getDisplayNearestPoint(cursor).workArea;
-    const moved = clampCompanionBounds({
-      ...this.orbSize(),
-      x: this.dragOrigin.position.x + cursor.x - this.dragOrigin.cursor.x,
-      y: this.dragOrigin.position.y + cursor.y - this.dragOrigin.cursor.y,
-    }, workArea);
+    const moved = clampCompanionBounds({ ...size, x: cursor.x - this.drag.grab.x, y: cursor.y - this.drag.grab.y }, workArea);
+    // Moving the window under a still cursor produces pointer events too. Moving again for
+    // them would fight anything else that places the window, which shows as flicker.
+    const placed = this.drag.placed;
+    if (phase === DesktopCompanionDragPhase.Move && placed?.x === moved.x && placed.y === moved.y) return;
     // Follow the pointer freely; settle near the left or right edge only after release.
     const settled = phase === DesktopCompanionDragPhase.End ? snapCompanionOrbToEdge(moved, workArea) : moved;
     this.orb.setBounds(settled, settled.x !== moved.x);
     if (phase === DesktopCompanionDragPhase.End) {
-      this.dragOrigin = null;
+      this.drag = null;
       this.savePosition(settled);
       this.publish();
     } else {
+      this.drag.placed = moved;
       this.position = { x: moved.x, y: moved.y };
     }
     this.stage.reposition();
@@ -1058,7 +1069,8 @@ export class DesktopCompanionManager {
     };
     on(DesktopCompanionIpc.Drag, (value, senderId) => {
       if (senderId !== this.orb?.webContents.id) return;
-      if (Object.values(DesktopCompanionDragPhase).includes(value as DesktopCompanionDragPhase)) this.move(value as DesktopCompanionDragPhase);
+      const payload = value as Partial<DesktopCompanionDragEvent> | null;
+      if (payload?.phase && Object.values(DesktopCompanionDragPhase).includes(payload.phase)) this.move(payload.phase, payload.grab);
     });
     on(DesktopCompanionIpc.TaskUpdated, (_value, senderId) => {
       if (senderId !== this.orb?.webContents.id) return;

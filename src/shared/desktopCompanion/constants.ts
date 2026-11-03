@@ -68,6 +68,9 @@ export type DesktopCompanionSurface = typeof DesktopCompanionSurface[keyof typeo
 
 export const DesktopCompanionDragPhase = { Start: 'start', Move: 'move', End: 'end', Cancel: 'cancel' } as const;
 export type DesktopCompanionDragPhase = typeof DesktopCompanionDragPhase[keyof typeof DesktopCompanionDragPhase];
+/** Where a press landed in the orb window, as fractions of its size so page zoom cannot skew it. */
+export interface DesktopCompanionDragGrab { x: number; y: number }
+export interface DesktopCompanionDragEvent { phase: DesktopCompanionDragPhase; grab?: DesktopCompanionDragGrab }
 
 export const DesktopCompanionFileDragPhase = { Enter: 'enter', Leave: 'leave', Drop: 'drop' } as const;
 export type DesktopCompanionFileDragPhase = typeof DesktopCompanionFileDragPhase[keyof typeof DesktopCompanionFileDragPhase];
@@ -322,7 +325,8 @@ export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionSc
   consumeMainPage(): Promise<DesktopCompanionMainPage | null>;
   onMainPageRequested(callback: () => void): () => void;
   showContextMenu(): Promise<void>;
-  drag(phase: DesktopCompanionDragPhase): void;
+  /** Start carries where the press landed; the drag keeps that point under the pointer. */
+  drag(phase: DesktopCompanionDragPhase, grab?: DesktopCompanionDragGrab): void;
   orbFileDrag(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[]): void;
   taskStarted(sessionId: string): Promise<void>;
   taskUpdated(): void;
