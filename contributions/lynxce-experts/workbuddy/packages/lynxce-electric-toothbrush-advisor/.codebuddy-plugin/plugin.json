@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-electric-toothbrush-advisor",
+  "version": "1.0.2",
+  "description": "Pick electric toothbrushes and flossers: modes, battery, tank size, yearly brush head and nozzle cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-electric-toothbrush-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-electric-toothbrush"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-electric-toothbrush-advisor",
+  "displayName": {
+    "zh": "电动牙刷冲牙器选购顾问",
+    "en": "Electric Toothbrush and Refill Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电动牙刷冲牙器选购与耗材核算顾问",
+    "en": "11.11 Electric Toothbrush and Refill Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "电动牙刷冲牙器怎么挑：看档位压力提醒与续航、水箱容量，算刷头喷头年耗材，比三年总成本。",
+    "en": "Pick electric toothbrushes and flossers: modes, battery, tank size, yearly brush head and nozzle cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两款电动牙刷算上刷头哪个更划算",
+    "en": "Which toothbrush is cheaper once brush heads are counted"
+  },
+  "plugin": "lynxce-electric-toothbrush-advisor",
+  "tags": [
+    {
+      "zh": "刷头成本",
+      "en": "Brush Head Cost"
+    },
+    {
+      "zh": "三年总成本",
+      "en": "Three-year Cost"
+    },
+    {
+      "zh": "冲牙器水箱",
+      "en": "Flosser Tank"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两款电动牙刷算上刷头哪个更划算",
+      "en": "Which toothbrush is cheaper once brush heads are counted"
+    },
+    {
+      "zh": "两个人用一年要买多少个刷头",
+      "en": "How many brush heads do two people need a year"
+    },
+    {
+      "zh": "冲牙器选台式还是便携款",
+      "en": "Should I get a countertop or portable water flosser"
+    }
+  ],
+  "keywords": [
+    "刷头成本",
+    "三年总成本",
+    "冲牙器水箱",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

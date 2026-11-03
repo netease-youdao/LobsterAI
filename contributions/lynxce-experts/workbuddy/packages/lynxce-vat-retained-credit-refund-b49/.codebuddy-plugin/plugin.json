@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-vat-retained-credit-refund-b49",
+  "version": "1.0.0",
+  "description": "Prepare retained VAT credit refund evidence, eligibility branches and calculations with full conflict-preserving revisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-vat-retained-credit-refund-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-retained-credit-eligibility-b49",
+    "./skills/lynxce-retained-input-ratio-b49",
+    "./skills/lynxce-retained-refund-revision-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-vat-retained-credit-refund-b49",
+  "displayName": {
+    "zh": "留抵顾问",
+    "en": "VAT Retained Credit Refund Advisor"
+  },
+  "profession": {
+    "zh": "留抵退税顾问",
+    "en": "VAT Retained Credit Refund Advisor"
+  },
+  "displayDescription": {
+    "zh": "为一般纳税人核对行业占比、进项构成和留抵申报数据，形成退税准备说明、条件测算与保留口径冲突的修订稿。",
+    "en": "Prepare retained VAT credit refund evidence, eligibility branches and calculations with full conflict-preserving revisions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按现行留抵政策核行业、信用和进项构成，写准备说明。",
+    "en": "VAT Retained Credit Refund Advisor"
+  },
+  "plugin": "lynxce-vat-retained-credit-refund-b49",
+  "tags": [
+    {
+      "zh": "留抵退税",
+      "en": "留抵退税"
+    },
+    {
+      "zh": "进项构成",
+      "en": "进项构成"
+    },
+    {
+      "zh": "申报勾稽",
+      "en": "申报勾稽"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按现行留抵政策核行业、信用和进项构成，写准备说明。",
+      "en": "VAT Retained Credit Refund Advisor"
+    },
+    {
+      "zh": "制造销售占比恰好50%且留抵有两口径，完整修订金额和缺口。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "尚未核准退款，帮我区分条件测算、申请状态与后续账税动作。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "留抵退税",
+    "进项构成",
+    "申报勾稽"
+  ]
+}

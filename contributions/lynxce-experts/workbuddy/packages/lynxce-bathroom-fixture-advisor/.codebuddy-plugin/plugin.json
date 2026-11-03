@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bathroom-fixture-advisor",
+  "version": "1.0.1",
+  "description": "Choose bathroom fixtures: toilet rough-in and drain, water pressure versus shower type, materials, install cost and price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bathroom-fixture-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bathroom-fixture"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bathroom-fixture-advisor",
+  "displayName": {
+    "zh": "卫浴五金选购顾问",
+    "en": "Toilet, Shower and Faucet Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 卫浴五金选购顾问",
+    "en": "11.11 Toilet, Shower and Faucet Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "卫浴五金怎么选：马桶坑距与排水方式、水压匹配花洒类型、材质与镀层、安装费与到手价。",
+    "en": "Choose bathroom fixtures: toilet rough-in and drain, water pressure versus shower type, materials, install cost and price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家坑距 380 该买哪种马桶",
+    "en": "Which toilet fits a 380 mm rough-in"
+  },
+  "plugin": "lynxce-bathroom-fixture-advisor",
+  "tags": [
+    {
+      "zh": "坑距核对",
+      "en": "Rough-in Check"
+    },
+    {
+      "zh": "水压匹配",
+      "en": "Pressure Match"
+    },
+    {
+      "zh": "材质镀层",
+      "en": "Material and Plating"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家坑距 380 该买哪种马桶",
+      "en": "Which toilet fits a 380 mm rough-in"
+    },
+    {
+      "zh": "水压低适合什么样的花洒",
+      "en": "Which shower suits low water pressure"
+    },
+    {
+      "zh": "龙头怎么看是不是好材质",
+      "en": "How can I tell if a faucet is well made"
+    }
+  ],
+  "keywords": [
+    "坑距核对",
+    "水压匹配",
+    "材质镀层",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

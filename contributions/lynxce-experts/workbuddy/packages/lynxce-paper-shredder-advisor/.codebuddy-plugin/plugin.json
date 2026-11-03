@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-paper-shredder-advisor",
+  "version": "1.0.0",
+  "description": "Pick paper shredders: security level, sheet capacity, run time, bin size and noise.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-paper-shredder-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-paper-shredder"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-paper-shredder-advisor",
+  "displayName": {
+    "zh": "碎纸机选购顾问",
+    "en": "Paper Shredder Advisor"
+  },
+  "profession": {
+    "zh": "11.11 家用与办公碎纸机选购顾问",
+    "en": "11.11 Home and Office Paper Shredder Advisor"
+  },
+  "displayDescription": {
+    "zh": "碎纸机怎么挑：按文件类型定保密等级、核单次张数与连续工时、看纸箱容量、比噪音与能否碎卡。",
+    "en": "Pick paper shredders: security level, sheet capacity, run time, bin size and noise."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "碎快递单要选 P-4 还是 P-5",
+    "en": "Should I pick P-4 or P-5 for shipping labels"
+  },
+  "plugin": "lynxce-paper-shredder-advisor",
+  "tags": [
+    {
+      "zh": "保密等级",
+      "en": "Security Level"
+    },
+    {
+      "zh": "张数工时",
+      "en": "Capacity and Run Time"
+    },
+    {
+      "zh": "纸箱噪音",
+      "en": "Bin and Noise"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "碎快递单要选 P-4 还是 P-5",
+      "en": "Should I pick P-4 or P-5 for shipping labels"
+    },
+    {
+      "zh": "每天碎 30 张选哪种碎纸机",
+      "en": "Which shredder suits 30 sheets a day"
+    },
+    {
+      "zh": "碎纸机单次张数为什么总卡纸",
+      "en": "Why a shredder jams below its rated sheet count"
+    }
+  ],
+  "keywords": [
+    "保密等级",
+    "张数工时",
+    "纸箱噪音",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

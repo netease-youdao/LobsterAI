@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-multi-piece-discount-advisor",
+  "version": "1.0.2",
+  "description": "Evaluate multi-item and second-item-half-price offers: average discount rate, stacking order, worth-it check, return re-settlement.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-multi-piece-discount-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-multi-piece-discount"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-multi-piece-discount-advisor",
+  "displayName": {
+    "zh": "多件多折与第二件半价顾问",
+    "en": "Multi-Item and Second-Item-Half-Price Advisor"
+  },
+  "profession": {
+    "zh": "11.11 多件多折与第二件半价顾问",
+    "en": "11.11 Multi-Item and Second-Item-Half-Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "多件折扣值不值：第二件半价换算平均折扣、与满减店铺券叠加顺序、只要一件是否划算、退货优惠回收。",
+    "en": "Evaluate multi-item and second-item-half-price offers: average discount rate, stacking order, worth-it check, return re-settlement."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "第二件半价我只要一件划不划算",
+    "en": "Is second-item-half-price worth it if I only need one"
+  },
+  "plugin": "lynxce-multi-piece-discount-advisor",
+  "tags": [
+    {
+      "zh": "平均折扣换算",
+      "en": "Average Discount"
+    },
+    {
+      "zh": "叠加顺序",
+      "en": "Stacking Order"
+    },
+    {
+      "zh": "退货重算",
+      "en": "Return Re-settlement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "第二件半价我只要一件划不划算",
+      "en": "Is second-item-half-price worth it if I only need one"
+    },
+    {
+      "zh": "多件优惠和满减怎么叠加更省",
+      "en": "How do multi-item offers stack with threshold discounts"
+    },
+    {
+      "zh": "退掉一件优惠会不会被收回",
+      "en": "Will the discount be clawed back if I return one item"
+    }
+  ],
+  "keywords": [
+    "平均折扣换算",
+    "叠加顺序",
+    "退货重算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

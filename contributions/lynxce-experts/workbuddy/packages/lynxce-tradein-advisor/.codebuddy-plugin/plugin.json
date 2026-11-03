@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-tradein-advisor",
+  "version": "1.0.3",
+  "description": "Grade before you sell: condition tiers, valuation factors, data wiping and safe transactions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tradein-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tradein-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tradein-advisor",
+  "displayName": {
+    "zh": "二手交易与以旧换新估值顾问",
+    "en": "Trade-in & Resale Advisor"
+  },
+  "profession": {
+    "zh": "二手交易与以旧换新估值顾问",
+    "en": "Trade-in & Resale Advisor"
+  },
+  "displayDescription": {
+    "zh": "旧机出手前先自评：成色怎么分级、影响估值的项、数据抹除步骤与线下交易安全怎么做到位。",
+    "en": "Grade before you sell: condition tiers, valuation factors, data wiping and safe transactions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我这台手机大概能卖多少",
+    "en": "Roughly what is my phone worth"
+  },
+  "plugin": "lynxce-tradein-advisor",
+  "tags": [
+    {
+      "zh": "以旧换新",
+      "en": "Trade-in"
+    },
+    {
+      "zh": "成色自评",
+      "en": "Grading"
+    },
+    {
+      "zh": "数据安全",
+      "en": "Data Wipe"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这台手机大概能卖多少",
+      "en": "Roughly what is my phone worth"
+    },
+    {
+      "zh": "官方换新和平台回收哪个划算",
+      "en": "Official trade-in or platform buyback"
+    },
+    {
+      "zh": "卖之前要做哪些清理",
+      "en": "What should I wipe before selling"
+    }
+  ],
+  "keywords": [
+    "以旧换新",
+    "成色自评",
+    "数据安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

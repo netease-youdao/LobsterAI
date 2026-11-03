@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-screen-wipe-device-consumption-advisor",
+  "version": "1.0.0",
+  "description": "Calculate compatible screen wiping supplies per device.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-screen-wipe-device-consumption-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-screen-wipe-device-consumption"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-screen-wipe-device-consumption-advisor",
+  "displayName": {
+    "zh": "屏幕擦拭耗材核算助理",
+    "en": "Screen Wipe Supply Assistant"
+  },
+  "profession": {
+    "zh": "屏幕清洁擦拭套装逐台耗材核算助理",
+    "en": "Office Screen Wipe Supplies by Device Assistant"
+  },
+  "displayDescription": {
+    "zh": "办公屏幕擦拭怎么配：逐台核涂层适配与试用耗量，区分复用布和消耗液，计算整包补货并交付领用台账。",
+    "en": "Calculate compatible screen wiping supplies per device."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "16台屏幕两轮擦拭需多少清洁液",
+    "en": "Calculate cleaner for 16 screens across two rounds"
+  },
+  "plugin": "lynxce-office-screen-wipe-device-consumption-advisor",
+  "tags": [
+    {
+      "zh": "涂层适配",
+      "en": "Coating Compatibility"
+    },
+    {
+      "zh": "逐台耗用",
+      "en": "Device Consumption"
+    },
+    {
+      "zh": "擦拭布周转",
+      "en": "Cloth Rotation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "16台屏幕两轮擦拭需多少清洁液",
+      "en": "Calculate cleaner for 16 screens across two rounds"
+    },
+    {
+      "zh": "复用布待洗和破损怎样重算补货",
+      "en": "Recalculate cloth stock with washing and damage"
+    },
+    {
+      "zh": "做逐台耗材领用和结存表",
+      "en": "Make a device supply issue and balance ledger"
+    }
+  ],
+  "keywords": [
+    "涂层适配",
+    "逐台耗用",
+    "擦拭布周转",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-factory-frozen-change-impact-b43-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied records for factory frozen plan rush change impact review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-factory-frozen-change-impact-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-factory-frozen-change-impact-b43",
+    "./skills/lynxce-factory-frozen-change-impact-b43-int-snapshot-delta",
+    "./skills/lynxce-factory-frozen-change-impact-b43-int-rollback-gate"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-factory-frozen-change-impact-b43-advisor",
+  "displayName": {
+    "zh": "工厂插单变更顾问",
+    "en": "Factory Frozen Plan Rush Change Impact Review Advisor"
+  },
+  "profession": {
+    "zh": "工厂冻结计划插单影响核对专家",
+    "en": "Factory Frozen Plan Rush Change Impact Review"
+  },
+  "displayDescription": {
+    "zh": "帮助工厂计划员核对冻结排程插单变更，按前后快照识别被影响订单，交付影响表、确认清单与撤回草案。",
+    "en": "Review supplied records for factory frozen plan rush change impact review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "首次提供已冻结计划前快照，请生成核对成果",
+    "en": "Prepare the first review from my supplied records"
+  },
+  "plugin": "lynxce-factory-frozen-change-impact-b43-advisor",
+  "tags": [
+    {
+      "zh": "制造质量",
+      "en": "Business Domain"
+    },
+    {
+      "zh": "工厂冻结计划插单影响核对",
+      "en": "Task Review"
+    },
+    {
+      "zh": "前后差异",
+      "en": "Evidence Deliverable"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "首次提供已冻结计划前快照，请生成核对成果",
+      "en": "Prepare the first review from my supplied records"
+    },
+    {
+      "zh": "资料缺失或版本冲突，哪些判断需要暂缓",
+      "en": "Identify blocked decisions when evidence conflicts"
+    },
+    {
+      "zh": "新一轮资料到了，请更新差异与未闭环项",
+      "en": "Update changes and unresolved items for the next round"
+    }
+  ],
+  "keywords": [
+    "制造质量",
+    "工厂冻结计划插单影响核对",
+    "前后差异"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-whiteboard-cleaner-use-advisor",
+  "version": "1.0.0",
+  "description": "Measure cleaner use and reconcile eraser pad supplies.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-whiteboard-cleaner-use-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-whiteboard-cleaner-use"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-whiteboard-cleaner-use-advisor",
+  "displayName": {
+    "zh": "白板清洁耗材师",
+    "en": "Whiteboard Cleaner Supply Advisor"
+  },
+  "profession": {
+    "zh": "白板擦清洁剂实耗补给顾问",
+    "en": "Whiteboard Cleaner Supply Advisor"
+  },
+  "displayDescription": {
+    "zh": "按白板清洁批次实测清洁剂用量，分开擦垫复用与报损，核瓶装补给和盘点差异，输出领用消耗台账。",
+    "en": "Measure cleaner use and reconcile eraser pad supplies."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按记录核算白板擦清洁剂实耗补给",
+    "en": "Calculate from recorded inputs"
+  },
+  "plugin": "lynxce-office-whiteboard-cleaner-use-advisor",
+  "tags": [
+    {
+      "zh": "需求核算",
+      "en": "Demand Calculation"
+    },
+    {
+      "zh": "规格复核",
+      "en": "Specification Review"
+    },
+    {
+      "zh": "异常台账",
+      "en": "Exception Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按记录核算白板擦清洁剂实耗补给",
+      "en": "Calculate from recorded inputs"
+    },
+    {
+      "zh": "核库存与延期在途对补货的影响",
+      "en": "Check stock and delayed arrivals"
+    },
+    {
+      "zh": "输出可复核算式及异常处理台账",
+      "en": "Build calculations and an exception ledger"
+    }
+  ],
+  "keywords": [
+    "需求核算",
+    "规格复核",
+    "异常台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

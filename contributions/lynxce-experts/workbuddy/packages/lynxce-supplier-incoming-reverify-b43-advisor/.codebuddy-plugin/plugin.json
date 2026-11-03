@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-supplier-incoming-reverify-b43-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied records for supplier incoming correction reverification.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-supplier-incoming-reverify-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-supplier-incoming-reverify-b43",
+    "./skills/lynxce-supplier-incoming-reverify-b43-int-lot-balance",
+    "./skills/lynxce-supplier-incoming-reverify-b43-int-evidence-gap"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-supplier-incoming-reverify-b43-advisor",
+  "displayName": {
+    "zh": "来料整改复验顾问",
+    "en": "Supplier Incoming Correction Reverification Advisor"
+  },
+  "profession": {
+    "zh": "供应商来料整改复验对照专家",
+    "en": "Supplier Incoming Correction Reverification"
+  },
+  "displayDescription": {
+    "zh": "帮助来料质量员按批次整理供应商整改证据，核对隔离数量和复验条件，交付整改对照、复验表及未闭环项。",
+    "en": "Review supplied records for supplier incoming correction reverification."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "首次提供来料批次台账，请生成核对成果",
+    "en": "Prepare the first review from my supplied records"
+  },
+  "plugin": "lynxce-supplier-incoming-reverify-b43-advisor",
+  "tags": [
+    {
+      "zh": "制造质量",
+      "en": "Business Domain"
+    },
+    {
+      "zh": "供应商来料整改复验对照",
+      "en": "Task Review"
+    },
+    {
+      "zh": "批次数量守恒表",
+      "en": "Evidence Deliverable"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "首次提供来料批次台账，请生成核对成果",
+      "en": "Prepare the first review from my supplied records"
+    },
+    {
+      "zh": "资料缺失或版本冲突，哪些判断需要暂缓",
+      "en": "Identify blocked decisions when evidence conflicts"
+    },
+    {
+      "zh": "新一轮资料到了，请更新差异与未闭环项",
+      "en": "Update changes and unresolved items for the next round"
+    }
+  ],
+  "keywords": [
+    "制造质量",
+    "供应商来料整改复验对照",
+    "批次数量守恒表"
+  ]
+}

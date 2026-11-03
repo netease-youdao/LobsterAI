@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-building-blocks-advisor",
+  "version": "1.0.1",
+  "description": "Pick building blocks: price per piece, age and small parts warnings, licensed vs compatible, storage cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-building-blocks-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-building-blocks"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-building-blocks-advisor",
+  "displayName": {
+    "zh": "拼装积木玩具选购顾问",
+    "en": "Building Blocks Toy Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 拼装积木玩具选购顾问",
+    "en": "11.11 Building Blocks Toy Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "积木怎么选：按颗粒数折算单价、适龄与小零件警示、正版与兼容件识别、收纳与展示盒到手价。",
+    "en": "Pick building blocks: price per piece, age and small parts warnings, licensed vs compatible, storage cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两套积木哪个颗粒单价更划算",
+    "en": "Which block set has the better price per piece"
+  },
+  "plugin": "lynxce-building-blocks-advisor",
+  "tags": [
+    {
+      "zh": "颗粒单价",
+      "en": "Price per Piece"
+    },
+    {
+      "zh": "适龄安全",
+      "en": "Age and Safety"
+    },
+    {
+      "zh": "正版兼容",
+      "en": "Licensed or Compatible"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两套积木哪个颗粒单价更划算",
+      "en": "Which block set has the better price per piece"
+    },
+    {
+      "zh": "家里有 2 岁宝宝能买小颗粒积木吗",
+      "en": "Can I buy small bricks with a 2 year old at home"
+    },
+    {
+      "zh": "怎么分辨授权正版和兼容积木",
+      "en": "How do I tell licensed sets from compatible bricks"
+    }
+  ],
+  "keywords": [
+    "颗粒单价",
+    "适龄安全",
+    "正版兼容",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

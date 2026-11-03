@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-gold-price-advisor",
+  "version": "1.0.2",
+  "description": "Compare gold jewellery: per-gram conversion, labour fees, fineness marks, weight checks, buy-back rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-gold-price-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-gold-price"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-gold-price-advisor",
+  "displayName": {
+    "zh": "黄金饰品克价与工费核算顾问",
+    "en": "Gold Jewellery Per-Gram and Labour Fee Advisor"
+  },
+  "profession": {
+    "zh": "11.11 黄金饰品克价与工费核算顾问",
+    "en": "11.11 Gold Jewellery Per-Gram and Labour Fee Advisor"
+  },
+  "displayDescription": {
+    "zh": "金饰怎么比价：一口价折合克价、按克与按件工费、足金标识与证书核对、回收与换新规则差异。",
+    "en": "Compare gold jewellery: per-gram conversion, labour fees, fineness marks, weight checks, buy-back rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一口价金饰折合每克多少钱",
+    "en": "What is the per-gram price of this fixed-price piece"
+  },
+  "plugin": "lynxce-gold-price-advisor",
+  "tags": [
+    {
+      "zh": "克价换算",
+      "en": "Per-Gram Conversion"
+    },
+    {
+      "zh": "工费核算",
+      "en": "Labour Fee Check"
+    },
+    {
+      "zh": "回收规则",
+      "en": "Buy-Back Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一口价金饰折合每克多少钱",
+      "en": "What is the per-gram price of this fixed-price piece"
+    },
+    {
+      "zh": "按克计价和一口价哪个更划算",
+      "en": "Per-gram pricing or fixed price, which is better value"
+    },
+    {
+      "zh": "这款金饰以后回收能拿回多少",
+      "en": "How much would I get back if I sell this piece later"
+    }
+  ],
+  "keywords": [
+    "克价换算",
+    "工费核算",
+    "回收规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

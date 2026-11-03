@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-unboxing-review-advisor",
+  "version": "1.0.1",
+  "description": "Turn product, sample source and test conditions into disclosure plans, test protocols, data checks, review scripts and prepublish checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-unboxing-review-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-unboxing-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-unboxing-review-advisor",
+  "displayName": {
+    "zh": "开箱测评策划顾问",
+    "en": "Unboxing Review Advisor"
+  },
+  "profession": {
+    "zh": "开箱测评视频策划与拍摄顾问｜灵策智算",
+    "en": "Unboxing and Product Review Video Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据品类样品来源与测试条件策划测评，交付利益披露方案、测试协议与数据复核、分段脚本和发布前核对。",
+    "en": "Turn product, sample source and test conditions into disclosure plans, test protocols, data checks, review scripts and prepublish checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据产品和样品来源生成测评维度测试协议与分段脚本",
+    "en": "Build test dimensions and a test protocol and script from the sample source"
+  },
+  "plugin": "lynxce-unboxing-review-advisor",
+  "tags": [
+    {
+      "zh": "利益披露",
+      "en": "Disclosure"
+    },
+    {
+      "zh": "测试协议",
+      "en": "Test Protocol"
+    },
+    {
+      "zh": "测评脚本",
+      "en": "Review Script"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据产品和样品来源生成测评维度测试协议与分段脚本",
+      "en": "Build test dimensions and a test protocol and script from the sample source"
+    },
+    {
+      "zh": "复核我已写好的测评脚本和测试数据是否站得住",
+      "en": "Review my existing review script and test data"
+    },
+    {
+      "zh": "还不清楚样品来源先给一版最小维度表和脚本框架",
+      "en": "Give a minimal dimension table and script frame when sample source is unclear"
+    }
+  ],
+  "keywords": [
+    "利益披露",
+    "测试协议",
+    "测评脚本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-printgift-advisor",
+  "version": "1.0.4",
+  "description": "Order custom gifts: writing the brief, process choice, proofing and lead time.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-printgift-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-printgift-brief"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-printgift-advisor",
+  "displayName": {
+    "zh": "定制礼品与印刷物料采购顾问",
+    "en": "Custom Gift and Printing Advisor"
+  },
+  "profession": {
+    "zh": "定制礼品与印刷物料采购顾问",
+    "en": "Custom Gift and Printing Advisor"
+  },
+  "displayDescription": {
+    "zh": "定制礼品怎么下单：需求单写哪些项、工艺按数量怎么选、打样与交期怎么倒排才来得及。",
+    "en": "Order custom gifts: writing the brief, process choice, proofing and lead time."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "定制礼品需求单怎么写",
+    "en": "How do I write a custom gift brief"
+  },
+  "plugin": "lynxce-printgift-advisor",
+  "tags": [
+    {
+      "zh": "定制礼品",
+      "en": "Custom Gifts"
+    },
+    {
+      "zh": "印刷工艺",
+      "en": "Print Process"
+    },
+    {
+      "zh": "打样交期",
+      "en": "Lead Time"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "定制礼品需求单怎么写",
+      "en": "How do I write a custom gift brief"
+    },
+    {
+      "zh": "这个数量用什么工艺",
+      "en": "Which process suits this quantity"
+    },
+    {
+      "zh": "交期够不够来得及",
+      "en": "Is this lead time realistic"
+    }
+  ],
+  "keywords": [
+    "定制礼品",
+    "印刷工艺",
+    "打样交期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-cashier-bank-reconciliation-advisor",
+  "version": "1.0.0",
+  "description": "Cash and bank journals, daily cash report, bank reconciliation and petty cash control.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cashier-bank-reconciliation-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cashier-bank-reconciliation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cashier-bank-reconciliation-advisor",
+  "displayName": {
+    "zh": "出纳资金日报助理",
+    "en": "Cashier Cash Report and Reconciliation Assistant"
+  },
+  "profession": {
+    "zh": "出纳资金日报与银行余额调节助理",
+    "en": "Cashier Daily Report and Bank Reconciliation Assistant"
+  },
+  "displayDescription": {
+    "zh": "出纳日清月结：规范现金与银行日记账、编资金日报、做银行余额调节表、查未达账项与备用金。",
+    "en": "Cash and bank journals, daily cash report, bank reconciliation and petty cash control."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "银行日记账和对账单对不上，帮我做调节表",
+    "en": "My bank journal does not match the statement, build a reconciliation"
+  },
+  "plugin": "lynxce-cashier-bank-reconciliation-advisor",
+  "tags": [
+    {
+      "zh": "银行余额调节",
+      "en": "Bank Reconciliation"
+    },
+    {
+      "zh": "资金日报",
+      "en": "Daily Cash Report"
+    },
+    {
+      "zh": "备用金管理",
+      "en": "Petty Cash Control"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "银行日记账和对账单对不上，帮我做调节表",
+      "en": "My bank journal does not match the statement, build a reconciliation"
+    },
+    {
+      "zh": "帮我设计一张每天给老板看的资金日报",
+      "en": "Design a daily cash report for my boss"
+    },
+    {
+      "zh": "备用金老是挂账不报销，怎么管",
+      "en": "Petty cash advances stay open too long, how do I control them"
+    }
+  ],
+  "keywords": [
+    "银行余额调节",
+    "资金日报",
+    "备用金管理",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

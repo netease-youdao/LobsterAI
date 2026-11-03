@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-towel-bath-advisor",
+  "version": "1.0.1",
+  "description": "Choose towels: grams per square meter, long-staple cotton versus microfiber, absorbency, shedding, yearly cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-towel-bath-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-towel-bath"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-towel-bath-advisor",
+  "displayName": {
+    "zh": "毛巾浴巾选购顾问",
+    "en": "Towel and Bath Towel Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 毛巾浴巾选购顾问",
+    "en": "11.11 Towel and Bath Towel Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "毛巾浴巾怎么选：克重看每平米、长绒棉纯棉超细纤维区别、吸水与掉毛、按更换周期算年成本。",
+    "en": "Choose towels: grams per square meter, long-staple cotton versus microfiber, absorbency, shedding, yearly cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这条毛巾克重算下来够不够厚",
+    "en": "Is this towel heavy enough by GSM"
+  },
+  "plugin": "lynxce-towel-bath-advisor",
+  "tags": [
+    {
+      "zh": "克重换算",
+      "en": "GSM Check"
+    },
+    {
+      "zh": "材质辨别",
+      "en": "Fiber Check"
+    },
+    {
+      "zh": "年成本",
+      "en": "Yearly Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这条毛巾克重算下来够不够厚",
+      "en": "Is this towel heavy enough by GSM"
+    },
+    {
+      "zh": "长绒棉和超细纤维毛巾怎么选",
+      "en": "Long-staple cotton or microfiber towels"
+    },
+    {
+      "zh": "一家四口一年毛巾要花多少钱",
+      "en": "Yearly towel cost for a family of four"
+    }
+  ],
+  "keywords": [
+    "克重换算",
+    "材质辨别",
+    "年成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

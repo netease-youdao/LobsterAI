@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-monitor-dock-advisor",
+  "version": "1.0.2",
+  "description": "Pair a monitor and dock: size by distance, refresh rate and ports, USB-C power wattage, dock port list, price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-monitor-dock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-monitor-dock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-monitor-dock-advisor",
+  "displayName": {
+    "zh": "显示器与扩展坞选购顾问",
+    "en": "Monitor and Docking Station Advisor"
+  },
+  "profession": {
+    "zh": "11.11 显示器与扩展坞选购顾问",
+    "en": "11.11 Monitor and Docking Station Advisor"
+  },
+  "displayDescription": {
+    "zh": "显示器扩展坞怎么配：尺寸分辨率按距离选、刷新率与接口带宽、一线通供电瓦数、扩展坞端口清单。",
+    "en": "Pair a monitor and dock: size by distance, refresh rate and ports, USB-C power wattage, dock port list, price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的桌子适合多大的显示器",
+    "en": "What monitor size fits my desk"
+  },
+  "plugin": "lynxce-monitor-dock-advisor",
+  "tags": [
+    {
+      "zh": "尺寸分辨率",
+      "en": "Size and Resolution"
+    },
+    {
+      "zh": "一线通供电",
+      "en": "USB-C Power"
+    },
+    {
+      "zh": "端口清单",
+      "en": "Port Checklist"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的桌子适合多大的显示器",
+      "en": "What monitor size fits my desk"
+    },
+    {
+      "zh": "一线通显示器供电多少瓦才够",
+      "en": "How many watts of USB-C power does my laptop need"
+    },
+    {
+      "zh": "扩展坞需要哪些接口",
+      "en": "Which ports should my docking station have"
+    }
+  ],
+  "keywords": [
+    "尺寸分辨率",
+    "一线通供电",
+    "端口清单",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

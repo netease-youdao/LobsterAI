@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-itasset-advisor",
+  "version": "1.0.3",
+  "description": "Buy office IT in batches: role tiers, refresh cycles, warranty and value.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-itasset-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-itasset-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-itasset-advisor",
+  "displayName": {
+    "zh": "企业 IT 设备采购与更新顾问",
+    "en": "Corporate IT Purchasing Advisor"
+  },
+  "profession": {
+    "zh": "企业 IT 设备采购与更新顾问",
+    "en": "Corporate IT Purchasing Advisor"
+  },
+  "displayDescription": {
+    "zh": "公司电脑怎么批量买：按岗位分几档、更新周期怎么定、质保与残值怎么算才算得上划算。",
+    "en": "Buy office IT in batches: role tiers, refresh cycles, warranty and value."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "公司电脑按岗位怎么配",
+    "en": "How do I spec laptops by role"
+  },
+  "plugin": "lynxce-itasset-advisor",
+  "tags": [
+    {
+      "zh": "IT采购",
+      "en": "IT Purchasing"
+    },
+    {
+      "zh": "岗位分档",
+      "en": "Role Tiers"
+    },
+    {
+      "zh": "资产台账",
+      "en": "Asset Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "公司电脑按岗位怎么配",
+      "en": "How do I spec laptops by role"
+    },
+    {
+      "zh": "几年换一批比较合适",
+      "en": "How often should we refresh devices"
+    },
+    {
+      "zh": "帮我做一版采购预算",
+      "en": "Draft an IT purchase budget"
+    }
+  ],
+  "keywords": [
+    "IT采购",
+    "岗位分档",
+    "资产台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-desk-cable-tidy-advisor",
+  "version": "1.0.0",
+  "description": "Tidy desks: count cables and plugs, size strips, trays and ties, list purchases per desk.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-desk-cable-tidy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-desk-cable-tidy"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-desk-cable-tidy-advisor",
+  "displayName": {
+    "zh": "工位理线收纳顾问",
+    "en": "Desk Cable Tidy Advisor"
+  },
+  "profession": {
+    "zh": "工位理线与桌面收纳改造顾问",
+    "en": "Desk Cable Management and Storage Advisor"
+  },
+  "displayDescription": {
+    "zh": "工位线乱怎么改：逐台数线缆与插头，算插排位数、负载与理线槽长度，按工位出改造采购清单。",
+    "en": "Tidy desks: count cables and plugs, size strips, trays and ties, list purchases per desk."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一个工位需要几位的插排",
+    "en": "How many outlets one workstation needs"
+  },
+  "plugin": "lynxce-desk-cable-tidy-advisor",
+  "tags": [
+    {
+      "zh": "线缆清点",
+      "en": "Cable Count"
+    },
+    {
+      "zh": "线槽计算",
+      "en": "Tray Sizing"
+    },
+    {
+      "zh": "插排负载",
+      "en": "Power Strip Load"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一个工位需要几位的插排",
+      "en": "How many outlets one workstation needs"
+    },
+    {
+      "zh": "理线槽要买多长多宽怎么算",
+      "en": "How to size cable tray length and width"
+    },
+    {
+      "zh": "帮我做 12 个工位的理线改造采购清单",
+      "en": "Build a cable tidy purchase list for 12 desks"
+    }
+  ],
+  "keywords": [
+    "线缆清点",
+    "线槽计算",
+    "插排负载",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

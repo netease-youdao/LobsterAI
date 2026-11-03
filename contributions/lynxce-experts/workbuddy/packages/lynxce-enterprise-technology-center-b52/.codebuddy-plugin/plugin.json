@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-enterprise-technology-center-b52",
+  "version": "1.0.0",
+  "description": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-enterprise-technology-center-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tech-center-2026-route-b52",
+    "./skills/lynxce-tech-center-resource-ledger-b52",
+    "./skills/lynxce-tech-center-report-revision-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-enterprise-technology-center-b52",
+  "displayName": {
+    "zh": "研发顾问",
+    "en": "Enterprise Technology Center Advisor"
+  },
+  "profession": {
+    "zh": "技术中心申报顾问",
+    "en": "Enterprise Technology Center Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业研发与申报经办梳理技术中心机制，互核人员经费设备，交付运行说明、资源底稿和完整补正稿。",
+    "en": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按2026新办法整理技术中心认定准备材料。",
+    "en": "Enterprise Technology Center Advisor"
+  },
+  "plugin": "lynxce-enterprise-technology-center-b52",
+  "tags": [
+    {
+      "zh": "技术中心",
+      "en": "技术中心"
+    },
+    {
+      "zh": "研发资源",
+      "en": "研发资源"
+    },
+    {
+      "zh": "认定材料",
+      "en": "认定材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按2026新办法整理技术中心认定准备材料。",
+      "en": "Enterprise Technology Center Advisor"
+    },
+    {
+      "zh": "设备原值有办公资产争议，请给双分支台账。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "把人财物与组织运行资料写成完整补正说明。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "技术中心",
+    "研发资源",
+    "认定材料"
+  ]
+}

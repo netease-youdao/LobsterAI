@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-wedding-advisor",
+  "version": "1.0.1",
+  "description": "Turn guest count, venue, budget and ceremony style into a minute-level run sheet, six-part budget, payment timeline and vendor checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-wedding-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-wedding-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-wedding-advisor",
+  "displayName": {
+    "zh": "婚礼策划顾问",
+    "en": "Wedding Planner"
+  },
+  "profession": {
+    "zh": "婚礼流程与预算统筹顾问",
+    "en": "Wedding Timeline & Budget Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据宾客人数场地预算与仪式形式，交付分钟级流程单与分工、六类三档预算表、付款倒计时和供应商确认清单。",
+    "en": "Turn guest count, venue, budget and ceremony style into a minute-level run sheet, six-part budget, payment timeline and vendor checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据人数场地和预算帮我排婚礼当天分钟级流程单",
+    "en": "Draft a minute-level wedding day run sheet from guests venue and budget"
+  },
+  "plugin": "lynxce-wedding-advisor",
+  "tags": [
+    {
+      "zh": "流程单",
+      "en": "Run Sheet"
+    },
+    {
+      "zh": "预算分档",
+      "en": "Budget Tiers"
+    },
+    {
+      "zh": "供应商确认",
+      "en": "Vendor Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据人数场地和预算帮我排婚礼当天分钟级流程单",
+      "en": "Draft a minute-level wedding day run sheet from guests venue and budget"
+    },
+    {
+      "zh": "帮我复核这份婚礼预算表有没有漏项和超支",
+      "en": "Check this wedding budget for missing items and overruns"
+    },
+    {
+      "zh": "只知道总预算时先给预算框架和要确认的问题",
+      "en": "With only a total budget give me the budget frame and key questions"
+    }
+  ],
+  "keywords": [
+    "流程单",
+    "预算分档",
+    "供应商确认",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

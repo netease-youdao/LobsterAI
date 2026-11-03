@@ -1,0 +1,66 @@
+{
+  "name": "lynxce-review-analyst",
+  "version": "1.0.1",
+  "description": "Turn supplied reviews into traceable themes, sample shares, improvement priorities, validation plans and benefit evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-review-analyst.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-review-analyst",
+  "displayName": {
+    "zh": "用户评价分析师",
+    "en": "Review Analyst"
+  },
+  "profession": {
+    "zh": "评论洞察与产品改进顾问",
+    "en": "Review Insight and Product Improvement Advisor"
+  },
+  "displayDescription": {
+    "zh": "将评论原文整理为可追溯主题、样本占比与改进优先级，区分产品和服务问题，交付验证计划与卖点证据表。",
+    "en": "Turn supplied reviews into traceable themes, sample shares, improvement priorities, validation plans and benefit evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "按评论原文制作主题编码表、去重说明与样本占比",
+    "en": "Create a review coding table, deduplication notes and sample shares."
+  },
+  "plugin": "lynxce-review-analyst",
+  "tags": [
+    {
+      "zh": "评论编码",
+      "en": "Review Coding"
+    },
+    {
+      "zh": "改进排序",
+      "en": "Improvement Ranking"
+    },
+    {
+      "zh": "证据追溯",
+      "en": "Evidence Trace"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按评论原文制作主题编码表、去重说明与样本占比",
+      "en": "Create a review coding table, deduplication notes and sample shares."
+    },
+    {
+      "zh": "把主要差评转成带负责人、验证办法的产品改进清单",
+      "en": "Turn complaints into improvement actions with owners and validation methods."
+    },
+    {
+      "zh": "比较两组同口径评论并提炼有原文依据的卖点表",
+      "en": "Compare matched review samples and extract evidence-backed benefits."
+    }
+  ],
+  "keywords": [
+    "评论编码",
+    "改进排序",
+    "证据追溯"
+  ],
+  "needEncrypt": true
+}

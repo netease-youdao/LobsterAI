@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-doc-scanner-select-advisor",
+  "version": "1.0.0",
+  "description": "Digitise paper files: page and hour estimate, scanner or document camera, OCR check, selection table.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-doc-scanner-select-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-doc-scanner-select"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-doc-scanner-select-advisor",
+  "displayName": {
+    "zh": "档案数字化选型顾问",
+    "en": "Archive Digitising Advisor"
+  },
+  "profession": {
+    "zh": "扫描仪高拍仪与档案数字化办公采购顾问",
+    "en": "Document Scanner and Archive Digitising Advisor"
+  },
+  "displayDescription": {
+    "zh": "纸质档案数字化怎么做：算页数与工时、按幅面装订选扫描仪或高拍仪、定分辨率与OCR抽检，附选型表。",
+    "en": "Digitise paper files: page and hour estimate, scanner or document camera, OCR check, selection table."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一千多份合同扫描要多少工时",
+    "en": "Labour hours to scan a thousand contracts"
+  },
+  "plugin": "lynxce-doc-scanner-select-advisor",
+  "tags": [
+    {
+      "zh": "工作量测算",
+      "en": "Workload Estimate"
+    },
+    {
+      "zh": "设备选型",
+      "en": "Device Selection"
+    },
+    {
+      "zh": "OCR 抽检",
+      "en": "OCR Spot Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一千多份合同扫描要多少工时",
+      "en": "Labour hours to scan a thousand contracts"
+    },
+    {
+      "zh": "骑缝章合同用扫描仪还是高拍仪",
+      "en": "Scanner or document camera for sealed contracts"
+    },
+    {
+      "zh": "扫描票据分辨率开多少合适",
+      "en": "What resolution to scan receipts at"
+    }
+  ],
+  "keywords": [
+    "工作量测算",
+    "设备选型",
+    "OCR 抽检",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

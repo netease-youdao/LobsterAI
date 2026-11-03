@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-audience-persona-advisor",
+  "version": "1.0.2",
+  "description": "Turn platform demographics, comments and DMs into 3-4 audience types with a coding sheet, persona cards, topic fit and fair tests.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-audience-persona-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-audience-persona"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-audience-persona-advisor",
+  "displayName": {
+    "zh": "受众画像分析顾问",
+    "en": "Audience Persona Advisor"
+  },
+  "profession": {
+    "zh": "受众画像分析与内容匹配顾问｜灵策智算",
+    "en": "Audience Persona and Content Fit Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据后台画像、评论与私信样本归纳三到四类受众，提供编码表、画像卡、选题匹配表和同条件验证对比表。",
+    "en": "Turn platform demographics, comments and DMs into 3-4 audience types with a coding sheet, persona cards, topic fit and fair tests."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "根据评论私信和后台画像生成受众画像卡与选题表",
+    "en": "Build persona cards and topics from comments DMs and demographics"
+  },
+  "plugin": "lynxce-audience-persona-advisor",
+  "tags": [
+    {
+      "zh": "受众归类",
+      "en": "Audience Types"
+    },
+    {
+      "zh": "选题匹配",
+      "en": "Topic Fit"
+    },
+    {
+      "zh": "验证对比",
+      "en": "Fair Testing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据评论私信和后台画像生成受众画像卡与选题表",
+      "en": "Build persona cards and topics from comments DMs and demographics"
+    },
+    {
+      "zh": "帮我复核这份受众画像和验证数据的结论",
+      "en": "Review this persona set and its test results"
+    },
+    {
+      "zh": "只有后台人口属性数据时先给取数清单和暂定画像",
+      "en": "With only demographics give a data checklist and draft personas"
+    }
+  ],
+  "keywords": [
+    "受众归类",
+    "选题匹配",
+    "验证对比",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

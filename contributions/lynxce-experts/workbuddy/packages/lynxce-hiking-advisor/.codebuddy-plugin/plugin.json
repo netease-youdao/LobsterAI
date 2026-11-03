@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-hiking-advisor",
+  "version": "1.0.4",
+  "description": "Boots first: layering, pack weight control and the safety essentials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hiking-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hiking-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hiking-advisor",
+  "displayName": {
+    "zh": "徒步与登山装备选购顾问",
+    "en": "Hiking and Trekking Gear Advisor"
+  },
+  "profession": {
+    "zh": "徒步与登山装备选购顾问",
+    "en": "Hiking and Trekking Gear Advisor"
+  },
+  "displayDescription": {
+    "zh": "徒步装备先解决鞋：三层穿法怎么搭、背包重量怎么控、安全件必须带齐哪几样才敢出发上路。",
+    "en": "Boots first: layering, pack weight control and the safety essentials."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "第一次徒步要买什么",
+    "en": "What do I need for my first hike"
+  },
+  "plugin": "lynxce-hiking-advisor",
+  "tags": [
+    {
+      "zh": "徒步装备",
+      "en": "Hiking Gear"
+    },
+    {
+      "zh": "三层穿法",
+      "en": "Layering"
+    },
+    {
+      "zh": "安全必备",
+      "en": "Essentials"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "第一次徒步要买什么",
+      "en": "What do I need for my first hike"
+    },
+    {
+      "zh": "这双鞋适合这条线路吗",
+      "en": "Are these boots right for this trail"
+    },
+    {
+      "zh": "背包里必须带哪些安全件",
+      "en": "Which safety items are mandatory"
+    }
+  ],
+  "keywords": [
+    "徒步装备",
+    "三层穿法",
+    "安全必备",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

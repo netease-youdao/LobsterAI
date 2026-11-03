@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-sme-tax-filing-advisor",
+  "version": "1.0.0",
+  "description": "Small business tax calendar, nil return checks, filing steps and a month end checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sme-tax-filing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sme-tax-filing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sme-tax-filing-advisor",
+  "displayName": {
+    "zh": "记账报税助理",
+    "en": "Bookkeeping and Tax Filing Assistant"
+  },
+  "profession": {
+    "zh": "小微企业记账报税助理",
+    "en": "Small Business Bookkeeping and Tax Filing Assistant"
+  },
+  "displayDescription": {
+    "zh": "小微企业报税不漏报：排申报日历、判断能否零申报、逐税种核对填报步骤，产出月结清单与申报核对表。",
+    "en": "Small business tax calendar, nil return checks, filing steps and a month end checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我们公司这个季度没收入，哪些税能零申报",
+    "en": "We had no revenue this quarter, which taxes can be nil returns"
+  },
+  "plugin": "lynxce-sme-tax-filing-advisor",
+  "tags": [
+    {
+      "zh": "零申报判断",
+      "en": "Nil Return Check"
+    },
+    {
+      "zh": "申报日历",
+      "en": "Filing Calendar"
+    },
+    {
+      "zh": "月末结账",
+      "en": "Month End Close"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我们公司这个季度没收入，哪些税能零申报",
+      "en": "We had no revenue this quarter, which taxes can be nil returns"
+    },
+    {
+      "zh": "帮我排一下本月要报的税和截止日",
+      "en": "List the taxes I need to file this month and their deadlines"
+    },
+    {
+      "zh": "帮我做一份月末结账检查清单",
+      "en": "Make me a month end closing checklist"
+    }
+  ],
+  "keywords": [
+    "零申报判断",
+    "申报日历",
+    "月末结账",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

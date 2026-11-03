@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bottle-warmer-advisor",
+  "version": "1.0.0",
+  "description": "Pick bottle warmers and formula kettles: capacity, temperature accuracy, materials, power cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bottle-warmer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bottle-warmer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bottle-warmer-advisor",
+  "displayName": {
+    "zh": "温奶器调奶器选购顾问",
+    "en": "Bottle Warmer and Formula Kettle Advisor"
+  },
+  "profession": {
+    "zh": "11.11 温奶器与恒温调奶器选购顾问",
+    "en": "11.11 Bottle Warmer and Formula Kettle Advisor"
+  },
+  "displayDescription": {
+    "zh": "调奶器温奶器怎么挑：按每天喂奶次数定容量、核控温范围与精度、看接触材质与3C标志、算保温电费。",
+    "en": "Pick bottle warmers and formula kettles: capacity, temperature accuracy, materials, power cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "夜里冲奶粉选多大容量的调奶器",
+    "en": "What kettle size covers night formula feeds"
+  },
+  "plugin": "lynxce-bottle-warmer-advisor",
+  "tags": [
+    {
+      "zh": "容量核算",
+      "en": "Capacity Sizing"
+    },
+    {
+      "zh": "控温精度",
+      "en": "Temperature Accuracy"
+    },
+    {
+      "zh": "保温电费",
+      "en": "Keep Warm Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "夜里冲奶粉选多大容量的调奶器",
+      "en": "What kettle size covers night formula feeds"
+    },
+    {
+      "zh": "温奶器和恒温调奶器有什么区别",
+      "en": "Bottle warmer versus formula kettle"
+    },
+    {
+      "zh": "调奶器一直保温一年电费多少",
+      "en": "Yearly power cost of a kettle kept warm"
+    }
+  ],
+  "keywords": [
+    "容量核算",
+    "控温精度",
+    "保温电费",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

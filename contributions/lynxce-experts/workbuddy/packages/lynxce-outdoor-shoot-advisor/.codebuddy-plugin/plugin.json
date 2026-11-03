@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-outdoor-shoot-advisor",
+  "version": "1.0.2",
+  "description": "Turn location, date, crew and gear into permit tracking, a light-window plan, a site risk checklist and a day call sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-outdoor-shoot-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-outdoor-shoot"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-outdoor-shoot-advisor",
+  "displayName": {
+    "zh": "外景拍摄统筹顾问",
+    "en": "Outdoor Shoot Advisor"
+  },
+  "profession": {
+    "zh": "外景拍摄报备与现场安全顾问｜灵策智算",
+    "en": "Outdoor Shoot Permit and On-site Safety Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据拍摄地点、日期、人数与设备整理外景准备方案，提供场地报备跟踪、光线时段表、风险核对单和当日通告。",
+    "en": "Turn location, date, crew and gear into permit tracking, a light-window plan, a site risk checklist and a day call sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据地点日期和人员设备生成外景报备跟踪与当日通告",
+    "en": "Build permit tracking and a day call sheet from location date crew and gear"
+  },
+  "plugin": "lynxce-outdoor-shoot-advisor",
+  "tags": [
+    {
+      "zh": "场地报备",
+      "en": "Location Permits"
+    },
+    {
+      "zh": "光线时段",
+      "en": "Light Windows"
+    },
+    {
+      "zh": "风险核对",
+      "en": "Risk Checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据地点日期和人员设备生成外景报备跟踪与当日通告",
+      "en": "Build permit tracking and a day call sheet from location date crew and gear"
+    },
+    {
+      "zh": "帮我复核这份外景风险核对单和时间安排",
+      "en": "Review this outdoor risk checklist and schedule"
+    },
+    {
+      "zh": "只知道拍摄地点时先给报备问题清单和待确认项",
+      "en": "With only the location give permit questions and open items"
+    }
+  ],
+  "keywords": [
+    "场地报备",
+    "光线时段",
+    "风险核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

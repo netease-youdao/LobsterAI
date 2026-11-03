@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-phone-accessory-advisor",
+  "version": "1.0.1",
+  "description": "Match phone accessories: exact model, film material and coverage, drop and heat, magnetic charging, bundle pricing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-phone-accessory-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-phone-accessory"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-phone-accessory-advisor",
+  "displayName": {
+    "zh": "手机壳膜与镜头保护选购顾问",
+    "en": "Phone Case and Screen Protector Advisor"
+  },
+  "profession": {
+    "zh": "11.11 手机壳膜与镜头保护选购顾问",
+    "en": "11.11 Phone Case and Screen Protector Advisor"
+  },
+  "displayDescription": {
+    "zh": "手机壳膜怎么配：型号精确匹配、膜的材质与覆盖范围、壳的防摔散热与磁吸兼容、套装与单买比价。",
+    "en": "Match phone accessories: exact model, film material and coverage, drop and heat, magnetic charging, bundle pricing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新手机该配什么壳和膜",
+    "en": "Which case and screen protector suit my new phone"
+  },
+  "plugin": "lynxce-phone-accessory-advisor",
+  "tags": [
+    {
+      "zh": "型号匹配",
+      "en": "Model Match"
+    },
+    {
+      "zh": "膜壳选择",
+      "en": "Film and Case"
+    },
+    {
+      "zh": "套装比价",
+      "en": "Bundle Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新手机该配什么壳和膜",
+      "en": "Which case and screen protector suit my new phone"
+    },
+    {
+      "zh": "屏下指纹能贴钢化膜吗",
+      "en": "Can I use tempered glass with an in-display fingerprint sensor"
+    },
+    {
+      "zh": "这个壳膜套装比单买划算吗",
+      "en": "Is this case and film bundle better than buying separately"
+    }
+  ],
+  "keywords": [
+    "型号匹配",
+    "膜壳选择",
+    "套装比价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

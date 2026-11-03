@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-expo-crate-piece-check-b44-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied expo records with three evidence-based workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-expo-crate-piece-check-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-expo-crate-piece-check-b44",
+    "./skills/lynxce-expo-accessory-parent-check-b44",
+    "./skills/lynxce-expo-seal-pickup-chain-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-expo-crate-piece-check-b44-advisor",
+  "displayName": {
+    "zh": "撤展装箱核对顾问",
+    "en": "Exhibit Strike Crate Piece Check Advisor"
+  },
+  "profession": {
+    "zh": "会展撤展物流资料核对顾问",
+    "en": "Exhibit Strike Crate Piece Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户资料核对撤展逐箱展品核对，区分事实缺项与冲突，输出专项证据对照及人工复核记录。",
+    "en": "Review supplied expo records with three evidence-based workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "collaboration",
+  "defaultInitPrompt": {
+    "zh": "请用现有资料生成撤展逐箱展品核对，未知项保留待补。",
+    "en": "Review the supplied records and mark missing evidence."
+  },
+  "plugin": "lynxce-expo-crate-piece-check-b44-advisor",
+  "tags": [
+    {
+      "zh": "会展撤展物流",
+      "en": "Domain records"
+    },
+    {
+      "zh": "证据核对",
+      "en": "Evidence review"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请用现有资料生成撤展逐箱展品核对，未知项保留待补。",
+      "en": "Review the supplied records and mark missing evidence."
+    },
+    {
+      "zh": "请单独运行展品附件绑定缺口表，保留原值与算式。",
+      "en": "Run the first internal task with evidence and arithmetic."
+    },
+    {
+      "zh": "请核对封箱提货凭据接续中的矛盾和边界条件。",
+      "en": "Review conflicts and boundaries in the second internal task."
+    }
+  ],
+  "keywords": [
+    "会展撤展物流",
+    "证据核对",
+    "异常复核"
+  ]
+}

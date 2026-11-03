@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-flag-rollback-tabletop-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare reviewable records, exception checks and conditional decisions from supplied materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-flag-rollback-tabletop-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-flag-rollback-tabletop-b44",
+    "./skills/lynxce-flag-dependency-cycle-b44",
+    "./skills/lynxce-rollback-observation-coverage-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-flag-rollback-tabletop-b44-advisor",
+  "displayName": {
+    "zh": "功能开关演练顾问",
+    "en": "Feature Flag Tabletop Advisor"
+  },
+  "profession": {
+    "zh": "功能开关演练顾问",
+    "en": "Feature Flag Tabletop Advisor"
+  },
+  "displayDescription": {
+    "zh": "为软件演练主持人核对功能开关范围、触发阈值与回退顺序，形成桌面脚本、证据缺口及观察表。",
+    "en": "Prepare reviewable records, exception checks and conditional decisions from supplied materials."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我提供的资料完成功能开关回滚桌面脚本",
+    "en": "Prepare the focused record review"
+  },
+  "plugin": "lynxce-flag-rollback-tabletop-b44-advisor",
+  "tags": [
+    {
+      "zh": "软件交付",
+      "en": "Domain Records"
+    },
+    {
+      "zh": "功能开关回滚桌面",
+      "en": "Focused Review"
+    },
+    {
+      "zh": "人工待决资料",
+      "en": "Decision Evidence"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我提供的资料完成功能开关回滚桌面脚本",
+      "en": "Prepare the focused record review"
+    },
+    {
+      "zh": "请单独完成功能开关依赖环路核查",
+      "en": "Review the specific evidence task"
+    },
+    {
+      "zh": "请按补充记录执行回退观察证据覆盖核查",
+      "en": "Review the follow-up records"
+    }
+  ],
+  "keywords": [
+    "软件交付",
+    "功能开关回滚桌面",
+    "人工待决资料"
+  ]
+}

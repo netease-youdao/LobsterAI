@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-data-helper",
+  "version": "1.0.1",
+  "description": "Delivers paste-ready Excel formulas and SQL queries, plus definitions, indexing and data cleaning.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-data-helper.md"
+  ],
+  "skills": [
+    "./skills/lynxce-excel-helper",
+    "./skills/lynxce-sql-helper",
+    "./skills/lynxce-survey-design"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-data-helper",
+  "displayName": {
+    "zh": "表格与数据助手",
+    "en": "Spreadsheet & Data Helper"
+  },
+  "profession": {
+    "zh": "Excel 与 SQL 数据处理助手",
+    "en": "Excel & SQL Data Assistant"
+  },
+  "displayDescription": {
+    "zh": "给可直接粘贴的 Excel 公式与 SQL 查询,顺带把口径、索引和数据清洗一并讲明白。",
+    "en": "Delivers paste-ready Excel formulas and SQL queries, plus definitions, indexing and data cleaning."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "帮我写个跨表匹配的公式",
+    "en": "Write a cross-sheet lookup formula"
+  },
+  "plugin": "lynxce-data-helper",
+  "tags": [
+    {
+      "zh": "Excel公式",
+      "en": "Excel"
+    },
+    {
+      "zh": "SQL查询",
+      "en": "SQL"
+    },
+    {
+      "zh": "数据清洗",
+      "en": "Data Cleaning"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写个跨表匹配的公式",
+      "en": "Write a cross-sheet lookup formula"
+    },
+    {
+      "zh": "这条 SQL 很慢,帮我看看怎么优化",
+      "en": "This query is slow, how do I optimize it"
+    },
+    {
+      "zh": "帮我设计一份满意度问卷",
+      "en": "Design a customer satisfaction survey"
+    }
+  ],
+  "keywords": [
+    "Excel公式",
+    "SQL查询",
+    "数据清洗",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

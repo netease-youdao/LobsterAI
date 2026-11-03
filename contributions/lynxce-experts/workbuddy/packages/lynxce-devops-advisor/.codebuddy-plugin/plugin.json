@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-devops-advisor",
+  "version": "1.0.2",
+  "description": "Connect supplied requirements, code and incident evidence into design reviews, defect reports and test matrices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-devops-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-code-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-devops-advisor",
+  "displayName": {
+    "zh": "研发流程质量顾问",
+    "en": "Engineering Excellence Advisor"
+  },
+  "profession": {
+    "zh": "研发流程与代码质量顾问",
+    "en": "Engineering Process and Code Quality Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据需求代码与故障材料，串联方案评审、缺陷证据和测试矩阵，附复盘行动形成可追溯的交付底稿。",
+    "en": "Connect supplied requirements, code and incident evidence into design reviews, defect reports and test matrices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据需求生成方案比较与验收追溯表",
+    "en": "Compare design options and map requirements to acceptance evidence"
+  },
+  "plugin": "lynxce-devops-advisor",
+  "tags": [
+    {
+      "zh": "方案评审",
+      "en": "Design Review"
+    },
+    {
+      "zh": "缺陷证据",
+      "en": "Defect Evidence"
+    },
+    {
+      "zh": "测试追溯",
+      "en": "Test Traceability"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据需求生成方案比较与验收追溯表",
+      "en": "Compare design options and map requirements to acceptance evidence"
+    },
+    {
+      "zh": "根据这段改动生成带失败输入的代码评审单",
+      "en": "Review this change with concrete failure inputs and evidence"
+    },
+    {
+      "zh": "把故障记录串成测试补缺与复盘行动底稿",
+      "en": "Map incident evidence to test gaps and postmortem actions"
+    }
+  ],
+  "keywords": [
+    "方案评审",
+    "缺陷证据",
+    "测试追溯",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-stamp-tax-ledger-b49",
+  "version": "1.0.0",
+  "description": "Reconcile taxable instruments, stated VAT and amendments into a stamp tax ledger and traceable revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-stamp-tax-ledger-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-stamp-instrument-map-b49",
+    "./skills/lynxce-stamp-stated-vat-b49",
+    "./skills/lynxce-stamp-amendment-bridge-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-stamp-tax-ledger-b49",
+  "displayName": {
+    "zh": "印税顾问",
+    "en": "Stamp Tax Ledger Advisor"
+  },
+  "profession": {
+    "zh": "印花税顾问",
+    "en": "Stamp Tax Ledger Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务逐份核对合同税目、列明税额和变更凭据，形成印花税税源台账、测算说明与保留冲突的修订稿。",
+    "en": "Reconcile taxable instruments, stated VAT and amendments into a stamp tax ledger and traceable revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按合同原文和已缴记录，整理本期印花税税源与测算说明。",
+    "en": "Stamp Tax Ledger Advisor"
+  },
+  "plugin": "lynxce-stamp-tax-ledger-b49",
+  "tags": [
+    {
+      "zh": "印花税",
+      "en": "印花税"
+    },
+    {
+      "zh": "合同税源",
+      "en": "合同税源"
+    },
+    {
+      "zh": "变更补退",
+      "en": "变更补退"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按合同原文和已缴记录，整理本期印花税税源与测算说明。",
+      "en": "Stamp Tax Ledger Advisor"
+    },
+    {
+      "zh": "合同额与结算单不一致，帮我分清金额变更和履约差额。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "补充协议尚未签署，请保留两种口径完整修订台账。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "印花税",
+    "合同税源",
+    "变更补退"
+  ]
+}

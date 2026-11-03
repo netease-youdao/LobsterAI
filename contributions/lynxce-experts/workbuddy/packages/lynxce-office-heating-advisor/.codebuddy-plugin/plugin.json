@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-heating-advisor",
+  "version": "1.0.0",
+  "description": "Plan office heaters: power by area, circuit load check, monthly power cost and request.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-heating-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-heating"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-heating-advisor",
+  "displayName": {
+    "zh": "取暖设备采购顾问",
+    "en": "Office Heating Procurement Advisor"
+  },
+  "profession": {
+    "zh": "办公室冬季取暖设备采购顾问",
+    "en": "Office Winter Heating Equipment Advisor"
+  },
+  "displayDescription": {
+    "zh": "冬季取暖怎么配：按面积与保温算功率选设备，核电路负荷，估月电费，出取暖设备采购申请单。",
+    "en": "Plan office heaters: power by area, circuit load check, monthly power cost and request."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "60 平方米办公室需要多大功率取暖",
+    "en": "How much heating power a 60 sqm office needs"
+  },
+  "plugin": "lynxce-office-heating-advisor",
+  "tags": [
+    {
+      "zh": "制热功率",
+      "en": "Heating Power"
+    },
+    {
+      "zh": "回路负荷",
+      "en": "Circuit Load"
+    },
+    {
+      "zh": "电费估算",
+      "en": "Power Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "60 平方米办公室需要多大功率取暖",
+      "en": "How much heating power a 60 sqm office needs"
+    },
+    {
+      "zh": "电暖器一开就跳闸怎么核负荷",
+      "en": "Check circuit load when heaters trip the breaker"
+    },
+    {
+      "zh": "帮我做取暖设备采购申请单和电费估算",
+      "en": "Build a heater request sheet with power cost"
+    }
+  ],
+  "keywords": [
+    "制热功率",
+    "回路负荷",
+    "电费估算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

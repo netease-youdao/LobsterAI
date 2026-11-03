@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-product-copy-expert",
+  "version": "1.0.1",
+  "description": "Draft evidence-backed product copy, detail-page structure, specification tables and claim-review notes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-product-copy-expert.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ecommerce-copy",
+    "./skills/lynxce-product-page",
+    "./skills/lynxce-copy-evidence"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-product-copy-expert",
+  "displayName": {
+    "zh": "商品文案专家",
+    "en": "Product Copywriter"
+  },
+  "profession": {
+    "zh": "详情页与卖点提炼顾问",
+    "en": "Detail Page & Selling Point Specialist"
+  },
+  "displayDescription": {
+    "zh": "依据商品材料提炼可举证卖点编排详情页与规格说明核对夸大表达和版本差异交付文案草稿及补证清单",
+    "en": "Draft evidence-backed product copy, detail-page structure, specification tables and claim-review notes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我重写这个商品的详情页文案",
+    "en": "Rewrite this product's detail page copy"
+  },
+  "plugin": "lynxce-product-copy-expert",
+  "tags": [
+    {
+      "zh": "卖点提炼",
+      "en": "Selling Points"
+    },
+    {
+      "zh": "详情页",
+      "en": "Detail Page"
+    },
+    {
+      "zh": "违禁词自查",
+      "en": "Compliance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我重写这个商品的详情页文案",
+      "en": "Rewrite this product's detail page copy"
+    },
+    {
+      "zh": "把这些参数提炼成五个卖点",
+      "en": "Turn these specs into five selling points"
+    },
+    {
+      "zh": "检查这段文案有没有违禁词",
+      "en": "Check this copy for banned words"
+    }
+  ],
+  "keywords": [
+    "卖点提炼",
+    "详情页",
+    "违禁词自查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

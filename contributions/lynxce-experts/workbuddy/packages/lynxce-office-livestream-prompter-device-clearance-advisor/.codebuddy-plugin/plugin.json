@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-livestream-prompter-device-clearance-advisor",
+  "version": "1.0.0",
+  "description": "Check teleprompter device fit, load and mounting parts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-livestream-prompter-device-clearance-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-livestream-prompter-device-clearance"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-livestream-prompter-device-clearance-advisor",
+  "displayName": {
+    "zh": "直播提词器兼容助理",
+    "en": "Live Teleprompter Fit Advisor"
+  },
+  "profession": {
+    "zh": "直播提词器设备尺寸兼容顾问",
+    "en": "Live Teleprompter Fit Advisor"
+  },
+  "displayDescription": {
+    "zh": "按直播设备外形与提词器夹持范围核对兼容，复核镜头净空承载和配件费用，交付试装清单及异常台账。",
+    "en": "Check teleprompter device fit, load and mounting parts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "平板含壳180毫米能否装提词器",
+    "en": "Check a tablet with a 180 mm case width"
+  },
+  "plugin": "lynxce-office-livestream-prompter-device-clearance-advisor",
+  "tags": [
+    {
+      "zh": "含壳尺寸",
+      "en": "Case Dimensions"
+    },
+    {
+      "zh": "镜头净空",
+      "en": "Lens Clearance"
+    },
+    {
+      "zh": "试装复核",
+      "en": "Mount Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "平板含壳180毫米能否装提词器",
+      "en": "Check a tablet with a 180 mm case width"
+    },
+    {
+      "zh": "提词器与设备总重如何核对",
+      "en": "Check combined prompter and device weight"
+    },
+    {
+      "zh": "备用平板太宽如何列替换配件",
+      "en": "Plan parts for an oversized spare tablet"
+    }
+  ],
+  "keywords": [
+    "含壳尺寸",
+    "镜头净空",
+    "试装复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

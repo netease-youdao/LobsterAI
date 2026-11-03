@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-jewelry-advisor",
+  "version": "1.0.4",
+  "description": "Documents before price: pricing breakdowns, certificate checks and after-sales terms.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-jewelry-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-jewelry-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-jewelry-advisor",
+  "displayName": {
+    "zh": "珠宝首饰与腕表选购顾问",
+    "en": "Jewelry and Watch Buying Advisor"
+  },
+  "profession": {
+    "zh": "珠宝首饰与腕表选购顾问",
+    "en": "Jewelry and Watch Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "珠宝腕表先看凭证再看价：计价方式怎么拆开、证书怎么核验、售后与回收条款要问清哪几条。",
+    "en": "Documents before price: pricing breakdowns, certificate checks and after-sales terms."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个报价是怎么算出来的",
+    "en": "How is this price calculated"
+  },
+  "plugin": "lynxce-jewelry-advisor",
+  "tags": [
+    {
+      "zh": "珠宝选购",
+      "en": "Jewelry"
+    },
+    {
+      "zh": "证书核对",
+      "en": "Certificates"
+    },
+    {
+      "zh": "售后回收",
+      "en": "After-sales"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个报价是怎么算出来的",
+      "en": "How is this price calculated"
+    },
+    {
+      "zh": "帮我核一下这张证书",
+      "en": "Help me check this certificate"
+    },
+    {
+      "zh": "买之前要问清哪些售后",
+      "en": "Which after-sales terms should I confirm"
+    }
+  ],
+  "keywords": [
+    "珠宝选购",
+    "证书核对",
+    "售后回收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

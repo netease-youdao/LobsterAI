@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-company-deregistration-advisor",
+  "version": "1.0.0",
+  "description": "Company closure: simplified vs general deregistration, tax clearance order and progress checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-company-deregistration-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-company-deregistration"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-company-deregistration-advisor",
+  "displayName": {
+    "zh": "公司注销清税助理",
+    "en": "Company Deregistration Assistant"
+  },
+  "profession": {
+    "zh": "公司注销与清税准备助理",
+    "en": "Company Deregistration and Tax Clearance Assistant"
+  },
+  "displayDescription": {
+    "zh": "小公司关停不留尾巴：判断简易或一般注销、排清税顺序、缴销发票、留存账簿、收尾社保银行，产出进度清单。",
+    "en": "Company closure: simplified vs general deregistration, tax clearance order and progress checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我们公司能不能走简易注销",
+    "en": "Can our company use simplified deregistration"
+  },
+  "plugin": "lynxce-company-deregistration-advisor",
+  "tags": [
+    {
+      "zh": "注销方式判断",
+      "en": "Deregistration Route"
+    },
+    {
+      "zh": "清税顺序",
+      "en": "Tax Clearance Order"
+    },
+    {
+      "zh": "收尾清单",
+      "en": "Closure Checklist"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我们公司能不能走简易注销",
+      "en": "Can our company use simplified deregistration"
+    },
+    {
+      "zh": "帮我排一下注销前清税的先后顺序",
+      "en": "Lay out the tax clearance steps before deregistration"
+    },
+    {
+      "zh": "注销后账簿要留多久，社保银行怎么收尾",
+      "en": "How long to keep records and how to close social insurance and banks"
+    }
+  ],
+  "keywords": [
+    "注销方式判断",
+    "清税顺序",
+    "收尾清单",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

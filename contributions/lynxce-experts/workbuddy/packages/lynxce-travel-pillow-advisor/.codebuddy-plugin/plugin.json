@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-travel-pillow-advisor",
+  "version": "1.0.0",
+  "description": "Pick travel sleep kits: pillow shape, packed size, eye mask fit and earplug rating.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-travel-pillow-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-travel-pillow"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-travel-pillow-advisor",
+  "displayName": {
+    "zh": "旅行颈枕眼罩选购顾问",
+    "en": "Travel Pillow and Sleep Kit Advisor"
+  },
+  "profession": {
+    "zh": "11.11 旅行颈枕眼罩耳塞选购顾问",
+    "en": "11.11 Travel Neck Pillow, Eye Mask and Earplug Advisor"
+  },
+  "displayDescription": {
+    "zh": "旅行三件套怎么挑：按交通方式定颈枕形状、核收纳体积与可洗、看眼罩遮光压迫、比耳塞降噪值。",
+    "en": "Pick travel sleep kits: pillow shape, packed size, eye mask fit and earplug rating."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "红眼航班选哪种颈枕",
+    "en": "Which neck pillow suits red eye flights"
+  },
+  "plugin": "lynxce-travel-pillow-advisor",
+  "tags": [
+    {
+      "zh": "颈枕形状",
+      "en": "Pillow Shape"
+    },
+    {
+      "zh": "收纳清洁",
+      "en": "Packing and Washing"
+    },
+    {
+      "zh": "耳塞降噪",
+      "en": "Earplug Rating"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "红眼航班选哪种颈枕",
+      "en": "Which neck pillow suits red eye flights"
+    },
+    {
+      "zh": "耳塞 NRR 和 SNR 能直接比吗",
+      "en": "Can earplug NRR and SNR be compared directly"
+    },
+    {
+      "zh": "只背双肩包怎么带颈枕",
+      "en": "How to carry a neck pillow with only a backpack"
+    }
+  ],
+  "keywords": [
+    "颈枕形状",
+    "收纳清洁",
+    "耳塞降噪",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

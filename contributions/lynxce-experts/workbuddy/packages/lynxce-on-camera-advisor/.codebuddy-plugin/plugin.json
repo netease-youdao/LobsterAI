@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-on-camera-advisor",
+  "version": "1.0.1",
+  "description": "Create speech-ready scripts, pause marks, a ten-minute practice plan and comparable self-review records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-on-camera-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-on-camera"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-on-camera-advisor",
+  "displayName": {
+    "zh": "出镜表现顾问",
+    "en": "On-Camera Coach"
+  },
+  "profession": {
+    "zh": "出镜表现与镜头感训练顾问｜灵策智算",
+    "en": "On-Camera Delivery Coaching Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "把出镜稿改成便于表达的口语脚本，交付停顿标记、分段练习、十分钟训练表和回看记录，比较同口径变化",
+    "en": "Create speech-ready scripts, pause marks, a ten-minute practice plan and comparable self-review records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把这段书面稿改成口语稿，标明停顿、重音和结尾",
+    "en": "Rewrite this text for speaking with pauses, emphasis and a clear ending"
+  },
+  "plugin": "lynxce-on-camera-advisor",
+  "tags": [
+    {
+      "zh": "口语改稿",
+      "en": "Speech rewrite"
+    },
+    {
+      "zh": "分段练习",
+      "en": "Segment practice"
+    },
+    {
+      "zh": "回看记录",
+      "en": "Self-review log"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这段书面稿改成口语稿，标明停顿、重音和结尾",
+      "en": "Rewrite this text for speaking with pauses, emphasis and a clear ending"
+    },
+    {
+      "zh": "按我的出镜目标做一份十分钟练习表与自评记录",
+      "en": "Create a ten-minute practice routine and self-review sheet"
+    },
+    {
+      "zh": "根据两次录制的自评数据，比较语速与口头禅并定下一次练习",
+      "en": "Compare my two self-reviews and choose the next practice focus"
+    }
+  ],
+  "keywords": [
+    "口语改稿",
+    "分段练习",
+    "回看记录"
+  ],
+  "needEncrypt": true
+}

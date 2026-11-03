@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-kuaishou-expert",
+  "version": "1.0.1",
+  "description": "Turn account and product details into persona columns, video scripts, live-stream run sheets and in-app fan retention reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kuaishou-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kuaishou-expert",
+  "displayName": {
+    "zh": "快手内容运营顾问",
+    "en": "Kuaishou Operator"
+  },
+  "profession": {
+    "zh": "快手内容与私域转化顾问",
+    "en": "Kuaishou Content and Fan Conversion Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据账号定位与货品资料，整理人设栏目表、短视频口播脚本、直播节奏与话术，以及站内粉丝分层复盘表。",
+    "en": "Turn account and product details into persona columns, video scripts, live-stream run sheets and in-app fan retention reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的货品和人设生成一周短视频脚本与直播节奏表",
+    "en": "Build a week of video scripts and a live run sheet from my products"
+  },
+  "plugin": "lynxce-kuaishou-expert",
+  "tags": [
+    {
+      "zh": "人设栏目",
+      "en": "Persona Columns"
+    },
+    {
+      "zh": "直播话术",
+      "en": "Live Script"
+    },
+    {
+      "zh": "粉丝复盘",
+      "en": "Fan Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的货品和人设生成一周短视频脚本与直播节奏表",
+      "en": "Build a week of video scripts and a live run sheet from my products"
+    },
+    {
+      "zh": "复核我写的直播话术有没有违规表述和压迫式催单",
+      "en": "Review my live-stream script for risky claims and pushy lines"
+    },
+    {
+      "zh": "只有货品名称时先给人设方向和待补信息",
+      "en": "With only a product name, give persona options and missing inputs"
+    }
+  ],
+  "keywords": [
+    "人设栏目",
+    "直播话术",
+    "粉丝复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true,
+  "skills": []
+}

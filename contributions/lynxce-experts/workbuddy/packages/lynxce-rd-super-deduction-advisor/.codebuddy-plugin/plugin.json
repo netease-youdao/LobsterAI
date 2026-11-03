@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-rd-super-deduction-advisor",
+  "version": "1.0.0",
+  "description": "R&D super deduction: eligibility, hour based apportionment, expense caps and an auxiliary ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-rd-super-deduction-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-rd-super-deduction"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-rd-super-deduction-advisor",
+  "displayName": {
+    "zh": "研发加计扣除助理",
+    "en": "R&D Super Deduction Assistant"
+  },
+  "profession": {
+    "zh": "研发费用加计扣除归集助理",
+    "en": "R&D Expense Super Deduction Records Assistant"
+  },
+  "displayDescription": {
+    "zh": "研发加计扣除不踩坑：判断项目与行业是否适用、按工时分摊人员设备、算费用限额，产出辅助账与核对表。",
+    "en": "R&D super deduction: eligibility, hour based apportionment, expense caps and an auxiliary ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我们这个项目算不算研发活动，能不能加计扣除",
+    "en": "Does our project count as R&D for the super deduction"
+  },
+  "plugin": "lynxce-rd-super-deduction-advisor",
+  "tags": [
+    {
+      "zh": "研发项目判断",
+      "en": "R&D Eligibility"
+    },
+    {
+      "zh": "工时分摊",
+      "en": "Hour Apportionment"
+    },
+    {
+      "zh": "研发辅助账",
+      "en": "R&D Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我们这个项目算不算研发活动，能不能加计扣除",
+      "en": "Does our project count as R&D for the super deduction"
+    },
+    {
+      "zh": "兼职研发人员和共用设备怎么按工时分摊",
+      "en": "How to apportion part time R&D staff and shared equipment"
+    },
+    {
+      "zh": "帮我建一份研发费用辅助账和归集核对表",
+      "en": "Set up an R&D auxiliary ledger and reconciliation sheet"
+    }
+  ],
+  "keywords": [
+    "研发项目判断",
+    "工时分摊",
+    "研发辅助账",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-hvac-advisor",
+  "version": "1.0.4",
+  "description": "Size an air conditioner right: capacity, energy labels, install and running cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hvac-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hvac-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hvac-advisor",
+  "displayName": {
+    "zh": "空调与采暖设备选购顾问",
+    "en": "Air Conditioning and Heating Advisor"
+  },
+  "profession": {
+    "zh": "空调与采暖设备选购顾问",
+    "en": "Air Conditioning and Heating Advisor"
+  },
+  "displayDescription": {
+    "zh": "空调怎么选不踩坑：匹数按面积算、能效怎么读、安装费怎么问清楚、每月电费大概多少钱。",
+    "en": "Size an air conditioner right: capacity, energy labels, install and running cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个房间买几匹的",
+    "en": "What capacity fits this room"
+  },
+  "plugin": "lynxce-hvac-advisor",
+  "tags": [
+    {
+      "zh": "空调选型",
+      "en": "Air Conditioner"
+    },
+    {
+      "zh": "能效电费",
+      "en": "Energy Cost"
+    },
+    {
+      "zh": "安装验收",
+      "en": "Installation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个房间买几匹的",
+      "en": "What capacity fits this room"
+    },
+    {
+      "zh": "变频比定频值多少钱",
+      "en": "Is inverter worth the extra cost"
+    },
+    {
+      "zh": "一个月电费大概多少",
+      "en": "What will it cost to run each month"
+    }
+  ],
+  "keywords": [
+    "空调选型",
+    "能效电费",
+    "安装验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-kb-advisor",
+  "version": "1.0.1",
+  "description": "Build a knowledge base people use: structure, naming, owners and reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kb-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kb-structure"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kb-advisor",
+  "displayName": {
+    "zh": "团队知识库与文档规范顾问",
+    "en": "Team Knowledge Base Advisor"
+  },
+  "profession": {
+    "zh": "团队知识库与文档规范顾问",
+    "en": "Team Knowledge Base Advisor"
+  },
+  "displayDescription": {
+    "zh": "知识库怎么建才有人用：目录怎么分、文件怎么命名、谁来维护、每隔多久复审一次才合适。",
+    "en": "Build a knowledge base people use: structure, naming, owners and reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "团队知识库怎么分目录",
+    "en": "How should I structure our knowledge base"
+  },
+  "plugin": "lynxce-kb-advisor",
+  "tags": [
+    {
+      "zh": "知识库",
+      "en": "Knowledge Base"
+    },
+    {
+      "zh": "命名规范",
+      "en": "Naming"
+    },
+    {
+      "zh": "维护机制",
+      "en": "Upkeep"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "团队知识库怎么分目录",
+      "en": "How should I structure our knowledge base"
+    },
+    {
+      "zh": "文档命名有什么规范",
+      "en": "What naming convention should we use"
+    },
+    {
+      "zh": "文档没人维护怎么办",
+      "en": "Nobody maintains our docs, what now"
+    }
+  ],
+  "keywords": [
+    "知识库",
+    "命名规范",
+    "维护机制",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

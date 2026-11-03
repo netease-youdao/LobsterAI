@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-color-grade-advisor",
+  "version": "1.0.1",
+  "description": "Consistent grading: correct then stylize, protect skin tones, LUTs and a fixed look.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-color-grade-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-color-grade"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-color-grade-advisor",
+  "displayName": {
+    "zh": "短视频调色与画面风格顾问",
+    "en": "Short Video Color Grading Advisor"
+  },
+  "profession": {
+    "zh": "短视频调色与画面风格顾问",
+    "en": "Short Video Color Grading Advisor"
+  },
+  "displayDescription": {
+    "zh": "短视频调色怎么做得统一好看：先校色后风格的顺序、肤色怎么保护、LUT 怎么用、系列视频怎么保持一致。",
+    "en": "Consistent grading: correct then stylize, protect skin tones, LUTs and a fixed look."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "我的视频颜色每个镜头都不一样",
+    "en": "Every shot in my video looks different"
+  },
+  "plugin": "lynxce-color-grade-advisor",
+  "tags": [
+    {
+      "zh": "视频调色",
+      "en": "Color Grading"
+    },
+    {
+      "zh": "画面风格",
+      "en": "Visual Style"
+    },
+    {
+      "zh": "LUT",
+      "en": "LUT"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的视频颜色每个镜头都不一样",
+      "en": "Every shot in my video looks different"
+    },
+    {
+      "zh": "Log 素材该怎么调",
+      "en": "How to grade Log footage"
+    },
+    {
+      "zh": "帮我定一套账号调色风格",
+      "en": "Define a consistent color look for my account"
+    }
+  ],
+  "keywords": [
+    "视频调色",
+    "画面风格",
+    "LUT",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

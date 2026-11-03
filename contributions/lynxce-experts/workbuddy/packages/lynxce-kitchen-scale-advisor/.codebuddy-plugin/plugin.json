@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kitchen-scale-advisor",
+  "version": "1.0.1",
+  "description": "Pick kitchen or body scales: accuracy and capacity, tare and units, body fat for reference only, battery type.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kitchen-scale-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kitchen-scale"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kitchen-scale-advisor",
+  "displayName": {
+    "zh": "厨房秤与体重秤选购顾问",
+    "en": "Kitchen Scale and Body Scale Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 厨房秤与体重秤选购顾问",
+    "en": "11.11 Kitchen Scale and Body Scale Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "厨房秤体重秤怎么选：精度与量程、去皮与单位切换、体脂数据仅供参考、电池类型与到手价。",
+    "en": "Pick kitchen or body scales: accuracy and capacity, tare and units, body fat for reference only, battery type."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "做烘焙要 0.1 克精度的秤吗",
+    "en": "Do I need a 0.1 gram scale for baking"
+  },
+  "plugin": "lynxce-kitchen-scale-advisor",
+  "tags": [
+    {
+      "zh": "精度量程",
+      "en": "Accuracy and Capacity"
+    },
+    {
+      "zh": "去皮单位",
+      "en": "Tare and Units"
+    },
+    {
+      "zh": "电池成本",
+      "en": "Battery Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "做烘焙要 0.1 克精度的秤吗",
+      "en": "Do I need a 0.1 gram scale for baking"
+    },
+    {
+      "zh": "连盆一起称会不会超量程",
+      "en": "Will weighing with the bowl exceed the capacity"
+    },
+    {
+      "zh": "体脂秤的数据能信多少",
+      "en": "How far can I trust body fat scale readings"
+    }
+  ],
+  "keywords": [
+    "精度量程",
+    "去皮单位",
+    "电池成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

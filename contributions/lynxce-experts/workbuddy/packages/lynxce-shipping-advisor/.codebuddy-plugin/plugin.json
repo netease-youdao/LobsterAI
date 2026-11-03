@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-shipping-advisor",
+  "version": "1.0.4",
+  "description": "Ship smarter: volumetric weight math, first and extra weight pricing, insurance and packing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-shipping-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-shipping-compare"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-shipping-advisor",
+  "displayName": {
+    "zh": "快递寄件与转运比价顾问",
+    "en": "Parcel Shipping and Forwarding Advisor"
+  },
+  "profession": {
+    "zh": "快递寄件与转运比价顾问",
+    "en": "Parcel Shipping and Forwarding Advisor"
+  },
+  "displayDescription": {
+    "zh": "寄件先算体积重再去比价：材积系数怎么折、首重续重怎么比、保价打包与破损怎么约定。",
+    "en": "Ship smarter: volumetric weight math, first and extra weight pricing, insurance and packing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个箱子寄出去大概多少钱",
+    "en": "Roughly what will this parcel cost"
+  },
+  "plugin": "lynxce-shipping-advisor",
+  "tags": [
+    {
+      "zh": "寄件比价",
+      "en": "Shipping"
+    },
+    {
+      "zh": "体积重",
+      "en": "Volumetric"
+    },
+    {
+      "zh": "打包保价",
+      "en": "Packing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个箱子寄出去大概多少钱",
+      "en": "Roughly what will this parcel cost"
+    },
+    {
+      "zh": "体积重怎么算",
+      "en": "How is volumetric weight calculated"
+    },
+    {
+      "zh": "易碎件该怎么打包",
+      "en": "How should I pack fragile items"
+    }
+  ],
+  "keywords": [
+    "寄件比价",
+    "体积重",
+    "打包保价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

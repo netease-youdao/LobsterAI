@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ceiling-light-advisor",
+  "version": "1.0.1",
+  "description": "Pick ceiling lights: lumens by room area, color temperature and CRI, smart dimming, mounting and size fit.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ceiling-light-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ceiling-light"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ceiling-light-advisor",
+  "displayName": {
+    "zh": "客厅卧室吸顶灯与主灯选购顾问",
+    "en": "Ceiling Light and Main Lamp Advisor"
+  },
+  "profession": {
+    "zh": "11.11 客厅卧室吸顶灯与主灯选购顾问",
+    "en": "11.11 Ceiling Light and Main Lamp Advisor"
+  },
+  "displayDescription": {
+    "zh": "吸顶灯主灯怎么挑：按面积算流明与瓦数、看色温与显色指数、核智能调光、对安装方式与尺寸。",
+    "en": "Pick ceiling lights: lumens by room area, color temperature and CRI, smart dimming, mounting and size fit."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "25 平米客厅需要多少流明的吸顶灯",
+    "en": "How many lumens does a 25 square meter living room need"
+  },
+  "plugin": "lynxce-ceiling-light-advisor",
+  "tags": [
+    {
+      "zh": "面积流明",
+      "en": "Lumens by Area"
+    },
+    {
+      "zh": "色温显色",
+      "en": "Color Temp and CRI"
+    },
+    {
+      "zh": "尺寸安装",
+      "en": "Size and Mounting"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "25 平米客厅需要多少流明的吸顶灯",
+      "en": "How many lumens does a 25 square meter living room need"
+    },
+    {
+      "zh": "卧室选 3000K 还是 4000K 色温",
+      "en": "Should a bedroom light be 3000K or 4000K"
+    },
+    {
+      "zh": "这两款吸顶灯直径和安装方式怎么选",
+      "en": "How do I choose between these two lights by size and mounting"
+    }
+  ],
+  "keywords": [
+    "面积流明",
+    "色温显色",
+    "尺寸安装",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

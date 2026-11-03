@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-emergency-advisor",
+  "version": "1.0.4",
+  "description": "Build a home emergency kit: tiered items, quantities by household and rotation.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-emergency-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-emergency-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-emergency-advisor",
+  "displayName": {
+    "zh": "家庭应急物资与照明选购顾问",
+    "en": "Home Emergency Supplies Advisor"
+  },
+  "profession": {
+    "zh": "家庭应急物资与照明选购顾问",
+    "en": "Home Emergency Supplies Advisor"
+  },
+  "displayDescription": {
+    "zh": "家庭应急包怎么配：分三层先备哪些、按人数备多少、放在哪里、怎么定期轮换才不过期。",
+    "en": "Build a home emergency kit: tiered items, quantities by household and rotation."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里该先备什么",
+    "en": "What should we prepare first"
+  },
+  "plugin": "lynxce-emergency-advisor",
+  "tags": [
+    {
+      "zh": "应急物资",
+      "en": "Emergency Kit"
+    },
+    {
+      "zh": "分层清单",
+      "en": "Tiered List"
+    },
+    {
+      "zh": "定期轮换",
+      "en": "Rotation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里该先备什么",
+      "en": "What should we prepare first"
+    },
+    {
+      "zh": "三口之家要备多少水",
+      "en": "How much water for a family of three"
+    },
+    {
+      "zh": "多久检查一次",
+      "en": "How often should we check the kit"
+    }
+  ],
+  "keywords": [
+    "应急物资",
+    "分层清单",
+    "定期轮换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

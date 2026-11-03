@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-powerstation-advisor",
+  "version": "1.0.4",
+  "description": "Size a power station from real loads: battery types, ports and safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-powerstation-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-powerstation-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-powerstation-advisor",
+  "displayName": {
+    "zh": "户外电源与应急供电选购顾问",
+    "en": "Portable Power Station Advisor"
+  },
+  "profession": {
+    "zh": "户外电源与应急供电选购顾问",
+    "en": "Portable Power Station Advisor"
+  },
+  "displayDescription": {
+    "zh": "户外电源容量怎么定：按用电设备倒推、电池类型差在哪、携带与存放的安全红线怎么守住。",
+    "en": "Size a power station from real loads: battery types, ports and safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "露营用多大容量够",
+    "en": "What capacity do I need for camping"
+  },
+  "plugin": "lynxce-powerstation-advisor",
+  "tags": [
+    {
+      "zh": "户外电源",
+      "en": "Power Station"
+    },
+    {
+      "zh": "容量测算",
+      "en": "Capacity"
+    },
+    {
+      "zh": "用电安全",
+      "en": "Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "露营用多大容量够",
+      "en": "What capacity do I need for camping"
+    },
+    {
+      "zh": "磷酸铁锂和三元怎么选",
+      "en": "LFP or NMC, which should I pick"
+    },
+    {
+      "zh": "能带上高铁和飞机吗",
+      "en": "Can I take this on a train or plane"
+    }
+  ],
+  "keywords": [
+    "户外电源",
+    "容量测算",
+    "用电安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

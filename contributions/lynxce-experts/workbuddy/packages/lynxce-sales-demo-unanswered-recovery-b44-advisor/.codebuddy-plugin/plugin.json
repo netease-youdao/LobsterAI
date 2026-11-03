@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-sales-demo-unanswered-recovery-b44-advisor",
+  "version": "1.0.0",
+  "description": "Help staff review sales demo unanswered question recovery with three focused evidence workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sales-demo-unanswered-recovery-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sales-demo-unanswered-recovery-b44",
+    "./skills/lynxce-demo-question-subcondition-coverage-b44",
+    "./skills/lynxce-demo-reply-version-proof-audit-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sales-demo-unanswered-recovery-b44-advisor",
+  "displayName": {
+    "zh": "销售演示回补核对专家",
+    "en": "Sales Demo Answer Recovery Advisor"
+  },
+  "profession": {
+    "zh": "销售演示回补核对专家",
+    "en": "Sales Demo Answer Recovery Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助销售团队从已结束演示的问答记录识别遗漏与部分回答，核对资料依据，交付回补清单和答复草稿。",
+    "en": "Help staff review sales demo unanswered question recovery with three focused evidence workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我的资料生成销售演示问答遗漏回补表",
+    "en": "Create the review from my supplied records"
+  },
+  "plugin": "lynxce-sales-demo-unanswered-recovery-b44-advisor",
+  "tags": [
+    {
+      "zh": "企业销售演示",
+      "en": "Domain Workflow"
+    },
+    {
+      "zh": "销售演示问答遗漏回补表",
+      "en": "Evidence Review"
+    },
+    {
+      "zh": "人工复核",
+      "en": "Human Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我的资料生成销售演示问答遗漏回补表",
+      "en": "Create the review from my supplied records"
+    },
+    {
+      "zh": "请保留这些矛盾原值并列最少补证材料",
+      "en": "Keep conflicting values and list missing evidence"
+    },
+    {
+      "zh": "请追加新记录并复算受影响的版本差异",
+      "en": "Compare new evidence and recalculate affected rows"
+    }
+  ],
+  "keywords": [
+    "企业销售演示",
+    "销售演示问答遗漏回补表",
+    "人工复核"
+  ]
+}

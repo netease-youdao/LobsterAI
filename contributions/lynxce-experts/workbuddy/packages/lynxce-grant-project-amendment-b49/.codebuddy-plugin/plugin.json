@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-grant-project-amendment-b49",
+  "version": "1.0.0",
+  "description": "Prepare grant project amendments with baseline, budget and approval evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-grant-project-amendment-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-grant-baseline-amendment-route-b49",
+    "./skills/lynxce-grant-amendment-impact-b49",
+    "./skills/lynxce-grant-change-dossier-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-grant-project-amendment-b49",
+  "displayName": {
+    "zh": "变更顾问",
+    "en": "Grant Project Amendment Advisor"
+  },
+  "profession": {
+    "zh": "项目变更顾问",
+    "en": "Grant Project Amendment Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业项目与财务人员核对任务书、延期和预算调整，形成变更影响说明、申请初稿及完整补正版本。",
+    "en": "Prepare grant project amendments with baseline, budget and approval evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按任务书和进展资料，写完整项目变更申请并核预算影响。",
+    "en": "Grant Project Amendment Advisor"
+  },
+  "plugin": "lynxce-grant-project-amendment-b49",
+  "tags": [
+    {
+      "zh": "项目变更",
+      "en": "项目变更"
+    },
+    {
+      "zh": "延期申请",
+      "en": "延期申请"
+    },
+    {
+      "zh": "预算调整",
+      "en": "预算调整"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按任务书和进展资料，写完整项目变更申请并核预算影响。",
+      "en": "Grant Project Amendment Advisor"
+    },
+    {
+      "zh": "三月底与六月底两个延期版本冲突，请保留两版并重出申请。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "只有内部同意没有主管批复，帮我区分当前有效和拟调整内容。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "项目变更",
+    "延期申请",
+    "预算调整"
+  ]
+}

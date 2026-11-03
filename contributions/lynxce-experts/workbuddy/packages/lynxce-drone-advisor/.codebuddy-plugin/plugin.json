@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-drone-advisor",
+  "version": "1.0.1",
+  "description": "Turn shoot goals and site facts into document checklists, weather stop conditions, shot lists, battery plans and preflight checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-drone-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-drone-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-drone-advisor",
+  "displayName": {
+    "zh": "无人机航拍规划顾问",
+    "en": "Drone Filming"
+  },
+  "profession": {
+    "zh": "无人机航拍规划与合规顾问",
+    "en": "Drone Shoot Planning and Compliance Checklist Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据拍摄需求与场地信息，整理空域资质材料核对表、天气停止条件、镜头清单、电池架次表和起飞前检查表。",
+    "en": "Turn shoot goals and site facts into document checklists, weather stop conditions, shot lists, battery plans and preflight checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据拍摄需求和场地信息生成航拍计划与材料核对表",
+    "en": "Build a shoot plan and document checklist from my brief and site facts"
+  },
+  "plugin": "lynxce-drone-advisor",
+  "tags": [
+    {
+      "zh": "材料核对",
+      "en": "Document Check"
+    },
+    {
+      "zh": "镜头清单",
+      "en": "Shot List"
+    },
+    {
+      "zh": "电池与检查",
+      "en": "Battery and Preflight"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据拍摄需求和场地信息生成航拍计划与材料核对表",
+      "en": "Build a shoot plan and document checklist from my brief and site facts"
+    },
+    {
+      "zh": "复核我现有的镜头清单和电池架次是否够用",
+      "en": "Review my existing shot list and battery plan for gaps"
+    },
+    {
+      "zh": "只知道拍摄地点和日期时先给核对清单与待查项",
+      "en": "With only place and date, list documents and items to verify"
+    }
+  ],
+  "keywords": [
+    "材料核对",
+    "镜头清单",
+    "电池与检查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-taobao-expert",
+  "version": "1.0.1",
+  "description": "Draft product pages, calculate user-supplied promotion parameters and review store funnels without live store access.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-taobao-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-taobao-expert",
+  "displayName": {
+    "zh": "淘宝运营专家",
+    "en": "Taobao Store Operator"
+  },
+  "profession": {
+    "zh": "店铺运营与活动策划顾问",
+    "en": "Store Operations & Campaign Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据用户商品与活动材料整理页面文稿核算优惠价格和经营贡献拆分店铺漏斗交付复盘与确认清单",
+    "en": "Draft product pages, calculate user-supplied promotion parameters and review store funnels without live store access."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "帮我优化这个宝贝的标题和关键词",
+    "en": "Optimize this product's title and keywords"
+  },
+  "plugin": "lynxce-taobao-expert",
+  "tags": [
+    {
+      "zh": "标题关键词",
+      "en": "Title Keywords"
+    },
+    {
+      "zh": "活动策划",
+      "en": "Campaigns"
+    },
+    {
+      "zh": "店铺复盘",
+      "en": "Store Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我优化这个宝贝的标题和关键词",
+      "en": "Optimize this product's title and keywords"
+    },
+    {
+      "zh": "设计一套双十一的店铺活动方案",
+      "en": "Design a Double 11 store campaign plan"
+    },
+    {
+      "zh": "分析我店铺的转化数据并给建议",
+      "en": "Analyze my store conversion data and advise"
+    }
+  ],
+  "keywords": [
+    "标题关键词",
+    "活动策划",
+    "店铺复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "skills": [
+    "./skills/lynxce-product-page",
+    "./skills/lynxce-promotion-math",
+    "./skills/lynxce-store-review"
+  ],
+  "needEncrypt": true
+}

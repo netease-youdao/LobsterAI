@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-wifi-ap-advisor",
+  "version": "1.0.0",
+  "description": "Plan office wireless: AP count by area and devices, switch ports, PoE budget and quotes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-wifi-ap-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-wifi-ap"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-wifi-ap-advisor",
+  "displayName": {
+    "zh": "无线网络采购顾问",
+    "en": "Office Wireless Procurement Advisor"
+  },
+  "profession": {
+    "zh": "办公室无线网络设备采购顾问",
+    "en": "Office Wireless AP and Switch Procurement Advisor"
+  },
+  "displayDescription": {
+    "zh": "无线覆盖怎么配：按面积与终端数估AP数量，核交换机端口与供电，出设备清单与比价表。",
+    "en": "Plan office wireless: AP count by area and devices, switch ports, PoE budget and quotes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "300 平方米办公室要装几个无线 AP",
+    "en": "How many APs a 300 sqm office needs"
+  },
+  "plugin": "lynxce-office-wifi-ap-advisor",
+  "tags": [
+    {
+      "zh": "AP 数量",
+      "en": "AP Count"
+    },
+    {
+      "zh": "端口供电",
+      "en": "Ports and PoE"
+    },
+    {
+      "zh": "设备比价",
+      "en": "Quote Comparison"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "300 平方米办公室要装几个无线 AP",
+      "en": "How many APs a 300 sqm office needs"
+    },
+    {
+      "zh": "PoE 交换机要多大功率怎么算",
+      "en": "How to size PoE switch power budget"
+    },
+    {
+      "zh": "帮我做无线设备清单和三家比价表",
+      "en": "Build a wireless equipment list and three way quotes"
+    }
+  ],
+  "keywords": [
+    "AP 数量",
+    "端口供电",
+    "设备比价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

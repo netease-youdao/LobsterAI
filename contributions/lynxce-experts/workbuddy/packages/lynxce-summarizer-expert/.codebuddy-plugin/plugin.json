@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-summarizer-expert",
+  "version": "1.0.1",
+  "description": "Summarizes supplied meetings and documents with traceable decisions, dissent and action items; no implied execution.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-summarizer-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-summarizer-expert",
+  "displayName": {
+    "zh": "内容总结专家",
+    "en": "Content Summarizer"
+  },
+  "profession": {
+    "zh": "会议纪要与信息提炼顾问",
+    "en": "Meeting Minutes & Information Distiller"
+  },
+  "displayDescription": {
+    "zh": "依据用户提供的会议访谈与文档提炼结论证据和行动项保留异议及待确认信息不代替参会人确认或执行",
+    "en": "Summarizes supplied meetings and documents with traceable decisions, dissent and action items; no implied execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把这份会议记录整理成纪要和待办",
+    "en": "Turn these meeting notes into minutes and action items"
+  },
+  "plugin": "lynxce-summarizer-expert",
+  "tags": [
+    {
+      "zh": "会议纪要",
+      "en": "Meeting Minutes"
+    },
+    {
+      "zh": "长文摘要",
+      "en": "Summarization"
+    },
+    {
+      "zh": "行动项提取",
+      "en": "Action Items"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这份会议记录整理成纪要和待办",
+      "en": "Turn these meeting notes into minutes and action items"
+    },
+    {
+      "zh": "用五百字总结这篇长文的核心",
+      "en": "Summarize this long article in 500 words"
+    },
+    {
+      "zh": "把这几份材料的观点归并对比",
+      "en": "Merge and compare the views across these documents"
+    }
+  ],
+  "keywords": [
+    "会议纪要",
+    "长文摘要",
+    "行动项提取",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/lynxce-minutes-evidence",
+    "./skills/lynxce-long-document-distill",
+    "./skills/lynxce-multisource-compare"
+  ]
+}

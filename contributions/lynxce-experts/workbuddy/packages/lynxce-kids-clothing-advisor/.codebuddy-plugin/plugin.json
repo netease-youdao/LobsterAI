@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kids-clothing-advisor",
+  "version": "1.0.2",
+  "description": "Buy kids clothes smartly: size by height not age, 5-10 cm growth room, cross-season risk, drawstring and small-part safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kids-clothing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kids-clothing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kids-clothing-advisor",
+  "displayName": {
+    "zh": "童装尺码与换季囤货顾问",
+    "en": "Kids Clothing Size and Season Advisor"
+  },
+  "profession": {
+    "zh": "11.11 童装尺码与换季囤货顾问",
+    "en": "11.11 Kids Clothing Size and Season Advisor"
+  },
+  "displayDescription": {
+    "zh": "童装怎么买：按身高而非年龄选码、预留 5–10cm 取舍、跨季囤货风险、绳带小部件安全细节。",
+    "en": "Buy kids clothes smartly: size by height not age, 5-10 cm growth room, cross-season risk, drawstring and small-part safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "孩子 110cm 该买哪个码",
+    "en": "Which size fits a child who is 110 cm tall"
+  },
+  "plugin": "lynxce-kids-clothing-advisor",
+  "tags": [
+    {
+      "zh": "按身高选码",
+      "en": "Size by Height"
+    },
+    {
+      "zh": "生长预留",
+      "en": "Growth Room"
+    },
+    {
+      "zh": "安全细节",
+      "en": "Safety Details"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "孩子 110cm 该买哪个码",
+      "en": "Which size fits a child who is 110 cm tall"
+    },
+    {
+      "zh": "明年穿的衣服现在囤要大几码",
+      "en": "How much bigger should I buy for next year"
+    },
+    {
+      "zh": "童装绳带和小装饰要注意什么",
+      "en": "What should I check about drawstrings and small parts"
+    }
+  ],
+  "keywords": [
+    "按身高选码",
+    "生长预留",
+    "安全细节",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

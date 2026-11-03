@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-newsletter-advisor",
+  "version": "1.0.2",
+  "description": "Turn newsletter goals and department drafts into columns, backward schedules, fact-first rewrites, review checklists and read stats.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-newsletter-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-internal-newsletter"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-newsletter-advisor",
+  "displayName": {
+    "zh": "企业内刊编辑顾问",
+    "en": "Internal Newsletter Advisor"
+  },
+  "profession": {
+    "zh": "企业内刊与内部通讯编辑顾问｜灵策智算",
+    "en": "Internal Newsletter and Bulletin Editor"
+  },
+  "displayDescription": {
+    "zh": "根据内刊目的和各部门来稿规划栏目与截稿倒排期，按事实标题和数字口径改稿，交付审校清单与阅读复盘表。",
+    "en": "Turn newsletter goals and department drafts into columns, backward schedules, fact-first rewrites, review checklists and read stats."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据内刊目的和发布日生成栏目规划与截稿倒排期",
+    "en": "Build a column plan and backward deadline schedule from goals and issue date"
+  },
+  "plugin": "lynxce-newsletter-advisor",
+  "tags": [
+    {
+      "zh": "栏目规划",
+      "en": "Column Plan"
+    },
+    {
+      "zh": "事实改稿",
+      "en": "Fact-first Rewrite"
+    },
+    {
+      "zh": "审校排期",
+      "en": "Review Schedule"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据内刊目的和发布日生成栏目规划与截稿倒排期",
+      "en": "Build a column plan and backward deadline schedule from goals and issue date"
+    },
+    {
+      "zh": "复核这篇内刊稿的标题首段和数字口径",
+      "en": "Review this newsletter draft for headline lead and figure sourcing"
+    },
+    {
+      "zh": "只有一篇讲话稿时先给本期框架和待补事实",
+      "en": "Draft an issue outline and missing facts from a single speech"
+    }
+  ],
+  "keywords": [
+    "栏目规划",
+    "事实改稿",
+    "审校排期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

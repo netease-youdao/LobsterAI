@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-accelerated-depreciation-b51",
+  "version": "1.0.0",
+  "description": "Accelerated Depreciation Advisor evidence, calculations and full revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-accelerated-depreciation-b51.md"
+  ],
+  "skills": [
+    "./skills/depreciation-method-evidence",
+    "./skills/depreciation-yearly-bridge",
+    "./skills/depreciation-disposal-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-accelerated-depreciation-b51",
+  "displayName": {
+    "zh": "折旧顾问",
+    "en": "Accelerated Depreciation Advisor"
+  },
+  "profession": {
+    "zh": "加速折旧顾问",
+    "en": "Accelerated Depreciation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务核对设备购进、投用与扣除方法，生成逐年会税差异、处置底稿及完整使用日期冲突修订稿。",
+    "en": "Accelerated Depreciation Advisor evidence, calculations and full revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "480万元设备今年投入使用，帮我出逐年会税折旧表。",
+    "en": "Accelerated Depreciation Advisor"
+  },
+  "plugin": "lynxce-accelerated-depreciation-b51",
+  "tags": [
+    {
+      "zh": "加速折旧",
+      "en": "加速折旧"
+    },
+    {
+      "zh": "一次性扣除",
+      "en": "一次性扣除"
+    },
+    {
+      "zh": "会税差异",
+      "en": "会税差异"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "480万元设备今年投入使用，帮我出逐年会税折旧表。",
+      "en": "Accelerated Depreciation Advisor"
+    },
+    {
+      "zh": "投用记录跨月冲突，请保留原账并重算全生命周期。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "一次性扣除后计划出售设备，如何核处置剩余基础？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "加速折旧",
+    "一次性扣除",
+    "会税差异"
+  ]
+}

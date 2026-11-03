@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-industrial-design-center-b52",
+  "version": "1.0.0",
+  "description": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-industrial-design-center-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-design-center-route-b52",
+    "./skills/lynxce-design-results-ledger-b52",
+    "./skills/lynxce-design-center-dossier-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-industrial-design-center-b52",
+  "displayName": {
+    "zh": "设计顾问",
+    "en": "Industrial Design Center Advisor"
+  },
+  "profession": {
+    "zh": "设计中心申报顾问",
+    "en": "Industrial Design Center Advisor"
+  },
+  "displayDescription": {
+    "zh": "为制造企业设计与申报经办梳理中心人员投入，核对成果应用和收入口径，交付证据底稿与完整补正稿。",
+    "en": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按内部设计中心路线整理人员投入和成果证据。",
+    "en": "Industrial Design Center Advisor"
+  },
+  "plugin": "lynxce-industrial-design-center-b52",
+  "tags": [
+    {
+      "zh": "工业设计中心",
+      "en": "工业设计中心"
+    },
+    {
+      "zh": "成果应用",
+      "en": "成果应用"
+    },
+    {
+      "zh": "认定材料",
+      "en": "认定材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按内部设计中心路线整理人员投入和成果证据。",
+      "en": "Industrial Design Center Advisor"
+    },
+    {
+      "zh": "产品销售和设计服务收入怎么分，请给勾稽底稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "设计成果是否实施有矛盾，帮我写完整补正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "工业设计中心",
+    "成果应用",
+    "认定材料"
+  ]
+}

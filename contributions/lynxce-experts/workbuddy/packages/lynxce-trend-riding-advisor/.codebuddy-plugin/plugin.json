@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-trend-riding-advisor",
+  "version": "1.0.1",
+  "description": "Assess a trend for your account with a red-line gate, relevance score, timing math, fact tiers and a pre-publish checklist.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-trend-riding-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trend-riding"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-trend-riding-advisor",
+  "displayName": {
+    "zh": "热点借势选题顾问",
+    "en": "Trend Riding Advisor"
+  },
+  "profession": {
+    "zh": "热点借势选题与风险判断顾问｜灵策智算",
+    "en": "Trend Riding Topic and Risk Assessment Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据账号领域与热点材料判断能否借势，提供红线筛查、关联评分和时效核算，附借势提纲与发布前核查单。",
+    "en": "Assess a trend for your account with a red-line gate, relevance score, timing math, fact tiers and a pre-publish checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的账号领域和这个热点生成借势评估卡与提纲",
+    "en": "Assess this trend for my account and draft an angle outline"
+  },
+  "plugin": "lynxce-trend-riding-advisor",
+  "tags": [
+    {
+      "zh": "热点评估",
+      "en": "Trend Assessment"
+    },
+    {
+      "zh": "风险红线",
+      "en": "Red Lines"
+    },
+    {
+      "zh": "事实核查",
+      "en": "Fact Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的账号领域和这个热点生成借势评估卡与提纲",
+      "en": "Assess this trend for my account and draft an angle outline"
+    },
+    {
+      "zh": "复核我写好的借势稿是否踩红线或有事实问题",
+      "en": "Review my trend-based draft for red lines and fact issues"
+    },
+    {
+      "zh": "只有热点名称时先给红线判断和待补清单",
+      "en": "Give a red-line check and missing-info list from a trend name only"
+    }
+  ],
+  "keywords": [
+    "热点评估",
+    "风险红线",
+    "事实核查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

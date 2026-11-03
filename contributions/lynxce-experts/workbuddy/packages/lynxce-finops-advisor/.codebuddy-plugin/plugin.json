@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-finops-advisor",
+  "version": "1.0.1",
+  "description": "Analyze supplied cloud bills and resource evidence into cost attribution, savings estimates and validation plans.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-finops-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-finops-advisor",
+  "displayName": {
+    "zh": "云成本优化顾问",
+    "en": "Cloud Cost Advisor"
+  },
+  "profession": {
+    "zh": "云资源成本分析与优化顾问",
+    "en": "Cloud Cost Analysis and Optimization Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据云账单与资源材料拆解成本变化，提供用量归因、收益测算及变更复测底稿，辅助团队制定降本方案。",
+    "en": "Analyze supplied cloud bills and resource evidence into cost attribution, savings estimates and validation plans."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据两期云账单生成成本增量归因和分摊表",
+    "en": "Attribute cost changes and allocate costs from two billing periods"
+  },
+  "plugin": "lynxce-finops-advisor",
+  "tags": [
+    {
+      "zh": "成本归因",
+      "en": "Cost Attribution"
+    },
+    {
+      "zh": "收益测算",
+      "en": "Savings Estimate"
+    },
+    {
+      "zh": "变更复测",
+      "en": "Change Validation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据两期云账单生成成本增量归因和分摊表",
+      "en": "Attribute cost changes and allocate costs from two billing periods"
+    },
+    {
+      "zh": "根据资源用量生成含重叠扣除的降本收益表",
+      "en": "Estimate savings with resource overlap and costs accounted for"
+    },
+    {
+      "zh": "把选定降本动作整理成变更评审与复测对账单",
+      "en": "Draft change review and post-change reconciliation for cost actions"
+    }
+  ],
+  "keywords": [
+    "成本归因",
+    "收益测算",
+    "变更复测",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

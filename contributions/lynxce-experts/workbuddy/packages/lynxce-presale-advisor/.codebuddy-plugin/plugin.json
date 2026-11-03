@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-presale-advisor",
+  "version": "1.0.2",
+  "description": "Work out presale deals: deposit inflation, balance window, non-refundable deposit rules and itemised final price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-presale-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-presale-price"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-presale-advisor",
+  "displayName": {
+    "zh": "预售定金与到手价核算顾问",
+    "en": "Presale Deposit and Final Price Advisor"
+  },
+  "profession": {
+    "zh": "11.11 预售定金与到手价核算顾问",
+    "en": "11.11 Presale Deposit and Final Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促预售怎么算清：定金膨胀抵扣、尾款支付时间窗、定金不退规则、到手价逐项拆算与对比。",
+    "en": "Work out presale deals: deposit inflation, balance window, non-refundable deposit rules and itemised final price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我算这件预售商品到手多少钱",
+    "en": "Work out the final price of this presale item"
+  },
+  "plugin": "lynxce-presale-advisor",
+  "tags": [
+    {
+      "zh": "定金膨胀",
+      "en": "Deposit Inflation"
+    },
+    {
+      "zh": "尾款提醒",
+      "en": "Balance Reminder"
+    },
+    {
+      "zh": "到手价拆算",
+      "en": "Final Price Breakdown"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我算这件预售商品到手多少钱",
+      "en": "Work out the final price of this presale item"
+    },
+    {
+      "zh": "定金付了不付尾款会怎样",
+      "en": "What happens if I skip the balance payment"
+    },
+    {
+      "zh": "预售和等现货哪个划算",
+      "en": "Presale or wait for in-stock, which is better"
+    }
+  ],
+  "keywords": [
+    "定金膨胀",
+    "尾款提醒",
+    "到手价拆算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

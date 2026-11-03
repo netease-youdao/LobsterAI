@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-store-visit-advisor",
+  "version": "1.0.1",
+  "description": "Useful store-visit videos: script, must-have shots, info cards and disclosure.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-store-visit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-store-visit-video"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-store-visit-advisor",
+  "displayName": {
+    "zh": "探店视频策划与拍摄顾问",
+    "en": "Store Visit Video Planning Advisor"
+  },
+  "profession": {
+    "zh": "探店视频策划与拍摄顾问",
+    "en": "Store Visit Video Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "探店视频怎么拍得有用有人看：脚本结构怎么排、必拍镜头有哪些、价格信息卡怎么做、合作怎么标注。",
+    "en": "Useful store-visit videos: script, must-have shots, info cards and disclosure."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我写一个探店视频脚本",
+    "en": "Write a store-visit video script"
+  },
+  "plugin": "lynxce-store-visit-advisor",
+  "tags": [
+    {
+      "zh": "探店视频",
+      "en": "Store Visits"
+    },
+    {
+      "zh": "本地生活",
+      "en": "Local Life"
+    },
+    {
+      "zh": "拍摄脚本",
+      "en": "Shooting Script"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一个探店视频脚本",
+      "en": "Write a store-visit video script"
+    },
+    {
+      "zh": "探店必须拍哪些镜头",
+      "en": "Which shots are must-haves for store visits"
+    },
+    {
+      "zh": "商家合作的探店怎么拍才客观",
+      "en": "How to keep sponsored visits objective"
+    }
+  ],
+  "keywords": [
+    "探店视频",
+    "本地生活",
+    "拍摄脚本",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

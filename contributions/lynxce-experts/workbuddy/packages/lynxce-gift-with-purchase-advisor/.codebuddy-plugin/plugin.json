@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-gift-with-purchase-advisor",
+  "version": "1.0.2",
+  "description": "Judge gift-with-purchase offers: real gift value, gift versus discount, gift handling on returns, limited quotas.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-gift-with-purchase-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-gift-with-purchase"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-gift-with-purchase-advisor",
+  "displayName": {
+    "zh": "满赠赠品价值与退货规则顾问",
+    "en": "Gift-with-Purchase Value and Return Rules Advisor"
+  },
+  "profession": {
+    "zh": "11.11 满赠赠品价值与退货规则顾问",
+    "en": "11.11 Gift-with-Purchase Value and Return Rules Advisor"
+  },
+  "displayDescription": {
+    "zh": "满赠值不值怎么判断：赠品真实价值估算、满赠与满减对比、退货时赠品处理、限量先到先得。",
+    "en": "Judge gift-with-purchase offers: real gift value, gift versus discount, gift handling on returns, limited quotas."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "满赠送的东西值不值，要不要为它凑单",
+    "en": "Is the free gift worth adding items for"
+  },
+  "plugin": "lynxce-gift-with-purchase-advisor",
+  "tags": [
+    {
+      "zh": "赠品估值",
+      "en": "Gift Valuation"
+    },
+    {
+      "zh": "满赠对比满减",
+      "en": "Gift vs Discount"
+    },
+    {
+      "zh": "赠品退货",
+      "en": "Gift Returns"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "满赠送的东西值不值，要不要为它凑单",
+      "en": "Is the free gift worth adding items for"
+    },
+    {
+      "zh": "满赠和满减哪个更划算",
+      "en": "Which is better, a free gift or a discount"
+    },
+    {
+      "zh": "退主品时赠品要一起退吗",
+      "en": "Do I need to return the gift with the main item"
+    }
+  ],
+  "keywords": [
+    "赠品估值",
+    "满赠对比满减",
+    "赠品退货",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

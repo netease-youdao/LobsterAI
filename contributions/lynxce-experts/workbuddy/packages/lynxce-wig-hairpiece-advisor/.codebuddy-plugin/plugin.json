@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-wig-hairpiece-advisor",
+  "version": "1.0.0",
+  "description": "Pick wigs and hairpieces: head size, coverage, fiber heat limit, color and cost per wear.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-wig-hairpiece-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-wig-hairpiece"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-wig-hairpiece-advisor",
+  "displayName": {
+    "zh": "假发发片选购顾问",
+    "en": "Wig and Hairpiece Advisor"
+  },
+  "profession": {
+    "zh": "11.11 假发与发片选购顾问",
+    "en": "11.11 Wig and Hairpiece Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "假发发片怎么挑：量头围与需遮盖区域、比发丝材质耐热与密度、核色号与固定方式、算每次佩戴成本。",
+    "en": "Pick wigs and hairpieces: head size, coverage, fiber heat limit, color and cost per wear."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "头顶补发片底座要选多大",
+    "en": "How large a crown topper base should be"
+  },
+  "plugin": "lynxce-wig-hairpiece-advisor",
+  "tags": [
+    {
+      "zh": "尺寸覆盖",
+      "en": "Size and Coverage"
+    },
+    {
+      "zh": "材质耐热",
+      "en": "Fiber Heat Limit"
+    },
+    {
+      "zh": "色号匹配",
+      "en": "Color Matching"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "头顶补发片底座要选多大",
+      "en": "How large a crown topper base should be"
+    },
+    {
+      "zh": "高温丝假发能用卷发棒吗",
+      "en": "Can heat resistant fiber wigs take a curling iron"
+    },
+    {
+      "zh": "假发色号怎么和自己头发对上",
+      "en": "How to match a wig color to your own hair"
+    }
+  ],
+  "keywords": [
+    "尺寸覆盖",
+    "材质耐热",
+    "色号匹配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-hair-dryer-advisor",
+  "version": "1.0.1",
+  "description": "Pick hair dryers: power, airflow, noise, nozzles and heat control, hair length fit, dorm power limits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hair-dryer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hair-dryer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hair-dryer-advisor",
+  "displayName": {
+    "zh": "高速吹风机与造型工具选购顾问",
+    "en": "Hair Dryer and Styling Tool Advisor"
+  },
+  "profession": {
+    "zh": "11.11 高速吹风机与造型工具选购顾问",
+    "en": "11.11 Hair Dryer and Styling Tool Advisor"
+  },
+  "displayDescription": {
+    "zh": "吹风机怎么挑：看功率风速与噪音、风嘴与温控档位、按发长发量匹配、核宿舍限功率、比券后价。",
+    "en": "Pick hair dryers: power, airflow, noise, nozzles and heat control, hair length fit, dorm power limits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "长发发量多该选多大风速的吹风机",
+    "en": "What airflow speed suits long thick hair"
+  },
+  "plugin": "lynxce-hair-dryer-advisor",
+  "tags": [
+    {
+      "zh": "风速重量",
+      "en": "Airflow and Weight"
+    },
+    {
+      "zh": "限功率",
+      "en": "Power Limit"
+    },
+    {
+      "zh": "风嘴匹配",
+      "en": "Nozzle Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "长发发量多该选多大风速的吹风机",
+      "en": "What airflow speed suits long thick hair"
+    },
+    {
+      "zh": "宿舍限功率能用高速吹风机吗",
+      "en": "Can I use a high-speed dryer in a dorm with a power limit"
+    },
+    {
+      "zh": "卷发棒选 28 还是 32 毫米",
+      "en": "Should I choose a 28 or 32 millimeter curling wand"
+    }
+  ],
+  "keywords": [
+    "风速重量",
+    "限功率",
+    "风嘴匹配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-wiper-washer-advisor",
+  "version": "1.0.1",
+  "description": "Pick wipers and washer fluid: size and connector by model, blade type, freezing point, replacement yearly cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-wiper-washer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-wiper-washer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-wiper-washer-advisor",
+  "displayName": {
+    "zh": "雨刮与玻璃水选购顾问",
+    "en": "Wiper Blade and Washer Fluid Advisor"
+  },
+  "profession": {
+    "zh": "11.11 雨刮与玻璃水选购和年成本核算顾问",
+    "en": "11.11 Wiper Blade and Washer Fluid Advisor"
+  },
+  "displayDescription": {
+    "zh": "雨刮玻璃水怎么选：按车型核尺寸与接口、分有骨无骨、按最低气温选冰点、算更换周期年成本。",
+    "en": "Pick wipers and washer fluid: size and connector by model, blade type, freezing point, replacement yearly cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的车雨刮是多少英寸什么接口",
+    "en": "What wiper length and connector does my car use"
+  },
+  "plugin": "lynxce-wiper-washer-advisor",
+  "tags": [
+    {
+      "zh": "尺寸接口",
+      "en": "Size and Connector"
+    },
+    {
+      "zh": "冰点标号",
+      "en": "Freezing Point"
+    },
+    {
+      "zh": "年成本",
+      "en": "Yearly Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的车雨刮是多少英寸什么接口",
+      "en": "What wiper length and connector does my car use"
+    },
+    {
+      "zh": "冬天零下 22 度玻璃水选哪个标号",
+      "en": "Which washer fluid rating for a winter low of minus 22"
+    },
+    {
+      "zh": "无骨雨刮和有骨雨刮一年下来哪个省",
+      "en": "Frameless or framed wipers, which costs less per year"
+    }
+  ],
+  "keywords": [
+    "尺寸接口",
+    "冰点标号",
+    "年成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

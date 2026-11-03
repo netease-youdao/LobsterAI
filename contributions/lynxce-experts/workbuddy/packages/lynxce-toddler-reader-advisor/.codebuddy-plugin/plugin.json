@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-toddler-reader-advisor",
+  "version": "1.0.1",
+  "description": "Pick reading pens: compatible titles, paid content, eye care and volume cap, companion book price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-toddler-reader-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-toddler-reader"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-toddler-reader-advisor",
+  "displayName": {
+    "zh": "点读笔与早教机选购顾问",
+    "en": "Reading Pen and Learning Device Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 点读笔与早教机选购与资源成本核算顾问",
+    "en": "11.11 Reading Pen and Learning Device Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "点读笔怎么挑：数适配书目数量、核资源是否另付费、看护眼与音量限制、算配套书单价。",
+    "en": "Pick reading pens: compatible titles, paid content, eye care and volume cap, companion book price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "点读笔和带屏早教机算下来哪个花钱少",
+    "en": "Reading pen or screen device, which costs less overall"
+  },
+  "plugin": "lynxce-toddler-reader-advisor",
+  "tags": [
+    {
+      "zh": "适配书目",
+      "en": "Compatible Titles"
+    },
+    {
+      "zh": "资源收费",
+      "en": "Content Fees"
+    },
+    {
+      "zh": "时长音量",
+      "en": "Screen Time and Volume"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "点读笔和带屏早教机算下来哪个花钱少",
+      "en": "Reading pen or screen device, which costs less overall"
+    },
+    {
+      "zh": "这支点读笔家里的绘本能点读几本",
+      "en": "How many of our books can this reading pen read"
+    },
+    {
+      "zh": "早教机资源要不要另开会员",
+      "en": "Does this learning device need a paid membership"
+    }
+  ],
+  "keywords": [
+    "适配书目",
+    "资源收费",
+    "时长音量",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

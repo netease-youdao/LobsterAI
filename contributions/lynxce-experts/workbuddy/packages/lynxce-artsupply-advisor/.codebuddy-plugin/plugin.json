@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-artsupply-advisor",
+  "version": "1.0.4",
+  "description": "Buy art supplies wisely: a minimum list by medium and grade differences.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-artsupply-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-artsupply-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-artsupply-advisor",
+  "displayName": {
+    "zh": "美术与手工材料选购顾问",
+    "en": "Art and Craft Supplies Advisor"
+  },
+  "profession": {
+    "zh": "美术与手工材料选购顾问",
+    "en": "Art and Craft Supplies Advisor"
+  },
+  "displayDescription": {
+    "zh": "画材怎么买不浪费：按画种列最小清单、学生级与专业级差在哪、买回来怎么存放才不会干掉浪费。",
+    "en": "Buy art supplies wisely: a minimum list by medium and grade differences."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "学水彩先买哪些",
+    "en": "What do I need to start watercolour"
+  },
+  "plugin": "lynxce-artsupply-advisor",
+  "tags": [
+    {
+      "zh": "美术材料",
+      "en": "Art Supplies"
+    },
+    {
+      "zh": "画种清单",
+      "en": "By Medium"
+    },
+    {
+      "zh": "材料安全",
+      "en": "Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "学水彩先买哪些",
+      "en": "What do I need to start watercolour"
+    },
+    {
+      "zh": "学生级和专业级差在哪",
+      "en": "Student grade versus artist grade"
+    },
+    {
+      "zh": "给孩子买画材注意什么",
+      "en": "What to watch when buying for kids"
+    }
+  ],
+  "keywords": [
+    "美术材料",
+    "画种清单",
+    "材料安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

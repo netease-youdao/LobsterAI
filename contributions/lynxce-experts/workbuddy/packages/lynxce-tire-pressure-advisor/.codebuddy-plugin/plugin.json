@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-tire-pressure-advisor",
+  "version": "1.0.0",
+  "description": "Pick TPMS and inflators: factory check, sensor type, pressure, fill time and power.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tire-pressure-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tire-pressure"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tire-pressure-advisor",
+  "displayName": {
+    "zh": "胎压监测打气泵选购顾问",
+    "en": "TPMS and Tire Inflator Advisor"
+  },
+  "profession": {
+    "zh": "11.11 胎压监测与车载打气泵选购顾问",
+    "en": "11.11 TPMS and Portable Tire Inflator Advisor"
+  },
+  "displayDescription": {
+    "zh": "胎压设备怎么挑：先查原车有无监测、分内置外置传感器、核气泵压力与充气时长、看供电与安装。",
+    "en": "Pick TPMS and inflators: factory check, sensor type, pressure, fill time and power."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "老款车加装胎压监测选内置还是外置",
+    "en": "Internal or external TPMS for an older car"
+  },
+  "plugin": "lynxce-tire-pressure-advisor",
+  "tags": [
+    {
+      "zh": "原车配置",
+      "en": "Factory Equipment"
+    },
+    {
+      "zh": "内置外置",
+      "en": "Internal vs External"
+    },
+    {
+      "zh": "压力时长",
+      "en": "Pressure and Fill Time"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "老款车加装胎压监测选内置还是外置",
+      "en": "Internal or external TPMS for an older car"
+    },
+    {
+      "zh": "车载打气泵 150 psi 有必要吗",
+      "en": "Does a car inflator really need 150 psi"
+    },
+    {
+      "zh": "bar 和 psi 怎么换算",
+      "en": "How to convert bar and psi"
+    }
+  ],
+  "keywords": [
+    "原车配置",
+    "内置外置",
+    "压力时长",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

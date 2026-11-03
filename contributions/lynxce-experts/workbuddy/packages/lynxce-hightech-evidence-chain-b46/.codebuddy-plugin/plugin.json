@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-hightech-evidence-chain-b46",
+  "version": "1.0.0",
+  "description": "Turn verified company evidence into application chapters, reconciliation notes, and correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hightech-evidence-chain-b46.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hightech-evidence-chain-b46-evidence-chain",
+    "./skills/lynxce-hightech-evidence-chain-b46-reconcile",
+    "./skills/lynxce-hightech-evidence-chain-b46-correction"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hightech-evidence-chain-b46",
+  "displayName": {
+    "zh": "高企顾问",
+    "en": "High-tech Application Advisor"
+  },
+  "profession": {
+    "zh": "高企申报顾问",
+    "en": "High-tech Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业申报人员核对研发、专利与收入证据，复算认定指标，生成高企技术说明、勾稽报告及补正稿。",
+    "en": "Turn verified company evidence into application chapters, reconciliation notes, and correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请用我的研发、专利和收入材料，写一份高企申报初稿。",
+    "en": "High-tech Application Advisor"
+  },
+  "plugin": "lynxce-hightech-evidence-chain-b46",
+  "tags": [
+    {
+      "zh": "高企认定",
+      "en": "高企认定"
+    },
+    {
+      "zh": "研发证据",
+      "en": "研发证据"
+    },
+    {
+      "zh": "申报材料",
+      "en": "申报材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请用我的研发、专利和收入材料，写一份高企申报初稿。",
+      "en": "High-tech Application Advisor"
+    },
+    {
+      "zh": "两份高新收入明细冲突，帮我复算影响并拟补正说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "请检查主要产品与知识产权的证据链，列出具体断点。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "高企认定",
+    "研发证据",
+    "申报材料"
+  ]
+}

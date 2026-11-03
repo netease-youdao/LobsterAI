@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-cleaning-replenishment-advisor",
+  "version": "1.0.0",
+  "description": "Forecast recorded use, exclude unusable batches, round purchase packs and track replenishment.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-cleaning-replenishment-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-cleaning-replenishment"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-cleaning-replenishment-advisor",
+  "displayName": {
+    "zh": "清洁消杀耗材补货助理",
+    "en": "Cleaning Supply Replenishment Assistant"
+  },
+  "profession": {
+    "zh": "办公室消杀清洁耗材批次补货助理",
+    "en": "Office Cleaning Supply Batch Replenishment Assistant"
+  },
+  "displayDescription": {
+    "zh": "办公室消杀清洁耗材怎么补：按实际用量与交期核算缺口，剔除过期隔离库存，按包装采购，交付批次补货台账。",
+    "en": "Forecast recorded use, exclude unusable batches, round purchase packs and track replenishment."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "清洁液按实际用量和交期补几瓶",
+    "en": "Calculate cleaning bottles from usage and lead time"
+  },
+  "plugin": "lynxce-office-cleaning-replenishment-advisor",
+  "tags": [
+    {
+      "zh": "用量预测",
+      "en": "Usage Forecast"
+    },
+    {
+      "zh": "包装补货",
+      "en": "Pack Replenishment"
+    },
+    {
+      "zh": "批次验收",
+      "en": "Batch Acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "清洁液按实际用量和交期补几瓶",
+      "en": "Calculate cleaning bottles from usage and lead time"
+    },
+    {
+      "zh": "过期隔离和延期在途怎样扣库存",
+      "en": "Exclude expired stock and delayed incoming orders"
+    },
+    {
+      "zh": "做清洁耗材补货与批次领用台账",
+      "en": "Make a cleaning replenishment and batch issue ledger"
+    }
+  ],
+  "keywords": [
+    "用量预测",
+    "包装补货",
+    "批次验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

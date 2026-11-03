@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-beauty-batch-check-advisor",
+  "version": "1.0.2",
+  "description": "Check cosmetics batch codes: shelf life and period-after-opening, official-channel-only lookup, near-expiry sets, no efficacy claims.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-beauty-batch-check-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-beauty-batch-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-beauty-batch-check-advisor",
+  "displayName": {
+    "zh": "美妆护肤批号与生产日期顾问",
+    "en": "Cosmetics Batch Code and Production Date Advisor"
+  },
+  "profession": {
+    "zh": "11.11 美妆护肤批号与生产日期顾问",
+    "en": "11.11 Cosmetics Batch Code and Production Date Advisor"
+  },
+  "displayDescription": {
+    "zh": "美妆护肤批号怎么核：查保质期与开封后使用期限、批号只认官方渠道、识别临期大促装、不做功效判断。",
+    "en": "Check cosmetics batch codes: shelf life and period-after-opening, official-channel-only lookup, near-expiry sets, no efficacy claims."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这瓶精华的生产日期怎么查",
+    "en": "How do I check this serums production date"
+  },
+  "plugin": "lynxce-beauty-batch-check-advisor",
+  "tags": [
+    {
+      "zh": "保质期核对",
+      "en": "Shelf Life Check"
+    },
+    {
+      "zh": "批号官方查询",
+      "en": "Official Batch Lookup"
+    },
+    {
+      "zh": "临期识别",
+      "en": "Near-Expiry Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这瓶精华的生产日期怎么查",
+      "en": "How do I check this serums production date"
+    },
+    {
+      "zh": "大促清仓装是不是快过期了",
+      "en": "Is this clearance set near expiry"
+    },
+    {
+      "zh": "批号查询用哪个渠道靠谱",
+      "en": "Which channel is reliable for checking the batch code"
+    }
+  ],
+  "keywords": [
+    "保质期核对",
+    "批号官方查询",
+    "临期识别",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-file-naming-advisor",
+  "version": "1.0.1",
+  "description": "Build naming rules, version registers and migration maps with collision, dependency and rollback checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-file-naming-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-file-naming-rules"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-file-naming-advisor",
+  "displayName": {
+    "zh": "文件管理顾问",
+    "en": "File Organization Advisor"
+  },
+  "profession": {
+    "zh": "文件命名与版本管理顾问｜灵策智算",
+    "en": "File Naming and Version Control Advisor"
+  },
+  "displayDescription": {
+    "zh": "把混乱文件整理为命名规范版本台账与迁移对照表逐项检查重名冲突引用依赖和回滚依据便于团队复核执行",
+    "en": "Build naming rules, version registers and migration maps with collision, dependency and rollback checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "请根据这些文件名交付命名规范与逐项改名对照表",
+    "en": "Build naming rules and a file rename mapping from this list"
+  },
+  "plugin": "lynxce-file-naming-advisor",
+  "tags": [
+    {
+      "zh": "文件命名",
+      "en": "File Naming"
+    },
+    {
+      "zh": "版本台账",
+      "en": "Version Register"
+    },
+    {
+      "zh": "迁移核对",
+      "en": "Migration Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请根据这些文件名交付命名规范与逐项改名对照表",
+      "en": "Build naming rules and a file rename mapping from this list"
+    },
+    {
+      "zh": "请核对这批同名版本并交付权威版本待确认清单",
+      "en": "Review duplicate versions and list authority checks"
+    },
+    {
+      "zh": "请为这批文件交付迁移顺序与回滚核对单",
+      "en": "Produce a migration sequence and rollback checklist"
+    }
+  ],
+  "keywords": [
+    "文件命名",
+    "版本台账",
+    "迁移核对"
+  ],
+  "needEncrypt": true
+}

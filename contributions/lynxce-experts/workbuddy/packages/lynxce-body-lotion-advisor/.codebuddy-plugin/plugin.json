@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-body-lotion-advisor",
+  "version": "1.0.1",
+  "description": "Stock up on body lotion: monthly usage estimate, price per ml, texture by skin and season, shelf life.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-body-lotion-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-body-lotion"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-body-lotion-advisor",
+  "displayName": {
+    "zh": "身体乳与护手霜冬季囤货顾问",
+    "en": "Body Lotion and Hand Cream Winter Advisor"
+  },
+  "profession": {
+    "zh": "11.11 身体乳与护手霜冬季囤货顾问",
+    "en": "11.11 Body Lotion and Hand Cream Winter Advisor"
+  },
+  "displayDescription": {
+    "zh": "身体乳护手霜怎么囤：按月估算用量、算每毫升单价、按肤质季节选质地、核保质期与开封期。",
+    "en": "Stock up on body lotion: monthly usage estimate, price per ml, texture by skin and season, shelf life."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两个人一个冬天要用多少身体乳",
+    "en": "How much body lotion do two people use in a winter"
+  },
+  "plugin": "lynxce-body-lotion-advisor",
+  "tags": [
+    {
+      "zh": "按月用量",
+      "en": "Monthly Usage"
+    },
+    {
+      "zh": "每毫升单价",
+      "en": "Price per ml"
+    },
+    {
+      "zh": "质地选择",
+      "en": "Texture Choice"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两个人一个冬天要用多少身体乳",
+      "en": "How much body lotion do two people use in a winter"
+    },
+    {
+      "zh": "大瓶身体乳和两小瓶哪个更划算",
+      "en": "Is one big bottle of lotion better value than two small ones"
+    },
+    {
+      "zh": "北方暖气房选乳液还是乳霜",
+      "en": "Lotion or cream for a heated room in northern winter"
+    }
+  ],
+  "keywords": [
+    "按月用量",
+    "每毫升单价",
+    "质地选择",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-techdoc-advisor",
+  "version": "1.0.1",
+  "description": "Draft API references, onboarding steps, success and error examples, and changelogs from supplied engineering evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-techdoc-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-techdoc-advisor",
+  "displayName": {
+    "zh": "技术接口文档顾问",
+    "en": "Technical Writing & API Docs Advisor"
+  },
+  "profession": {
+    "zh": "技术文档与接口文档撰写顾问",
+    "en": "Technical Documentation and API Reference Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据接口与代码材料编写接入指南和字段说明，提供成功失败示例及版本变更记录，标出证据缺口供复核。",
+    "en": "Draft API references, onboarding steps, success and error examples, and changelogs from supplied engineering evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据接口材料生成含成功与两类失败示例的文档",
+    "en": "Draft an API reference with success and two failure examples"
+  },
+  "plugin": "lynxce-techdoc-advisor",
+  "tags": [
+    {
+      "zh": "接口参考",
+      "en": "API Reference"
+    },
+    {
+      "zh": "接入指南",
+      "en": "Integration Guide"
+    },
+    {
+      "zh": "变更记录",
+      "en": "Changelog"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据接口材料生成含成功与两类失败示例的文档",
+      "en": "Draft an API reference with success and two failure examples"
+    },
+    {
+      "zh": "根据接入前提生成首次调用指南和排错表",
+      "en": "Build a first-call guide and troubleshooting table from prerequisites"
+    },
+    {
+      "zh": "比较两版契约生成兼容性说明与迁移清单",
+      "en": "Compare two contracts into compatibility notes and a migration checklist"
+    }
+  ],
+  "keywords": [
+    "接口参考",
+    "接入指南",
+    "变更记录",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

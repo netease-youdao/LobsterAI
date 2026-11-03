@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-rural-origin-shoot-advisor",
+  "version": "1.0.2",
+  "description": "Turn origin, crop and season details into a topic plan, shot list, interview consent outline and fact-check sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-rural-origin-shoot-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-rural-origin-shoot"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-rural-origin-shoot-advisor",
+  "displayName": {
+    "zh": "产地拍摄顾问",
+    "en": "Origin Shoot Advisor"
+  },
+  "profession": {
+    "zh": "三农与产地助农内容拍摄顾问｜灵策智算",
+    "en": "Rural and Origin Content Shooting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据产地品类与农时材料，交付选题农时表、镜头清单、采访授权提纲和事实核实表，守住助农表述边界。",
+    "en": "Turn origin, crop and season details into a topic plan, shot list, interview consent outline and fact-check sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据产地品类和农时生成选题镜头清单与拍摄时段表",
+    "en": "Build a topic plan shot list and schedule from origin crop and season"
+  },
+  "plugin": "lynxce-rural-origin-shoot-advisor",
+  "tags": [
+    {
+      "zh": "产地拍摄",
+      "en": "Origin Shooting"
+    },
+    {
+      "zh": "采访授权",
+      "en": "Interview Consent"
+    },
+    {
+      "zh": "表述核实",
+      "en": "Claim Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据产地品类和农时生成选题镜头清单与拍摄时段表",
+      "en": "Build a topic plan shot list and schedule from origin crop and season"
+    },
+    {
+      "zh": "帮我复核这条助农脚本里的数字认证和绝对化表述",
+      "en": "Review numbers certifications and absolute claims in this origin script"
+    },
+    {
+      "zh": "只知道品类和大概月份先给最小拍摄方案",
+      "en": "Give a minimal shoot plan from the crop and a rough month only"
+    }
+  ],
+  "keywords": [
+    "产地拍摄",
+    "采访授权",
+    "表述核实",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-sterilizer-dryer-advisor",
+  "version": "1.0.1",
+  "description": "Pick sterilizer cabinets and bottle dryers: capacity, mode by material, drying, built-in size, power use.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sterilizer-dryer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sterilizer-dryer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sterilizer-dryer-advisor",
+  "displayName": {
+    "zh": "消毒柜与奶瓶消毒烘干器选购顾问",
+    "en": "Sterilizer Cabinet and Bottle Dryer Advisor"
+  },
+  "profession": {
+    "zh": "11.11 消毒柜与奶瓶消毒烘干器选购顾问",
+    "en": "11.11 Sterilizer Cabinet and Bottle Dryer Advisor"
+  },
+  "displayDescription": {
+    "zh": "消毒柜奶瓶消毒器怎么挑：按餐具数定容量、按材质配高温紫外臭氧、看烘干与嵌入尺寸、估耗电。",
+    "en": "Pick sterilizer cabinets and bottle dryers: capacity, mode by material, drying, built-in size, power use."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "塑料餐具能放高温消毒柜吗",
+    "en": "Can plastic tableware go in a high-temperature cabinet"
+  },
+  "plugin": "lynxce-sterilizer-dryer-advisor",
+  "tags": [
+    {
+      "zh": "材质配方式",
+      "en": "Mode by Material"
+    },
+    {
+      "zh": "嵌入尺寸",
+      "en": "Built-in Size"
+    },
+    {
+      "zh": "容量耗电",
+      "en": "Capacity and Power"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "塑料餐具能放高温消毒柜吗",
+      "en": "Can plastic tableware go in a high-temperature cabinet"
+    },
+    {
+      "zh": "橱柜预留 60 厘米能嵌入哪种消毒柜",
+      "en": "Which built-in cabinet fits a 60 centimeter cutout"
+    },
+    {
+      "zh": "奶瓶消毒器要不要选带烘干的",
+      "en": "Should a bottle sterilizer have a drying function"
+    }
+  ],
+  "keywords": [
+    "材质配方式",
+    "嵌入尺寸",
+    "容量耗电",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "calculations": [
+    {
+      "id": "乙逐维未知",
+      "operation": "sum",
+      "values": [
+        null,
+        3,
+        0,
+        2
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "calculationId": "乙逐维未知",
+      "value": 5
+    }
+  ]
+}

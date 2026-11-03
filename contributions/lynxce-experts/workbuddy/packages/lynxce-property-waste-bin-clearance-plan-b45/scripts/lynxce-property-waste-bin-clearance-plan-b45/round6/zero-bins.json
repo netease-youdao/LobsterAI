@@ -1,0 +1,40 @@
+{
+  "point": "P",
+  "date": null,
+  "categoryConfirmation": null,
+  "actualExecutionStatus": null,
+  "initialL": 0,
+  "segments": [
+    {
+      "start": "08:00",
+      "end": "10:00",
+      "addedL": 100
+    },
+    {
+      "start": "10:00",
+      "end": "12:00",
+      "addedL": 130
+    },
+    {
+      "start": "12:00",
+      "end": "14:00",
+      "addedL": 90
+    }
+  ],
+  "clearWindows": [
+    "10:00",
+    "12:00",
+    "14:00"
+  ],
+  "closingClearRequired": false,
+  "clearDurationMinutes": null,
+  "crewAvailableWindows": null,
+  "crewBusyIntervals": null,
+  "scenarios": [
+    {
+      "label": "规格表120升2桶",
+      "source": "本轮假设资料；不是类别确认记录",
+      "bins": []
+    }
+  ]
+}

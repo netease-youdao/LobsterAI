@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-fitness-advisor",
+  "version": "1.0.2",
+  "description": "Evidence-based document preparation with transparent calculations and review checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fitness-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fitness-advisor-evidence",
+    "./skills/lynxce-fitness-advisor-method",
+    "./skills/lynxce-fitness-advisor-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fitness-advisor",
+  "displayName": {
+    "zh": "训练记录整理顾问",
+    "en": "Activity Records Advisor"
+  },
+  "profession": {
+    "zh": "训练记录与负荷台账整理顾问",
+    "en": "Activity Records and Load Ledger Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户已有健身记录整理动作组次负荷与时间参数，核对单位缺项及冲突，交付记录表和专业核实事项",
+    "en": "Organize user-provided evidence, check calculations and conflicts, and deliver reviewable records and templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "整理我已有的训练记录，保留日期和原始参数",
+    "en": "Organize existing activity records while preserving dates and original parameters"
+  },
+  "plugin": "lynxce-fitness-advisor",
+  "tags": [
+    {
+      "zh": "记录整理",
+      "en": "Record organization"
+    },
+    {
+      "zh": "单位核对",
+      "en": "Unit checks"
+    },
+    {
+      "zh": "组次汇总",
+      "en": "Set-count summary"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "整理我已有的训练记录，保留日期和原始参数",
+      "en": "Organize existing activity records while preserving dates and original parameters"
+    },
+    {
+      "zh": "核对两份记录的负荷单位，分开不同器械口径",
+      "en": "Check load units across records and separate equipment conventions"
+    },
+    {
+      "zh": "只按已记录的组数次数负荷汇总台账，缺值留空",
+      "en": "Summarize recorded sets, repetitions and loads; leave missing values blank"
+    }
+  ],
+  "keywords": [
+    "训练计划",
+    "动作要点",
+    "进阶安排",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

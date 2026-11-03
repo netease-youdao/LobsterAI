@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ebike-advisor",
+  "version": "1.0.4",
+  "description": "Registration first: standards, realistic range estimation and safe charging rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ebike-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ebike-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ebike-advisor",
+  "displayName": {
+    "zh": "电动两轮车选购与合规顾问",
+    "en": "E-bike Buying and Compliance Advisor"
+  },
+  "profession": {
+    "zh": "电动两轮车选购与合规顾问",
+    "en": "E-bike Buying and Compliance Advisor"
+  },
+  "displayDescription": {
+    "zh": "电动车先确认能不能上牌：车辆标准怎么认、实际续航怎么估、充电安全必须守住哪几条。",
+    "en": "Registration first: standards, realistic range estimation and safe charging rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这台车在我这能上牌吗",
+    "en": "Can this model be registered where I live"
+  },
+  "plugin": "lynxce-ebike-advisor",
+  "tags": [
+    {
+      "zh": "电动车选购",
+      "en": "E-bike"
+    },
+    {
+      "zh": "上牌合规",
+      "en": "Compliance"
+    },
+    {
+      "zh": "电池续航",
+      "en": "Battery"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这台车在我这能上牌吗",
+      "en": "Can this model be registered where I live"
+    },
+    {
+      "zh": "标称续航实际能跑多少",
+      "en": "What real range should I expect"
+    },
+    {
+      "zh": "充电要注意什么",
+      "en": "What are the safe charging rules"
+    }
+  ],
+  "keywords": [
+    "电动车选购",
+    "上牌合规",
+    "电池续航",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

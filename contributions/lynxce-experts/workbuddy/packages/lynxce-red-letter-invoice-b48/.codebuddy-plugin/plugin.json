@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-red-letter-invoice-b48",
+  "version": "1.0.0",
+  "description": "Reconcile invoice reversals, confirmation status and accounting handoffs with traceable draft and revision records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-red-letter-invoice-b48.md"
+  ],
+  "skills": [
+    "./skills/lynxce-b48-red-business-blue-red-match",
+    "./skills/lynxce-b48-red-confirmation-status-routing",
+    "./skills/lynxce-b48-red-tax-accounting-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-red-letter-invoice-b48",
+  "displayName": {
+    "zh": "发票顾问",
+    "en": "Red Letter Invoice Reconciliation Advisor"
+  },
+  "profession": {
+    "zh": "红字发票顾问",
+    "en": "Red Letter Invoice Reconciliation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业开票与财务人员核对退货折让、蓝红金额及双方确认状态，形成红冲准备说明、对账台账与完整修订稿。",
+    "en": "Reconcile invoice reversals, confirmation status and accounting handoffs with traceable draft and revision records."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按真实退货和双方状态写红冲准备说明，别把拟红当已开。",
+    "en": "Red Letter Invoice Reconciliation Advisor"
+  },
+  "plugin": "lynxce-red-letter-invoice-b48",
+  "tags": [
+    {
+      "zh": "红字发票",
+      "en": "红字发票"
+    },
+    {
+      "zh": "蓝红勾稽",
+      "en": "蓝红勾稽"
+    },
+    {
+      "zh": "进项衔接",
+      "en": "进项衔接"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按真实退货和双方状态写红冲准备说明，别把拟红当已开。",
+      "en": "Red Letter Invoice Reconciliation Advisor"
+    },
+    {
+      "zh": "本次退货20件与25件冲突，保留两种条件完整修订金额和台账。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "受票方入账、抵扣和出口退税状态不同，帮我准确分流。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "红字发票",
+    "蓝红勾稽",
+    "进项衔接"
+  ]
+}

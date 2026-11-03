@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-quality-cavity-offset-compare-b45",
+  "version": "1.0.1",
+  "description": "Create a ready-to-review plan and transparent calculations from supplied inputs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-quality-cavity-offset-compare-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-quality-cavity-offset-compare-mapping-b45",
+    "./skills/lynxce-quality-cavity-offset-compare-offset-b45",
+    "./skills/lynxce-quality-cavity-offset-compare-sampling-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-quality-cavity-offset-compare-b45",
+  "displayName": {
+    "zh": "模穴分析师",
+    "en": "Mold Cavity Dimension Comparison Analyst"
+  },
+  "profession": {
+    "zh": "模穴尺寸分析师",
+    "en": "Mold Cavity Dimension Comparison Analyst"
+  },
+  "displayDescription": {
+    "zh": "按模穴与测量轮次比较尺寸，计算均值偏移、极差和超限分布，交付分穴分析报告与下一轮取样安排。",
+    "en": "Create a ready-to-review plan and transparent calculations from supplied inputs."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "四个模穴各测三件，请按同一图纸比较均值偏移和逐件超限。",
+    "en": "Mold Cavity Dimension Comparison Analyst"
+  },
+  "plugin": "lynxce-quality-cavity-offset-compare-b45",
+  "tags": [
+    {
+      "zh": "模穴尺寸",
+      "en": "模穴尺寸"
+    },
+    {
+      "zh": "偏移分析",
+      "en": "偏移分析"
+    },
+    {
+      "zh": "分穴取样",
+      "en": "分穴取样"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "四个模穴各测三件，请按同一图纸比较均值偏移和逐件超限。",
+      "en": "Mold Cavity Dimension Comparison Analyst"
+    },
+    {
+      "zh": "新增一轮分穴数据后，区分整体漂移与某穴持续偏高并写分析报告。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "样本数各穴不一样，请给可用描述结论与下一轮平衡取样方案。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "模穴尺寸",
+    "偏移分析",
+    "分穴取样"
+  ]
+}

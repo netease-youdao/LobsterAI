@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-copyright-advisor",
+  "version": "1.0.2",
+  "description": "Check each asset's license scope, term and consents against supplied proof, then build a traceable asset ledger and takedown log.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-copyright-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-media-copyright"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-copyright-advisor",
+  "displayName": {
+    "zh": "素材版权核对顾问",
+    "en": "Content Licensing and Compliance Advisor"
+  },
+  "profession": {
+    "zh": "素材版权与合规使用顾问",
+    "en": "Media Licensing and Usage Compliance Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据素材清单与授权凭证逐项核对用途范围和期限，整理肖像场所同意及侵权通知处置记录，交可追溯素材台账。",
+    "en": "Check each asset's license scope, term and consents against supplied proof, then build a traceable asset ledger and takedown log."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据素材清单和凭证生成发布前授权核对台账",
+    "en": "Build a pre-publish license ledger from my asset list and proofs"
+  },
+  "plugin": "lynxce-copyright-advisor",
+  "tags": [
+    {
+      "zh": "素材台账",
+      "en": "Asset Ledger"
+    },
+    {
+      "zh": "授权核对",
+      "en": "License Check"
+    },
+    {
+      "zh": "投诉处置",
+      "en": "Takedown Log"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据素材清单和凭证生成发布前授权核对台账",
+      "en": "Build a pre-publish license ledger from my asset list and proofs"
+    },
+    {
+      "zh": "帮我复核这份素材台账找出范围期限与同意缺口",
+      "en": "Review this asset ledger for scope term and consent gaps"
+    },
+    {
+      "zh": "只知道素材来源和发布平台先给一版待核清单",
+      "en": "With only sources and platforms draft a to-verify list first"
+    }
+  ],
+  "keywords": [
+    "素材台账",
+    "授权核对",
+    "投诉处置",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

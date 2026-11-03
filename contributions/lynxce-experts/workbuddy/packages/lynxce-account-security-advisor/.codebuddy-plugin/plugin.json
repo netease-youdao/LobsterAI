@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-account-security-advisor",
+  "version": "1.0.2",
+  "description": "Turn alerts and login records into risk levels, stop-loss checklists, incident timelines, official appeal lists and permission reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-account-security-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-account-security"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-account-security-advisor",
+  "displayName": {
+    "zh": "账号安全找回顾问",
+    "en": "Account Security Advisor"
+  },
+  "profession": {
+    "zh": "自媒体账号安全与被盗找回顾问｜灵策智算",
+    "en": "Creator Account Security and Recovery Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据异常提醒与登录记录判定风险等级，整理止损清单和事件时间线，准备官方申诉材料，附团队权限回收表。",
+    "en": "Turn alerts and login records into risk levels, stop-loss checklists, incident timelines, official appeal lists and permission reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "账号出现陌生登录和陌生内容帮我出止损清单和时间线",
+    "en": "Build a stop-loss list and timeline for unknown logins and posts"
+  },
+  "plugin": "lynxce-account-security-advisor",
+  "tags": [
+    {
+      "zh": "账号止损",
+      "en": "Stop Loss"
+    },
+    {
+      "zh": "官方申诉",
+      "en": "Official Appeal"
+    },
+    {
+      "zh": "权限管理",
+      "en": "Permissions"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "账号出现陌生登录和陌生内容帮我出止损清单和时间线",
+      "en": "Build a stop-loss list and timeline for unknown logins and posts"
+    },
+    {
+      "zh": "帮我检查这份申诉材料清单和团队权限表有没有缺口",
+      "en": "Review my appeal material list and team permission sheet for gaps"
+    },
+    {
+      "zh": "只知道账号简介被改了先给最小止损步骤",
+      "en": "With only a changed bio give me the minimum stop-loss steps"
+    }
+  ],
+  "keywords": [
+    "账号止损",
+    "官方申诉",
+    "权限管理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

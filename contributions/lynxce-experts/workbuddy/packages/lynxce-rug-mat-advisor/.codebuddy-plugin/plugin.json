@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-rug-mat-advisor",
+  "version": "1.0.1",
+  "description": "Pick rugs: wool, synthetic or cotton-linen by room, size from furniture layout, anti-slip and cleaning, price per m2.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-rug-mat-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-rug-mat"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-rug-mat-advisor",
+  "displayName": {
+    "zh": "地毯地垫尺寸与材质选购顾问",
+    "en": "Rug Size and Material Advisor"
+  },
+  "profession": {
+    "zh": "11.11 地毯地垫尺寸与材质选购顾问",
+    "en": "11.11 Rug Size and Material Advisor"
+  },
+  "displayDescription": {
+    "zh": "地毯地垫怎么挑：按房间选羊毛化纤或棉麻、按家具布局算尺寸、看防滑与清洁、折算每平米价。",
+    "en": "Pick rugs: wool, synthetic or cotton-linen by room, size from furniture layout, anti-slip and cleaning, price per m2."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的沙发 2.4 米该配多大的地毯",
+    "en": "What rug size fits my 2.4 meter sofa"
+  },
+  "plugin": "lynxce-rug-mat-advisor",
+  "tags": [
+    {
+      "zh": "尺寸推算",
+      "en": "Size from Layout"
+    },
+    {
+      "zh": "材质选择",
+      "en": "Material Choice"
+    },
+    {
+      "zh": "每平米价",
+      "en": "Price per m2"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的沙发 2.4 米该配多大的地毯",
+      "en": "What rug size fits my 2.4 meter sofa"
+    },
+    {
+      "zh": "家里有猫选羊毛还是化纤地毯",
+      "en": "Wool or synthetic rug for a home with a cat"
+    },
+    {
+      "zh": "这两块地毯按每平米算哪个更值",
+      "en": "Which of these two rugs is better value per square meter"
+    }
+  ],
+  "keywords": [
+    "尺寸推算",
+    "材质选择",
+    "每平米价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

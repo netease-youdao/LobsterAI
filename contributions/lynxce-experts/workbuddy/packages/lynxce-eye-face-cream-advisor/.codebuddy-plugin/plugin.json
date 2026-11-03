@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-eye-face-cream-advisor",
+  "version": "1.0.0",
+  "description": "Pick eye and face creams: price per gram, days of use, expiry, filing and patch test.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-eye-face-cream-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-eye-face-cream"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-eye-face-cream-advisor",
+  "displayName": {
+    "zh": "眼霜面霜选购顾问",
+    "en": "Eye and Face Cream Stock Advisor"
+  },
+  "profession": {
+    "zh": "11.11 眼霜面霜选购与囤货顾问",
+    "en": "11.11 Eye Cream and Face Cream Stock Advisor"
+  },
+  "displayDescription": {
+    "zh": "眼霜面霜怎么挑：按克折算单价、按用量算可用天数、核保质期与开封期、查备案并先做局部试用。",
+    "en": "Pick eye and face creams: price per gram, days of use, expiry, filing and patch test."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "正装加小样怎么折算每克价",
+    "en": "How to compute price per gram with samples"
+  },
+  "plugin": "lynxce-eye-face-cream-advisor",
+  "tags": [
+    {
+      "zh": "每克单价",
+      "en": "Price per Gram"
+    },
+    {
+      "zh": "可用天数",
+      "en": "Days of Use"
+    },
+    {
+      "zh": "开封期限",
+      "en": "Period After Opening"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "正装加小样怎么折算每克价",
+      "en": "How to compute price per gram with samples"
+    },
+    {
+      "zh": "一瓶 50 克面霜能用多少天",
+      "en": "How many days a 50 gram face cream lasts"
+    },
+    {
+      "zh": "大促囤面霜最多囤几瓶合适",
+      "en": "How many jars of face cream are worth stocking"
+    }
+  ],
+  "keywords": [
+    "每克单价",
+    "可用天数",
+    "开封期限",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

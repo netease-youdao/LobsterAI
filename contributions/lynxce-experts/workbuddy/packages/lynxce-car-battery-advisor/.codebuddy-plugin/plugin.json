@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-car-battery-advisor",
+  "version": "1.0.0",
+  "description": "Replace car batteries: model code, size, terminals, CCA, type and trade in cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-car-battery-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-car-battery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-car-battery-advisor",
+  "displayName": {
+    "zh": "汽车电瓶选购顾问",
+    "en": "Car Battery Replacement Advisor"
+  },
+  "profession": {
+    "zh": "11.11 汽车电瓶蓄电池更换选购顾问",
+    "en": "11.11 Car Starter Battery Replacement Advisor"
+  },
+  "displayDescription": {
+    "zh": "电瓶怎么换：按原车型号核尺寸与极柱方向、对容量与冷启动电流、启停车选对类型、算以旧换新到手价。",
+    "en": "Replace car batteries: model code, size, terminals, CCA, type and trade in cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "启停车电瓶能换普通的吗",
+    "en": "Can a start stop car use a regular battery"
+  },
+  "plugin": "lynxce-car-battery-advisor",
+  "tags": [
+    {
+      "zh": "型号尺寸",
+      "en": "Model and Size"
+    },
+    {
+      "zh": "容量冷启",
+      "en": "Capacity and CCA"
+    },
+    {
+      "zh": "以旧换新",
+      "en": "Trade In Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "启停车电瓶能换普通的吗",
+      "en": "Can a start stop car use a regular battery"
+    },
+    {
+      "zh": "55B24L 这种型号怎么读",
+      "en": "How to read a battery code like 55B24L"
+    },
+    {
+      "zh": "北方冬天电瓶 CCA 选多少",
+      "en": "What CCA a car battery needs for cold winters"
+    }
+  ],
+  "keywords": [
+    "型号尺寸",
+    "容量冷启",
+    "以旧换新",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

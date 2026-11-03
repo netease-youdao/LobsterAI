@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-sound-card-mic-advisor",
+  "version": "1.0.0",
+  "description": "Pick streaming audio: condenser or dynamic, ports, phantom power, gain and bundle pricing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sound-card-mic-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sound-card-mic"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sound-card-mic-advisor",
+  "displayName": {
+    "zh": "声卡直播麦选购顾问",
+    "en": "Sound Card and Streaming Mic Advisor"
+  },
+  "profession": {
+    "zh": "11.11 声卡与直播麦克风选购顾问",
+    "en": "11.11 Sound Card and Streaming Mic Advisor"
+  },
+  "displayDescription": {
+    "zh": "声卡直播麦怎么挑：按环境选电容或动圈、核接口与幻象供电、比耳返内录、套装拆件核价。",
+    "en": "Pick streaming audio: condenser or dynamic, ports, phantom power, gain and bundle pricing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "临街卧室直播唱歌选电容还是动圈",
+    "en": "Condenser or dynamic mic for a street facing bedroom"
+  },
+  "plugin": "lynxce-sound-card-mic-advisor",
+  "tags": [
+    {
+      "zh": "电容动圈",
+      "en": "Condenser or Dynamic"
+    },
+    {
+      "zh": "接口供电",
+      "en": "Ports and Phantom Power"
+    },
+    {
+      "zh": "套装核价",
+      "en": "Bundle Pricing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "临街卧室直播唱歌选电容还是动圈",
+      "en": "Condenser or dynamic mic for a street facing bedroom"
+    },
+    {
+      "zh": "电容麦插上声卡没声音怎么办",
+      "en": "Why a condenser mic is silent on my sound card"
+    },
+    {
+      "zh": "直播麦克风套装拆开买更省吗",
+      "en": "Is a streaming mic bundle cheaper than separate parts"
+    }
+  ],
+  "keywords": [
+    "电容动圈",
+    "接口供电",
+    "套装核价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

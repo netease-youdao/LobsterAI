@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-shortdrama-advisor",
+  "version": "1.0.1",
+  "description": "Drafts original short-drama beats, shots, dialogue and subtitles within supplied production constraints; no reach guarantees.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-shortdrama-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-drama-beat-design",
+    "./skills/lynxce-shot-script",
+    "./skills/lynxce-script-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-shortdrama-advisor",
+  "displayName": {
+    "zh": "短剧与短视频编剧顾问",
+    "en": "Short Drama & Video Script Advisor"
+  },
+  "profession": {
+    "zh": "短剧结构与短视频脚本创作顾问",
+    "en": "Short-form Drama Structure and Video Script Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户给定主题和拍摄条件设计短剧冲突反转分镜台词与字幕核对时长和制作约束不承诺流量或成片效果",
+    "en": "Drafts original short-drama beats, shots, dialogue and subtitles within supplied production constraints; no reach guarantees."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我写一集三分钟短剧的分镜脚本",
+    "en": "Write a shot list for a three-minute episode"
+  },
+  "plugin": "lynxce-shortdrama-advisor",
+  "tags": [
+    {
+      "zh": "黄金三秒",
+      "en": "Hook"
+    },
+    {
+      "zh": "反转设计",
+      "en": "Plot Twist"
+    },
+    {
+      "zh": "分镜脚本",
+      "en": "Shot List"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一集三分钟短剧的分镜脚本",
+      "en": "Write a shot list for a three-minute episode"
+    },
+    {
+      "zh": "这个开头怎么改才留得住人",
+      "en": "How to rewrite this opening to hold viewers"
+    },
+    {
+      "zh": "给这个主题设计三个反转点",
+      "en": "Design three plot twists for this theme"
+    }
+  ],
+  "keywords": [
+    "黄金三秒",
+    "反转设计",
+    "分镜脚本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

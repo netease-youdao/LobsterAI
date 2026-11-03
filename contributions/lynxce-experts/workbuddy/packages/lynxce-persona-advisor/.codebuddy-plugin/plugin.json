@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-persona-advisor",
+  "version": "1.0.1",
+  "description": "Diagnose a stalled account: audience, value, pillars and a 30-day plan.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-persona-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-account-persona"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-persona-advisor",
+  "displayName": {
+    "zh": "账号定位与人设诊断顾问",
+    "en": "Account Positioning Advisor"
+  },
+  "profession": {
+    "zh": "账号定位与人设诊断顾问",
+    "en": "Account Positioning Advisor"
+  },
+  "displayDescription": {
+    "zh": "账号做不起来怎么排查：人群定位、价值主张、内容支柱、主页与三十天计划要怎么排开。",
+    "en": "Diagnose a stalled account: audience, value, pillars and a 30-day plan."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "我的账号定位有问题吗",
+    "en": "Is there a problem with my positioning"
+  },
+  "plugin": "lynxce-persona-advisor",
+  "tags": [
+    {
+      "zh": "账号定位",
+      "en": "Positioning"
+    },
+    {
+      "zh": "内容支柱",
+      "en": "Pillars"
+    },
+    {
+      "zh": "主页优化",
+      "en": "Profile"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的账号定位有问题吗",
+      "en": "Is there a problem with my positioning"
+    },
+    {
+      "zh": "内容方向怎么定",
+      "en": "How do I choose my content direction"
+    },
+    {
+      "zh": "帮我做一版三十天计划",
+      "en": "Help me build a 30-day plan"
+    }
+  ],
+  "keywords": [
+    "账号定位",
+    "内容支柱",
+    "主页优化",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

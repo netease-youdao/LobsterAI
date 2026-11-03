@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-live-product-order-advisor",
+  "version": "1.0.2",
+  "description": "Turn product, stock and past session data into role-based lineups, timed pitch schedules, listing cues, stock alerts and reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-live-product-order-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-live-product-order"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-live-product-order-advisor",
+  "displayName": {
+    "zh": "直播排品讲品顾问",
+    "en": "Live Pitch Sequence Advisor"
+  },
+  "profession": {
+    "zh": "直播间商品排序与讲品节奏顾问｜灵策智算",
+    "en": "Live Room Product Order and Pitch Pacing Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据商品库存与历史场次数据划分商品角色，排出整场讲品时间表和上下架口令，附库存预警与逐品复盘表。",
+    "en": "Turn product, stock and past session data into role-based lineups, timed pitch schedules, listing cues, stock alerts and reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "根据商品清单和直播时长生成带时间轴的排品表",
+    "en": "Build a timed lineup from my product list and stream length"
+  },
+  "plugin": "lynxce-live-product-order-advisor",
+  "tags": [
+    {
+      "zh": "直播排品",
+      "en": "Product Lineup"
+    },
+    {
+      "zh": "讲品节奏",
+      "en": "Pitch Pacing"
+    },
+    {
+      "zh": "逐品复盘",
+      "en": "Product Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据商品清单和直播时长生成带时间轴的排品表",
+      "en": "Build a timed lineup from my product list and stream length"
+    },
+    {
+      "zh": "帮我检查这份排品表的时长序号和库存预警",
+      "en": "Check this lineup for timing slot numbers and stock alerts"
+    },
+    {
+      "zh": "只有商品名称和价格先给一版商品角色划分",
+      "en": "With only product names and prices draft product roles first"
+    }
+  ],
+  "keywords": [
+    "直播排品",
+    "讲品节奏",
+    "逐品复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

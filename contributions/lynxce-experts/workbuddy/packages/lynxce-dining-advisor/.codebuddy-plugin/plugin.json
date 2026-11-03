@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-dining-advisor",
+  "version": "1.0.4",
+  "description": "Order for a group with method: dishes per head, menu balance, dietary checks and budget control.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dining-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-group-dining"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dining-advisor",
+  "displayName": {
+    "zh": "聚餐点菜与宴请预算顾问",
+    "en": "Group Dining Planning Advisor"
+  },
+  "profession": {
+    "zh": "聚餐点菜与宴请预算顾问",
+    "en": "Group Dining Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "聚餐点菜有章法：人均菜量怎么估算、荤素冷热怎么搭配、忌口与预算怎么提前一次问清楚。",
+    "en": "Order for a group with method: dishes per head, menu balance, dietary checks and budget control."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "八个人聚餐点几个菜合适",
+    "en": "How many dishes for eight people"
+  },
+  "plugin": "lynxce-dining-advisor",
+  "tags": [
+    {
+      "zh": "聚餐点菜",
+      "en": "Group Dining"
+    },
+    {
+      "zh": "预算控制",
+      "en": "Budget"
+    },
+    {
+      "zh": "优惠核算",
+      "en": "Deals"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "八个人聚餐点几个菜合适",
+      "en": "How many dishes for eight people"
+    },
+    {
+      "zh": "帮我按预算排个菜单",
+      "en": "Draft a menu within my budget"
+    },
+    {
+      "zh": "附近有什么优惠可以领",
+      "en": "What deals can I grab nearby"
+    }
+  ],
+  "keywords": [
+    "聚餐点菜",
+    "预算控制",
+    "优惠核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

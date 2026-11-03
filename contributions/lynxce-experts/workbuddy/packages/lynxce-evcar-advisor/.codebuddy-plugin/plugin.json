@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-evcar-advisor",
+  "version": "1.0.4",
+  "description": "Decide on an EV with numbers: home charging, cost per kilometer and winter range reality.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-evcar-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ev-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-evcar-advisor",
+  "displayName": {
+    "zh": "新能源汽车选购与补能规划顾问",
+    "en": "EV Purchase and Charging Advisor"
+  },
+  "profession": {
+    "zh": "新能源汽车选购与补能规划顾问",
+    "en": "EV Purchase and Charging Advisor"
+  },
+  "displayDescription": {
+    "zh": "电车值不值买先算账：能不能装家充、每公里成本多少、冬天续航打几折、质保条款怎么看。",
+    "en": "Decide on an EV with numbers: home charging, cost per kilometer and winter range reality."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我这种情况适合买电车吗",
+    "en": "Does an EV fit my situation"
+  },
+  "plugin": "lynxce-evcar-advisor",
+  "tags": [
+    {
+      "zh": "新能源车",
+      "en": "EV"
+    },
+    {
+      "zh": "补能规划",
+      "en": "Charging"
+    },
+    {
+      "zh": "用车成本",
+      "en": "Running Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这种情况适合买电车吗",
+      "en": "Does an EV fit my situation"
+    },
+    {
+      "zh": "帮我算一下一年用车成本",
+      "en": "Estimate my yearly running cost"
+    },
+    {
+      "zh": "冬天续航大概打几折",
+      "en": "How much range do I lose in winter"
+    }
+  ],
+  "keywords": [
+    "新能源车",
+    "补能规划",
+    "用车成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

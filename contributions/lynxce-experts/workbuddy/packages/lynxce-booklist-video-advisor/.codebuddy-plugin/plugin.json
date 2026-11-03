@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-booklist-video-advisor",
+  "version": "1.0.2",
+  "description": "Turn your books, account focus and setup into book cards, a timed script, a shot list and a copyright-page and quote check.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-booklist-video-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-booklist-video"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-booklist-video-advisor",
+  "displayName": {
+    "zh": "书单视频顾问",
+    "en": "Book List Video Advisor"
+  },
+  "profession": {
+    "zh": "书单与读书分享短视频顾问｜灵策智算",
+    "en": "Book List and Reading Video Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据书目、账号定位与拍摄条件，交付选书卡、按本数计时的脚本表、拍摄清单和版权页与引用核对表。",
+    "en": "Turn your books, account focus and setup into book cards, a timed script, a shot list and a copyright-page and quote check."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我读完的几本书生成书单卡和按时长分配的脚本表",
+    "en": "Build book cards and a timed script from books I have finished"
+  },
+  "plugin": "lynxce-booklist-video-advisor",
+  "tags": [
+    {
+      "zh": "书单脚本",
+      "en": "Book List Script"
+    },
+    {
+      "zh": "拍摄清单",
+      "en": "Shot List"
+    },
+    {
+      "zh": "引用核对",
+      "en": "Quote Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我读完的几本书生成书单卡和按时长分配的脚本表",
+      "en": "Build book cards and a timed script from books I have finished"
+    },
+    {
+      "zh": "帮我复核这条书单脚本的书目信息引用和时长",
+      "en": "Check book details quotes and timing in this book list script"
+    },
+    {
+      "zh": "只有书名清单先给最小可拍的书单方案",
+      "en": "Give a minimal shootable plan from a list of titles only"
+    }
+  ],
+  "keywords": [
+    "书单脚本",
+    "拍摄清单",
+    "引用核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

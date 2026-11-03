@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-mosquito-net-advisor",
+  "version": "1.0.0",
+  "description": "Pick mosquito nets: bed size, frame style, mesh density, fabric, ceiling height and headroom.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-mosquito-net-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-mosquito-net"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-mosquito-net-advisor",
+  "displayName": {
+    "zh": "蚊帐选购顾问",
+    "en": "Mosquito Net Advisor"
+  },
+  "profession": {
+    "zh": "11.11 蚊帐选购顾问",
+    "en": "11.11 Mosquito Net Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "蚊帐怎么挑：按床尺寸定蚊帐规格、比支架与免安装款式、核网孔密度与面料、量层高与坐起空间。",
+    "en": "Pick mosquito nets: bed size, frame style, mesh density, fabric, ceiling height and headroom."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "1.8 米床靠墙放选什么蚊帐",
+    "en": "Which net suits a 1.8 meter bed against a wall"
+  },
+  "plugin": "lynxce-mosquito-net-advisor",
+  "tags": [
+    {
+      "zh": "床宽规格",
+      "en": "Bed Size"
+    },
+    {
+      "zh": "坐起空间",
+      "en": "Headroom"
+    },
+    {
+      "zh": "网孔面料",
+      "en": "Mesh and Fabric"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "1.8 米床靠墙放选什么蚊帐",
+      "en": "Which net suits a 1.8 meter bed against a wall"
+    },
+    {
+      "zh": "蒙古包蚊帐和支架蚊帐哪个好用",
+      "en": "Pop up dome net versus framed mosquito net"
+    },
+    {
+      "zh": "蚊帐网孔多密才挡得住小飞虫",
+      "en": "How dense a mesh blocks small insects"
+    }
+  ],
+  "keywords": [
+    "床宽规格",
+    "坐起空间",
+    "网孔面料",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

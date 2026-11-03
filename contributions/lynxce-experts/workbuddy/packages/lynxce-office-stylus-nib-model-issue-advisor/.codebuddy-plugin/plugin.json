@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-stylus-nib-model-issue-advisor",
+  "version": "1.0.0",
+  "description": "Check stylus nib fit and reconcile issue quantities.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-stylus-nib-model-issue-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-stylus-nib-model-issue"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-stylus-nib-model-issue-advisor",
+  "displayName": {
+    "zh": "触控笔笔尖领用助理",
+    "en": "Stylus Nib Issue Assistant"
+  },
+  "profession": {
+    "zh": "办公室触控笔替换笔尖领用兼容核对助理",
+    "en": "Office Stylus Nib Compatibility and Issue Assistant"
+  },
+  "displayDescription": {
+    "zh": "办公触控笔笔尖怎么领：逐支核型号代次与替换规格，分组计算整包补货，交付兼容清单与笔尖领用台账。",
+    "en": "Check stylus nib fit and reconcile issue quantities."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两代触控笔的笔尖库存怎么分开核算",
+    "en": "Separate nib stock for two stylus generations"
+  },
+  "plugin": "lynxce-office-stylus-nib-model-issue-advisor",
+  "tags": [
+    {
+      "zh": "型号兼容",
+      "en": "Model Compatibility"
+    },
+    {
+      "zh": "笔尖领用",
+      "en": "Nib Issue"
+    },
+    {
+      "zh": "整包补货",
+      "en": "Pack Replenishment"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两代触控笔的笔尖库存怎么分开核算",
+      "en": "Separate nib stock for two stylus generations"
+    },
+    {
+      "zh": "错型号笔尖如何隔离并重算结存",
+      "en": "Isolate wrong nibs and recalculate remaining stock"
+    },
+    {
+      "zh": "做笔尖兼容清单与逐支领用表",
+      "en": "Make a nib compatibility and issue ledger"
+    }
+  ],
+  "keywords": [
+    "型号兼容",
+    "笔尖领用",
+    "整包补货",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

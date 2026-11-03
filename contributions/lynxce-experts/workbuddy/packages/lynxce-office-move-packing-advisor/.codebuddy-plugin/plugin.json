@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-move-packing-advisor",
+  "version": "1.0.0",
+  "description": "Calculate moving cartons, tape, cushioning, stock deductions and handover quantities.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-move-packing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-move-packing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-move-packing-advisor",
+  "displayName": {
+    "zh": "搬迁打包耗材核算顾问",
+    "en": "Office Packing Supplies Advisor"
+  },
+  "profession": {
+    "zh": "办公室搬迁打包体积与耗材采购核算顾问",
+    "en": "Office Packing Volume and Supplies Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公室搬迁按物件尺寸与装箱重量核算纸箱、胶带和缓冲耗材，扣除可用库存与整包余量，输出采购及交接表。",
+    "en": "Calculate moving cartons, tape, cushioning, stock deductions and handover quantities."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按物件尺寸和重量算要买几箱",
+    "en": "Calculate cartons from item sizes and weights"
+  },
+  "plugin": "lynxce-office-move-packing-advisor",
+  "tags": [
+    {
+      "zh": "装箱容量",
+      "en": "Packing Capacity"
+    },
+    {
+      "zh": "耗材净购",
+      "en": "Net Supplies Purchase"
+    },
+    {
+      "zh": "装箱交接表",
+      "en": "Packing Handover Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按物件尺寸和重量算要买几箱",
+      "en": "Calculate cartons from item sizes and weights"
+    },
+    {
+      "zh": "胶带缓冲材料扣库存后买多少",
+      "en": "Calculate tape and cushioning after stock deductions"
+    },
+    {
+      "zh": "生成部门打包采购与箱号交接表",
+      "en": "Build a packing purchase and carton handover table"
+    }
+  ],
+  "keywords": [
+    "装箱容量",
+    "耗材净购",
+    "装箱交接表",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

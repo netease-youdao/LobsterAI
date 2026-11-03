@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-drawer-divider-cut-allocation-advisor",
+  "version": "1.0.0",
+  "description": "Plan drawer divider cuts and compartment allocation.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-drawer-divider-cut-allocation-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-drawer-divider-cut-allocation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-drawer-divider-cut-allocation-advisor",
+  "displayName": {
+    "zh": "抽屉隔板分配顾问",
+    "en": "Drawer Divider Advisor"
+  },
+  "profession": {
+    "zh": "桌面抽屉隔板裁切与格位分配顾问",
+    "en": "Drawer Divider Advisor"
+  },
+  "displayDescription": {
+    "zh": "抽屉按净尺寸与物品清单规划隔板，逐段核对厚度裁切和格位分配，扣除连续可用库存，输出补料复查表。",
+    "en": "Plan drawer divider cuts and compartment allocation."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对桌面抽屉隔板裁切与格位分配的输入条件",
+    "en": "Check inputs and compatibility"
+  },
+  "plugin": "lynxce-office-drawer-divider-cut-allocation-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "台账核算",
+      "en": "Ledger Reconciliation"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对桌面抽屉隔板裁切与格位分配的输入条件",
+      "en": "Check inputs and compatibility"
+    },
+    {
+      "zh": "依据确认数据计算净购与余量",
+      "en": "Calculate net purchases and remaining stock"
+    },
+    {
+      "zh": "生成专项台账与异常复核表",
+      "en": "Build records and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "台账核算",
+    "异常复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

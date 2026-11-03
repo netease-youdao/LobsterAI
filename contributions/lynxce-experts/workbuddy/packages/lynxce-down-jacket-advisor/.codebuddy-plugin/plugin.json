@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-down-jacket-advisor",
+  "version": "1.0.1",
+  "description": "Pick down jackets: fill weight and down content, fill power and fabric, sizing for layers, cost per gram of down.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-down-jacket-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-down-jacket"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-down-jacket-advisor",
+  "displayName": {
+    "zh": "羽绒服选购与每克绒核算顾问",
+    "en": "Down Jacket and Per-gram Down Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 羽绒服选购与每克绒核算顾问",
+    "en": "11.11 Down Jacket and Per-gram Down Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "羽绒服怎么挑：看充绒量与含绒量、蓬松度与面料、尺码留出内搭余量、折算每克绒单价比价。",
+    "en": "Pick down jackets: fill weight and down content, fill power and fabric, sizing for layers, cost per gram of down."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两件羽绒服按每克绒算哪件更值",
+    "en": "Which of these two down jackets is better value per gram"
+  },
+  "plugin": "lynxce-down-jacket-advisor",
+  "tags": [
+    {
+      "zh": "充绒量",
+      "en": "Fill Weight"
+    },
+    {
+      "zh": "每克绒单价",
+      "en": "Cost per Gram"
+    },
+    {
+      "zh": "尺码余量",
+      "en": "Layering Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两件羽绒服按每克绒算哪件更值",
+      "en": "Which of these two down jackets is better value per gram"
+    },
+    {
+      "zh": "零下十度通勤要多少克充绒量",
+      "en": "How much fill weight do I need for commuting at minus ten"
+    },
+    {
+      "zh": "我平时穿 L 羽绒服该买多大码",
+      "en": "I usually wear L, what size down jacket should I get"
+    }
+  ],
+  "keywords": [
+    "充绒量",
+    "每克绒单价",
+    "尺码余量",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

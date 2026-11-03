@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-virtual-topup-advisor",
+  "version": "1.0.2",
+  "description": "Decide on stockpiling top-ups: discount rate, arrival time, auto-renewal traps, stacking validity, unofficial card risks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-virtual-topup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-virtual-topup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-virtual-topup-advisor",
+  "displayName": {
+    "zh": "话费充值与会员年卡囤卡顾问",
+    "en": "Phone Top-up and Membership Card Advisor"
+  },
+  "profession": {
+    "zh": "11.11 话费充值与会员年卡囤卡顾问",
+    "en": "11.11 Phone Top-up and Membership Card Advisor"
+  },
+  "displayDescription": {
+    "zh": "话费会员卡该不该囤：折扣率换算、到账时效、自动续费陷阱、叠加已有会员时长、非官方低价卡风险。",
+    "en": "Decide on stockpiling top-ups: discount rate, arrival time, auto-renewal traps, stacking validity, unofficial card risks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "会员年卡自动续费的划算吗",
+    "en": "Is the auto-renewing annual membership worth it"
+  },
+  "plugin": "lynxce-virtual-topup-advisor",
+  "tags": [
+    {
+      "zh": "折扣率换算",
+      "en": "Discount Rate"
+    },
+    {
+      "zh": "自动续费核查",
+      "en": "Auto-renewal Check"
+    },
+    {
+      "zh": "叠加有效期",
+      "en": "Validity Stacking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "会员年卡自动续费的划算吗",
+      "en": "Is the auto-renewing annual membership worth it"
+    },
+    {
+      "zh": "现在充话费会不会浪费剩余天数",
+      "en": "Will topping up now waste my remaining days"
+    },
+    {
+      "zh": "便宜的第三方充值卡靠谱吗",
+      "en": "Is a cheap third-party top-up card reliable"
+    }
+  ],
+  "keywords": [
+    "折扣率换算",
+    "自动续费核查",
+    "叠加有效期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

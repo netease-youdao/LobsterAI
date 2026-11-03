@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-appliance-replace-advisor",
+  "version": "1.0.2",
+  "description": "Judge appliance replacement: typical lifespan reference, energy/fault/safety scoring, and repair-versus-replace cost threshold.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-appliance-replace-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-appliance-replace"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-appliance-replace-advisor",
+  "displayName": {
+    "zh": "家电更换优先级顾问",
+    "en": "Appliance Replacement Priority Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促家电更换优先级与年限评估顾问",
+    "en": "11.11 Appliance Replacement Priority Advisor"
+  },
+  "displayDescription": {
+    "zh": "家电换不换先看三件事：常见使用年限参考、能耗故障安全三维打分、维修费超新机三到五成就换新。",
+    "en": "Judge appliance replacement: typical lifespan reference, energy/fault/safety scoring, and repair-versus-replace cost threshold."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里的空调该修还是该换",
+    "en": "Should I repair or replace my air conditioner"
+  },
+  "plugin": "lynxce-appliance-replace-advisor",
+  "tags": [
+    {
+      "zh": "年限参考",
+      "en": "Lifespan Reference"
+    },
+    {
+      "zh": "三维打分",
+      "en": "Scoring"
+    },
+    {
+      "zh": "维修阈值",
+      "en": "Repair Threshold"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里的空调该修还是该换",
+      "en": "Should I repair or replace my air conditioner"
+    },
+    {
+      "zh": "这几件家电优先换哪个",
+      "en": "Which appliance should I replace first"
+    },
+    {
+      "zh": "维修费多少算不值得修",
+      "en": "What repair cost means it is not worth fixing"
+    }
+  ],
+  "keywords": [
+    "年限参考",
+    "三维打分",
+    "维修阈值",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

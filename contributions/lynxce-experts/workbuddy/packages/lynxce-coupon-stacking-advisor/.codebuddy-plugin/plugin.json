@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-coupon-stacking-advisor",
+  "version": "1.0.2",
+  "description": "Stack red packets, allowances and store coupons: threshold checks, usage order, exclusion rules and checkout review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-coupon-stacking-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-coupon-stacking"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-coupon-stacking-advisor",
+  "displayName": {
+    "zh": "红包津贴与店铺券叠加顺序顾问",
+    "en": "Red Packet, Allowance and Store Coupon Stacking Advisor"
+  },
+  "profession": {
+    "zh": "11.11 红包津贴与店铺券叠加顺序顾问",
+    "en": "11.11 Red Packet, Allowance and Store Coupon Stacking Advisor"
+  },
+  "displayDescription": {
+    "zh": "红包、津贴与店铺券怎么叠：各自门槛计算、使用先后顺序、互斥规则核对与结算页核验要点。",
+    "en": "Stack red packets, allowances and store coupons: threshold checks, usage order, exclusion rules and checkout review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我手上这几张券怎么叠最省",
+    "en": "How should I stack the coupons I have"
+  },
+  "plugin": "lynxce-coupon-stacking-advisor",
+  "tags": [
+    {
+      "zh": "叠加顺序",
+      "en": "Stacking Order"
+    },
+    {
+      "zh": "门槛核算",
+      "en": "Threshold Check"
+    },
+    {
+      "zh": "互斥核对",
+      "en": "Exclusion Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我手上这几张券怎么叠最省",
+      "en": "How should I stack the coupons I have"
+    },
+    {
+      "zh": "店铺券和跨店满减能一起用吗",
+      "en": "Can store coupons and cross-store discounts combine"
+    },
+    {
+      "zh": "红包快过期了该先用在哪",
+      "en": "Where should I use a red packet that expires soon"
+    }
+  ],
+  "keywords": [
+    "叠加顺序",
+    "门槛核算",
+    "互斥核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

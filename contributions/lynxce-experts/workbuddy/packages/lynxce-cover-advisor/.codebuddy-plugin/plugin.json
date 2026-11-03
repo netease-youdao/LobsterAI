@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-cover-advisor",
+  "version": "1.0.1",
+  "description": "Lift click-through: thumbnail hierarchy, title patterns and A/B comparison.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cover-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cover-title"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cover-advisor",
+  "displayName": {
+    "zh": "封面与标题优化顾问",
+    "en": "Video Thumbnail and Title Advisor"
+  },
+  "profession": {
+    "zh": "封面与标题优化顾问",
+    "en": "Video Thumbnail and Title Advisor"
+  },
+  "displayDescription": {
+    "zh": "点击率上不去怎么改：封面信息怎么排、字要多大、标题怎么写、怎么做对照测试来验证。",
+    "en": "Lift click-through: thumbnail hierarchy, title patterns and A/B comparison."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "这个封面怎么改",
+    "en": "How should I improve this thumbnail"
+  },
+  "plugin": "lynxce-cover-advisor",
+  "tags": [
+    {
+      "zh": "封面设计",
+      "en": "Thumbnails"
+    },
+    {
+      "zh": "标题写法",
+      "en": "Titles"
+    },
+    {
+      "zh": "对照测试",
+      "en": "A/B Testing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个封面怎么改",
+      "en": "How should I improve this thumbnail"
+    },
+    {
+      "zh": "帮我想几个标题",
+      "en": "Give me some title options"
+    },
+    {
+      "zh": "点击率低是封面还是标题问题",
+      "en": "Is my low CTR from the thumbnail or the title"
+    }
+  ],
+  "keywords": [
+    "封面设计",
+    "标题写法",
+    "对照测试",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

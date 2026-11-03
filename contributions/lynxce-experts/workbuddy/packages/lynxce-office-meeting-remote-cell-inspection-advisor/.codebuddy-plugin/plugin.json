@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-meeting-remote-cell-inspection-advisor",
+  "version": "1.0.0",
+  "description": "Inspect remote batteries and reconcile replacement stock.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-meeting-remote-cell-inspection-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-meeting-remote-cell-inspection"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-meeting-remote-cell-inspection-advisor",
+  "displayName": {
+    "zh": "遥控器电池巡检助理",
+    "en": "Meeting Remote Battery Inspection Assistant"
+  },
+  "profession": {
+    "zh": "会议室遥控器逐台电池巡检助理",
+    "en": "Meeting Room Remote Battery Inspection Ledger Assistant"
+  },
+  "displayDescription": {
+    "zh": "会议室遥控器电池怎么查：逐台核型号、节数与测试结果，按整套更换算补货，交付巡检表与旧电池交接表。",
+    "en": "Inspect remote batteries and reconcile replacement stock."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "AAA和AA遥控器按整套换装要买几包",
+    "en": "Calculate AA and AAA packs for full set replacement"
+  },
+  "plugin": "lynxce-office-meeting-remote-cell-inspection-advisor",
+  "tags": [
+    {
+      "zh": "逐台巡检",
+      "en": "Device Inspection"
+    },
+    {
+      "zh": "整套换装",
+      "en": "Set Replacement"
+    },
+    {
+      "zh": "旧电池交接",
+      "en": "Used Cell Handover"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "AAA和AA遥控器按整套换装要买几包",
+      "en": "Calculate AA and AAA packs for full set replacement"
+    },
+    {
+      "zh": "换后仍无响应怎样登记异常",
+      "en": "Record a remote that still fails after replacement"
+    },
+    {
+      "zh": "做逐台电池巡检与旧电池交接表",
+      "en": "Make a battery inspection and used cell ledger"
+    }
+  ],
+  "keywords": [
+    "逐台巡检",
+    "整套换装",
+    "旧电池交接",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

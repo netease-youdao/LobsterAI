@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-soundbar-speaker-advisor",
+  "version": "1.0.1",
+  "description": "Pick a soundbar or speaker: channels and subwoofer, eARC or optical match, battery and waterproof rating, price tiers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-soundbar-speaker-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-soundbar-speaker"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-soundbar-speaker-advisor",
+  "displayName": {
+    "zh": "回音壁与蓝牙音箱选购顾问",
+    "en": "Soundbar and Bluetooth Speaker Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 回音壁与蓝牙音箱选购顾问",
+    "en": "11.11 Soundbar and Bluetooth Speaker Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "回音壁音箱怎么选：声道数与低音炮、电视接口eARC匹配、便携款续航防水、按到手价分档。",
+    "en": "Pick a soundbar or speaker: channels and subwoofer, eARC or optical match, battery and waterproof rating, price tiers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的电视配什么回音壁合适",
+    "en": "Which soundbar suits my TV"
+  },
+  "plugin": "lynxce-soundbar-speaker-advisor",
+  "tags": [
+    {
+      "zh": "接口匹配",
+      "en": "Port Match"
+    },
+    {
+      "zh": "声道选择",
+      "en": "Channel Choice"
+    },
+    {
+      "zh": "续航防水",
+      "en": "Battery and Waterproof"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的电视配什么回音壁合适",
+      "en": "Which soundbar suits my TV"
+    },
+    {
+      "zh": "电视只有光纤口还能用全景声吗",
+      "en": "Can I get Atmos if my TV only has optical out"
+    },
+    {
+      "zh": "露营用的蓝牙音箱怎么选",
+      "en": "How do I pick a Bluetooth speaker for camping"
+    }
+  ],
+  "keywords": [
+    "接口匹配",
+    "声道选择",
+    "续航防水",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

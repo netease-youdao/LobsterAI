@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-office-asset-advisor",
+  "version": "1.0.1",
+  "description": "Track office assets with a register, labels, check-out records and stocktakes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-asset-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-asset-inventory"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-asset-advisor",
+  "displayName": {
+    "zh": "办公资产台账与盘点顾问",
+    "en": "Office Asset Register and Stocktake Advisor"
+  },
+  "profession": {
+    "zh": "办公资产台账与盘点顾问",
+    "en": "Office Asset Register and Stocktake Advisor"
+  },
+  "displayDescription": {
+    "zh": "电脑显示器等办公资产怎么管清楚：台账字段怎么设、编号标签怎么贴、领用归还怎么记、定期盘点怎么做。",
+    "en": "Track office assets with a register, labels, check-out records and stocktakes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我设计一份资产台账",
+    "en": "Design an asset register for me"
+  },
+  "plugin": "lynxce-office-asset-advisor",
+  "tags": [
+    {
+      "zh": "资产台账",
+      "en": "Asset Register"
+    },
+    {
+      "zh": "资产盘点",
+      "en": "Stocktake"
+    },
+    {
+      "zh": "行政管理",
+      "en": "Office Admin"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我设计一份资产台账",
+      "en": "Design an asset register for me"
+    },
+    {
+      "zh": "每年盘点怎么做",
+      "en": "How should we run an annual stocktake"
+    },
+    {
+      "zh": "员工离职电脑怎么回收",
+      "en": "How to recover laptops when staff leave"
+    }
+  ],
+  "keywords": [
+    "资产台账",
+    "资产盘点",
+    "行政管理",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

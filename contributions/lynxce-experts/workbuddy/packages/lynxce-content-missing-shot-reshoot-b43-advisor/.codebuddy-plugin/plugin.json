@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-content-missing-shot-reshoot-b43-advisor",
+  "version": "1.0.1",
+  "description": "Reconcile short video missing shot reshoot from supplied records and produce reviewable text tables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-content-missing-shot-reshoot-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-content-missing-shot-reshoot-b43",
+    "./skills/lynxce-content-missing-shot-reshoot-b43-int-continuity",
+    "./skills/lynxce-content-missing-shot-reshoot-b43-int-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-content-missing-shot-reshoot-b43-advisor",
+  "displayName": {
+    "zh": "短视频缺镜补拍统筹顾问",
+    "en": "Short Video Missing Shot Reshoot Advisor"
+  },
+  "profession": {
+    "zh": "短视频缺镜补拍统筹顾问",
+    "en": "Short Video Missing Shot Reshoot Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向短视频制作团队，依据粗剪缺镜单、场记与剩余档期统筹补拍，提供连续性检查和素材交付映射表。",
+    "en": "Reconcile short video missing shot reshoot from supplied records and produce reviewable text tables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据现有记录生成首份短视频缺镜补拍统筹表",
+    "en": "Build the first review table from supplied records"
+  },
+  "plugin": "lynxce-content-missing-shot-reshoot-b43-advisor",
+  "tags": [
+    {
+      "zh": "短视频制作统筹",
+      "en": "Target Role"
+    },
+    {
+      "zh": "短视频缺镜补拍统筹",
+      "en": "Task Review"
+    },
+    {
+      "zh": "证据复核表",
+      "en": "Evidence Review Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据现有记录生成首份短视频缺镜补拍统筹表",
+      "en": "Build the first review table from supplied records"
+    },
+    {
+      "zh": "资料冲突或条件缺失时怎样保留待核项",
+      "en": "Handle conflicting records and missing conditions"
+    },
+    {
+      "zh": "根据后续反馈更新版本并复核影响范围",
+      "en": "Revise the table and check the affected scope"
+    }
+  ],
+  "keywords": [
+    "短视频制作统筹",
+    "短视频缺镜补拍统筹",
+    "证据复核表"
+  ]
+}

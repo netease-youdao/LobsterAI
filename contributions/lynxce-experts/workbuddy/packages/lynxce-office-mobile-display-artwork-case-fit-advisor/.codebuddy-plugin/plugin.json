@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-mobile-display-artwork-case-fit-advisor",
+  "version": "1.0.0",
+  "description": "Check display artwork, packed size and part counts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-mobile-display-artwork-case-fit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-mobile-display-artwork-case-fit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-mobile-display-artwork-case-fit-advisor",
+  "displayName": {
+    "zh": "移动展架尺寸助理",
+    "en": "Mobile Display Fit Advisor"
+  },
+  "profession": {
+    "zh": "移动展架画面与收箱核对顾问",
+    "en": "Mobile Display Fit Advisor"
+  },
+  "displayDescription": {
+    "zh": "按移动展架可视画面与安装结构核对制作尺寸，复核拆收包装净空及配件数量，交付采购验收和搬运表。",
+    "en": "Check display artwork, packed size and part counts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "800毫米画面怎样加隐藏边",
+    "en": "Add hidden margins to 800 mm artwork"
+  },
+  "plugin": "lynxce-office-mobile-display-artwork-case-fit-advisor",
+  "tags": [
+    {
+      "zh": "画面尺寸",
+      "en": "Artwork Size"
+    },
+    {
+      "zh": "拆收净空",
+      "en": "Packed Fit"
+    },
+    {
+      "zh": "齐件验收",
+      "en": "Parts Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "800毫米画面怎样加隐藏边",
+      "en": "Add hidden margins to 800 mm artwork"
+    },
+    {
+      "zh": "拆收杆件比箱子长如何改规格",
+      "en": "Review a rod longer than its carry case"
+    },
+    {
+      "zh": "已有架体如何拆分画面包装预算",
+      "en": "Budget artwork and cases for existing frames"
+    }
+  ],
+  "keywords": [
+    "画面尺寸",
+    "拆收净空",
+    "齐件验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

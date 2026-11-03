@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-flowchart-advisor",
+  "version": "1.0.2",
+  "description": "Map supplied business steps into nodes, lanes and exception paths, with boundary checks and text handoff.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-flowchart-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-flowchart-rules",
+    "./skills/flowchart-paths",
+    "./skills/flowchart-change"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-flowchart-advisor",
+  "displayName": {
+    "zh": "流程图与泳道图绘制顾问",
+    "en": "Flowchart and Swimlane Advisor"
+  },
+  "profession": {
+    "zh": "流程图与泳道图绘制顾问",
+    "en": "Flowchart and Swimlane Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据业务步骤与角色材料整理流程及泳道规范，补齐判断异常和交接责任，输出节点连线文本与复核清单",
+    "en": "Map supplied business steps into nodes, lanes and exception paths, with boundary checks and text handoff."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "帮我把这个审批流程画成图",
+    "en": "Turn this approval process into a diagram"
+  },
+  "plugin": "lynxce-flowchart-advisor",
+  "tags": [
+    {
+      "zh": "流程图",
+      "en": "Flowchart"
+    },
+    {
+      "zh": "泳道图",
+      "en": "Swimlane"
+    },
+    {
+      "zh": "流程梳理",
+      "en": "Process Mapping"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把这个审批流程画成图",
+      "en": "Turn this approval process into a diagram"
+    },
+    {
+      "zh": "泳道图该怎么分",
+      "en": "How should I split swimlanes"
+    },
+    {
+      "zh": "生成一个 Mermaid 流程图",
+      "en": "Generate a Mermaid flowchart"
+    }
+  ],
+  "keywords": [
+    "流程图",
+    "泳道图",
+    "流程梳理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "needEncrypt": true
+}

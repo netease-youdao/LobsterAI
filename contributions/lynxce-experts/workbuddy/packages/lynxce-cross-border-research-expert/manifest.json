@@ -1,0 +1,11 @@
+{
+  "name": "lynxce-cross-border-research-expert",
+  "version": "1.0.1",
+  "pricing": {
+    "mode": "buyout",
+    "payMode": 1,
+    "priceFen": 999,
+    "durationDays": 0
+  },
+  "pricingRationale": "稳定方法与单次成果模板；沿用分片快照价格，价值来自专用方法、交付表及复算，不增加工具或结果保证。"
+}

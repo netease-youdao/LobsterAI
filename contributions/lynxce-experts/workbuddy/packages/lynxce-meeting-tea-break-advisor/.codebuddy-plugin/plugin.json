@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-meeting-tea-break-advisor",
+  "version": "1.0.0",
+  "description": "Tea breaks: attendance, quantities, budget, delivery timing, order and receipt sheets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-meeting-tea-break-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-meeting-tea-break"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-meeting-tea-break-advisor",
+  "displayName": {
+    "zh": "会议茶歇订购助理",
+    "en": "Meeting Tea Break Assistant"
+  },
+  "profession": {
+    "zh": "会议茶歇订购与签收助理",
+    "en": "Meeting Tea Break Ordering and Receipt Assistant"
+  },
+  "displayDescription": {
+    "zh": "会议茶歇订多少：按人数与时长算饮品点心水果份量、核人均预算与送达时间，产出订购单与签收表。",
+    "en": "Tea breaks: attendance, quantities, budget, delivery timing, order and receipt sheets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "40 人培训茶歇要订多少份",
+    "en": "How much to order for a 40 person training"
+  },
+  "plugin": "lynxce-meeting-tea-break-advisor",
+  "tags": [
+    {
+      "zh": "份量测算",
+      "en": "Quantity Estimate"
+    },
+    {
+      "zh": "人均预算",
+      "en": "Per Person Budget"
+    },
+    {
+      "zh": "送达签收",
+      "en": "Delivery and Receipt"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "40 人培训茶歇要订多少份",
+      "en": "How much to order for a 40 person training"
+    },
+    {
+      "zh": "茶歇最晚几点下单能准时送到",
+      "en": "Latest order time for an on time tea break"
+    },
+    {
+      "zh": "帮我做茶歇订购单和签收表",
+      "en": "Make a tea break order form and receipt sheet"
+    }
+  ],
+  "keywords": [
+    "份量测算",
+    "人均预算",
+    "送达签收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

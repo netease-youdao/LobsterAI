@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-body-wash-advisor",
+  "version": "1.0.1",
+  "description": "Plan shampoo and body wash stocking: household usage, per-ml price, period after opening, trial size first.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-body-wash-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-body-wash"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-body-wash-advisor",
+  "displayName": {
+    "zh": "洗发沐浴用品囤货顾问",
+    "en": "Shampoo and Body Wash Stocking Advisor"
+  },
+  "profession": {
+    "zh": "11.11 洗发沐浴用品囤货顾问",
+    "en": "11.11 Shampoo and Body Wash Stocking Advisor"
+  },
+  "displayDescription": {
+    "zh": "洗发沐浴用品怎么囤：按家庭人数算月用量、换算毫升单价、看开封后保质期、先小瓶试用再囤大瓶。",
+    "en": "Plan shampoo and body wash stocking: household usage, per-ml price, period after opening, trial size first."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "沐浴露 1 升装买 4 瓶够用多久",
+    "en": "How long will four 1L bottles of body wash last"
+  },
+  "plugin": "lynxce-body-wash-advisor",
+  "tags": [
+    {
+      "zh": "月用量估算",
+      "en": "Monthly Usage"
+    },
+    {
+      "zh": "毫升单价",
+      "en": "Per-ml Price"
+    },
+    {
+      "zh": "先试后囤",
+      "en": "Trial Before Stocking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "沐浴露 1 升装买 4 瓶够用多久",
+      "en": "How long will four 1L bottles of body wash last"
+    },
+    {
+      "zh": "补充装和瓶装哪个更划算",
+      "en": "Is a refill pack cheaper than a bottle"
+    },
+    {
+      "zh": "没用过的洗发水能直接囤大瓶吗",
+      "en": "Should I stock a large bottle of an untried shampoo"
+    }
+  ],
+  "keywords": [
+    "月用量估算",
+    "毫升单价",
+    "先试后囤",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

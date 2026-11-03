@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-crossborder-buy-advisor",
+  "version": "1.0.2",
+  "description": "Price cross-border imports: purchase limits, combined tax estimate, bonded vs direct shipping and returns.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-crossborder-buy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-crossborder-buy"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-crossborder-buy-advisor",
+  "displayName": {
+    "zh": "跨境进口商品到手价核算顾问",
+    "en": "Cross-Border Import Final Price Advisor"
+  },
+  "profession": {
+    "zh": "11.11 跨境进口商品到手价核算顾问",
+    "en": "11.11 Cross-Border Import Final Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "跨境进口商品怎么算：单次与年度限额、综合税估算、保税仓与直邮时效差、退货难度与到手价。",
+    "en": "Price cross-border imports: purchase limits, combined tax estimate, bonded vs direct shipping and returns."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这件跨境商品加上税到手多少钱",
+    "en": "What is the final price of this cross-border item with tax"
+  },
+  "plugin": "lynxce-crossborder-buy-advisor",
+  "tags": [
+    {
+      "zh": "限额核对",
+      "en": "Limit Check"
+    },
+    {
+      "zh": "综合税估算",
+      "en": "Combined Tax Estimate"
+    },
+    {
+      "zh": "时效与退货",
+      "en": "Delivery and Returns"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这件跨境商品加上税到手多少钱",
+      "en": "What is the final price of this cross-border item with tax"
+    },
+    {
+      "zh": "保税仓发货和海外直邮有什么区别",
+      "en": "Bonded warehouse versus direct overseas shipping"
+    },
+    {
+      "zh": "我今年的跨境额度还够买这单吗",
+      "en": "Do I have enough annual cross-border quota for this order"
+    }
+  ],
+  "keywords": [
+    "限额核对",
+    "综合税估算",
+    "时效与退货",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

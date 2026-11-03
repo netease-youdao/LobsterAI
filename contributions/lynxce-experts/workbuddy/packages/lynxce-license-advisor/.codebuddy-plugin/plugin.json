@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-license-advisor",
+  "version": "1.0.1",
+  "description": "Organize license records, renewal plans and custody logs with entity matching, date evidence and missing material checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-license-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-license-ledger"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-license-advisor",
+  "displayName": {
+    "zh": "证照台账顾问",
+    "en": "License Ledger Advisor"
+  },
+  "profession": {
+    "zh": "证照与资质台账管理顾问｜灵策智算",
+    "en": "License and Qualification Ledger Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据现有证照材料建立主体台账续期倒排与借用记录逐项核对有效期办理依据原件去向及待确认事项便于复查",
+    "en": "Organize license records, renewal plans and custody logs with entity matching, date evidence and missing material checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请根据这批证照材料建立主体与有效期台账",
+    "en": "Build an entity and validity register from these license records"
+  },
+  "plugin": "lynxce-license-advisor",
+  "tags": [
+    {
+      "zh": "证照台账",
+      "en": "License Register"
+    },
+    {
+      "zh": "续期计划",
+      "en": "Renewal Plan"
+    },
+    {
+      "zh": "原件流转",
+      "en": "Original Custody"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请根据这批证照材料建立主体与有效期台账",
+      "en": "Build an entity and validity register from these license records"
+    },
+    {
+      "zh": "请按已给办理依据交付续期节点和材料准备表",
+      "en": "Plan renewal milestones and materials using these supplied requirements"
+    },
+    {
+      "zh": "请核对证照目录与借还记录交付原件去向差异表",
+      "en": "Reconcile license originals against lending and return records"
+    }
+  ],
+  "keywords": [
+    "证照台账",
+    "续期计划",
+    "原件流转"
+  ],
+  "needEncrypt": true
+}

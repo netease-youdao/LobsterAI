@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-throttle-appeal-advisor",
+  "version": "1.0.1",
+  "description": "Diagnose reach drops: rule out normal swings, self-check rules, fix and appeal.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-throttle-appeal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-throttle-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-throttle-appeal-advisor",
+  "displayName": {
+    "zh": "账号限流排查与申诉顾问",
+    "en": "Account Reach Drop and Appeal Advisor"
+  },
+  "profession": {
+    "zh": "账号限流排查与申诉顾问",
+    "en": "Account Reach Drop and Appeal Advisor"
+  },
+  "displayDescription": {
+    "zh": "觉得账号被限流了怎么办：先排除哪些正常波动、违规提示怎么逐条自查、怎么整改、申诉材料怎么写。",
+    "en": "Diagnose reach drops: rule out normal swings, self-check rules, fix and appeal."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "播放突然掉了是不是被限流",
+    "en": "Views dropped suddenly, am I throttled"
+  },
+  "plugin": "lynxce-throttle-appeal-advisor",
+  "tags": [
+    {
+      "zh": "限流排查",
+      "en": "Reach Drop"
+    },
+    {
+      "zh": "违规自查",
+      "en": "Rule Self-check"
+    },
+    {
+      "zh": "申诉材料",
+      "en": "Appeals"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "播放突然掉了是不是被限流",
+      "en": "Views dropped suddenly, am I throttled"
+    },
+    {
+      "zh": "收到违规通知该怎么处理",
+      "en": "I got a violation notice, what now"
+    },
+    {
+      "zh": "帮我写一份申诉说明",
+      "en": "Help me write an appeal"
+    }
+  ],
+  "keywords": [
+    "限流排查",
+    "违规自查",
+    "申诉材料",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

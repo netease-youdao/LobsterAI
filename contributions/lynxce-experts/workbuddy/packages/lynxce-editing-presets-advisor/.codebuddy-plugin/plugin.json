@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-editing-presets-advisor",
+  "version": "1.0.2",
+  "description": "Turn supplied records into checkable templates, worked examples and change plans.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-editing-presets-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-editing-presets"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-editing-presets-advisor",
+  "displayName": {
+    "zh": "剪辑提效顾问",
+    "en": "Editing Template and Preset Reuse Advisor"
+  },
+  "profession": {
+    "zh": "剪辑模板与预设复用提效顾问",
+    "en": "Editing Template and Preset Reuse Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据剪辑计时与样式要求，交付工程蓝图、预设登记、试跑收益复算和成片验收清单，供用户自行执行。",
+    "en": "Use supplied records to deliver checkable templates, worked examples and versioned plans for human execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "按我的剪辑步骤和耗时，做工程蓝图与复用清单",
+    "en": "Build the first deliverable from my records"
+  },
+  "plugin": "lynxce-editing-presets-advisor",
+  "tags": [
+    {
+      "zh": "材料核对",
+      "en": "Record Review"
+    },
+    {
+      "zh": "交付模板",
+      "en": "Deliverable Templates"
+    },
+    {
+      "zh": "变更复算",
+      "en": "Change Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按我的剪辑步骤和耗时，做工程蓝图与复用清单",
+      "en": "Build the first deliverable from my records"
+    },
+    {
+      "zh": "根据我的样式和软件版本，做预设登记及成片验收表",
+      "en": "Review requirements, exceptions and acceptance evidence"
+    },
+    {
+      "zh": "用试跑记录算首批净省时间，分开一次性投入与单条耗时",
+      "en": "Recalculate the results and record changes"
+    }
+  ],
+  "keywords": [
+    "剪辑模板与预设复用提效顾问",
+    "验收",
+    "模板",
+    "灵策智算"
+  ],
+  "needEncrypt": true
+}

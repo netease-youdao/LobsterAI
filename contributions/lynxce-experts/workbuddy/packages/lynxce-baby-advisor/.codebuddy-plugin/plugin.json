@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-baby-advisor",
+  "version": "1.0.3",
+  "description": "Buy in stages by age: what is actually needed, safety certifications to check and what to skip.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-baby-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-baby-buying"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-baby-advisor",
+  "displayName": {
+    "zh": "母婴用品选购与安全核对顾问",
+    "en": "Baby Essentials Buying Advisor"
+  },
+  "profession": {
+    "zh": "母婴用品选购与安全核对顾问",
+    "en": "Baby Essentials Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "按月龄分批买不浪费：各阶段必需品清单、认证与安全项怎么核对、哪些东西其实完全不用买。",
+    "en": "Buy in stages by age: what is actually needed, safety certifications to check and what to skip."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "待产包到底要准备什么",
+    "en": "What do I actually need in the hospital bag"
+  },
+  "plugin": "lynxce-baby-advisor",
+  "tags": [
+    {
+      "zh": "母婴选购",
+      "en": "Baby Gear"
+    },
+    {
+      "zh": "安全认证",
+      "en": "Safety"
+    },
+    {
+      "zh": "分阶段买",
+      "en": "By Age"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "待产包到底要准备什么",
+      "en": "What do I actually need in the hospital bag"
+    },
+    {
+      "zh": "这个月龄该添置什么",
+      "en": "What should I add at this age"
+    },
+    {
+      "zh": "帮我比一下纸尿裤单片价",
+      "en": "Compare the per-piece price of these diapers"
+    }
+  ],
+  "keywords": [
+    "母婴选购",
+    "安全认证",
+    "分阶段买",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

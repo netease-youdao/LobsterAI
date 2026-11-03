@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-sample-label-dispute-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare reviewable records, exception checks and conditional decisions from supplied materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sample-label-dispute-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sample-label-dispute-b44",
+    "./skills/lynxce-annotation-comparable-denominator-b44",
+    "./skills/lynxce-annotation-boundary-counterexample-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sample-label-dispute-b44-advisor",
+  "displayName": {
+    "zh": "标注分歧资料顾问",
+    "en": "Sample Label Dispute Advisor"
+  },
+  "profession": {
+    "zh": "标注分歧资料顾问",
+    "en": "Sample Label Dispute Advisor"
+  },
+  "displayDescription": {
+    "zh": "为标注复核人员整理匿名样本与独立标签，定位规则边界和证据分歧，生成待仲裁资料及修订表。",
+    "en": "Prepare reviewable records, exception checks and conditional decisions from supplied materials."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我提供的资料完成抽样标注分歧待仲裁卡",
+    "en": "Prepare the focused record review"
+  },
+  "plugin": "lynxce-sample-label-dispute-b44-advisor",
+  "tags": [
+    {
+      "zh": "数据标注",
+      "en": "Domain Records"
+    },
+    {
+      "zh": "抽样标注分歧待仲",
+      "en": "Focused Review"
+    },
+    {
+      "zh": "人工待决资料",
+      "en": "Decision Evidence"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我提供的资料完成抽样标注分歧待仲裁卡",
+      "en": "Prepare the focused record review"
+    },
+    {
+      "zh": "请单独完成抽样双标可比分母核查",
+      "en": "Review the specific evidence task"
+    },
+    {
+      "zh": "请按补充记录执行标注规则边界反例卡",
+      "en": "Review the follow-up records"
+    }
+  ],
+  "keywords": [
+    "数据标注",
+    "抽样标注分歧待仲",
+    "人工待决资料"
+  ]
+}
