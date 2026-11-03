@@ -51,6 +51,7 @@ const RETAINED_PATCHES = [
   'openclaw-openai-completions-tool-call-repair.patch',
   'openclaw-openai-oauth-token-proxy.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
+  'openclaw-plugin-realpath-parent-cache.patch',
   'openclaw-project-memory-negative-probe.patch',
   'openclaw-provider-auth-warm-cooperative-exit.patch',
   'openclaw-provider-fetch-transient-retry.patch',
@@ -135,6 +136,15 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+    return { ok: true, moduleExport: requireWithOptionalAliases(requirePath, options.aliasMap) };',
       '+    const resolved = nodeRequire.resolve(toRequirePath(modulePath));',
       '+  it("clears modules loaded through file URL targets", () => {',
+    ]);
+  });
+
+  test('realpaths plugin paths through cached parent directories', () => {
+    expectPatchContains('openclaw-plugin-realpath-parent-cache.patch', [
+      '+export function realpathThroughParentSync(',
+      '+export function safeRealpathWithParentsSync(',
+      '+        : realpathThroughParentSync(targetPath, (parentPath) =>',
+      '+        const realCursor = safeRealpathWithParentsSync(cursor, cache);',
     ]);
   });
 

@@ -950,6 +950,36 @@ macOS, where these plugins always load natively.
 Verify with `node_modules/.bin/vitest run src/plugins/native-module-require.test.ts`.
 Remove when upstream converts loader URLs before native `require`.
 
+## Plugin realpaths through cached parent directories
+
+`openclaw-plugin-realpath-parent-cache.patch` targets the realpath calls that
+remain once plugins load natively. `pluginCacheRealpathSync` and the
+installed-plugin index staleness checks in `plugin-registry-snapshot.ts` already
+cache realpaths, but only by exact path, so each new file still paid a full
+`fs.realpathSync` walk (one lstat per component) under the same few directories.
+
+`realpath-through-parent.ts` resolves a path as its parent's cached realpath
+plus its basename after one lstat, and falls back to `fs.realpathSync` for
+links and roots. `pluginCacheRealpathSync` (non-native) uses its own per-path
+facts for the parent, and the staleness checks use
+`safeRealpathWithParentsSync` with the Map they already create per check. Cache
+lifetimes do not change: plugin cache generation and one check respectively.
+Missing paths still return null and are not cached. The native realpath variant
+and other `safeRealpathSync` callers are unchanged. Two tests that counted
+`fs.realpathSync` calls to prove one lookup per path now count the lstat too.
+
+Measured on the same 360 machine in the runtime built with this patch set,
+copied to `%LOCALAPPDATA%` and run by `LobsterAI.exe` with 7 plugins, reverting
+only this patch in the loaded bundle for comparison: lstat 32,851 -> 13,919 and
+time inside lstat about 19 s -> 9 s per startup; the process reached
+`[plugins] loaded` after 64-75 s without it and 50-51 s with it. Most of the
+saving lands before plugin loading, in discovery and index checks.
+
+Verify with `node_modules/.bin/vitest run src/plugins/realpath-through-parent.test.ts
+src/plugins/discovery.test.ts src/plugins/manifest-registry.test.ts
+src/plugins/plugin-registry-snapshot.test.ts`, then rebuild the runtime. Remove
+when upstream resolves plugin paths through cached parents itself.
+
 ## Web fetch follows the desktop proxy preference
 
 `openclaw-web-fetch-proxy.patch` lets LobsterAI enable the existing
