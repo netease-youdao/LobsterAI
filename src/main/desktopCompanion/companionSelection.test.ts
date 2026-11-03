@@ -28,7 +28,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
 
-const { CompanionSelectionController } = await import('./companionSelection');
+const { CompanionSelectionController, selectionCoversGesture } = await import('./companionSelection');
 
 class FakeHook extends EventEmitter {
   static FilterMode = { EXCLUDE_LIST: 2 };
@@ -124,6 +124,20 @@ function drag() {
 
 // What a direct read returns: no gesture, so the mouse position is (0, 0).
 const chromeSelection = { text: 'first selection', programName: 'com.google.Chrome', posLevel: 0, mousePosEnd: { x: 0, y: 0 } };
+
+/** A direct read with the bounds of the first and last selected characters. */
+function placedSelection(left: number, right: number, lineTop: number, lastLineTop = lineTop) {
+  return {
+    text: 'placed selection',
+    programName: 'com.apple.Notes',
+    posLevel: 3,
+    startTop: { x: left, y: lineTop },
+    startBottom: { x: left, y: lineTop + 20 },
+    endTop: { x: right, y: lastLineTop },
+    endBottom: { x: right, y: lastLineTop + 20 },
+    mousePosEnd: { x: 0, y: 0 },
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -557,6 +571,36 @@ describe('selection toolbar', () => {
   });
 });
 
+describe('selectionCoversGesture', () => {
+  const along = (startX: number, endX: number, y = 210) => ({ start: { x: startX, y }, end: { x: endX, y } });
+
+  test('accepts a drag that runs a little past the end of the line or starts in the margin', () => {
+    const line = placedSelection(300, 480, 200);
+    expect(selectionCoversGesture(line, 3, along(300, 528))).toBe(true);
+    expect(selectionCoversGesture(line, 3, along(252, 480))).toBe(true);
+    expect(selectionCoversGesture(line, 3, along(300, 529))).toBe(false);
+  });
+
+  test('allows a line of slack above and below the selected lines', () => {
+    const lines = placedSelection(300, 200, 200, 240);
+    expect(selectionCoversGesture(lines, 3, { start: { x: 300, y: 181 }, end: { x: 200, y: 279 } })).toBe(true);
+    expect(selectionCoversGesture(lines, 3, { start: { x: 300, y: 179 }, end: { x: 200, y: 262 } })).toBe(false);
+    expect(selectionCoversGesture(lines, 3, { start: { x: 300, y: 205 }, end: { x: 200, y: 281 } })).toBe(false);
+  });
+
+  test('caps the slack when an app reports the whole selection as one rectangle', () => {
+    const block = { ...placedSelection(100, 600, 200), endTop: { x: 600, y: 200 }, endBottom: { x: 600, y: 400 } };
+    expect(selectionCoversGesture(block, 3, { start: { x: 120, y: 161 }, end: { x: 580, y: 439 } })).toBe(true);
+    expect(selectionCoversGesture(block, 3, { start: { x: 120, y: 159 }, end: { x: 580, y: 300 } })).toBe(false);
+  });
+
+  test('needs the selection position', () => {
+    expect(selectionCoversGesture(placedSelection(300, 480, 200), 4, along(320, 460))).toBe(false);
+    expect(selectionCoversGesture({ ...placedSelection(300, 480, 200), startBottom: undefined }, 3, along(320, 460))).toBe(false);
+    expect(selectionCoversGesture({ ...placedSelection(300, 480, 200), endTop: { x: -99999, y: -99999 } }, 3, along(320, 460))).toBe(false);
+  });
+});
+
 describe('a selection the hook missed on macOS', () => {
   test('is read again once a Chromium app has had time to build its accessibility tree', () => onMac(() => {
     create();
@@ -584,10 +628,41 @@ describe('a selection the hook missed on macOS', () => {
     expect(win.visible).toBe(false);
   }));
 
-  test('is not invented from text that was readable right after the gesture', () => onMac(() => {
+  // selection-hook 2.1.1 matches the I-beam by exact hot spot and skipped every gesture on
+  // macOS 26.6, while the text it skipped was readable right away and was dropped here too.
+  test('is shown right away when the drag was made on it, whatever the pointer looked like', () => onMac(() => {
     create();
     const hook = FakeHook.last!;
-    hook.getCurrentSelection.mockReturnValue(chromeSelection);
+    hook.getCurrentSelection.mockReturnValue(placedSelection(300, 480, 200));
+    drag();
+    vi.advanceTimersByTime(100);
+    expect(sentSelection()).toMatchObject({ text: 'placed selection', appId: 'com.apple.Notes' });
+    vi.advanceTimersByTime(200);
+    expect(win.visible).toBe(true);
+    vi.advanceTimersByTime(10_000);
+    expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+  }));
+
+  test('is shown right away after a double-click on a word', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.getCurrentSelection.mockReturnValue(placedSelection(380, 430, 200));
+    for (let click = 0; click < 2; click += 1) {
+      hook.emit('mouse-down', { x: 400, y: 210, button: 0 });
+      hook.emit('mouse-up', { x: 400, y: 210, button: 0 });
+    }
+    vi.advanceTimersByTime(300);
+    expect(win.visible).toBe(true);
+  }));
+
+  test.each([
+    ['has no position', chromeSelection],
+    ['was left elsewhere, as by a window drag', placedSelection(300, 480, 400)],
+    ['only the press was made on, as when dragged text is dropped', placedSelection(260, 320, 200)],
+  ])('is not invented from text readable right after the gesture that %s', (_case, selection) => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.getCurrentSelection.mockReturnValue(selection);
     drag();
     vi.advanceTimersByTime(10_000);
     expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);

@@ -34,7 +34,7 @@ import {
 import type { CompanionAnalytics } from './companionAnalytics';
 import { isCompanionTextTooLarge } from './companionClipboard';
 import type { CompanionQuickAnswerService } from './quickAnswerService';
-import { SelectionGestureTracker } from './selectionGesture';
+import { type SelectionGesture, SelectionGestureTracker } from './selectionGesture';
 import { isScreenshotApp, SelectionKeyEffect, selectionKeyEffect,type SelectionKeyEvent } from './selectionKeys';
 
 const INVALID_COORDINATE = -99999;
@@ -56,6 +56,10 @@ const CAPTURE_TOOLBAR_MS = 20_000;
 const CAPTURE_SETTLE_MS = 400;
 // A pointer-only selection whose ends are this far apart vertically spans lines.
 const POINTER_LINE_SLOP = 12;
+// How far a selecting gesture may stray from the selected text: a line above or below it, and this
+// far past either side, since drags often run beyond the end of a line or start in the margin.
+const GESTURE_SIDE_SLOP = 48;
+const GESTURE_MAX_LINE_SLOP = 40;
 
 interface Point { x: number; y: number }
 
@@ -153,6 +157,30 @@ export function selectionAnchor(data: SelectionHookEvent, fullLevel: number, cur
     bottom: last.y + 14,
     multiline,
   };
+}
+
+/**
+ * Whether a selection read right after a drag or double-click was made by that gesture: both of
+ * its ends lie on the selected text. On macOS selection-hook only reports gestures made with an
+ * I-beam pointer, which it recognizes by exact hot spot, and macOS releases have changed that
+ * cursor. A selection left over from earlier lies elsewhere after a window or scroll bar drag.
+ * Both the gesture and the selection are in selection-hook's own coordinates.
+ */
+export function selectionCoversGesture(data: SelectionHookEvent, fullLevel: number, gesture: SelectionGesture): boolean {
+  if (data.posLevel < fullLevel || !valid(data.startTop) || !valid(data.startBottom) || !valid(data.endTop) || !valid(data.endBottom)) {
+    return false;
+  }
+  // An app that reports the whole selection as one rectangle makes this the selection's height.
+  const line = Math.min(GESTURE_MAX_LINE_SLOP, Math.max(1, data.endBottom.y - data.endTop.y));
+  const left = Math.min(data.startTop.x, data.endTop.x) - GESTURE_SIDE_SLOP;
+  const top = Math.min(data.startTop.y, data.endTop.y) - line;
+  const area: CompanionRect = {
+    x: left,
+    y: top,
+    width: Math.max(data.startTop.x, data.endTop.x) + GESTURE_SIDE_SLOP - left,
+    height: Math.max(data.startBottom.y, data.endBottom.y) + line - top,
+  };
+  return rectContains(area, gesture.start) && rectContains(area, gesture.end);
 }
 
 /** Owns the system selection hook and the toolbar/answer window that follows a selection. */
@@ -560,7 +588,8 @@ export class CompanionSelectionController {
       this.captureUntil = Date.now() + CAPTURE_SETTLE_MS;
       this.captureOnRelease = false;
     }
-    if (this.gesture.up(data, Date.now()) && process.platform === 'darwin') this.recoverSelection({ x: data.x, y: data.y });
+    const gesture = this.gesture.up(data, Date.now());
+    if (gesture && process.platform === 'darwin') this.recoverSelection(gesture);
   };
 
   private onWheel = (): void => {
@@ -590,7 +619,7 @@ export class CompanionSelectionController {
    * selection-hook reads a selection once, at mouse-up. A Chromium or Electron app only turns
    * its accessibility tree on after such a read fails, so its first selection would be lost.
    */
-  private recoverSelection(point: Point, attempt = 0): void {
+  private recoverSelection(gesture: SelectionGesture, attempt = 0): void {
     clearTimeout(this.recoveryTimer);
     this.recoveryTimer = setTimeout(() => {
       this.recoveryTimer = undefined;
@@ -600,15 +629,21 @@ export class CompanionSelectionController {
       const data = this.readCurrentSelection();
       if (attempt === 0) {
         // Text readable right away was readable at mouse-up too: the hook chose not to report it.
-        if (!data) this.recoverSelection(point, 1);
+        // It decides by the pointer shape, so trust only a selection the gesture itself was made on.
+        if (!data) {
+          this.recoverSelection(gesture, 1);
+        } else if (selectionCoversGesture(data, this.module?.PositionLevel.SEL_FULL ?? 3, gesture)) {
+          console.debug(`[DesktopCompanion] Showing a selection the hook skipped in ${data.programName}`);
+          this.showSelection({ ...data, mousePosStart: gesture.end, mousePosEnd: gesture.end });
+        }
         return;
       }
       if (data) {
         console.debug(`[DesktopCompanion] Recovered a selection the hook missed in ${data.programName}`);
         // A direct read reports the mouse at (0, 0); anchor where the gesture ended instead.
-        this.showSelection({ ...data, mousePosStart: point, mousePosEnd: point });
+        this.showSelection({ ...data, mousePosStart: gesture.end, mousePosEnd: gesture.end });
       } else if (attempt + 1 < RECOVERY_READ_DELAYS_MS.length) {
-        this.recoverSelection(point, attempt + 1);
+        this.recoverSelection(gesture, attempt + 1);
       }
     }, RECOVERY_READ_DELAYS_MS[attempt]);
   }
