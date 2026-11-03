@@ -92,6 +92,20 @@ const PATCH_SENTINELS = [
     expect: '_Out_ str16 *name',
     occurrences: 1,
   },
+  {
+    // The require-builtin addon rejects our Electron's V8 fingerprint, so
+    // internalModules() must reach Node internals via --expose-internals.
+    patch: '01-app-boot-expose-internals-fallback.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
+    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
+    occurrences: 1,
+  },
+  {
+    patch: '01-app-boot-expose-internals-fallback.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/worker/profile-resolution-bootstrap.js',
+    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
+    occurrences: 1,
+  },
 ];
 
 const TARGETS = {
