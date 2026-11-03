@@ -32,6 +32,7 @@ export type OpenClawChatState = typeof OpenClawChatState[keyof typeof OpenClawCh
 
 export const OpenClawGatewayMethod = {
   ChatAbort: 'chat.abort',
+  ChatMessageGet: 'chat.message.get',
   ChatSend: 'chat.send',
   SessionsSubscribe: 'sessions.subscribe',
   SessionsAbort: 'sessions.abort',
