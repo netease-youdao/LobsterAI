@@ -5,42 +5,51 @@ const path = require('path');
 const { Arch } = require('builder-util');
 
 const REVIEWED_SQLITE_VERSION = '13.0.3';
-const MAC_NATIVE_TARGETS = new Map([[Arch.arm64, 'darwin-arm64'], [Arch.x64, 'darwin-x64']]);
-const SQLITE_MAC_EXCLUSIONS = [
-  '!node_modules/better-sqlite3/{deps,src}{,/**/*}',
-  '!node_modules/better-sqlite3/prebuilds/!(darwin-${arch}).node',
-];
+// lib/binding.js loads prebuilds/<process.platform>-<process.arch>.node. Linux
+// is left alone: it chooses between glibc and musl builds at runtime.
+const NATIVE_TARGETS = new Map([
+  ['darwin', new Map([[Arch.arm64, 'darwin-arm64'], [Arch.x64, 'darwin-x64']])],
+  ['win32', new Map([[Arch.arm64, 'win32-arm64'], [Arch.x64, 'win32-x64']])],
+]);
 const appliedExclusions = new WeakMap();
 
+function sqliteExclusions(platform) {
+  return [
+    '!node_modules/better-sqlite3/{deps,src}{,/**/*}',
+    `!node_modules/better-sqlite3/prebuilds/!(${platform}-\${arch}).node`,
+  ];
+}
+
 /** Filter before ASAR construction so its index agrees with app.asar.unpacked. */
-function configureBetterSqlite3MacPayload(context) {
-  if (context.electronPlatformName !== 'darwin') return;
+function configureBetterSqlite3Payload(context) {
+  const targets = NATIVE_TARGETS.get(context.electronPlatformName);
+  if (!targets) return;
   const options = context.packager.platformSpecificBuildOptions;
   const previous = appliedExclusions.get(options);
   const configured = options.files == null ? [] : Array.isArray(options.files) ? options.files : [options.files];
   const retained = configured.filter(pattern => !previous?.has(pattern));
   const universal = context.arch === Arch.universal
     || context.packager.info.options?.targets?.get(context.packager.platform)?.has(Arch.universal);
-  const nativeTarget = universal ? null : MAC_NATIVE_TARGETS.get(context.arch);
+  const nativeTarget = universal ? null : targets.get(context.arch);
   let exclusions = [];
 
   if (nativeTarget) {
     const root = path.join(context.packager.info.appDir, 'node_modules', 'better-sqlite3');
     const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     if (manifest.name !== 'better-sqlite3' || manifest.version !== REVIEWED_SQLITE_VERSION) {
-      console.warn(`[better-sqlite3-mac-payload] Keeping unreviewed better-sqlite3 ${manifest.version} payload. Review the exclusions after upgrading.`);
+      console.warn(`[better-sqlite3-payload] Keeping unreviewed better-sqlite3 ${manifest.version} payload. Review the exclusions after upgrading.`);
     } else {
       if (manifest.gypfile !== false || manifest.main !== 'lib/index.js') {
-        throw new Error('[better-sqlite3-mac-payload] Unexpected SQLite package layout. Review the payload policy.');
+        throw new Error('[better-sqlite3-payload] Unexpected SQLite package layout. Review the payload policy.');
       }
       for (const relative of ['lib/index.js', 'lib/binding.js', `prebuilds/${nativeTarget}.node`]) {
         const file = path.join(root, relative);
         if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) {
-          throw new Error(`[better-sqlite3-mac-payload] Missing SQLite runtime file: ${relative}. Reinstall dependencies before packaging.`);
+          throw new Error(`[better-sqlite3-payload] Missing SQLite runtime file: ${relative}. Reinstall dependencies before packaging.`);
         }
       }
-      exclusions = SQLITE_MAC_EXCLUSIONS;
-      console.log(`[better-sqlite3-mac-payload] Keeping ${nativeTarget}.node and runtime JavaScript; excluding other prebuilds and SQLite build sources.`);
+      exclusions = sqliteExclusions(context.electronPlatformName);
+      console.log(`[better-sqlite3-payload] Keeping ${nativeTarget}.node and runtime JavaScript; excluding other prebuilds and SQLite build sources.`);
     }
   }
 
@@ -61,4 +70,4 @@ function configureBetterSqlite3MacPayload(context) {
   appliedExclusions.set(options, added);
 }
 
-module.exports = { configureBetterSqlite3MacPayload };
+module.exports = { configureBetterSqlite3Payload };
