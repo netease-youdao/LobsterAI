@@ -6,6 +6,8 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PID_FILE="$PROJECT_DIR/.server.pid"
 LOG_FILE="$PROJECT_DIR/.server.log"
 SERVER_ENTRY="dist/server/index.js"
+# Some historical installs had partial node_modules trees (missing iconv-lite encodings).
+ICONV_SENTINEL="node_modules/iconv-lite/encodings/index.js"
 FORCE_REPAIR="${WEB_SEARCH_FORCE_REPAIR:-0}"
 SERVER_PORT="8923"
 DEFAULT_SERVER_URL="http://127.0.0.1:8923"
@@ -100,16 +102,65 @@ repair_iconv_lite() {
   return 0
 }
 
+# Decoding loads iconv-lite's encodings lazily, as body-parser does; a bare require
+# succeeds even when they are broken.
 verify_iconv_runtime() {
-  env "${NODE_ENV_PREFIX[@]}" "$NODE_CMD" "${NODE_ARGS[@]}" -e "require('./node_modules/iconv-lite/lib/index.js')" > /dev/null 2>&1
+  env "${NODE_ENV_PREFIX[@]}" "$NODE_CMD" "${NODE_ARGS[@]}" -e "require('./node_modules/iconv-lite/lib/index.js').decode(Buffer.from('ok'), 'utf8')" > /dev/null 2>&1
+}
+
+# Only reinstall what is actually broken: npm may be missing or offline, and
+# repair_iconv_lite deletes iconv-lite before reinstalling it.
+ensure_dependencies() {
+  if [ ! -d "node_modules" ] || [ ! -f "$ICONV_SENTINEL" ]; then
+    if ! ensure_npm_available; then
+      return 1
+    fi
+    if ! install_dependencies; then
+      return 1
+    fi
+  fi
+
+  # npm install may succeed while keeping a corrupted cached package.
+  if [ ! -f "$ICONV_SENTINEL" ]; then
+    if ! ensure_npm_available; then
+      return 1
+    fi
+    if ! repair_iconv_lite; then
+      return 1
+    fi
+  fi
+
+  if [ ! -f "$ICONV_SENTINEL" ]; then
+    echo "✗ Dependency check failed: missing $ICONV_SENTINEL"
+    echo "  Try removing node_modules and reinstalling with network access."
+    return 1
+  fi
+
+  if ! verify_iconv_runtime; then
+    if ! ensure_npm_available; then
+      return 1
+    fi
+    if ! repair_iconv_lite; then
+      return 1
+    fi
+  fi
+
+  if ! verify_iconv_runtime; then
+    echo "✗ iconv-lite runtime verification failed after repair"
+    echo "  Try removing node_modules and reinstalling with network access."
+    return 1
+  fi
+  return 0
+}
+
+# Packaged copies ship a prebuilt dist without tsconfig.json, so `npm run build`
+# cannot run there.
+can_rebuild_server() {
+  [ -f "tsconfig.json" ]
 }
 
 is_server_build_outdated() {
   if [ ! -f "$SERVER_ENTRY" ]; then
-    return 0
-  fi
-
-  if [ -n "$(find server -type f -name '*.ts' -newer "$SERVER_ENTRY" -print -quit 2>/dev/null)" ]; then
     return 0
   fi
 
@@ -118,7 +169,38 @@ is_server_build_outdated() {
     return 0
   fi
 
+  # Copying resets mtimes, so only compare them in a source checkout that can rebuild itself.
+  if ! can_rebuild_server; then
+    return 1
+  fi
+
+  if [ -n "$(find server -type f -name '*.ts' -newer "$SERVER_ENTRY" -print -quit 2>/dev/null)" ]; then
+    return 0
+  fi
+
   return 1
+}
+
+ensure_server_build() {
+  if ! is_server_build_outdated; then
+    return 0
+  fi
+
+  if ! can_rebuild_server; then
+    echo "✗ $SERVER_ENTRY is missing or outdated, and this packaged copy cannot rebuild it"
+    echo "  Restart LobsterAI to restore the bundled web-search skill."
+    return 1
+  fi
+
+  if ! ensure_npm_available; then
+    return 1
+  fi
+  echo "Compiling TypeScript (dist missing/outdated)..."
+  if ! npm run build > /dev/null 2>&1; then
+    echo "✗ Failed to compile TypeScript server"
+    return 1
+  fi
+  return 0
 }
 
 kill_listeners_on_server_port() {
@@ -221,69 +303,15 @@ if ! resolve_node_runtime; then
 fi
 
 # Verify a critical transitive dependency before deciding whether to reinstall.
-# Some historical installs had partial node_modules trees (missing iconv-lite encodings).
-ICONV_SENTINEL="node_modules/iconv-lite/encodings/index.js"
-
-if [ "$FORCE_REPAIR" = "1" ]; then
-  if ! ensure_npm_available; then
-    exit 1
-  fi
-  if ! repair_iconv_lite; then
-    exit 1
-  fi
-fi
-
-# Ensure dependencies are installed
-if [ ! -d "node_modules" ] || [ ! -f "$ICONV_SENTINEL" ]; then
-  if ! ensure_npm_available; then
-    exit 1
-  fi
-  if ! install_dependencies; then
-    exit 1
-  fi
-fi
-
-# npm install may succeed while keeping a corrupted cached package.
-if [ ! -f "$ICONV_SENTINEL" ]; then
-  if ! ensure_npm_available; then
-    exit 1
-  fi
-  if ! repair_iconv_lite; then
-    exit 1
-  fi
-fi
-
-if [ ! -f "$ICONV_SENTINEL" ]; then
-  echo "✗ Dependency check failed: missing $ICONV_SENTINEL"
-  echo "  Try removing node_modules and reinstalling with network access."
-  exit 1
-fi
-
-if ! verify_iconv_runtime; then
-  if ! ensure_npm_available; then
-    exit 1
-  fi
-  if ! repair_iconv_lite; then
-    exit 1
-  fi
-fi
-
-if ! verify_iconv_runtime; then
-  echo "✗ iconv-lite runtime verification failed after repair"
-  echo "  Try removing node_modules and reinstalling with network access."
+# Force-repair restarts the server; it reinstalls dependencies only when they fail
+# these checks, like a normal start.
+if ! ensure_dependencies; then
   exit 1
 fi
 
 # Ensure code is compiled and not stale
-if is_server_build_outdated; then
-  if ! ensure_npm_available; then
-    exit 1
-  fi
-  echo "Compiling TypeScript (dist missing/outdated)..."
-  if ! npm run build > /dev/null 2>&1; then
-    echo "✗ Failed to compile TypeScript server"
-    exit 1
-  fi
+if ! ensure_server_build; then
+  exit 1
 fi
 
 # Start server in background
