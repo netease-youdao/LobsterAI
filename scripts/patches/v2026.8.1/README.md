@@ -1123,3 +1123,88 @@ Then rebuild the runtime. After a drop, the gateway log shows
 from the transcript attempt=N/5`. Remove this patch when the pinned upstream
 records transport failures for reasoning-only output and resumes first-call
 drops.
+
+## Byte-bounded model history
+
+Two patches handle sessions whose stored history outgrows the embedded
+runner's model-context byte bound. Upstream tracks the problem as
+[openclaw/openclaw#159799](https://github.com/openclaw/openclaw/issues/159799),
+which is still open.
+
+Background: every attempt hydrates its history with
+`SessionManager.open(..., { maxBytes: contextTokenBudget * 8, maxEvents: 10000 })`,
+so a 1M-token model loads at most 8 MB. The bound counts stored event JSON,
+including inline base64 from `view_image` results, tool payload mirrors and
+metadata. Image-heavy sessions therefore run at 12 to 20 bytes per prompt
+token. They hit the byte bound long before the token compaction threshold
+(980k for a 1M window). Compaction then never runs, and the newest-first
+reader drops the oldest events on every turn. On 2026-11-03 one WeChat DM
+session crossed 8 MB at 16:08 (`activeTranscriptBytes=8.04MB`). From then on,
+almost every new turn's first request cached only the system prompt and
+tools, about 32k of roughly 650k prompt tokens, and was billed about 60
+credits off-peak and 130 at peak. The dropped history was never summarized.
+
+### Stable window start
+
+`openclaw-bounded-history-chunked-window.patch` ports the policy of upstream
+[#168157](https://github.com/openclaw/openclaw/pull/168157), merged after
+v2026.8.1, into the v2026.8.1 reader
+`session-accessor.sqlite-active-context.ts`:
+
+- The latest compaction or reset boundary is reserved before the tail is
+  sized. Its summary no longer appears or disappears depending on how much
+  room the newest events leave.
+- Byte pressure is measured from the boundary's retained start
+  (`firstKeptEntryId`), not from history that a compaction already replaced.
+- When that model-visible tail exceeds the capacity, the omitted bytes are
+  rounded up to a quarter-capacity step, measured from the retained start. The
+  cut then moves forward to the next user message. The first model message
+  stays the same until the tail grows by another step.
+- If the newest turn alone exceeds one step, the reader falls back to the old
+  newest-first selection. Sessions that fit, and event-count limits, behave as
+  before.
+
+This patch does not summarize omitted history. That is the next patch.
+
+### Compaction before the bound
+
+`openclaw-bounded-history-compaction.patch` makes preflight compaction
+(`runSessionCompactionIfNeeded`) compact before the bounded load would omit
+anything:
+
+- `run/session-context-limits.ts` owns the hydration limits. The attempt and
+  preflight now read the same byte bound.
+- The new `model_context_bytes` trigger fires when the active model-context
+  bytes (`readSessionTranscriptActiveStats`, the same bytes the reader counts)
+  reach 80% of the bound. At least a quarter of the bound must lie after the
+  latest boundary's retained tail
+  (`readSessionTranscriptRetainedPrefixBytes`). A fresh boundary whose kept
+  tail is already large therefore cannot cause a compaction every turn.
+- Compaction loads the full transcript, so history already dropped from the
+  prompt is summarized instead of lost.
+- The trigger is optional. A skip or a failure, including a thrown error
+  before the compaction commits, keeps the turn running on the bounded tail.
+  Retries for that session wait until its bytes grow by another quarter of the
+  bound. The token and `maxActiveTranscriptBytes` triggers keep their existing
+  fail-closed behavior, and Codex native compaction is untouched.
+- The verbose `preflightCompaction check` log now includes
+  `contextHydrationMaxBytes` and `contextBytesTrigger`.
+
+One existing test,
+`estimates Codex tool-result mirrors through the provider projection`, stored
+64 duplicated 8 KB mirrors. That is 1.1 MB, above its 128k model's 1 MB
+hydration bound, so the new trigger fired. The fixture now uses 5 KB mirrors
+and still fails if mirrors are double-counted.
+
+Verify with:
+
+```sh
+node scripts/run-vitest.mjs run src/config/sessions/session-accessor.sqlite-bounded-context.test.ts src/auto-reply/reply/agent-runner-memory.test.ts
+```
+
+After rebuilding the runtime, a session over the bound logs
+`preflightCompaction triggered: ... trigger=model_context_bytes` once. Its later
+turns' first requests should read most of the history from cache again
+(TokenProxy `prompt prefix ... boundary=turn` with a high `cachedTokens`). Drop
+the first patch when the pinned upstream includes #168157. Drop the second when
+upstream #159799 summarizes byte-bounded history itself.

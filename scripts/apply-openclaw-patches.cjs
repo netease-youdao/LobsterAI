@@ -1368,6 +1368,38 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-bounded-history-chunked-window.patch': [
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-active-context.ts',
+      snippets: [
+        'const BOUNDED_CONTEXT_STEP_DIVISOR = 4;',
+        'function resolveBoundedContextStart(',
+        'function readBoundedContextBytes(',
+        'const boundaryOmitted = boundary !== undefined && headerBytes + boundaryBytes > maxBytes;',
+      ],
+    },
+  ],
+  'openclaw-bounded-history-compaction.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/session-context-limits.ts',
+      snippets: ['export function resolveEmbeddedSessionContextLimits('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-session-prepare.ts',
+      snippets: ['resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget)'],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-memory.ts',
+      snippets: [
+        'function shouldCompactByModelContextBytes(',
+        'const compactionOptional = compactionTrigger === "model_context_bytes";',
+      ],
+    },
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-reset-window.ts',
+      snippets: ['export function readVisibleTranscriptRetainedPrefixBytes('],
+    },
+  ],
 };
 
 v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
