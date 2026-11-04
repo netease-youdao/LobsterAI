@@ -2767,7 +2767,9 @@ export class OpenClawConfigSync {
             ? { feishu: { enabled: false } }
             : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
-          ...(hasMediaGenPlugin ? { 'lobster-media-generation': { enabled: true } } : {}),
+          ...(hasMediaGenPlugin ? {
+            'lobster-media-generation': { enabled: true, hooks: { allowConversationAccess: true } },
+          } : {}),
           ...(hasModelRoutingPlugin ? {
             'lobster-model-routing': getOpenClawTokenProxyPort() ? {
               enabled: true,
@@ -2927,6 +2929,9 @@ export class OpenClawConfigSync {
       const entries = plugins.entries as Record<string, Record<string, unknown>>;
       entries['lobster-media-generation'] = {
         enabled: true,
+        // Media tools need the run-owner hooks (before_model_resolve/agent_end)
+        // outside desktop session keys, e.g. visible subagents, IM and cron runs.
+        hooks: { allowConversationAccess: true },
         config: {
           callbackUrl: mediaCallbackUrl,
           secret: '${LOBSTER_MCP_BRIDGE_SECRET}',

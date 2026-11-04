@@ -1,6 +1,10 @@
 import { expect, test, vi } from 'vitest';
 
-import { MediaRunContexts, MediaRunLifecycle } from '../../../openclaw-extensions/lobster-media-generation/runContext';
+import {
+  getSharedMediaRunContexts,
+  MediaRunContexts,
+  MediaRunLifecycle,
+} from '../../../openclaw-extensions/lobster-media-generation/runContext';
 
 const sessionKey = 'agent:main:feishu:direct:user-1';
 const context = { sessionKey, runId: 'run-1' };
@@ -84,4 +88,32 @@ test('desktop continuation of an IM conversation preserves the IPC media selecti
   expect(runs.forTool(sessionKey, 'desktop-call')).toEqual({});
   await runs.end(context);
   expect(send).not.toHaveBeenCalled();
+});
+
+test('a visible subagent session binds only once its run is captured', async () => {
+  const send = vi.fn(async () => ({}));
+  const runs = new MediaRunContexts(send);
+  const visible = { sessionKey: 'agent:main:dashboard:child-session', runId: 'child-run' };
+  // Without the before_model_resolve capture there is no trusted run owner.
+  expect(await runs.bindTool({ ...visible, toolCallId: 'uncaptured-call' })).toBe(false);
+  await runs.begin({ ...visible, messageProvider: 'webchat' });
+  expect(await runs.bindTool({ ...visible, toolCallId: 'child-call' })).toBe(true);
+  expect(runs.forTool(visible.sessionKey, 'child-call')).toEqual({});
+  expect(send).not.toHaveBeenCalled();
+});
+
+test('plugin reloads share run bindings and use the latest bridge sender', async () => {
+  const firstSend = vi.fn(async () => ({}));
+  const secondSend = vi.fn(async () => ({}));
+  // Each OpenClaw registry load calls register(); hooks and tools may come from different loads.
+  const hookRuns = getSharedMediaRunContexts(firstSend);
+  const toolRuns = getSharedMediaRunContexts(secondSend);
+  expect(toolRuns).toBe(hookRuns);
+  const run = { sessionKey: 'agent:main:feishu:direct:shared-user', runId: 'shared-run' };
+  await hookRuns.begin(run);
+  expect(await hookRuns.bindTool({ ...run, toolCallId: 'shared-call' })).toBe(true);
+  expect(toolRuns.forTool(run.sessionKey, 'shared-call')).toEqual({ runId: run.runId });
+  expect(firstSend).not.toHaveBeenCalled();
+  expect(secondSend).toHaveBeenCalledTimes(1);
+  await toolRuns.end(run);
 });
