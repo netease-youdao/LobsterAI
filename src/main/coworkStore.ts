@@ -52,7 +52,7 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
-import { type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
+import { type ModelPresetId, parseModelPresetId, parseModelPresetModelId } from '../shared/modelPresets/constants';
 import {
   type Platform,
   PlatformRegistry,
@@ -2348,7 +2348,14 @@ export class CoworkStore {
       const selection = this.db.prepare('SELECT model_preset_id, model_override FROM cowork_sessions WHERE id = ?')
         .get(sessionId) as { model_preset_id?: string; model_override?: string } | undefined;
       const modelPresetId = parseModelPresetId(selection?.model_preset_id);
-      if (modelPresetId && selection?.model_override) {
+      const mobileInput = run ? this.remote.get<{ modelPresetId?: unknown }>(`inputRun:${run.runId}`) : null;
+      const mobilePresetId = parseModelPresetId(mobileInput?.modelPresetId);
+      if (mobilePresetId) {
+        // Mobile execution resolves a virtual route without setting the desktop session preset.
+        // Stamp the run's frozen tier on the source message so both UIs share the provenance.
+        message = { ...message, metadata: { ...message.metadata, modelPresetId: mobilePresetId } };
+      } else if (!Object.prototype.hasOwnProperty.call(mobileInput ?? {}, 'modelPresetId')
+        && modelPresetId && selection?.model_override) {
         message = { ...message, metadata: { ...message.metadata, modelPresetId,
           resolvedModelId: selection.model_override.split('/').slice(1).join('/') } };
       }
@@ -2661,7 +2668,14 @@ export class CoworkStore {
       merged.remoteCommandId = metadata.remoteCommandId;
       if (metadata.modelPresetId) {
         merged.modelPresetId = metadata.modelPresetId;
-        merged.resolvedModelId = metadata.resolvedModelId;
+        const mobileInput = typeof metadata.remoteRunId === 'string'
+          ? this.remote.get<{ modelPresetId?: unknown }>(`inputRun:${metadata.remoteRunId}`) : null;
+        const isMobilePreset = parseModelPresetId(mobileInput?.modelPresetId) === metadata.modelPresetId;
+        const hasResolvedModel = typeof metadata.resolvedModelId === 'string' && metadata.resolvedModelId.trim()
+          && !parseModelPresetModelId(metadata.resolvedModelId);
+        // Only a verified mobile preset may acquire its concrete model during streaming.
+        // Desktop provenance keeps its existing immutable behavior, including legacy values.
+        if (!isMobilePreset || hasResolvedModel) merged.resolvedModelId = metadata.resolvedModelId;
       }
       setClauses.push('metadata = ?');
       values.push(JSON.stringify(merged));

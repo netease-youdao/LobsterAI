@@ -67,7 +67,7 @@ function fixture(create = false, initialTargetId: string | null = null, initialM
     status: 'claimed', statusVersion: '1', expiresAt: new Date(Date.now() + 60000).toISOString() };
   const binding = remote.transaction(() => service.prepare(command, owner, create ? cwd : null));
   const entry: InboxEntry = { targetId: targetId ?? undefined, command, owner, ...binding, state: 'executing', result: null };
-  return { service, remote, runtime, send, entry, store, onInputConfigurationChanged, onRecovered, resolveModel, resolveRuntimeModel, switchTarget(next: string | null) { targetId = next; } };
+  return { service, remote, runtime, send, entry, store, manifest, onInputConfigurationChanged, onRecovered, resolveModel, resolveRuntimeModel, switchTarget(next: string | null) { targetId = next; } };
 }
 it('starts a v2 task with the frozen session model and thinking override', async () => {
   const { service, entry, store, runtime, send } = fixture(true);
@@ -231,4 +231,34 @@ it('publishes the confirmed explicit model while the caller clears the previous 
   f.service.recordCurrentInputModel('local');
   expect(f.resolveRuntimeModel).toHaveBeenLastCalledWith(owner, 'pc', 'provider/new');
   expect(f.remote.get('inputModel:local')).toMatchObject({ modelRef: 'new-model', thinkingLevel: 'high' });
+});
+
+it.each([
+  ['lobsterai-server/yd-fast', ModelPresetId.Balanced],
+  ['lobsterai-server/yd-ultra', ModelPresetId.Ultimate],
+])('freezes the mobile preset before dispatch: %s', async (runtimeRef, presetId) => {
+  for (const create of [true, false]) {
+    const f = fixture(create);
+    f.manifest.runtimeRef = runtimeRef;
+    f.resolveModel.mockReturnValue({ item: { modelRef: 'new-model', version: '1', source: 'subscription',
+      displayName: 'Preset', providerLabel: 'LobsterAI', thinking: { options: ['low', 'high'], default: 'low' } } });
+    await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
+    expect(f.remote.get('inputRun:run')).toMatchObject({ modelPresetId: presetId });
+    f.store.updateSession('local', { modelPresetId: null, modelOverride: 'provider/later' });
+    expect(f.remote.get('inputRun:run')).toMatchObject({ modelPresetId: presetId });
+  }
+});
+
+it('freezes keep-session preset bindings even when their route is already concrete', async () => {
+  const f = fixture();
+  f.manifest.presetBinding = { mode: 'keep_session', presetId: ModelPresetId.Ultimate,
+    physicalModel: { modelRef: 'physical', version: '1' }, sessionThinkingLevel: 'high', thinkingLevel: 'high' };
+  await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
+  expect(f.remote.get('inputRun:run')).toMatchObject({ modelPresetId: ModelPresetId.Ultimate });
+});
+
+it('does not treat custom virtual-looking model names as subscription presets', async () => {
+  const f = fixture(); f.manifest.runtimeRef = 'custom/yd-fast';
+  await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
+  expect(f.remote.get('inputRun:run')).toMatchObject({ modelPresetId: null });
 });

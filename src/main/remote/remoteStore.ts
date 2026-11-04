@@ -1588,7 +1588,7 @@ export class RemoteStore {
       if (!foreignHistory && metadata.remoteRunId && this.get<boolean>(`runPublished:${metadata.remoteRunId}`) === false) continue;
       const isTool = m.type.startsWith('tool_');
       const toolId = String(metadata.toolUseId || metadata.toolCallId || m.id);
-      const inputRun = this.get<{ input: { text: string; attachments: Array<{ assetId: string; version: string; fileName: string; mimeType: string; sizeBytes: string; intent: string }> }; inputModel: unknown }>(`inputRun:${metadata.remoteRunId}`);
+      const inputRun = this.get<{ input: { text: string; attachments: Array<{ assetId: string; version: string; fileName: string; mimeType: string; sizeBytes: string; intent: string }> }; inputModel: unknown; modelPresetId?: unknown }>(`inputRun:${metadata.remoteRunId}`);
       const desktopInput = this.get<DesktopInputRun & { inputModel?: unknown }>(`desktopInputRun:${metadata.remoteRunId}`);
       const ownDesktopInput = desktopInput && sameOwner(desktopInput.owner, this.owner(sessionId))
         && (foreignHistory || !desktopInput.attachments.some(source => source.preparedSource)) ? desktopInput : null;
@@ -1644,7 +1644,7 @@ export class RemoteStore {
         role: isTool ? 'tool' : this.replyProjectionSupported && m.type === 'system' ? 'notice' : m.type, status: metadata.isStreaming ? 'streaming' : 'complete', createdAt: iso(m.created_at),
         ...(this.replyProjectionSupported ? { projectionVersion: RemoteReply.ProjectionVersion, displayOrdinal: String(displayIndex + 1) } : {}),
         contentState: 'complete', preview: isTool ? '' : preview(content), originalContentBytes: String(Buffer.byteLength(stableJson(blocks))), blocks,
-        ...(this.inputProjectionSupported && !foreignHistory && (inputRun || ownDesktopInput?.inputModel) ? { inputModel: replyInputModel(m.type, metadata, inputRun?.inputModel ?? ownDesktopInput?.inputModel ?? null, this.modelPresetNames) } : {}) };
+        ...(this.inputProjectionSupported && !foreignHistory && (inputRun || ownDesktopInput?.inputModel) ? { inputModel: replyInputModel(m.type, metadata, inputRun?.inputModel ?? ownDesktopInput?.inputModel ?? null, this.modelPresetNames, inputRun?.modelPresetId) } : {}) };
       if (this.replyProjectionSupported) {
         for (const block of blocks) if (typeof block.text === 'string' && Buffer.byteLength(block.text) > RemoteReply.InlineBytes) {
           if (Buffer.byteLength(block.text) > RemoteReply.MaximumContentBytes) {

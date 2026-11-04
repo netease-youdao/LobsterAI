@@ -119,3 +119,58 @@ it('bounds a long model label without emitting a lone UTF-16 surrogate', () => {
   expect(projected.displayName).toBe('a'.repeat(119));
   expect(Buffer.byteLength(projected.displayName)).toBeLessThanOrEqual(480);
 });
+
+it.each([
+  [ModelPresetId.Balanced, '快速'], [ModelPresetId.Ultimate, '旗舰'],
+])('uses the frozen mobile tier in both sync paths: %s', (modelPresetId, name) => {
+  const { store } = fixture();
+  store.remove('desktopInputRun:run');
+  store.put('inputRun:run', { input: { text: 'Question', attachments: [] }, inputModel: selected, modelPresetId });
+  add(store, { model: 'provider/deepseek-flash-YoudaoInner' });
+  const expected = `${name}（deepseek-flash）`;
+  expect(message(store).inputModel.displayName).toBe(expected);
+  expect(live(store).payload.inputModel.displayName).toBe(expected);
+  expect(live(store).resolvedModelLabel).toBe(expected);
+  expect(store.get('inputRun:run')).toMatchObject({ inputModel: selected, modelPresetId });
+  // A different run's selection must not relabel earlier replies.
+  store.put('inputRun:later', { inputModel: selected, modelPresetId: ModelPresetId.Ultimate });
+  expect(message(store).inputModel.displayName).toBe(expected);
+});
+
+it('keeps explicit reply metadata ahead of the frozen mobile tier', () => {
+  expect(replyInputModel('assistant', { modelPresetId: ModelPresetId.Ultimate, model: 'provider/actual' },
+    selected, undefined, ModelPresetId.Balanced)).toMatchObject({ displayName: '旗舰（actual）' });
+  expect(replyInputModel('assistant', { model: 'provider/yd-ultra', resolvedModelId: 'provider/actual' },
+    selected, undefined, ModelPresetId.Balanced)).toMatchObject({ displayName: '旗舰（actual）' });
+  expect(replyInputModel('assistant', { model: 'provider/actual' }, selected, undefined, 'unknown'))
+    .toMatchObject({ displayName: 'actual' });
+  expect(replyInputModel('assistant', { model: 'yd-fast' }, selected, undefined, ModelPresetId.Balanced)).toBe(selected);
+  expect(replyInputModel('assistant', { model: 'provider/actual' }, selected,
+    { balanced: 'Fast', ultimate: 'Flagship' }, ModelPresetId.Balanced)).toMatchObject({ displayName: 'Fast（actual）' });
+});
+
+it('keeps the frozen tier when streaming reveals the concrete model', () => {
+  const { store } = fixture();
+  store.remove('desktopInputRun:run');
+  store.put('inputRun:run', { input: { text: 'Question', attachments: [] }, inputModel: selected,
+    modelPresetId: ModelPresetId.Balanced });
+  add(store, { model: 'yd-fast', isStreaming: true });
+  const before = message(store);
+  expect(before.inputModel.displayName).toBe('快速');
+  store.transaction(() => store.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='m'")
+    .run(JSON.stringify({ remoteRunId: 'run', model: 'provider/deepseek-flash', isStreaming: false })));
+  const after = message(store);
+  expect(after.inputModel.displayName).toBe('快速（deepseek-flash）');
+  expect(BigInt(after.revision)).toBeGreaterThan(BigInt(before.revision));
+  expect(live(store).payload.inputModel.displayName).toBe(after.inputModel.displayName);
+  store.put('syncTargetHistory:s', { runIds: ['run'] });
+  expect(message(store)).not.toHaveProperty('inputModel');
+  expect(live(store).payload).not.toHaveProperty('inputModel');
+});
+
+it('does not infer a tier from rejected model metadata', () => {
+  for (const model of ['https://private.invalid/yd-fast', 'localhost/yd-ultra', 'host/secret\n/yd-fast']) {
+    expect(replyInputModel('assistant', { model, resolvedModelId: 'provider/actual' }, selected))
+      .toMatchObject({ displayName: 'actual' });
+  }
+});

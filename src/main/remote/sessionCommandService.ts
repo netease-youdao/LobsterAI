@@ -5,7 +5,7 @@ import { resolve } from 'path';
 
 import { AgentId, AgentOwnerKind } from '../../shared/agent/constants';
 import type { ApprovalDecisionOutcome, ApprovalState } from '../../shared/cowork/approval';
-import { modelPresetModelId, parseModelPresetId } from '../../shared/modelPresets/constants';
+import { modelPresetModelId, parseModelPresetId, parseModelPresetModelId } from '../../shared/modelPresets/constants';
 import { OpenClawProviderId } from '../../shared/providers/constants';
 import { parseModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type { RemoteOwner } from '../../shared/remote/constants';
@@ -530,7 +530,10 @@ export class SessionCommandService {
                 bindingHash: payloadHash(preparedInput.presetBinding), runtimeRef: options.modelOverride, thinkingLevel: options.thinkingLevel || null } } : {}) });
             // The gateway patch is a local fact; its old service references are not the new target's projection.
             if (sameInputTarget()) {
-              this.store.remote.put(`inputRun:${entry.runId}`, { input: preparedInput.resolvedInput, inputModel });
+              // Freeze the selected tier before execution resolves its virtual route to a concrete model.
+              const modelPresetId = preparedInput.presetBinding?.presetId
+                ?? (inputModel.source === 'subscription' ? parseModelPresetModelId(preparedInput.runtimeRef) : null);
+              this.store.remote.put(`inputRun:${entry.runId}`, { input: preparedInput.resolvedInput, inputModel, modelPresetId });
             }
             this.store.remote.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(localId);
           });

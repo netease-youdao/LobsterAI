@@ -77,10 +77,10 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       preview: Buffer.from(content).subarray(0, 1000).toString('utf8').replace(/\uFFFD$/u, ''),
       originalContentBytes: String(originalBytes),
       blocks: omitted ? [] : blocks,
-      ...(model ? { inputModel: replyInputModel(row.type, metadata, model, input.modelPresetNames) } : {}),
+      ...(model ? { inputModel: replyInputModel(row.type, metadata, model, input.modelPresetNames, prepared?.modelPresetId) } : {}),
       ...(omitted ? { contentUnavailableReason: 'CONTENT_LIMIT_EXCEEDED' } : {}),
     };
-    const resolvedModelLabel = model && (row.type === 'user' || row.type === 'assistant') ? replyModelLabel(metadata, input.modelPresetNames) : null;
+    const resolvedModelLabel = model && (row.type === 'user' || row.type === 'assistant') ? replyModelLabel(metadata, input.modelPresetNames, prepared?.modelPresetId) : null;
     return { objectKind: 'message', objectId: row.id, sourceObjectRevision: input.revision,
       ...(row.type === 'user' && normalized.hasAnnotationText ? { hasAnnotationText: true } : {}),
       ...(resolvedModelLabel ? { resolvedModelLabel } : {}), ...(toolSource ? { toolSource } : {}),

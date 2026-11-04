@@ -30,6 +30,7 @@ import {
   CoworkForkMode,
 } from '../shared/cowork/constants';
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
+import { getMessageModelLabel } from '../shared/cowork/messageModelLabel';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { ModelPresetId } from '../shared/modelPresets/constants';
 import { RemoteDeletion } from '../shared/remote/deletions';
@@ -38,6 +39,7 @@ import { setLanguage, t } from './i18n';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 import { ownershipOperationGate } from './ownershipOperationGate';
+import { replyInputModel } from './remote/remoteReplyModel';
 import { configureRemoteTelemetry, shutdownRemoteTelemetry } from './remote/remoteTelemetry';
 
 // ---------------------------------------------------------------------------
@@ -1928,4 +1930,70 @@ test('rolls back the user message when persisting the fixed failure message fail
     expect(store.countSessionMessages(session.id)).toBe(0);
     expect(store.getSession(session.id)?.status).toBe('idle');
   } finally { spy.mockRestore(); }
+});
+
+
+test.each([ModelPresetId.Balanced, ModelPresetId.Ultimate])('mobile messages retain the frozen tier in desktop and phone labels: %s', modelPresetId => {
+  const sid = 'mobile-preset-message'; insertSession(sid);
+  const binding = vi.spyOn(store.remote, 'messageRunBinding').mockReturnValue({ runId: 'mobile-run', commandId: 'mobile-command' });
+  try {
+    store.remote.put('inputRun:mobile-run', { modelPresetId });
+    const user = store.addMessage(sid, { type: 'user', content: 'weather' });
+    const reply = store.addMessage(sid, { type: 'assistant', content: '', metadata: { model: 'yd-fast', isStreaming: true } });
+    expect(user.metadata?.modelPresetId).toBe(modelPresetId);
+    expect(reply.metadata?.modelPresetId).toBe(modelPresetId);
+    // Later session changes must not relabel this run's reply.
+    db.prepare('UPDATE cowork_sessions SET model_preset_id=?, model_override=? WHERE id=?')
+      .run(ModelPresetId.Ultimate, 'provider/later-model', sid);
+    store.updateMessage(sid, reply.id, { content: 'sunny', metadata: {
+      resolvedModelId: 'provider/deepseek-flash-YoudaoInner', isStreaming: false, isFinal: true,
+      modelPresetId: modelPresetId === ModelPresetId.Balanced ? ModelPresetId.Ultimate : ModelPresetId.Balanced,
+    } });
+    const updated = store.getMessage(sid, reply.id)!;
+    expect(updated.metadata?.modelPresetId).toBe(modelPresetId);
+    const expected = `${modelPresetId === ModelPresetId.Balanced ? '快速' : '旗舰'}（deepseek-flash）`;
+    expect(getMessageModelLabel(updated.metadata, id => id === ModelPresetId.Balanced ? '快速' : '旗舰')).toBe(expected);
+    expect(replyInputModel('assistant', updated.metadata ?? {}, { displayName: 'old' },
+      { balanced: '快速', ultimate: '旗舰' })).toMatchObject({ displayName: expected });
+    store.updateMessage(sid, reply.id, { metadata: { resolvedModelId: 'provider/later-model' } });
+    expect(store.getMessage(sid, reply.id)?.metadata?.resolvedModelId).toBe('provider/deepseek-flash-YoudaoInner');
+    const tool = store.addMessage(sid, { type: 'tool_result', content: 'result' });
+    expect(tool.metadata?.modelPresetId).toBeUndefined();
+  } finally { binding.mockRestore(); }
+});
+
+
+test.each([undefined, 'yd-fast', 'desktop-model'])('desktop model provenance remains immutable: %s', resolvedModelId => {
+  const sid = 'desktop-provenance'; insertSession(sid);
+  insertMessage('desktop-reply', sid, 'assistant', 'partial', JSON.stringify({
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId,
+  }), 1);
+  store.updateMessage(sid, 'desktop-reply', { metadata: {
+    modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'replacement', isFinal: true,
+  } });
+  expect(store.getMessage(sid, 'desktop-reply')?.metadata).toMatchObject({ modelPresetId: ModelPresetId.Balanced });
+  expect(store.getMessage(sid, 'desktop-reply')?.metadata?.resolvedModelId).toBe(resolvedModelId);
+});
+
+test('desktop sends retain their own preset after a mobile run', () => {
+  const sid = 'desktop-after-mobile'; insertSession(sid);
+  store.remote.beginRun(sid, 'earlier-mobile', 'mobile-command');
+  store.remote.put('inputRun:earlier-mobile', { modelPresetId: ModelPresetId.Balanced });
+  store.remote.updateRun(sid, 'succeeded');
+  store.remote.beginRun(sid, 'next-desktop');
+  db.prepare('UPDATE cowork_sessions SET model_preset_id=?, model_override=? WHERE id=?')
+    .run(ModelPresetId.Ultimate, 'provider/desktop-model', sid);
+  const reply = store.addMessage(sid, { type: 'assistant', content: 'reply' });
+  expect(reply.metadata).toMatchObject({ modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'desktop-model', remoteRunId: 'next-desktop' });
+});
+
+test('an explicit mobile non-preset selection does not inherit the desktop session tier', () => {
+  const sid = 'mobile-custom-model'; insertSession(sid);
+  store.remote.beginRun(sid, 'custom-run', 'command');
+  store.remote.put('inputRun:custom-run', { modelPresetId: null });
+  db.prepare('UPDATE cowork_sessions SET model_preset_id=?, model_override=? WHERE id=?')
+    .run(ModelPresetId.Balanced, 'provider/actual', sid);
+  const reply = store.addMessage(sid, { type: 'assistant', content: 'reply', metadata: { model: 'provider/actual' } });
+  expect(reply.metadata?.modelPresetId).toBeUndefined();
+  expect(getMessageModelLabel(reply.metadata, () => '快速')).toBe('actual');
 });
