@@ -19,13 +19,15 @@ function fixture(syncSuccess = true) {
   };
   let saved = false;
   const authStore = {
+    initialize: vi.fn(async () => {}),
     status: vi.fn(async () => ({ connected: saved })),
     save: vi.fn(async () => { saved = true; }), remove: vi.fn(async () => { saved = false; }),
   };
   const sync = vi.fn(async () => ({ success: syncSuccess }));
+  const broadcast = vi.fn();
   const connection = new NeteaseMailConnection({ config: getNeteaseMailOAuthConfig(false, { LOBSTER_NETEASE_MAIL_CLIENT_ID: credential.clientId }), getAuthStore: () => authStore,
-    getMcpStore: () => store as unknown as McpStore, fetch, openExternal: async () => {}, callbackText: () => 'Return', sync, broadcast: vi.fn() });
-  return { connection, records, authStore, store, sync };
+    getMcpStore: () => store as unknown as McpStore, fetch, openExternal: async () => {}, callbackText: () => 'Return', sync, broadcast });
+  return { connection, records, authStore, store, sync, broadcast };
 }
 
 test('stores credentials once, registers only read tools and never exposes tokens in availability', async () => {
@@ -47,9 +49,44 @@ test('stores credentials once, registers only read tools and never exposes token
 test('does not report connected success when runtime sync fails and reauthorization updates the same server', async () => {
   const { connection, records } = fixture(false);
   expect(await connection.authorize()).toEqual({ success: false, code: NeteaseMailFailure.SyncFailed });
-  expect(await connection.getAvailability()).toMatchObject({ connected: true });
+  expect(await connection.getAvailability()).toMatchObject({ connected: false });
   await connection.authorize();
   expect(records).toHaveLength(1);
+});
+
+test('waits for hot credential reload before reporting or broadcasting a connected server', async () => {
+  const { connection, authStore, sync, broadcast } = fixture();
+  let finishReload!: (result: { success: boolean }) => void;
+  sync.mockImplementation(() => new Promise(resolve => { finishReload = resolve; }));
+  const login = connection.authorize();
+  await vi.waitFor(() => expect(sync).toHaveBeenCalledOnce());
+  expect(authStore.save).toHaveBeenCalledOnce();
+  expect(await connection.getAvailability()).toMatchObject({ connected: false });
+  expect(broadcast).not.toHaveBeenCalled();
+  finishReload({ success: true });
+  expect(await login).toEqual({ success: true, outcome: NeteaseMailOutcome.Connected });
+  expect(await connection.getAvailability()).toMatchObject({ connected: true });
+  expect(broadcast).toHaveBeenCalledOnce();
+});
+
+test('reauthorization reloads even when the MCP server identity is unchanged', async () => {
+  const { connection, authStore, records, sync } = fixture();
+  await connection.authorize();
+  authorize.mockResolvedValueOnce({ ...credential, access: 'replacement-access' });
+  expect(await connection.authorize()).toEqual({ success: true, outcome: NeteaseMailOutcome.Connected });
+  expect(authStore.save).toHaveBeenLastCalledWith(expect.objectContaining({ access: 'replacement-access' }));
+  expect(records).toHaveLength(1);
+  expect(sync).toHaveBeenCalledTimes(2);
+});
+
+test('reload errors report sync failure while disconnect still removes credentials and disables the server', async () => {
+  const { connection, authStore, records, sync } = fixture();
+  await connection.authorize();
+  sync.mockRejectedValue(new Error('reload unavailable'));
+  expect(await connection.disconnect()).toEqual({ success: false, code: NeteaseMailFailure.SyncFailed });
+  expect(authStore.remove).toHaveBeenCalledOnce();
+  expect(records[0].enabled).toBe(false);
+  expect(await connection.getAvailability()).toMatchObject({ connected: false });
 });
 
 test('cancelling an in-flight authorization cannot install a connector', async () => {

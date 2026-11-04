@@ -19,6 +19,7 @@ import {
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { NeteaseMail, NeteaseMailAuth } from '../../../shared/neteaseMail/constants';
 import { t } from '../../i18n';
+import type { OpenClawConfigRpcClient } from '../../libs/openclawConfigDelivery';
 import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
 import { buildOpenClawMcpServers, safeServerKey } from '../../libs/openclawConfigSync';
 import {
@@ -43,6 +44,7 @@ import { createNeteaseMailAuthStore } from '../../mcp/neteaseMailAuthStore';
 import { getNeteaseMailOAuthConfig } from '../../mcp/neteaseMailConfig';
 import { NeteaseMailConnection } from '../../mcp/neteaseMailConnection';
 import { NeteaseMailIntegration } from '../../mcp/neteaseMailIntegration';
+import { reloadNeteaseMailCredentials } from '../../mcp/neteaseMailRuntime';
 import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
 import { registerNeteaseMailHandlers } from './neteaseMail';
 
@@ -56,6 +58,7 @@ export interface McpHandlerDeps {
   }) => Promise<{ success: boolean; changed: boolean }>;
   /** Paths for running `openclaw mcp …`; null when the runtime is not installed. */
   getOAuthCliContext: () => McpOAuthCliContext | null;
+  ensureGatewayRpcClient: () => Promise<OpenClawConfigRpcClient | null>;
 }
 
 function isOAuthRemoteServer(server: McpServerRecord | null): server is McpServerRecord {
@@ -231,7 +234,10 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     fetch: (input, init) => session.defaultSession.fetch(input instanceof Request ? input.url : input.toString(), init),
     openExternal: url => shell.openExternal(url),
     callbackText: () => t('neteaseMailAuthorizationReturned'),
-    sync: () => syncOpenClawConfig({ reason: 'netease-mail-authorization', expectedImpact: OpenClawConfigImpact.Sync }),
+    sync: async () => {
+      const result = await syncOpenClawConfig({ reason: 'netease-mail-authorization', expectedImpact: OpenClawConfigImpact.Sync });
+      return { success: result.success && await reloadNeteaseMailCredentials(deps.ensureGatewayRpcClient) };
+    },
     broadcast: () => getMcpRuntime().broadcastServersChanged(),
   });
   registerNeteaseMailHandlers(deps.getMainWindow ?? (() => null), new NeteaseMailIntegration(mailConnection));
@@ -244,6 +250,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   const clearOAuthCredentials = async (server: McpServerRecord): Promise<void> => {
     if (server.registryId === NeteaseMail.RegistryId) {
       await mailConnection!.clearCredentials();
+      if (!(await reloadNeteaseMailCredentials(deps.ensureGatewayRpcClient))) throw new Error(t('neteaseMailSyncFailed'));
       return;
     }
     cancelMcpOAuthLogin(server.id);

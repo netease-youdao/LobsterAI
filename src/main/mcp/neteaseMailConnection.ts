@@ -22,6 +22,7 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
   private pending?: { controller: AbortController; result: Promise<NeteaseMailActionResult> };
   private disconnecting = false;
   private committing = false;
+  private runtimeReady = true;
 
   constructor(private readonly deps: NeteaseMailConnectionDeps) {}
 
@@ -29,7 +30,7 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
     const store = this.deps.getAuthStore();
     if (!store) return { authorization: false, confirmation: false, connected: false };
     const status = await store.status();
-    return { authorization: Boolean(this.deps.config), confirmation: false, ...status };
+    return { authorization: Boolean(this.deps.config), confirmation: false, ...status, connected: status.connected && this.runtimeReady };
   }
 
   authorize(): Promise<NeteaseMailActionResult> {
@@ -58,6 +59,7 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
       const store = this.deps.getAuthStore();
       if (!store) throw new NeteaseMailOAuthError(NeteaseMailFailure.StorageFailed);
       await store.remove();
+      this.runtimeReady = false;
     } finally { this.disconnecting = wasDisconnecting; }
   }
 
@@ -69,8 +71,7 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
       for (const server of store.listServers()) {
         if (server.registryId === NeteaseMail.RegistryId) store.setEnabled(server.id, false);
       }
-      this.deps.broadcast();
-      if (!(await this.deps.sync()).success) return { success: false, code: NeteaseMailFailure.SyncFailed };
+      if (!(await this.syncRuntime())) return { success: false, code: NeteaseMailFailure.SyncFailed };
       return { success: true, outcome: NeteaseMailOutcome.Disconnected };
     } catch (error) { return this.failure(error); }
     finally { this.disconnecting = false; }
@@ -85,6 +86,18 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
     return { success: false, code: error instanceof NeteaseMailOAuthError ? error.code : NeteaseMailFailure.Failed };
   }
 
+  private async syncRuntime(): Promise<boolean> {
+    try {
+      this.runtimeReady = (await this.deps.sync()).success;
+      return this.runtimeReady;
+    } catch {
+      this.runtimeReady = false;
+      return false;
+    } finally {
+      this.deps.broadcast();
+    }
+  }
+
   private async connect(signal: AbortSignal): Promise<NeteaseMailActionResult> {
     const { config } = this.deps;
     const authStore = this.deps.getAuthStore();
@@ -95,6 +108,7 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
       });
       signal.throwIfAborted();
       this.committing = true;
+      this.runtimeReady = false;
       await authStore.save(credential);
       const store = this.deps.getMcpStore();
       const existing = store.listServers().find(server => server.registryId === NeteaseMail.RegistryId);
@@ -106,8 +120,7 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
       };
       const server = existing ? store.updateServer(existing.id, data)! : store.createServer(data);
       store.setEnabled(server.id, true);
-      this.deps.broadcast();
-      if (!(await this.deps.sync()).success) return { success: false, code: NeteaseMailFailure.SyncFailed };
+      if (!(await this.syncRuntime())) return { success: false, code: NeteaseMailFailure.SyncFailed };
       return { success: true, outcome: NeteaseMailOutcome.Connected };
     } catch (error) {
       if (signal.aborted) return { success: true, outcome: NeteaseMailOutcome.Cancelled };

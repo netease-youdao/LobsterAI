@@ -90,4 +90,6 @@ export const NeteaseMailReadTools = [
   NeteaseMailTool.ListDrafts,
 ] as const;
 
-export const NeteaseMailAuthStoreOperation = { Status: 'status', Save: 'save', Remove: 'remove' } as const;
+export const NeteaseMailAuthStoreOperation = { Initialize: 'initialize', Status: 'status', Save: 'save', Remove: 'remove' } as const;
+
+export const NeteaseMailRuntimeRpc = { ReloadCredentials: 'secrets.reload' } as const;

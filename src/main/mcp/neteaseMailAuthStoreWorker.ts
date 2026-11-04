@@ -21,7 +21,14 @@ async function run(): Promise<void> {
   }
   const request = JSON.parse(input) as { operation: string; credential?: NeteaseMailCredential };
   const stateDir = process.env.OPENCLAW_STATE_DIR!;
-  if (request.operation === NeteaseMailAuthStoreOperation.Save) {
+  if (request.operation === NeteaseMailAuthStoreOperation.Initialize) {
+    // Select the canonical shared store before the gateway pins its owner. The
+    // SDK preserves existing legacy stores; this must not replace any profiles.
+    const result = await sdk.updateAuthProfileStoreWithLock({
+      stateDir, sharedStoreWrite: true, updater: () => false,
+    });
+    if (!result) throw new Error('Auth store initialization failed');
+  } else if (request.operation === NeteaseMailAuthStoreOperation.Save) {
     const credential = request.credential;
     if (credential?.type !== NeteaseMailAuth.CredentialType || credential.provider !== NeteaseMailAuth.Provider
       || !credential.access || !credential.refresh || !Number.isFinite(credential.expires)) throw new Error('Invalid credential');

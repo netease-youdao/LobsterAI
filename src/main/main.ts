@@ -10303,6 +10303,7 @@ if (!gotTheLock) {
     getMainWindow: () => mainWindow,
     getMcpRuntime,
     syncOpenClawConfig,
+    ensureGatewayRpcClient: async () => openClawRuntimeAdapter?.ensureGatewayRpcClient() ?? null,
     // `openclaw mcp login|logout|status` share the gateway's state dir, where tokens live, but run
     // against a config of their own that references no secrets.
     getOAuthCliContext: () => {

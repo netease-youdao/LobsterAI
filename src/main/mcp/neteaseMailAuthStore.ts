@@ -1,12 +1,15 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 
-import { NeteaseMailAuthStoreOperation, NeteaseMailFailure } from '../../shared/neteaseMail/constants';
+import { NeteaseMailAuth, NeteaseMailAuthStoreOperation, NeteaseMailFailure } from '../../shared/neteaseMail/constants';
 import type { McpOAuthCliContext } from './mcpOAuthCli';
+import { getNeteaseMailOAuthConfig } from './neteaseMailConfig';
 import { type NeteaseMailCredential, NeteaseMailOAuthError } from './neteaseMailOAuth';
 
 export interface NeteaseMailAuthStatus { connected: boolean; expiresAt?: number }
 export interface NeteaseMailAuthStore {
+  initialize(): Promise<void>;
   status(): Promise<NeteaseMailAuthStatus>;
   save(credential: NeteaseMailCredential): Promise<void>;
   remove(): Promise<void>;
@@ -42,8 +45,16 @@ export function createNeteaseMailAuthStore(context: McpOAuthCliContext): Netease
     child.stdin.end(JSON.stringify({ operation, credential }));
   });
   return {
+    initialize: async () => { await run(NeteaseMailAuthStoreOperation.Initialize); },
     status: () => run(NeteaseMailAuthStoreOperation.Status),
     save: async credential => { await run(NeteaseMailAuthStoreOperation.Save, credential); },
     remove: async () => { await run(NeteaseMailAuthStoreOperation.Remove); },
   };
+}
+
+/** Must finish before spawning the gateway, including when startup migration is skipped. */
+export async function prepareNeteaseMailAuthStore(context: McpOAuthCliContext, isPackaged: boolean): Promise<void> {
+  if (!getNeteaseMailOAuthConfig(isPackaged)
+    || !fs.existsSync(path.join(context.runtimeRoot, 'third-party-extensions', NeteaseMailAuth.Provider, 'openclaw.plugin.json'))) return;
+  await createNeteaseMailAuthStore(context).initialize();
 }

@@ -20,6 +20,7 @@ import { type OpenClawDreamingRecoverySummary } from '../../shared/openclawEngin
 import { OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { t } from '../i18n';
+import { prepareNeteaseMailAuthStore } from '../mcp/neteaseMailAuthStore';
 import { AwakeClock } from './awakeClock';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import {
@@ -1344,6 +1345,15 @@ export class OpenClawEngineManager extends EventEmitter {
       electronNodeRuntimePath,
       env,
     });
+    if (this.shutdownRequested) return this.getStatus();
+
+    try {
+      await prepareNeteaseMailAuthStore({ runtimeRoot: runtime.root, stateDir: this.stateDir, electronNodeRuntimePath }, app.isPackaged);
+    } catch {
+      console.error('[NeteaseMail] Failed to prepare shared auth store before gateway startup');
+      this.setStatus({ phase: OpenClawEnginePhase.Error, version: runtime.version, message: t('neteaseMailStorageFailed'), canRetry: true });
+      return this.getStatus();
+    }
     if (this.shutdownRequested) return this.getStatus();
 
     // Verbose mode logs every streamed WebSocket event, including thinking deltas.
