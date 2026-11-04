@@ -170,6 +170,7 @@ export class RemoteAgentCatalog {
     const targetId = this.targetId(), epoch = this.operationEpoch;
     const isCurrent = () => stillCurrent() && this.getTargetId?.() === targetId && this.operationEpoch === epoch;
     if (!isCurrent()) throw new Error('Account changed');
+    this.store.publicationOrigins.inferLegacy(owner);
     const key = this.key(owner, deviceId);
     const path = `/devices/${deviceId}/agents`;
     let state = this.store.get<CatalogState>(key) || { catalogVersion: '0', syncedHash: null, pending: null };

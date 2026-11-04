@@ -147,28 +147,60 @@ export class RemotePublicationOrigins {
     for (const row of this.db.prepare('SELECT session_id FROM cowork_session_ownership o WHERE owner_user_id=? AND owner_scope_key=? AND ownership_status=\'confirmed\' AND NOT EXISTS(SELECT 1 FROM remote_publication_origins p WHERE p.kind=\'session\' AND p.local_id=o.session_id)')
       .all(owner.userId, owner.scopeKey) as Array<{ session_id: string }>) this.inferSession(row.session_id, damagedArchive);
     if (!exists(this.db, 'agent_ownership')) return;
-    const agents = this.db.prepare("SELECT agent_id FROM agent_ownership a WHERE owner_kind='owned' AND owner_user_id=? AND owner_scope_key=? AND NOT EXISTS(SELECT 1 FROM remote_publication_origins p WHERE p.kind='agent' AND p.local_id=a.agent_id)")
+    const agents = this.db.prepare("SELECT agent_id FROM agent_ownership a WHERE owner_kind='owned' AND owner_user_id=? AND owner_scope_key=? AND (NOT EXISTS(SELECT 1 FROM remote_publication_origins p WHERE p.kind='agent' AND p.local_id=a.agent_id) OR EXISTS(SELECT 1 FROM remote_publication_origins p WHERE p.kind='agent' AND p.local_id=a.agent_id AND p.route IS NULL AND p.data_space_id IS NULL AND p.owner_user_id=a.owner_user_id AND p.owner_scope_key=a.owner_scope_key))")
       .all(owner.userId, owner.scopeKey) as Array<{ agent_id: string }>;
     if (!agents.length) return;
     const agentSpaces = new Map<string, Set<string>>();
     let damagedCatalog = false;
     const unresolvedAgents = new Set<string>();
+    const awaitingLegacyTargets = new Set<string>();
     for (const catalog of this.db.prepare("SELECT key,value FROM remote_state WHERE key>='agentCatalog:' AND key<'agentCatalog;'").all() as Array<{ key: string; value: string }>) {
       try {
         const scope = JSON.parse(catalog.key.slice('agentCatalog:'.length)) as string[];
-        if (scope.length !== 4 || scope[1] !== owner.userId || scope[2] !== owner.scopeKey) continue;
-        const space = remotePublicationTargetSpace(this.db, scope[0]);
+        const legacy = scope.length === 3;
+        const offset = legacy ? 0 : 1;
+        if ((!legacy && scope.length !== 4) || scope[offset] !== owner.userId || scope[offset + 1] !== owner.scopeKey) continue;
+        // Pre-target catalogs used [owner, scope, device]. Resolve only an
+        // unambiguous authenticated account/device mapping, never the active route.
+        const candidates = legacy && exists(this.db, 'remote_sync_targets')
+          ? (this.db.prepare('SELECT target_id FROM remote_sync_targets WHERE owner_user_id=? AND owner_scope_key=? AND device_id=?')
+            .all(owner.userId, owner.scopeKey, scope[2]) as Array<{ target_id: string }>).map(row => remotePublicationTargetSpace(this.db, row.target_id))
+          : [legacy ? null : remotePublicationTargetSpace(this.db, scope[0])];
+        const known = [...new Set(candidates)];
+        const space = known.length === 1 ? known[0] : null;
         const value = JSON.parse(catalog.value) as { syncedItems?: Array<{ agentId: string }>; pending?: { items?: Array<{ agentId: string }> } };
         for (const item of [...(value.syncedItems || []), ...(value.pending?.items || [])]) {
-          if (!space) { unresolvedAgents.add(item.agentId); continue; }
+          if (!space) {
+            unresolvedAgents.add(item.agentId);
+            // Activation calls migration before registering the first target.
+            // Missing registration is retryable evidence, not a conflicting origin.
+            if (legacy && candidates.every(candidate => candidate === null)) awaitingLegacyTargets.add(item.agentId);
+            continue;
+          }
           const spaces = agentSpaces.get(item.agentId) || new Set<string>(); spaces.add(space); agentSpaces.set(item.agentId, spaces);
         }
       } catch { damagedCatalog = true; /* Missing evidence cannot establish a sole source. */ }
     }
     for (const { agent_id: id } of agents) {
       const spaces = agentSpaces.get(id) || new Set<string>();
-      this.db.prepare('INSERT OR IGNORE INTO remote_publication_origins VALUES(?,?,?,?,?,?)')
-        .run(RemotePublicationKind.Agent, id, damagedCatalog || unresolvedAgents.has(id) || spaces.size > 1 ? '' : null, !damagedCatalog && !unresolvedAgents.has(id) && spaces.size === 1 ? [...spaces][0] : null, owner.userId, owner.scopeKey);
+      const space = !damagedCatalog && !unresolvedAgents.has(id) && spaces.size === 1 ? [...spaces][0] : null;
+      this.db.transaction(() => {
+        this.db.prepare('INSERT OR IGNORE INTO remote_publication_origins VALUES(?,?,?,NULL,?,?)')
+          .run(RemotePublicationKind.Agent, id, damagedCatalog || unresolvedAgents.has(id) && !awaitingLegacyTargets.has(id) || spaces.size > 1 ? '' : null, owner.userId, owner.scopeKey);
+        if (!space) return;
+        const repaired = this.db.prepare(`UPDATE remote_publication_origins SET data_space_id=? WHERE kind='agent' AND local_id=?
+          AND route IS NULL AND data_space_id IS NULL AND owner_user_id=? AND owner_scope_key=?`)
+          .run(space, id, owner.userId, owner.scopeKey).changes;
+        // Re-project existing tasks as well as publishing the recovered catalog.
+        // Atomic durable revisions survive a crash before the next sync tick.
+        if (repaired && exists(this.db, 'remote_session_revisions')) {
+          this.db.prepare(`INSERT INTO remote_session_revisions(session_id,revision,dirty_at)
+            SELECT s.id,1,? FROM cowork_sessions s JOIN cowork_session_ownership o ON o.session_id=s.id
+            WHERE s.agent_id=? AND o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=?
+            ON CONFLICT(session_id) DO UPDATE SET revision=revision+1,dirty_at=excluded.dirty_at`)
+            .run(Date.now(), id, owner.userId, owner.scopeKey);
+        }
+      })();
     }
   }
   claimLegacyAgents(owner: RemoteOwner, deviceId: string, targetId: string, items: RemoteAgentCatalogItem[]): void {
