@@ -24,6 +24,7 @@ import { DECISION_MODEL_PLUGIN_ID } from '../../shared/decisionModel/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
+import { NeteaseMailAuth } from '../../shared/neteaseMail/constants';
 import { OFFICE_EDITORS } from '../../shared/office/editors';
 import {
   OPENCLAW_MODEL_COMPAT_PLUGIN_ID,
@@ -60,6 +61,7 @@ import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
 import type { DingTalkInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
 import { DiscordDmPolicy } from '../im/types';
+import { getNeteaseMailOAuthConfig } from '../mcp/neteaseMailConfig';
 import type { OfficeMcpStdioLaunch } from '../office/core/officeMcpServer';
 import { OpenClawSessionKeepAlive } from '../openclawSessionPolicy/constants';
 import { buildOpenClawSessionConfig } from '../openclawSessionPolicy/store';
@@ -1814,6 +1816,8 @@ export interface ResolvedMcpServer {
   // Remote servers only -> openclaw mcp.servers.*.auth. With "oauth", OpenClaw
   // runs MCP OAuth itself (tokens live in its state dir, `openclaw mcp login`).
   auth?: 'oauth';
+  /** Main-process-managed reference; never filled from renderer/server JSON. */
+  oauth?: { authProfileId: string };
   // -> openclaw mcp.servers.*.requestTimeoutMs / connectionTimeoutMs. Set by
   // marketplace entries for slow remote connectors; OpenClaw defaults otherwise.
   requestTimeoutMs?: number;
@@ -1900,6 +1904,7 @@ export function buildOpenClawMcpServers(
     }
     if (server.transportType !== 'stdio' && server.auth === 'oauth') {
       entry.auth = 'oauth';
+      if (server.oauth?.authProfileId) entry.oauth = { authProfileId: escapeOpenClawEnvTemplate(server.oauth.authProfileId) };
       // OpenClaw ignores a static Authorization header on OAuth servers (and warns),
       // so keep it out of openclaw.json instead of shipping a value that is never used.
       if (entry.headers && typeof entry.headers === 'object') {
@@ -2509,6 +2514,8 @@ export class OpenClawConfigSync {
     const hasAskUserPlugin = isBundledPluginAvailable('ask-user-question');
     const hasMediaGenPlugin = isBundledPluginAvailable('lobster-media-generation');
     const hasModelRoutingPlugin = isBundledPluginAvailable('lobster-model-routing');
+    const mailOAuthConfig = getNeteaseMailOAuthConfig(app.isPackaged);
+    const hasMailPlugin = isBundledPluginAvailable(NeteaseMailAuth.Provider) && Boolean(mailOAuthConfig);
     const hasDecisionPlugin = isBundledPluginAvailable(DECISION_MODEL_PLUGIN_ID);
     // Runtime-bundled xai extension (dist/extensions/xai): provides the Grok
     // model compat hooks (e.g. only grok-4.3 accepts reasoningEffort) plus the
@@ -2723,6 +2730,7 @@ export class OpenClawConfigSync {
         const transientPluginIds = [
           ...(hasPreinstalledPlugin('openclaw-lark') ? ['feishu'] : []),
           OPENCLAW_MODEL_COMPAT_PLUGIN_ID,
+          NeteaseMailAuth.Provider,
         ];
         const cleanedExistingEntries = Object.fromEntries(
           Object.entries(existingPluginEntries).filter(([id]) => (
@@ -2801,6 +2809,9 @@ export class OpenClawConfigSync {
           // exists, otherwise it becomes a stale entry on every startup.
           ...(hasQwenProvider && qwenPortalAuthPluginId ? { [qwenPortalAuthPluginId]: { enabled: true } } : {}),
           ...(hasXaiPlugin ? { xai: { enabled: true } } : {}),
+          ...(hasMailPlugin ? { [NeteaseMailAuth.Provider]: { enabled: true, config: {
+            clientId: mailOAuthConfig!.clientId,
+          } } } : {}),
           // User-installed plugins: merge enabled state and config from user_plugins table
           ...Object.fromEntries(
             userPlugins.map(p => [p.pluginId, {
@@ -2817,7 +2828,7 @@ export class OpenClawConfigSync {
         const existingAllow = Array.isArray((existingPlugins as Record<string, unknown>).allow)
           ? ((existingPlugins as Record<string, unknown>).allow as unknown[])
               .filter((id): id is string => typeof id === 'string' && id.length > 0)
-              .filter(id => id !== OPENCLAW_MODEL_COMPAT_PLUGIN_ID)
+              .filter(id => id !== OPENCLAW_MODEL_COMPAT_PLUGIN_ID && id !== NeteaseMailAuth.Provider)
           : [];
         const trustedPluginAllow = Array.from(new Set([
           ...existingAllow,
@@ -2828,6 +2839,7 @@ export class OpenClawConfigSync {
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
+          ...(hasMailPlugin ? [NeteaseMailAuth.Provider] : []),
           ...(hasModelRoutingPlugin ? ['lobster-model-routing'] : []),
           ...(hasModelCompatConfig
             ? [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]

@@ -12,6 +12,7 @@ import {
 } from '../../shared/browserCredentials/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
+import { NeteaseMailAuth } from '../../shared/neteaseMail/constants';
 import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { ComputerUseMcpEnv, ComputerUseMcpServerName } from '../computerUse/computerUseMcpServer';
@@ -4659,6 +4660,7 @@ describe('OpenClawConfigSync runtime config output', () => {
           url: 'https://mcp.example.com/mcp',
           headers: { Authorization: 'Bearer stale', 'X-Tenant': 'acme' },
           auth: 'oauth',
+          oauth: { authProfileId: NeteaseMailAuth.ProfileId },
         },
         {
           name: 'header-remote',
@@ -4678,6 +4680,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       transport: 'streamable-http',
       auth: 'oauth',
       headers: { 'x-tenant': 'acme' },
+      oauth: { authProfileId: NeteaseMailAuth.ProfileId },
     });
     expect(config.mcp.servers['oauth-remote'].headers).not.toHaveProperty('authorization');
     expect(config.mcp.servers['header-remote']).not.toHaveProperty('auth');

@@ -2,6 +2,7 @@ import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import fs from 'fs';
 import https from 'https';
+import path from 'path';
 
 import {
   McpAuthMode,
@@ -16,6 +17,8 @@ import {
   type McpToolDiscoveryResult,
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
+import { NeteaseMail, NeteaseMailAuth } from '../../../shared/neteaseMail/constants';
+import { t } from '../../i18n';
 import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
 import { buildOpenClawMcpServers, safeServerKey } from '../../libs/openclawConfigSync';
 import {
@@ -36,9 +39,15 @@ import {
   McpToolDiscoveryTimeoutMs,
   normalizeMcpToolDiscoveryRequest,
 } from '../../mcp/mcpToolDiscovery';
+import { createNeteaseMailAuthStore } from '../../mcp/neteaseMailAuthStore';
+import { getNeteaseMailOAuthConfig } from '../../mcp/neteaseMailConfig';
+import { NeteaseMailConnection } from '../../mcp/neteaseMailConnection';
+import { NeteaseMailIntegration } from '../../mcp/neteaseMailIntegration';
 import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
+import { registerNeteaseMailHandlers } from './neteaseMail';
 
 export interface McpHandlerDeps {
+  getMainWindow?: () => BrowserWindow | null;
   getMcpRuntime: () => McpRuntime;
   syncOpenClawConfig: (options: {
     reason: string;
@@ -74,6 +83,7 @@ const INVALID_URL_ERROR = 'MCP server URL must be an absolute HTTP or HTTPS URL.
 // In-flight sign-ins by server id. Aborting one kills its `openclaw mcp login`,
 // which also frees the loopback callback port.
 const oauthLoginControllers = new Map<string, AbortController>();
+let mailConnection: NeteaseMailConnection | undefined;
 
 function cancelMcpOAuthLogin(id: string): void {
   oauthLoginControllers.get(id)?.abort();
@@ -82,6 +92,7 @@ function cancelMcpOAuthLogin(id: string): void {
 /** Called on app quit so no `openclaw mcp login` outlives the app holding 127.0.0.1:8989. */
 export function cancelAllMcpOAuthLogins(): void {
   for (const controller of oauthLoginControllers.values()) controller.abort();
+  void mailConnection?.cancelAuthorization();
 }
 
 function toOAuthFailure(error: unknown, fallback: string): McpOAuthActionResult {
@@ -208,6 +219,22 @@ function buildQichachaServerData(
 
 export function registerMcpHandlers(deps: McpHandlerDeps): void {
   const { getMcpRuntime, syncOpenClawConfig, getOAuthCliContext } = deps;
+  const mailConfig = getNeteaseMailOAuthConfig(app.isPackaged);
+  mailConnection = new NeteaseMailConnection({
+    config: mailConfig,
+    getAuthStore: () => {
+      const context = getOAuthCliContext();
+      return context && fs.existsSync(path.join(context.runtimeRoot, 'third-party-extensions', NeteaseMailAuth.Provider, 'openclaw.plugin.json'))
+        ? createNeteaseMailAuthStore(context) : undefined;
+    },
+    getMcpStore: () => getMcpRuntime().getStore(),
+    fetch: (input, init) => session.defaultSession.fetch(input instanceof Request ? input.url : input.toString(), init),
+    openExternal: url => shell.openExternal(url),
+    callbackText: () => t('neteaseMailAuthorizationReturned'),
+    sync: () => syncOpenClawConfig({ reason: 'netease-mail-authorization', expectedImpact: OpenClawConfigImpact.Sync }),
+    broadcast: () => getMcpRuntime().broadcastServersChanged(),
+  });
+  registerNeteaseMailHandlers(deps.getMainWindow ?? (() => null), new NeteaseMailIntegration(mailConnection));
 
   /**
    * Signs out before a server's OAuth identity goes away (delete, rename, URL or
@@ -215,6 +242,10 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
    * state nor come back when the same server is added again.
    */
   const clearOAuthCredentials = async (server: McpServerRecord): Promise<void> => {
+    if (server.registryId === NeteaseMail.RegistryId) {
+      await mailConnection!.clearCredentials();
+      return;
+    }
     cancelMcpOAuthLogin(server.id);
     const context = getOAuthCliContext();
     const cliServer = toOAuthCliServer(server);
@@ -507,6 +538,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
 
   ipcMain.handle(McpIpcChannel.OAuthLogin, async (_event, id: string): Promise<McpOAuthActionResult> => {
     const server = getMcpRuntime().getStore().getServer(id);
+    if (server?.registryId === NeteaseMail.RegistryId) return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: t('neteaseMailUseManagedEntry') };
     if (!isOAuthRemoteServer(server)) {
       return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: 'This MCP server does not use OAuth.' };
     }
@@ -553,6 +585,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
 
   ipcMain.handle(McpIpcChannel.OAuthLogout, async (_event, id: string): Promise<McpOAuthActionResult> => {
     const server = getMcpRuntime().getStore().getServer(id);
+    if (server?.registryId === NeteaseMail.RegistryId) return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: t('neteaseMailUseManagedEntry') };
     if (!isOAuthRemoteServer(server)) {
       return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: 'This MCP server does not use OAuth.' };
     }
@@ -575,7 +608,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   });
 
   ipcMain.handle(McpIpcChannel.OAuthStatus, async (): Promise<McpOAuthStatusResult> => {
-    const servers = getMcpRuntime().getStore().listServers().filter(isOAuthRemoteServer);
+    const servers = getMcpRuntime().getStore().listServers().filter(server => isOAuthRemoteServer(server) && server.registryId !== NeteaseMail.RegistryId);
     if (servers.length === 0) return { success: true, states: {} };
     // Disabled servers are not loaded by OpenClaw, so they show no OAuth state.
     const cliServers = servers

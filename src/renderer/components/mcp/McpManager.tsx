@@ -4,6 +4,8 @@ import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { McpAuthMode, McpOAuthErrorCode, McpOAuthState } from '../../../shared/mcp/auth';
+import { McpManagedProvider } from '../../../shared/mcp/constants';
+import { NeteaseMail } from '../../../shared/neteaseMail/constants';
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
@@ -36,6 +38,7 @@ import EditIcon from '../icons/EditIcon';
 import PlusCircleIcon from '../icons/PlusCircleIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
+import NeteaseMailConnectionDialog from '../mail/NeteaseMailConnectionDialog';
 import {
   getFormAnalyticsParams,
   getRegistryAnalyticsParams,
@@ -59,10 +62,10 @@ const LAUNCH_STATUS_COLORS: Record<string, string> = {
 };
 
 const isQichachaRegistryEntry = (entry: McpRegistryEntry): boolean =>
-  entry.oauthProvider === 'qichacha';
+  entry.oauthProvider === McpManagedProvider.Qichacha;
 
 const isOAuthRemoteServer = (server: McpServerConfig): boolean =>
-  server.transportType !== 'stdio' && server.auth === McpAuthMode.OAuth;
+  server.registryId !== NeteaseMail.RegistryId && server.transportType !== 'stdio' && server.auth === McpAuthMode.OAuth;
 
 /** How a remote OAuth server's sign-in reads on its card and in its detail. */
 const OAuthPhase = {
@@ -148,6 +151,7 @@ const McpManager: React.FC = () => {
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isMailConnectionOpen, setIsMailConnectionOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
   const [installingRegistry, setInstallingRegistry] = useState<McpRegistryEntry | null>(null);
   const [connectingRegistryId, setConnectingRegistryId] = useState<string | null>(null);
@@ -660,6 +664,7 @@ const McpManager: React.FC = () => {
   };
 
   const handleOpenEditForm = (server: McpServerConfig) => {
+    if (server.registryId === NeteaseMail.RegistryId) { setIsMailConnectionOpen(true); return; }
     reportMcpAction('edit_open', {
       source: 'mcp_manager',
       activeTab,
@@ -737,6 +742,11 @@ const McpManager: React.FC = () => {
   };
 
   const handleInstallFromRegistry = (entry: McpRegistryEntry) => {
+    if (entry.oauthProvider === McpManagedProvider.NeteaseMail) {
+      setDetailTarget(null);
+      setIsMailConnectionOpen(true);
+      return;
+    }
     reportMcpAction('marketplace_install_open', {
       source: 'mcp_manager',
       activeTab,
@@ -967,6 +977,7 @@ const McpManager: React.FC = () => {
   };
 
   const openServerDetail = (server: McpServerConfig) => {
+    if (server.registryId === NeteaseMail.RegistryId) { setIsMailConnectionOpen(true); return; }
     reportMcpAction('open_detail', {
       source: 'mcp_manager',
       activeTab,
@@ -1042,6 +1053,7 @@ const McpManager: React.FC = () => {
     phase: OAuthPhase | null,
     size: 'card' | 'cardHeader' | 'detail',
   ) => {
+    if (server.registryId === NeteaseMail.RegistryId) return <button type="button" className={CARD_SECONDARY_PILL_CLASS} onClick={event => { event.stopPropagation(); setIsMailConnectionOpen(true); }}>{i18nService.t('neteaseMailConnect')}</button>;
     // Negative margins keep the action from increasing the compact facts row's height.
     const placement = size === 'card' ? 'ml-auto -my-1 ' : '';
     const isCardSize = size !== 'detail';
@@ -1078,6 +1090,7 @@ const McpManager: React.FC = () => {
    * until it is authorized, everything else just reads Installed.
    */
   const renderMarketplaceInstalledState = (entry: McpRegistryEntry, size: 'cardHeader' | 'detail') => {
+    if (entry.oauthProvider === McpManagedProvider.NeteaseMail) return <button type="button" className={CARD_SECONDARY_PILL_CLASS} onClick={event => { event.stopPropagation(); setIsMailConnectionOpen(true); }}>{i18nService.t('neteaseMailConnect')}</button>;
     const oauthServer = isOAuthRegistryEntry(entry)
       ? servers.find(server => server.registryId === entry.id && isOAuthRemoteServer(server))
       : undefined;
@@ -1102,6 +1115,7 @@ const McpManager: React.FC = () => {
   };
 
   const getInstallActionLabel = (entry: McpRegistryEntry, isConnecting: boolean): string => {
+    if (entry.oauthProvider === McpManagedProvider.NeteaseMail) return i18nService.t('neteaseMailConnect');
     if (isQichachaRegistryEntry(entry)) {
       return i18nService.t(isConnecting ? 'mcpQichachaConnecting' : 'mcpQichachaConnect');
     }
@@ -1817,6 +1831,7 @@ const McpManager: React.FC = () => {
       </div>
 
       {renderDetailModal()}
+      {isMailConnectionOpen && <NeteaseMailConnectionDialog onClose={() => setIsMailConnectionOpen(false)} />}
 
       {/* Delete confirmation modal */}
       {pendingDelete && (

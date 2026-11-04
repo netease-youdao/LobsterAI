@@ -124,6 +124,8 @@ import type {
   MediaType,
 } from '../shared/media/defaultPolicy';
 import { type ModelPresetId, ModelPresetIpc } from '../shared/modelPresets/constants';
+import { NeteaseMailIpc } from '../shared/neteaseMail/constants';
+import type { NeteaseMailBridge, NeteaseMailConfirmationRequest } from '../shared/neteaseMail/types';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
@@ -268,6 +270,13 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
   mcp: {
+    neteaseMail: {
+      getAvailability: () => ipcRenderer.invoke(NeteaseMailIpc.Availability),
+      authorize: () => ipcRenderer.invoke(NeteaseMailIpc.Authorize),
+      cancelAuthorization: () => ipcRenderer.invoke(NeteaseMailIpc.CancelAuthorization),
+      disconnect: () => ipcRenderer.invoke(NeteaseMailIpc.Disconnect),
+      resolveConfirmation: (request: NeteaseMailConfirmationRequest) => ipcRenderer.invoke(NeteaseMailIpc.ResolveConfirmation, request),
+    } satisfies NeteaseMailBridge,
     list: () => ipcRenderer.invoke(McpIpcChannel.List),
     create: (data: any) => ipcRenderer.invoke(McpIpcChannel.Create, data),
     update: (id: string, data: any) => ipcRenderer.invoke(McpIpcChannel.Update, id, data),

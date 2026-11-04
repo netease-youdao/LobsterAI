@@ -107,7 +107,13 @@ export default defineConfig({
             },
           },
         },
-        // package.json starts Electron after all five output files stabilize.
+        // package.json starts Electron after all output files stabilize.
+        onstart() {},
+      },
+      {
+        // Isolated OpenClaw credential-store owner (ELECTRON_RUN_AS_NODE).
+        entry: 'src/main/mcp/neteaseMailAuthStoreWorker.ts',
+        vite: { build: { outDir: 'dist-electron', minify: false, sourcemap: true } },
         onstart() {},
       },
       {

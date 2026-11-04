@@ -10300,6 +10300,7 @@ if (!gotTheLock) {
   });
 
   registerMcpHandlers({
+    getMainWindow: () => mainWindow,
     getMcpRuntime,
     syncOpenClawConfig,
     // `openclaw mcp login|logout|status` share the gateway's state dir, where tokens live, but run

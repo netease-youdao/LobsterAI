@@ -37,6 +37,7 @@ import InlineImageGallery from '../artifacts/imageEditor/InlineImageGallery';
 import AbnormalIcon from '../icons/AbnormalIcon';
 import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
+import NeteaseMailToolResult, { buildNeteaseMailPresentations } from '../mail/NeteaseMailToolResult';
 import MarkdownContent from '../MarkdownContent';
 import PurchaseOfferCountdown from '../PurchaseOfferCountdown';
 import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
@@ -618,16 +619,18 @@ const AssistantTurnBlock: React.FC<{
     () => consolidateMediaPolling(visibleAssistantItems, taskPresentations),
     [visibleAssistantItems, taskPresentations],
   );
+  const mailPresentations = useMemo(() => buildNeteaseMailPresentations(consolidatedItems), [consolidatedItems]);
   const toolGroupOverrides = useMemo(() => {
     const overrides = new Map<string, React.ReactNode>();
-    if (!renderToolGroupOverride) return overrides;
     for (const item of consolidatedItems) {
       if (item.type !== 'tool_group') continue;
-      const override = renderToolGroupOverride(item.group);
+      const mail = mailPresentations.get(item.group.toolUse.id);
+      const override = renderToolGroupOverride?.(item.group)
+        ?? (mail ? <NeteaseMailToolResult group={item.group} presentation={mail} /> : null);
       if (override) overrides.set(item.group.toolUse.id, override);
     }
     return overrides;
-  }, [consolidatedItems, renderToolGroupOverride]);
+  }, [consolidatedItems, renderToolGroupOverride, mailPresentations]);
   const videoPathArtifacts = useMemo(
     () => getVideoPathArtifacts(artifacts),
     [artifacts],
@@ -1113,6 +1116,10 @@ const AssistantTurnBlock: React.FC<{
                   )}
                 />
                 {isProcessExpanded && processChunks.map((chunk, index) => renderChunk(chunk, index))}
+                {/* Mail cards and quota notices remain visible when the process is folded. */}
+                {!isProcessExpanded && processChunks.map((chunk, index) => chunk.kind === 'item'
+                  && chunk.item.type === 'tool_group' && mailPresentations.has(chunk.item.group.toolUse.id)
+                  ? renderChunk(chunk, index) : null)}
                 {answerChunks.map((chunk, index) => renderChunk(chunk, answerStartIndex + index))}
               </>
             ) : (

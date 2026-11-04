@@ -1,3 +1,6 @@
+import { McpAuthMode } from '../../shared/mcp/auth';
+import { McpManagedProvider } from '../../shared/mcp/constants';
+import { NeteaseMail, NeteaseMailReadTools } from '../../shared/neteaseMail/constants';
 import { McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
 
 /**
@@ -20,9 +23,26 @@ export const mcpRegistry: McpRegistryEntry[] = [
     transportType: 'http',
     command: 'https://agent.qcc.com/mcp',
     defaultArgs: ['6 servers'],
-    oauthProvider: 'qichacha',
+    oauthProvider: McpManagedProvider.Qichacha,
     kind: McpRegistryEntryKind.Bundle,
     marketplacePosition: 4,
+  },
+  {
+    id: NeteaseMail.RegistryId,
+    name: 'NetEase Mail',
+    name_zh: '网易邮箱',
+    descriptionKey: 'neteaseMailDescription',
+    category: 'productivity',
+    categoryKey: 'mcpCategoryProductivity',
+    transportType: 'http',
+    command: '',
+    defaultArgs: [],
+    oauthProvider: McpManagedProvider.NeteaseMail,
+    connector: {
+      url: NeteaseMail.Endpoint,
+      auth: McpAuthMode.OAuth,
+      allowedTools: [...NeteaseMailReadTools],
+    },
   },
 ];
 

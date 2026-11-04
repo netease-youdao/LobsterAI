@@ -145,6 +145,7 @@ import type {
   MediaType,
 } from '../../shared/media/defaultPolicy';
 import type { AvailableModelPreset, ModelPresetId, ModelPresetPreference } from '../../shared/modelPresets/constants';
+import type { NeteaseMailBridge } from '../../shared/neteaseMail/types';
 import type { OfficeBridges } from '../../shared/office/editors';
 import type {
   OpenClawEngineErrorCode,
@@ -750,6 +751,7 @@ interface IElectronAPI {
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {
+    neteaseMail: NeteaseMailBridge;
     list: () => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
     create: (
       data: any,
