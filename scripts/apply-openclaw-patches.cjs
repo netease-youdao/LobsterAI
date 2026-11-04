@@ -1621,6 +1621,34 @@ v20260801StrongPatchValidators['zzz-openclaw-stream-drop-reconnect.patch'] = [
     snippets: ['transportDropRetryPending: false,'],
   },
 ];
+v20260801StrongPatchValidators['openclaw-plugin-realpath-parent-cache.patch'] = [
+  {
+    file: 'src/plugins/realpath-through-parent.ts',
+    snippets: [
+      'export function realpathThroughParentSync(',
+      'export function safeRealpathWithParentsSync(',
+    ],
+  },
+  {
+    file: 'src/plugins/plugin-cache-files.ts',
+    snippets: ['realpathThroughParentSync(targetPath, (parentPath) =>'],
+  },
+  {
+    file: 'src/plugins/plugin-registry-snapshot.ts',
+    snippets: ['const realCursor = safeRealpathWithParentsSync(cursor, cache);'],
+    forbiddenSnippets: ['safeRealpathSync('],
+  },
+];
+v20260801StrongPatchValidators['openclaw-windows-native-plugin-require.patch'] = [
+  {
+    file: 'src/plugins/native-module-require.ts',
+    snippets: [
+      'function toRequirePath(modulePath: string): string {',
+      'const requirePath = toRequirePath(modulePath);',
+      'nodeRequire.resolve(toRequirePath(modulePath))',
+    ],
+  },
+];
 
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators
