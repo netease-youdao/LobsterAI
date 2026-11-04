@@ -184,7 +184,7 @@ import {
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { LogIpc } from '../shared/logExport/constants';
-import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
+import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
@@ -472,6 +472,7 @@ import {
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
 import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
+import { mediaConfirmationQuote } from './libs/mediaConfirmationRequests';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
 import {
   MEDIA_INTENT_RETRY_WINDOW_MS,
@@ -7109,8 +7110,12 @@ if (!gotTheLock) {
         params,
       };
 
+      // A turn approval covers later images of this turn at the same model and quote; a new price asks again.
+      const imageTurnApproved = mediaType === MediaType.Image && defaultImageBudget.isTurnApproved(
+        selection?.imageDefault, selectedModel, mediaConfirmationQuote(imageConfirmationQuestions(modelCapability, t)));
       if (mediaType === MediaType.Image
-        && defaultImageBudget.needsConfirmation(selection?.imageDefault, request.context.toolCallId)) {
+        && defaultImageBudget.needsConfirmation(selection?.imageDefault, request.context.toolCallId)
+        && (!imageTurnApproved || defaultImageBudget.wasDeclined(selection?.imageDefault))) {
         const declined = { behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.UserCancelled };
         if (defaultImageBudget.wasDeclined(selection?.imageDefault)) return imageConfirmationFailure(declined, t);
         const question = t('mediaExtraImageConfirmDescription');
@@ -7118,6 +7123,7 @@ if (!gotTheLock) {
           sessionKey: request.context.sessionKey,
           recoverableMedia: {
             kind: MediaConfirmationKind.Image,
+            turnGroup: defaultImageBudget.turnGroup(selection?.imageDefault, selectedModel),
             isCurrent: () => isRequestAccountCurrent() && serverBaseUrl === getServerApiBaseUrl(),
             signal: request.signal,
             onEvent: event => mediaUsage.confirmationEvent(request.context.toolCallId, event, selectedModel),
@@ -7135,6 +7141,11 @@ if (!gotTheLock) {
         if (defaultImageBudget.wasDeclined(selection?.imageDefault)
           || !isMediaGenerationConfirmed(response, question, t('mediaVideoConfirmAccept'))) {
           return imageConfirmationFailure(defaultImageBudget.wasDeclined(selection?.imageDefault) ? declined : response, t);
+        }
+        if (response.grant === MediaConfirmationGrant.Turn && response.quote
+          && !defaultImageBudget.isTurnApproved(selection?.imageDefault, selectedModel, response.quote)) {
+          defaultImageBudget.approveTurn(selection?.imageDefault, selectedModel, response.quote);
+          console.log(`[MediaGeneration] user approved the remaining images of this turn for model ${selectedModel}`);
         }
       }
 
