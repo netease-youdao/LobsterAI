@@ -202,6 +202,12 @@ import {
   buildOpenClawTranscriptOversizedError,
   inspectOpenClawTranscriptSafety,
 } from './openclawTranscriptSafety';
+import {
+  hasTruncatedHistoryMessages,
+  isTruncatedHistoryPreviewOf,
+  OPENCLAW_HISTORY_TRUNCATION_MARKER,
+  OpenClawTruncatedHistoryRestorer,
+} from './openclawTruncatedHistory';
 import { OpenClawTurnHistorySync } from './openclawTurnHistorySync';
 import {
   checkSessionModelRoute,
@@ -2685,6 +2691,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly fullySyncedSessions = new Set<string>();
   /** Per-session cursor: number of gateway history entries (user+assistant) already synced locally. */
   private readonly channelSyncCursor = new Map<string, number>();
+  /** chat.history caps message text for display; full rows are fetched before history is persisted. */
+  private readonly truncatedHistoryRestorer = new OpenClawTruncatedHistoryRestorer();
   /** Sessions re-created after user deletion — use latestOnly sync to avoid replaying old history. */
   private readonly reCreatedChannelSessionIds = new Set<string>();
   /** Channel sessionKeys explicitly deleted by the user. Polling will not re-create these. */
@@ -3967,6 +3975,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }): boolean {
     const { coworkSessionId, openClawSessionKey, state } = options;
     if (!state) return false;
+    // Cron rows carry the job's run model. Manual replies in a scheduled-task
+    // conversation run on the managed key, so the local override owns them.
+    if (isCronSessionKey(openClawSessionKey)) return false;
     const session = this.store.getSession(coworkSessionId);
     if (!session) return false;
 
@@ -3975,7 +3986,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (staleReason) {
       // Never mirror a model that can no longer run. Only a sessions.list row is
       // the entry OpenClaw runs with; history keeps the /model command from before.
-      if (state.explicitOverride && state.source === 'sessions-list' && !isCronSessionKey(openClawSessionKey)) {
+      if (state.explicitOverride && state.source === 'sessions-list') {
         void this.staleModelOverrides.reset({
           sessionId: coworkSessionId,
           sessionKey: openClawSessionKey,
@@ -4249,6 +4260,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionKey,
         limit: OpenClawRuntimeAdapter.FULL_HISTORY_SYNC_LIMIT,
       }, { timeoutMs: 10_000 });
+      if (hasTruncatedHistoryMessages(history?.messages)) {
+        history.messages = await this.restoreTruncatedHistory(client, sessionKey, history.messages);
+      }
       if (!Array.isArray(history?.messages) || history.messages.length === 0) {
         return (
           await this.readFromTranscript(sessionKey, options?.sessionId)
@@ -11497,7 +11511,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const session = this.store.getSession(sessionId);
       if (!session) return;
 
-      const plan = buildSubagentChildHistorySyncPlan(session.messages, history.messages);
+      const historyMessages = hasTruncatedHistoryMessages(history.messages)
+        ? await this.restoreTruncatedHistory(client, sessionKey, history.messages)
+        : history.messages;
+      const plan = buildSubagentChildHistorySyncPlan(session.messages, historyMessages);
       if (plan.entriesToStore.length === 0) {
         this.channelSyncCursor.set(sessionId, 0);
         return;
@@ -11543,6 +11560,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionKey,
         limit: FINAL_HISTORY_SYNC_LIMIT,
       }, { timeoutMs: 10_000 });
+      if (hasTruncatedHistoryMessages(history?.messages)) {
+        history.messages = await this.restoreTruncatedHistory(client, sessionKey, history.messages);
+      }
       const runHistoryKey = resolveOpenClawCronRunHistoryKey(sessionKey, history?.sessionId);
       if (!runHistoryKey) {
         console.debug('[CronHistorySync] awaiting transcript identity - sessionKey:', sessionKey);
@@ -11657,6 +11677,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
   }
 
+  private restoreTruncatedHistory(
+    client: GatewayClientLike,
+    sessionKey: string,
+    messages: unknown[],
+  ): Promise<unknown[]> {
+    return this.truncatedHistoryRestorer.restore(client.request.bind(client), sessionKey, messages);
+  }
+
   /**
    * Reconcile local session messages with the authoritative gateway chat.history.
    *
@@ -11695,6 +11723,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionKey,
         limit,
       }, { timeoutMs: 10_000 });
+      if (hasTruncatedHistoryMessages(history?.messages)) {
+        history.messages = await this.restoreTruncatedHistory(client, sessionKey, history.messages);
+      }
       if (!Array.isArray(history?.messages) || history.messages.length === 0) {
         console.log('[Reconcile] empty history — sessionId:', sessionId);
         this.channelSyncCursor.set(sessionId, 0);
@@ -11947,6 +11978,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           sessionKey: turn.sessionKey,
           limit: FINAL_HISTORY_SYNC_LIMIT,
         }, { timeoutMs: 8_000 });
+        if (hasTruncatedHistoryMessages(history?.messages)) {
+          history.messages = await this.restoreTruncatedHistory(client, turn.sessionKey, history.messages);
+        }
         if (
           options.requireActiveTurn
           && (
@@ -12055,6 +12089,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         : this.resolveAssistantSegmentText(turn, canonicalText);
       if (turn.planMode && !options.suppressPlanModeWrapping) {
         canonicalSegmentText = ensurePlanModeProposedPlanBlock(canonicalSegmentText);
+      }
+      if (turn.assistantMessageId && canonicalSegmentText.trim().endsWith(OPENCLAW_HISTORY_TRUNCATION_MARKER)) {
+        const localSegmentText = this.store.getSession(sessionId)?.messages
+          .find((message) => message.id === turn.assistantMessageId)?.content ?? '';
+        if (isTruncatedHistoryPreviewOf(canonicalSegmentText, localSegmentText)) {
+          // chat.message.get could not supply the full row; keep the complete streamed text.
+          canonicalSegmentText = localSegmentText.trim();
+        }
       }
       console.debug('[Debug:syncFinal] canonicalSegmentText length:', canonicalSegmentText.length,
         'committed.length:', turn.committedAssistantText.length,

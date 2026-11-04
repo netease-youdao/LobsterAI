@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 
 import {
-  countPastedTextLines,
   type CoworkPastedTextBlock,
   getPastedTextSnippet,
 } from '../../../shared/cowork/pastedText';
@@ -10,11 +9,10 @@ import EditIcon from '../icons/EditIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import PastedTextPreviewModal from './PastedTextPreviewModal';
 
+// The line count depends on wrapping, so only the open preview shows it.
 const formatPastedTextTooltip = (text: string): string => (
   `${i18nService.t('coworkPastedTextOpen')} · ${
-    i18nService.t('coworkPastedTextMeta')
-      .replace('{lines}', String(countPastedTextLines(text)))
-      .replace('{chars}', text.length.toLocaleString())
+    i18nService.t('coworkPastedTextChars').replace('{chars}', text.length.toLocaleString())
   }`
 );
 

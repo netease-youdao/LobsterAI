@@ -440,7 +440,9 @@ async function main() {
   if (fromManifest.sha256 !== artifact.sha256) fail('manifest and config descriptors disagree');
 
   // [4/8] Start the mock LLM upstream, then render a LobsterAI provider that
-  // points at it — settings.yaml on disk, the API key only in the child env.
+  // points at it — the web profile patch on disk, the API key only in the
+  // child env. The patch already holds the probe's insert row, which the sync
+  // must keep.
   const ANSWER = 'E2E mock upstream answer.';
   const mock = await startMockLlmServer(ANSWER);
   log(`>> mock OpenAI upstream at 127.0.0.1:${mock.port}`);
@@ -469,9 +471,11 @@ async function main() {
     fail(`unexpected rendered routes: ${routeIds.join(', ')} (skipped: ${JSON.stringify(managed.skipped)})`);
   }
   const written = await writeDshManagedSettings(dshHome, managed);
-  log(`>> provider settings rendered at ${written.settingsPath}`);
+  log(`>> provider settings rendered at ${written.patchPath}`);
 
-  // [5/8] Boot the installed runtime and assert provider + model over RPC.
+  // [5/8] Boot the installed runtime and assert provider + model over RPC. The
+  // assertions run as soon as the server answers: the routes must be live from
+  // boot, not only after a later settings import and reload.
   step(
     'boot installed runtime (web smoke + provider RPC assertions)',
     process.execPath,

@@ -47,6 +47,8 @@ const PATTERNS_TO_DELETE = [
   // Test files
   /\.test\.\w+$/i,
   /\.spec\.\w+$/i,
+  // Native debug symbols (node-pty ships 10 MB of them next to conpty.node)
+  /\.pdb$/i,
 ];
 
 const DIRS_TO_DELETE = new Set([
@@ -116,6 +118,9 @@ const WINDOWS_RUNTIME_TARGET_PREFIX = 'win-';
 // Build-only koffi content that its runtime loader never reads.
 const KOFFI_BUILD_ONLY_PATHS = ['doc', 'vendor', 'CHANGELOG.md', 'cnoke.cjs'];
 
+// tsc --locale message catalogs; the compiler API never loads them.
+const TYPESCRIPT_DIAGNOSTIC_LOCALES = ['cs', 'de', 'es', 'fr', 'it', 'ja', 'ko', 'pl', 'pt-br', 'ru', 'tr', 'zh-cn', 'zh-tw'];
+
 // Paths under node_modules that the gateway never loads.
 const RUNTIME_UNUSED_PATHS = [
   // OpenClaw loads only tree-sitter-bash.wasm (via web-tree-sitter); the
@@ -125,6 +130,11 @@ const RUNTIME_UNUSED_PATHS = [
   // Type-only packages with no runtime code.
   '@cloudflare/workers-types',
   'bun-types',
+  // OpenClaw uses the compiler API (lib/typescript.js) for createSourceFile
+  // and transpileModule. The tsc CLI bundle is only reached through bin/tsc,
+  // which the Windows payload never exposes (node_modules/.bin is excluded).
+  'typescript/lib/_tsc.js',
+  ...TYPESCRIPT_DIAGNOSTIC_LOCALES.map(locale => `typescript/lib/${locale}`),
 ];
 
 function readRuntimeTarget(runtimeRoot) {
@@ -175,11 +185,43 @@ function removeRuntimeUnusedPaths(nodeModulesDir, stats) {
   for (const relative of RUNTIME_UNUSED_PATHS) {
     const target = path.join(nodeModulesDir, relative);
     if (!fs.existsSync(target)) continue;
+    const isDirectory = fs.statSync(target).isDirectory();
     stats.bytesFreed += getPathSize(target);
     fs.rmSync(target, { recursive: true, force: true });
-    stats.dirsRemoved++;
+    if (isDirectory) stats.dirsRemoved++; else stats.filesRemoved++;
     removed.push(relative);
   }
+  return removed;
+}
+
+// Only the bundled feishu extension imports the root copy of the Lark SDK
+// (install-openclaw-channel-deps.cjs put it there for that extension's dist
+// chunks). openclaw-lark ships its own copy under its node_modules.
+const LARK_SDK_PACKAGE = '@larksuiteoapi/node-sdk';
+
+/**
+ * Prefer external openclaw-lark over the bundled feishu extension when both
+ * are present, then drop the root Lark SDK that only feishu loaded. Keep the
+ * current runtime-code path intact; this trims packaging/runtime output only.
+ */
+function preferExternalLark(runtimeRoot, stats) {
+  const removed = [];
+  if (!fs.existsSync(path.join(runtimeRoot, 'third-party-extensions', 'openclaw-lark'))) return removed;
+  const bundledFeishuDir = path.join(runtimeRoot, 'dist', 'extensions', 'feishu');
+  const rootLarkSdkDir = path.join(runtimeRoot, 'node_modules', LARK_SDK_PACKAGE);
+  for (const [label, target] of [['bundled feishu', bundledFeishuDir], [`root ${LARK_SDK_PACKAGE}`, rootLarkSdkDir]]) {
+    if (!fs.existsSync(target)) continue;
+    const size = getDirSize(target);
+    fs.rmSync(target, { recursive: true, force: true });
+    stats.bytesFreed += size;
+    stats.dirsRemoved++;
+    removed.push(label);
+    console.log(
+      `[prune-openclaw-runtime] Removed ${label} because openclaw-lark is present (${(size / 1024 / 1024).toFixed(1)} MB)`
+    );
+  }
+  const scopeDir = path.dirname(rootLarkSdkDir);
+  if (fs.existsSync(scopeDir) && fs.readdirSync(scopeDir).length === 0) fs.rmdirSync(scopeDir);
   return removed;
 }
 
@@ -344,23 +386,11 @@ function main() {
     }
   }
 
-  // Step 1a: Prefer external openclaw-lark over bundled feishu when both are
-  // present. Keep the current runtime-code path intact and trim the duplicate
-  // bundled feishu extension only for packaging/runtime output.
-  const thirdPartyDir = path.join(runtimeRoot, 'third-party-extensions');
-  const externalLarkDir = path.join(thirdPartyDir, 'openclaw-lark');
-  const bundledFeishuDir = path.join(distExtDir, 'feishu');
-  if (fs.existsSync(externalLarkDir) && fs.existsSync(bundledFeishuDir)) {
-    const size = getDirSize(bundledFeishuDir);
-    fs.rmSync(bundledFeishuDir, { recursive: true, force: true });
-    stats.bytesFreed += size;
-    stats.dirsRemoved++;
-    console.log(
-      `[prune-openclaw-runtime] Removed bundled feishu because openclaw-lark is present (${(size / 1024 / 1024).toFixed(1)} MB)`
-    );
-  }
+  // Step 1a: Prefer external openclaw-lark over bundled feishu and its root SDK.
+  preferExternalLark(runtimeRoot, stats);
 
   // Step 1b: Remove stale external qqbot payloads from older builds.
+  const thirdPartyDir = path.join(runtimeRoot, 'third-party-extensions');
   const staleExternalQqbotDir = path.join(thirdPartyDir, 'openclaw-qqbot');
   if (fs.existsSync(staleExternalQqbotDir)) {
     const size = getDirSize(staleExternalQqbotDir);
@@ -499,12 +529,15 @@ module.exports = {
   BUNDLED_EXTENSIONS_TO_KEEP,
   KOFFI_BUILD_ONLY_PATHS,
   KOFFI_PACKAGE,
+  LARK_SDK_PACKAGE,
   PACKAGES_TO_STUB,
   RUNTIME_UNUSED_PATHS,
   isWindowsRuntimeTarget,
+  preferExternalLark,
   readRuntimeTarget,
   removeRuntimeUnusedPaths,
   resolvePackagesToStub,
+  shouldDeleteFile,
   shouldKeepBundledExtension,
   trimKoffiBuildFiles,
 };

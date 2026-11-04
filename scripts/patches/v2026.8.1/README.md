@@ -935,6 +935,68 @@ confirm recovery on the next browser command without restarting the gateway.
 Remove when upstream preserves a verifiable cleanup handle across discovery
 failures and provides equivalent recovery coverage.
 
+## Native plugin loading on Windows
+
+`openclaw-windows-native-plugin-require.patch` makes Windows load compiled
+plugins with native `require` like macOS and Linux. The plugin loader passes
+`toSafeImportPath(modulePath)`, which on Windows is a `file:///` URL (the form
+ESM imports need), to `tryNativeRequireJavaScriptModule`. `require()` rejects
+URLs with `MODULE_NOT_FOUND`, the loader read that as a missing target, and every
+plugin, bundled `dist/extensions/*` included, fell back to jiti with
+`tryNative: false`: Babel transforms of the plugin and OpenClaw's whole SDK graph.
+The patch converts `file:` URLs to paths for `require()` and for
+`clearPluginModuleRequireCache`'s `require.resolve`, whose failure had also
+skipped eviction of URL-keyed modules. The URL stays the cache key.
+
+End to end on a 360 machine: runtime built with this patch and
+`openclaw-plugin-realpath-parent-cache.patch`, copied to `%LOCALAPPDATA%`, gateway
+run by `LobsterAI.exe` with the same scratch config as the installed v2026.8.1
+runtime (built 2026-10-30). 7 plugins: `[plugins] loaded` 124.5 s -> 16.0 s,
+HTTP listening 129.8 s -> 18.0 s, lstat 138,504 -> 13,919. All 16 allowed
+plugins enabled: 270.2 s -> 44.7 s with the same plugin list and no load errors.
+`tools.catalog` lists the same plugin tools, and jiti is no longer called at
+startup (the installed runtime made 6,508 jiti cache calls for 16 plugins).
+
+A plugin hot reload re-registers from the same module generation; a running
+gateway does not retire it, so eviction applies to restarts and CLI flows.
+Plugin staging during the runtime build now logs `failed to load` for
+openclaw-lark, nim-channel and netease-bee: their `node_modules/openclaw` host
+peer does not export `./plugin-sdk`. The packaging step removes that peer, as on
+macOS, where these plugins always load natively.
+
+Verify with `node_modules/.bin/vitest run src/plugins/native-module-require.test.ts`.
+Remove when upstream converts loader URLs before native `require`.
+
+## Plugin realpaths through cached parent directories
+
+`openclaw-plugin-realpath-parent-cache.patch` targets the realpath calls that
+remain once plugins load natively. `pluginCacheRealpathSync` and the
+installed-plugin index staleness checks in `plugin-registry-snapshot.ts` already
+cache realpaths, but only by exact path, so each new file still paid a full
+`fs.realpathSync` walk (one lstat per component) under the same few directories.
+
+`realpath-through-parent.ts` resolves a path as its parent's cached realpath
+plus its basename after one lstat, and falls back to `fs.realpathSync` for
+links and roots. `pluginCacheRealpathSync` (non-native) uses its own per-path
+facts for the parent, and the staleness checks use
+`safeRealpathWithParentsSync` with the Map they already create per check. Cache
+lifetimes do not change: plugin cache generation and one check respectively.
+Missing paths still return null and are not cached. The native realpath variant
+and other `safeRealpathSync` callers are unchanged. Two tests that counted
+`fs.realpathSync` calls to prove one lookup per path now count the lstat too.
+
+Measured on the same 360 machine in the runtime built with this patch set,
+copied to `%LOCALAPPDATA%` and run by `LobsterAI.exe` with 7 plugins, reverting
+only this patch in the loaded bundle for comparison: lstat 32,851 -> 13,919 and
+time inside lstat about 19 s -> 9 s per startup; the process reached
+`[plugins] loaded` after 64-75 s without it and 50-51 s with it. Most of the
+saving lands before plugin loading, in discovery and index checks.
+
+Verify with `node_modules/.bin/vitest run src/plugins/realpath-through-parent.test.ts
+src/plugins/discovery.test.ts src/plugins/manifest-registry.test.ts
+src/plugins/plugin-registry-snapshot.test.ts`, then rebuild the runtime. Remove
+when upstream resolves plugin paths through cached parents itself.
+
 ## Web fetch follows the desktop proxy preference
 
 `openclaw-web-fetch-proxy.patch` lets LobsterAI enable the existing
@@ -1140,3 +1202,88 @@ Then rebuild the runtime. After a drop, the gateway log shows
 from the transcript attempt=N/5`. Remove this patch when the pinned upstream
 records transport failures for reasoning-only output and resumes first-call
 drops.
+
+## Byte-bounded model history
+
+Two patches handle sessions whose stored history outgrows the embedded
+runner's model-context byte bound. Upstream tracks the problem as
+[openclaw/openclaw#159799](https://github.com/openclaw/openclaw/issues/159799),
+which is still open.
+
+Background: every attempt hydrates its history with
+`SessionManager.open(..., { maxBytes: contextTokenBudget * 8, maxEvents: 10000 })`,
+so a 1M-token model loads at most 8 MB. The bound counts stored event JSON,
+including inline base64 from `view_image` results, tool payload mirrors and
+metadata. Image-heavy sessions therefore run at 12 to 20 bytes per prompt
+token. They hit the byte bound long before the token compaction threshold
+(980k for a 1M window). Compaction then never runs, and the newest-first
+reader drops the oldest events on every turn. On 2026-11-03 one WeChat DM
+session crossed 8 MB at 16:08 (`activeTranscriptBytes=8.04MB`). From then on,
+almost every new turn's first request cached only the system prompt and
+tools, about 32k of roughly 650k prompt tokens, and was billed about 60
+credits off-peak and 130 at peak. The dropped history was never summarized.
+
+### Stable window start
+
+`openclaw-bounded-history-chunked-window.patch` ports the policy of upstream
+[#168157](https://github.com/openclaw/openclaw/pull/168157), merged after
+v2026.8.1, into the v2026.8.1 reader
+`session-accessor.sqlite-active-context.ts`:
+
+- The latest compaction or reset boundary is reserved before the tail is
+  sized. Its summary no longer appears or disappears depending on how much
+  room the newest events leave.
+- Byte pressure is measured from the boundary's retained start
+  (`firstKeptEntryId`), not from history that a compaction already replaced.
+- When that model-visible tail exceeds the capacity, the omitted bytes are
+  rounded up to a quarter-capacity step, measured from the retained start. The
+  cut then moves forward to the next user message. The first model message
+  stays the same until the tail grows by another step.
+- If the newest turn alone exceeds one step, the reader falls back to the old
+  newest-first selection. Sessions that fit, and event-count limits, behave as
+  before.
+
+This patch does not summarize omitted history. That is the next patch.
+
+### Compaction before the bound
+
+`openclaw-bounded-history-compaction.patch` makes preflight compaction
+(`runSessionCompactionIfNeeded`) compact before the bounded load would omit
+anything:
+
+- `run/session-context-limits.ts` owns the hydration limits. The attempt and
+  preflight now read the same byte bound.
+- The new `model_context_bytes` trigger fires when the active model-context
+  bytes (`readSessionTranscriptActiveStats`, the same bytes the reader counts)
+  reach 80% of the bound. At least a quarter of the bound must lie after the
+  latest boundary's retained tail
+  (`readSessionTranscriptRetainedPrefixBytes`). A fresh boundary whose kept
+  tail is already large therefore cannot cause a compaction every turn.
+- Compaction loads the full transcript, so history already dropped from the
+  prompt is summarized instead of lost.
+- The trigger is optional. A skip or a failure, including a thrown error
+  before the compaction commits, keeps the turn running on the bounded tail.
+  Retries for that session wait until its bytes grow by another quarter of the
+  bound. The token and `maxActiveTranscriptBytes` triggers keep their existing
+  fail-closed behavior, and Codex native compaction is untouched.
+- The verbose `preflightCompaction check` log now includes
+  `contextHydrationMaxBytes` and `contextBytesTrigger`.
+
+One existing test,
+`estimates Codex tool-result mirrors through the provider projection`, stored
+64 duplicated 8 KB mirrors. That is 1.1 MB, above its 128k model's 1 MB
+hydration bound, so the new trigger fired. The fixture now uses 5 KB mirrors
+and still fails if mirrors are double-counted.
+
+Verify with:
+
+```sh
+node scripts/run-vitest.mjs run src/config/sessions/session-accessor.sqlite-bounded-context.test.ts src/auto-reply/reply/agent-runner-memory.test.ts
+```
+
+After rebuilding the runtime, a session over the bound logs
+`preflightCompaction triggered: ... trigger=model_context_bytes` once. Its later
+turns' first requests should read most of the history from cache again
+(TokenProxy `prompt prefix ... boundary=turn` with a high `cachedTokens`). Drop
+the first patch when the pinned upstream includes #168157. Drop the second when
+upstream #159799 summarizes byte-bounded history itself.

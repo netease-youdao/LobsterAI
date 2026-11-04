@@ -1368,6 +1368,38 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-bounded-history-chunked-window.patch': [
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-active-context.ts',
+      snippets: [
+        'const BOUNDED_CONTEXT_STEP_DIVISOR = 4;',
+        'function resolveBoundedContextStart(',
+        'function readBoundedContextBytes(',
+        'const boundaryOmitted = boundary !== undefined && headerBytes + boundaryBytes > maxBytes;',
+      ],
+    },
+  ],
+  'openclaw-bounded-history-compaction.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/session-context-limits.ts',
+      snippets: ['export function resolveEmbeddedSessionContextLimits('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-session-prepare.ts',
+      snippets: ['resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget)'],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-memory.ts',
+      snippets: [
+        'function shouldCompactByModelContextBytes(',
+        'const compactionOptional = compactionTrigger === "model_context_bytes";',
+      ],
+    },
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-reset-window.ts',
+      snippets: ['export function readVisibleTranscriptRetainedPrefixBytes('],
+    },
+  ],
 };
 
 v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
@@ -1619,6 +1651,34 @@ v20260801StrongPatchValidators['zzz-openclaw-stream-drop-reconnect.patch'] = [
   {
     file: 'src/agents/embedded-agent-runner/run/context-recovery-state.ts',
     snippets: ['transportDropRetryPending: false,'],
+  },
+];
+v20260801StrongPatchValidators['openclaw-plugin-realpath-parent-cache.patch'] = [
+  {
+    file: 'src/plugins/realpath-through-parent.ts',
+    snippets: [
+      'export function realpathThroughParentSync(',
+      'export function safeRealpathWithParentsSync(',
+    ],
+  },
+  {
+    file: 'src/plugins/plugin-cache-files.ts',
+    snippets: ['realpathThroughParentSync(targetPath, (parentPath) =>'],
+  },
+  {
+    file: 'src/plugins/plugin-registry-snapshot.ts',
+    snippets: ['const realCursor = safeRealpathWithParentsSync(cursor, cache);'],
+    forbiddenSnippets: ['safeRealpathSync('],
+  },
+];
+v20260801StrongPatchValidators['openclaw-windows-native-plugin-require.patch'] = [
+  {
+    file: 'src/plugins/native-module-require.ts',
+    snippets: [
+      'function toRequirePath(modulePath: string): string {',
+      'const requirePath = toRequirePath(modulePath);',
+      'nodeRequire.resolve(toRequirePath(modulePath))',
+    ],
   },
 ];
 

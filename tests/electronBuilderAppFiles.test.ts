@@ -8,6 +8,30 @@ import { afterEach, expect, test } from 'vitest';
 const require = createRequire(import.meta.url);
 const { getFileMatchers, copyFiles } = require('app-builder-lib/out/fileMatcher');
 const builderConfig = require('../electron-builder.json');
+const packageJson = require('../package.json');
+
+// electron-builder copies every production dependency into app.asar, while
+// Vite bundles the main and renderer code. Only modules loaded or resolved
+// from outside those bundles belong in dependencies.
+const RUNTIME_DEPENDENCIES: Record<string, string> = {
+  '@larksuite/openclaw-lark-tools': 'external in vite.config.ts',
+  'better-sqlite3': 'native addon, external in vite.config.ts',
+  bufferutil: 'optional ws native addon, external in vite.config.ts',
+  'utf-8-validate': 'optional ws native addon, external in vite.config.ts',
+  koffi: 'native FFI, plain require() in desktopCompanion/windowsNative.ts',
+  'selection-hook': 'native addon, plain require() in desktopCompanion/companionSelection.ts',
+  // The bundled @larksuiteoapi/node-sdk ESM build keeps a top-level
+  // require('protobufjs/minimal'); without it the main process fails to start.
+  protobufjs: 'top-level require() in the bundled Lark SDK',
+  'pptx-preview': 'htmlPreviewServer serves its UMD build through require.resolve',
+  '@modelcontextprotocol/sdk': 'imported by the spawned computer-use MCP server script',
+  zod: 'imported by the spawned computer-use MCP server script',
+  npm: 'CLI spawned from app.asar.unpacked',
+  // coworkUtil puts app.asar/node_modules on NODE_PATH for skill processes.
+  cheerio: 'SKILLs/content-planner scripts',
+  react: 'SKILLs/pptx html2pptx guide',
+  'react-dom': 'SKILLs/pptx html2pptx guide (react-dom/server)',
+};
 
 const tempDirs: string[] = [];
 
@@ -63,6 +87,18 @@ test('app files ship the bundles without source maps or the tsc output tree', as
 
   for (const relative of shipped) expect(fs.existsSync(path.join(out, relative)), relative).toBe(true);
   for (const relative of dropped) expect(fs.existsSync(path.join(out, relative)), relative).toBe(false);
+});
+
+test('production dependencies are only the modules loaded outside the Vite bundles', () => {
+  expect(
+    Object.keys(packageJson.dependencies).sort(),
+    'Bundled libraries go in devDependencies; a production dependency is copied into app.asar a second time.',
+  ).toEqual(Object.keys(RUNTIME_DEPENDENCIES).sort());
+});
+
+test('protobufjs follows the range the bundled Lark SDK declares', () => {
+  const larkSdk = require('@larksuiteoapi/node-sdk/package.json');
+  expect(packageJson.dependencies.protobufjs).toBe(larkSdk.dependencies.protobufjs);
 });
 
 test('Windows keeps the Chromium locales that app.getLocale() must report', () => {

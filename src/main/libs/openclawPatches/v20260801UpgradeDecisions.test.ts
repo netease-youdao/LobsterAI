@@ -12,6 +12,8 @@ const RETAINED_PATCHES = [
   'openclaw-aborted-tool-loop-breaker.patch',
   'openclaw-active-exec-sessions-runtime-context.patch',
   'openclaw-auth-migration-config-commit.patch',
+  'openclaw-bounded-history-chunked-window.patch',
+  'openclaw-bounded-history-compaction.patch',
   'openclaw-browser-blocked-hostnames.patch',
   'openclaw-browser-cdp-dispatch-rejection.patch',
   'openclaw-browser-navigation-error-containment.patch',
@@ -51,6 +53,7 @@ const RETAINED_PATCHES = [
   'openclaw-openai-completions-tool-call-repair.patch',
   'openclaw-openai-oauth-token-proxy.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
+  'openclaw-plugin-realpath-parent-cache.patch',
   'openclaw-project-memory-negative-probe.patch',
   'openclaw-provider-auth-warm-cooperative-exit.patch',
   'openclaw-provider-fetch-transient-retry.patch',
@@ -74,6 +77,7 @@ const RETAINED_PATCHES = [
   'openclaw-web-fetch-proxy.patch',
   'openclaw-web-login-channel-routing.patch',
   'openclaw-windows-file-path-redaction.patch',
+  'openclaw-windows-native-plugin-require.patch',
   'openclaw-windows-private-directory-native.patch',
   'openclaw-windows-process-identity.patch',
   'openclaw-workspace-attestation-quarantine.patch',
@@ -126,6 +130,24 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+        activeProcessRuntimeFacts,',
       '+        capabilityToolNames: toolSearchRunPlan.capabilityToolNames,',
       'carries background process snapshots as hidden runtime context, not system prompt',
+    ]);
+  });
+
+  test('loads Windows plugin file URLs natively and evicts them on reload', () => {
+    expectPatchContains('openclaw-windows-native-plugin-require.patch', [
+      '+  return modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;',
+      '+    return { ok: true, moduleExport: requireWithOptionalAliases(requirePath, options.aliasMap) };',
+      '+    const resolved = nodeRequire.resolve(toRequirePath(modulePath));',
+      '+  it("clears modules loaded through file URL targets", () => {',
+    ]);
+  });
+
+  test('realpaths plugin paths through cached parent directories', () => {
+    expectPatchContains('openclaw-plugin-realpath-parent-cache.patch', [
+      '+export function realpathThroughParentSync(',
+      '+export function safeRealpathWithParentsSync(',
+      '+        : realpathThroughParentSync(targetPath, (parentPath) =>',
+      '+        const realCursor = safeRealpathWithParentsSync(cursor, cache);',
     ]);
   });
 
@@ -187,6 +209,19 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       'utf8',
     );
     expect(adapter).toContain('traceparent: createLlmTraceparent(llmTrace.traceId)');
+  });
+
+  test('compacts byte-bounded model history instead of sliding its first message', () => {
+    expectPatchContains('openclaw-bounded-history-chunked-window.patch', [
+      '+const BOUNDED_CONTEXT_STEP_DIVISOR = 4;',
+      '+function resolveBoundedContextStart(',
+      '+it("keeps a byte-limited tail start fixed until the tail outgrows a quarter-capacity step", async () => {',
+    ]);
+    expectPatchContains('openclaw-bounded-history-compaction.patch', [
+      '+export function resolveEmbeddedSessionContextLimits(',
+      '+function shouldCompactByModelContextBytes(',
+      '+  const compactionOptional = compactionTrigger === "model_context_bytes";',
+    ]);
   });
 
   test('routes ChatGPT OAuth token requests through the gateway proxy env', () => {
