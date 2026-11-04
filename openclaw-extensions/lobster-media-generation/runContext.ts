@@ -16,12 +16,19 @@ type LifecycleRequest = {
   context: { sessionKey: string; runId: string; toolCallId: string };
 };
 
+type LifecycleSender = (request: LifecycleRequest) => Promise<{ isError?: boolean }>;
+
 /** Correlate tools using trusted hook metadata, never model-supplied arguments. */
 export class MediaRunContexts {
   private readonly runs = new Map<string, Run>();
   private readonly calls = new Map<string, Run>();
 
-  constructor(private readonly send: (request: LifecycleRequest) => Promise<{ isError?: boolean }>) {}
+  constructor(private send: LifecycleSender) {}
+
+  /** A reloaded plugin registry may carry a new bridge config; keep the run state. */
+  setSender(send: LifecycleSender): void {
+    this.send = send;
+  }
 
   private key(sessionKey: string, id: string): string {
     return JSON.stringify([sessionKey, id]);
@@ -86,4 +93,24 @@ export class MediaRunContexts {
       context: { sessionKey, runId, toolCallId: runId },
     }).catch(() => undefined);
   }
+}
+
+const SHARED_RUN_CONTEXTS = Symbol.for('lobsterai.media-generation.run-contexts');
+type SharedRunContextsHost = { [SHARED_RUN_CONTEXTS]?: MediaRunContexts };
+
+/**
+ * OpenClaw registers this plugin once per plugin registry in the gateway
+ * process, and hooks and tool execution can come from different registries.
+ * Keep one run table per process so a hook-bound call is visible to execute.
+ */
+export function getSharedMediaRunContexts(send: LifecycleSender): MediaRunContexts {
+  const host = globalThis as SharedRunContextsHost;
+  const existing = host[SHARED_RUN_CONTEXTS];
+  if (existing) {
+    existing.setSender(send);
+    return existing;
+  }
+  const created = new MediaRunContexts(send);
+  host[SHARED_RUN_CONTEXTS] = created;
+  return created;
 }

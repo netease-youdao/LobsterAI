@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
-import { MediaRunContexts } from './runContext';
+import { getSharedMediaRunContexts } from './runContext';
 import { isLobsterAiDesktopSessionKey, isLobsterAiMediaSessionKey } from './sessionKey';
 import {
   type MediaStatusPollPolicy,
@@ -347,7 +347,7 @@ const plugin = {
       return;
     }
 
-    const runs = new MediaRunContexts(request => callMediaBridge(
+    const runs = getSharedMediaRunContexts(request => callMediaBridge(
       { ...config, requestTimeoutMs: 10_000 }, request,
     ));
     api.on('before_model_resolve', async (_event, ctx) => {

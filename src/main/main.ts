@@ -546,6 +546,7 @@ import { OpenClawImConfigRestartTracker } from './libs/openclawImConfigRestart';
 import {
   getCoworkParentSessionId,
   resolveCoworkSessionIdByOpenClawSessionKey,
+  resolveSubagentRequesterCoworkSessionId,
 } from './libs/openclawLocalSessionResolver';
 import { OPENCLAW_LOOPBACK_STATE_FILE, OpenClawLoopbackService, OpenClawLoopbackState } from './libs/openclawLoopbackState';
 import {
@@ -6540,6 +6541,9 @@ if (!gotTheLock) {
 
   const extractSessionIdFromKey = (sessionKey: string): string | null =>
     resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey);
+  // Authorization, model selection and file saving; UI events keep the child's own session.
+  const resolveMediaOwnerSessionId = (sessionKey: string, sessionId: string | null): string | null =>
+    sessionId ?? resolveSubagentRequesterCoworkSessionId(getStore().getDatabase(), sessionKey);
 
   /**
    * Handle media generation tool callbacks from the OpenClaw plugin.
@@ -6594,6 +6598,7 @@ if (!gotTheLock) {
     const action = (args.action as string) || 'generate';
     const serverBaseUrl = getServerApiBaseUrl();
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
+    const ownerSessionId = resolveMediaOwnerSessionId(request.context.sessionKey, sessionId);
     // Native runs must not inherit the latest desktop user's usage/selection.
     const nativeRun = Boolean(request.context.runId);
     const turnUserMessage = !nativeRun && sessionId && action === 'generate'
@@ -6604,7 +6609,7 @@ if (!gotTheLock) {
       : getMediaUsageContext(sessionId, turnUserMessage);
     const requestAccountScope = nativeRun
       ? mediaRunAccountScopes.resolve(request.context, getCurrentMediaAccountScope())
-      : resolveMediaTurnAccountScopeForSession(sessionId);
+      : resolveMediaTurnAccountScopeForSession(ownerSessionId);
     const isRequestAccountCurrent = (): boolean => (
       requestAccountScope !== null
       && isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())
@@ -6625,7 +6630,7 @@ if (!gotTheLock) {
     }
     const selection: MediaSelectionState | undefined = nativeRun
       ? { mode: MediaSelectionMode.Auto }
-      : resolveMediaSelectionForSession(sessionId);
+      : resolveMediaSelectionForSession(ownerSessionId);
     const prompt = typeof args.prompt === 'string' ? args.prompt : '';
     const explicitModel = canonicalizeMediaModelId(typeof args.model === 'string' ? args.model : '');
     const resolvedModelFromSelection = tool === MediaGenerationTool.Image
@@ -6794,8 +6799,8 @@ if (!gotTheLock) {
         let resultLines: string[];
         let detailsAssets: unknown[] = composesImageEditLocally(statusImageEdit?.operation) ? [] : assets;
         let savedCount = 0;
-        if (status === 'succeeded' && statusMediaType === 'image' && sessionId) {
-          const persistResult = await persistGeneratedImages(sessionId, assets, statusImageEdit, String(task.taskId));
+        if (status === 'succeeded' && statusMediaType === 'image' && ownerSessionId) {
+          const persistResult = await persistGeneratedImages(ownerSessionId, assets, statusImageEdit, String(task.taskId));
           if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(String(args.taskId), persistResult?.saved.length ?? 0, assets.length);
           if (persistResult && persistResult.saved.length > 0) {
@@ -6808,8 +6813,8 @@ if (!gotTheLock) {
             resultLines = composesImageEditLocally(statusImageEdit?.operation) ? []
               : resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           }
-        } else if (status === 'succeeded' && statusMediaType === 'video' && sessionId) {
-          const persistResult = await persistGeneratedVideos(sessionId, assets);
+        } else if (status === 'succeeded' && statusMediaType === 'video' && ownerSessionId) {
+          const persistResult = await persistGeneratedVideos(ownerSessionId, assets);
           if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(String(args.taskId), persistResult?.saved.length ?? 0, assets.length);
           if (persistResult && persistResult.saved.length > 0) {
@@ -7347,8 +7352,8 @@ if (!gotTheLock) {
         ...(task.quotaRemaining != null ? [`Quota remaining: ${task.quotaRemaining}`] : []),
       ];
 
-      if (status === 'succeeded' && mediaType === 'image' && sessionId) {
-        const persistResult = await persistGeneratedImages(sessionId, assets, imageEdit, String(task.taskId));
+      if (status === 'succeeded' && mediaType === 'image' && ownerSessionId) {
+        const persistResult = await persistGeneratedImages(ownerSessionId, assets, imageEdit, String(task.taskId));
         if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(request.context.toolCallId, persistResult?.saved.length ?? 0, assets.length);
         if (persistResult && persistResult.saved.length > 0) {
@@ -7361,8 +7366,8 @@ if (!gotTheLock) {
           const resultLines = resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           lines.push(`Results:\n${resultLines.join('\n')}`);
         }
-      } else if (status === 'succeeded' && mediaType === 'video' && sessionId) {
-        const persistResult = await persistGeneratedVideos(sessionId, assets);
+      } else if (status === 'succeeded' && mediaType === 'video' && ownerSessionId) {
+        const persistResult = await persistGeneratedVideos(ownerSessionId, assets);
         if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(request.context.toolCallId, persistResult?.saved.length ?? 0, assets.length);
         if (persistResult && persistResult.saved.length > 0) {
@@ -7459,7 +7464,9 @@ if (!gotTheLock) {
       return handleMediaGenerationCallback(request);
     }
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
-    const selection = request.context.runId ? undefined : resolveMediaSelectionForSession(sessionId);
+    const selection = request.context.runId
+      ? undefined
+      : resolveMediaSelectionForSession(resolveMediaOwnerSessionId(request.context.sessionKey, sessionId));
     return mediaUsage.run({ sessionId: request.context.runId ? null : sessionId,
       selectionSource: request.tool === MediaGenerationTool.Image ? selection?.imageSource : selection?.videoSource,
       policyVersion: selection?.policyVersion,
