@@ -90,6 +90,65 @@ function shouldKeepBundledExtension(extensionId) {
   return BUNDLED_EXTENSIONS_TO_KEEP.has(extensionId);
 }
 
+// ─── Strategy 2b: Remove unused bundled skills ───
+// OpenClaw loads every directory under <runtime>/skills as an "openclaw-bundled"
+// skill and <runtime>/custodian-skills as "openclaw-custodian" skills. LobsterAI
+// hides both from its skill manager, yet the gateway still:
+//   - probes PATH for each skill's required binaries while building the model
+//     runtime sidecar: one accessSync per PATH dir x PATHEXT entry, about 12,700
+//     calls and 5 s of sync I/O at startup on Windows for the binaries that are
+//     missing (macOS/overseas CLIs such as blu, codex, spotify_player);
+//   - injects every eligible one into the agent prompt (clawhub, healthcheck,
+//     notion, taskflow, spike, ... plus custodian skills that edit OpenClaw's
+//     config and channels, which LobsterAI owns);
+//   - lets bundled skills beat LobsterAI's own SKILLs of the same name
+//     (skill-creator, weather), because bundled skills load after extraDirs.
+// skills.allowBundled cannot fix the shadowing: collisions resolve before that
+// filter runs, so a filtered-out bundled winner removes both copies. Removing
+// the directories makes those skills absent instead.
+//
+// Allowlist approach: new skills from OpenClaw upgrades are pruned unless added
+// here. Never add a name that LobsterAI ships in SKILLs/ (see the test).
+
+const BUNDLED_SKILLS_TO_KEEP = new Set([
+  'diagram-maker', // SVG / Excalidraw diagrams, no external binaries
+]);
+
+const BUNDLED_SKILLS_DIR = 'skills';
+const CUSTODIAN_SKILLS_DIR = 'custodian-skills';
+
+function shouldKeepBundledSkill(skillId) {
+  return BUNDLED_SKILLS_TO_KEEP.has(skillId);
+}
+
+/**
+ * Remove bundled skill directories outside BUNDLED_SKILLS_TO_KEEP and the whole
+ * custodian skills directory. Loose files in skills/ (e.g. pyproject.toml) are
+ * not skills and stay. Safe to run repeatedly.
+ */
+function pruneBundledSkills(runtimeRoot, stats) {
+  const removed = [];
+  const skillsDir = path.join(runtimeRoot, BUNDLED_SKILLS_DIR);
+  if (fs.existsSync(skillsDir)) {
+    for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || shouldKeepBundledSkill(entry.name)) continue;
+      const fullPath = path.join(skillsDir, entry.name);
+      stats.bytesFreed += getDirSize(fullPath);
+      fs.rmSync(fullPath, { recursive: true, force: true });
+      stats.dirsRemoved++;
+      removed.push(entry.name);
+    }
+  }
+  const custodianDir = path.join(runtimeRoot, CUSTODIAN_SKILLS_DIR);
+  if (fs.existsSync(custodianDir)) {
+    stats.bytesFreed += getDirSize(custodianDir);
+    fs.rmSync(custodianDir, { recursive: true, force: true });
+    stats.dirsRemoved++;
+    removed.push(CUSTODIAN_SKILLS_DIR);
+  }
+  return removed;
+}
+
 // ─── Strategy 3: Stub replacements ───
 // Packages not needed in headless gateway mode, replaced with lightweight stubs.
 // The stub allows require/import to succeed but throws when actually called.
@@ -386,6 +445,18 @@ function main() {
     }
   }
 
+  // Step 1-skills: Keep only allowlisted bundled skills; drop custodian skills.
+  try {
+    const skillsPruned = pruneBundledSkills(runtimeRoot, stats);
+    if (skillsPruned.length > 0) {
+      console.log(
+        `[prune-openclaw-runtime] Pruned ${skillsPruned.length} bundled skill dir(s); kept: ${[...BUNDLED_SKILLS_TO_KEEP].join(', ')}`
+      );
+    }
+  } catch (err) {
+    console.warn(`[prune-openclaw-runtime] Failed to prune bundled skills: ${err.message}`);
+  }
+
   // Step 1a: Prefer external openclaw-lark over bundled feishu and its root SDK.
   preferExternalLark(runtimeRoot, stats);
 
@@ -527,6 +598,7 @@ function main() {
 
 module.exports = {
   BUNDLED_EXTENSIONS_TO_KEEP,
+  BUNDLED_SKILLS_TO_KEEP,
   KOFFI_BUILD_ONLY_PATHS,
   KOFFI_PACKAGE,
   LARK_SDK_PACKAGE,
@@ -534,11 +606,13 @@ module.exports = {
   RUNTIME_UNUSED_PATHS,
   isWindowsRuntimeTarget,
   preferExternalLark,
+  pruneBundledSkills,
   readRuntimeTarget,
   removeRuntimeUnusedPaths,
   resolvePackagesToStub,
   shouldDeleteFile,
   shouldKeepBundledExtension,
+  shouldKeepBundledSkill,
   trimKoffiBuildFiles,
 };
 
