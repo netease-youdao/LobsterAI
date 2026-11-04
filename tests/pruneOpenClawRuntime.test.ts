@@ -7,6 +7,7 @@ import { afterEach, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const {
+  BUNDLED_SKILLS_TO_KEEP,
   KOFFI_BUILD_ONLY_PATHS,
   KOFFI_PACKAGE,
   LARK_SDK_PACKAGE,
@@ -14,11 +15,13 @@ const {
   RUNTIME_UNUSED_PATHS,
   isWindowsRuntimeTarget,
   preferExternalLark,
+  pruneBundledSkills,
   readRuntimeTarget,
   removeRuntimeUnusedPaths,
   resolvePackagesToStub,
   shouldDeleteFile,
   shouldKeepBundledExtension,
+  shouldKeepBundledSkill,
   trimKoffiBuildFiles,
 } = require('../scripts/prune-openclaw-runtime.cjs');
 
@@ -52,6 +55,59 @@ test('pruneOpenClawRuntime removes explicitly unwanted bundled extensions', () =
   expect(shouldKeepBundledExtension('amazon-bedrock-mantle')).toBe(false);
   expect(shouldKeepBundledExtension('slack')).toBe(false);
   expect(shouldKeepBundledExtension('diffs')).toBe(false);
+});
+
+test('pruneOpenClawRuntime keeps only allowlisted bundled skills', () => {
+  expect(shouldKeepBundledSkill('diagram-maker')).toBe(true);
+  // LobsterAI ships its own versions; the bundled copies would shadow them.
+  expect(shouldKeepBundledSkill('skill-creator')).toBe(false);
+  expect(shouldKeepBundledSkill('weather')).toBe(false);
+  // Conflicts with LobsterAI's skill store and managed config.
+  expect(shouldKeepBundledSkill('clawhub')).toBe(false);
+  expect(shouldKeepBundledSkill('healthcheck')).toBe(false);
+  // Requires binaries absent on most machines; probing them costs startup time.
+  expect(shouldKeepBundledSkill('spotify-player')).toBe(false);
+  expect(shouldKeepBundledSkill('python-debugpy')).toBe(false);
+});
+
+test('pruneOpenClawRuntime never keeps a bundled skill that LobsterAI ships itself', () => {
+  // Bundled skills load after skills.load.extraDirs and win name collisions,
+  // which would hide LobsterAI's own skill of the same name.
+  const lobsterSkillsDir = path.join(__dirname, '..', 'SKILLs');
+  const lobsterSkills = fs.readdirSync(lobsterSkillsDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name);
+  expect(lobsterSkills).toContain('skill-creator');
+  expect(lobsterSkills.filter(name => BUNDLED_SKILLS_TO_KEEP.has(name))).toEqual([]);
+});
+
+test('pruneOpenClawRuntime removes unlisted bundled skills and all custodian skills', () => {
+  const root = tempDir();
+  write(root, 'skills/diagram-maker/SKILL.md');
+  write(root, 'skills/diagram-maker/references/svg-template.md');
+  write(root, 'skills/skill-creator/SKILL.md');
+  write(root, 'skills/spotify-player/SKILL.md');
+  write(root, 'skills/pyproject.toml');
+  write(root, 'custodian-skills/configure-channel/SKILL.md');
+  const stats = { filesRemoved: 0, dirsRemoved: 0, bytesFreed: 0 };
+
+  const removed = pruneBundledSkills(root, stats);
+
+  expect(removed.sort()).toEqual(['custodian-skills', 'skill-creator', 'spotify-player']);
+  expect(fs.readdirSync(path.join(root, 'skills')).sort()).toEqual(['diagram-maker', 'pyproject.toml']);
+  expect(fs.existsSync(path.join(root, 'skills/diagram-maker/references/svg-template.md'))).toBe(true);
+  expect(fs.existsSync(path.join(root, 'custodian-skills'))).toBe(false);
+  expect(stats.dirsRemoved).toBe(3);
+  expect(stats.bytesFreed).toBeGreaterThan(0);
+
+  expect(pruneBundledSkills(root, stats)).toEqual([]);
+});
+
+test('pruneOpenClawRuntime skill pruning tolerates runtimes without skill directories', () => {
+  const root = tempDir();
+  const stats = { filesRemoved: 0, dirsRemoved: 0, bytesFreed: 0 };
+  expect(pruneBundledSkills(root, stats)).toEqual([]);
+  expect(stats.dirsRemoved).toBe(0);
 });
 
 test('pruneOpenClawRuntime keeps koffi only for Windows runtime targets', () => {
