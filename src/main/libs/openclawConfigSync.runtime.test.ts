@@ -2864,6 +2864,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.plugins.entries['lobster-media-generation']).toEqual({
       enabled: true,
+      hooks: { allowConversationAccess: true },
       config: {
         callbackUrl: 'http://127.0.0.1:5175/media-callback',
         secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
@@ -2898,6 +2899,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.plugins.entries['lobster-media-generation']).toEqual({
       enabled: true,
+      hooks: { allowConversationAccess: true },
       config: {
         callbackUrl: 'http://127.0.0.1:5175/media-callback',
         secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
