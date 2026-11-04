@@ -122,9 +122,9 @@
         "size": 32779272
       },
       "win-x64": {
-        "url": "https://ydschool-video.nosdn.127.net/1790149296647dsh-runtime-0.1.5-rc.3-win-x64.tar.gz",
-        "sha256": "2c9895f424cfa61f4e6faf4e9155a4e6420906a31184c55b5826e6b9f2e54409",
-        "size": 31996964
+        "url": "https://ydschool-video.nosdn.127.net/1793719318415dsh-runtime-0.2.1-rc.5-win-x64.tar.gz",
+        "sha256": "28b465c823f0a519a3fad4b7c073e73dee4ba21939cf41204480ae2c344af8f6",
+        "size": 141662283
       }
     }
   },
