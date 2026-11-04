@@ -50,3 +50,25 @@ test('declining additional images blocks this turn and descendants but not a new
   expect(budget.wasDeclined(defaults())).toBe(false);
   expect(budget.wasDeclined(undefined)).toBe(false);
 });
+
+test('a turn approval covers this turn only, for the approved model and quote', () => {
+  const budget = new MediaDefaultImageBudget();
+  const snapshot = defaults();
+  expect(budget.isTurnApproved(snapshot, 'image-default', 'quote-a')).toBe(false);
+  budget.approveTurn(snapshot, 'image-default', 'quote-a');
+  expect(budget.isTurnApproved(snapshot, 'image-default', 'quote-a')).toBe(true);
+  expect(budget.isTurnApproved(snapshot, 'image-default', 'quote-b')).toBe(false);
+  expect(budget.isTurnApproved(snapshot, 'other-model', 'quote-a')).toBe(false);
+  expect(budget.isTurnApproved(defaults(), 'image-default', 'quote-a')).toBe(false);
+  budget.approveTurn(undefined, 'image-default', 'quote-a');
+  expect(budget.isTurnApproved(undefined, 'image-default', 'quote-a')).toBe(false);
+});
+
+test('each turn snapshot and model gets its own stable confirmation group', () => {
+  const budget = new MediaDefaultImageBudget();
+  const snapshot = defaults();
+  expect(budget.turnGroup(snapshot, 'image-default')).toBe(budget.turnGroup(snapshot, 'image-default'));
+  expect(budget.turnGroup(snapshot, 'other-model')).not.toBe(budget.turnGroup(snapshot, 'image-default'));
+  expect(budget.turnGroup(defaults(), 'image-default')).not.toBe(budget.turnGroup(snapshot, 'image-default'));
+  expect(budget.turnGroup(undefined, 'image-default')).toBeUndefined();
+});

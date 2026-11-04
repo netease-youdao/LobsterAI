@@ -57,6 +57,11 @@ export type MediaConfirmationOutcome =
 
 export const ConfirmationBehavior = { Allow: 'allow', Deny: 'deny' } as const;
 
+/** How far an approval reaches: this attempt, or the rest of the turn at the same model and quote. */
+export const MediaConfirmationGrant = { Once: 'once', Turn: 'turn' } as const;
+export type MediaConfirmationGrant =
+  (typeof MediaConfirmationGrant)[keyof typeof MediaConfirmationGrant];
+
 export interface MediaConfirmationState {
   kind: MediaConfirmationKind;
   revision: number;
@@ -65,6 +70,8 @@ export interface MediaConfirmationState {
   retainedUntil: number;
   /** Set when confirming found a new price; the user must answer again. */
   repriced?: { previousCredits?: number };
+  /** The card may offer approving the rest of this turn at the displayed quote. */
+  turnGrant?: boolean;
 }
 
 export interface MediaConfirmationResponse {
@@ -72,6 +79,10 @@ export interface MediaConfirmationResponse {
   answers?: Record<string, string>;
   skippedQuestionIds?: string[];
   reason?: MediaConfirmationReason;
+  /** Omitted means `Once`. */
+  grant?: MediaConfirmationGrant;
+  /** Set on a turn approval: the quote the user agreed to. */
+  quote?: string;
 }
 
 export interface MediaConfirmationCommand {
@@ -98,7 +109,8 @@ export const readMediaConfirmationState = (value: unknown): MediaConfirmationSta
     item.sequence >= 0 &&
     Object.values(MediaConfirmationStatus).includes(item.status) &&
     Number.isFinite(item.retainedUntil) &&
-    (item.repriced === undefined || (typeof item.repriced === 'object' && item.repriced !== null))
+    (item.repriced === undefined || (typeof item.repriced === 'object' && item.repriced !== null)) &&
+    (item.turnGrant === undefined || typeof item.turnGrant === 'boolean')
     ? item
     : undefined;
 };

@@ -90,3 +90,25 @@ test('lays out structured video details with the cost beside the primary action'
   expect(html).toContain('<s class="text-xs tabular-nums text-secondary">350</s>');
   expect(html).not.toContain('role="timer"');
 });
+
+test.each([true, undefined])('offers approving the rest of the turn only when allowed: %s', turnGrant => {
+  const request = permissionDockRequest({
+    sessionId: 'session',
+    requestId: 'request',
+    toolName: ASK_USER_QUESTION_TOOL_NAME,
+    toolInput: {
+      mediaConfirmation: {
+        kind: MediaConfirmationKind.Image,
+        revision: 0,
+        sequence: 1,
+        status: MediaConfirmationStatus.Visible,
+        retainedUntil: Date.now() + 600_000,
+        ...(turnGrant ? { turnGrant } : {}),
+      },
+      questions: [{ title: 'Image', question: 'Another image?', options: [{ label: 'Generate' }, { label: 'Cancel' }] }],
+    },
+  })!;
+  const html = renderToStaticMarkup(createElement(MediaConfirmationCard, { request }));
+  expect(html.includes('mediaImageConfirmTurn<')).toBe(turnGrant === true);
+  expect(html.includes('mediaImageConfirmTurnHint')).toBe(turnGrant === true);
+});
