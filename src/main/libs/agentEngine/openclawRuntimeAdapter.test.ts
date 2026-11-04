@@ -249,6 +249,63 @@ test('plan mode treats OpenClaw failure finals as system errors instead of propo
   expect(adapter.activeTurns.has(session.id)).toBe(false);
 });
 
+test.each([
+  'session file locked (timeout 60000ms)',
+  'Agent failed before reply: upstream unavailable',
+  'Something went wrong while processing your request',
+])('normal final replies may quote runtime diagnostics: %s', async (diagnostic) => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'summarize the stability checklist', timestamp: 1, metadata: {} },
+    ]);
+    session.status = 'running';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const errorSpy = vi.fn();
+    adapter.on('error', errorSpy);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-diagnostic-quote');
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+    const reply = `The checklist has been saved. Verify that cancellation does not leave \`${diagnostic}\`, and oversized inputs do not show a raw \`gateway closed (1009)\` error.`;
+
+    await adapter.handleChatFinal(session.id, turn, {
+      state: 'final', runId: turn.runId, sessionKey,
+      message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: reply }] },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(session.status).toBe('completed');
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(session.messages.some((message) => message.type === 'assistant' && message.content === reply)).toBe(true);
+    expect(session.messages.some((message) => message.type === 'system' && message.metadata?.error)).toBe(false);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+test.each([
+  'session file locked (timeout 60000ms): pid=47378 alive=true',
+  'Something went wrong while processing your request. Please try again.',
+])('runtime failure final prefixes remain errors: %s', async (text) => {
+  const { session, store } = createReconcileStore([]);
+  session.status = 'running';
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.on('error', vi.fn());
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, 'run-failure-prefix');
+  adapter.activeTurns.set(session.id, turn);
+
+  await adapter.handleChatFinal(session.id, turn, {
+    state: 'final', runId: turn.runId, sessionKey,
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  });
+
+  expect(session.status).toBe('error');
+  expect(session.messages.some((message) => message.type === 'system' && message.metadata?.error)).toBe(true);
+});
+
 test('assistant snapshot jitter does not count as a stream reset', () => {
   expect(isSignificantAssistantStreamReset(545, 544)).toBe(false);
   expect(isSignificantAssistantStreamReset(1000, 930)).toBe(false);

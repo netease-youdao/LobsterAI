@@ -17,6 +17,20 @@ failure, incomplete-summary rejection, transient recovery, and cancellation.
 Rebuild the runtime after applying the patch. Remove it when the pinned upstream
 supports bounded subdivision with the same completeness guarantees.
 
+## Show compaction progress during overflow recovery
+
+`zzzz-openclaw-recovery-compaction-events.patch` publishes the existing
+compaction start/end events around overflow recovery. This path runs outside
+the session subscriber, so the adapter otherwise cannot show its existing
+progress indicator. The end event is also emitted on failure or cancellation;
+completion is reported only after the recovered transcript is accepted.
+The following model retry still owns the task's final result.
+
+Regression coverage checks pending work, success, failure, exceptions, and
+cancellation. Rebuild the runtime after applying it. Remove the patch when the
+pinned upstream emits this lifecycle from the recovery owner. There is no
+adapter hook for the missing start event; log parsing is intentionally avoided.
+
 ## Stable prefixes across LobsterAI tasks
 
 `zzz-openclaw-session-prefix-cache.patch` moves sessionKey/sessionId/sessionUrl
