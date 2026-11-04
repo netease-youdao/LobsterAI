@@ -117,9 +117,9 @@
         "size": 146784429
       },
       "mac-x64": {
-        "url": "https://ydschool-video.nosdn.127.net/1790148651817dsh-runtime-0.1.5-rc.3-mac-x64.tar.gz",
-        "sha256": "e355ae19a636f0bb0d4a794ad181abea01e59e027ecba176b7a62173907367a5",
-        "size": 32779272
+        "url": "https://ydschool-video.nosdn.127.net/1793761418918dsh-runtime-0.2.1-rc.5-mac-x64.tar.gz",
+        "sha256": "39de43a39f1a95dd127a1dcd45528dd181a4284a4a3d7385bdb78867023c8746",
+        "size": 148130601
       },
       "win-x64": {
         "url": "https://ydschool-video.nosdn.127.net/1793719318415dsh-runtime-0.2.1-rc.5-win-x64.tar.gz",
