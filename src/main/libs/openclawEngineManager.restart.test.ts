@@ -9,7 +9,7 @@ import type { OpenClawDreamingRecoverySummary } from '../../shared/openclawEngin
 import { OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
-import { OpenClawGatewaySignal } from './openclawGatewayProcess';
+import { GATEWAY_STOP_GRACE_MS, OpenClawGatewaySignal } from './openclawGatewayProcess';
 
 vi.mock('electron', () => ({
   app: { getAppPath: () => process.cwd(), isPackaged: false },
@@ -495,7 +495,7 @@ describe('OpenClaw gateway restart supervision', () => {
     const start = vi.spyOn(manager, 'startGateway');
     const pending = manager.restartGateway('mcp-change');
     const rejected = expect(pending).rejects.toThrow('did not exit after SIGKILL');
-    await vi.advanceTimersByTimeAsync(process.platform === 'win32' ? 36_000 : 8_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS + (process.platform === 'win32' ? 30_000 : 2_000));
     await rejected;
 
     expect(internals.gatewayProcess).toBe(child);
@@ -513,7 +513,7 @@ describe('OpenClaw gateway restart supervision', () => {
       return manager.getStatus();
     });
     const pending = manager.restartGateway('config-delivery-fallback');
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS);
     expect(start).not.toHaveBeenCalled();
     vi.mocked(process.kill).mockImplementation(() => {
       throw Object.assign(new Error('No such process'), { code: 'ESRCH' });

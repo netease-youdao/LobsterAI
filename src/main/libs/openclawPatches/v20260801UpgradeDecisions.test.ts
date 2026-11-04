@@ -11,6 +11,7 @@ import {
 const RETAINED_PATCHES = [
   'openclaw-aborted-tool-loop-breaker.patch',
   'openclaw-active-exec-sessions-runtime-context.patch',
+  'openclaw-agent-db-clean-close-seal.patch',
   'openclaw-auth-migration-config-commit.patch',
   'openclaw-bounded-history-chunked-window.patch',
   'openclaw-bounded-history-compaction.patch',
@@ -121,6 +122,19 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
 
   test.each(RETIRED_PATCHES)('retires %s', (patchFile) => {
     expectCurrentOpenClawPatchMissing(patchFile);
+  });
+
+  test('lets an unchanged cleanly closed agent database skip its whole-file integrity check', () => {
+    expectPatchContains('openclaw-agent-db-clean-close-seal.patch', [
+      '+export function readSqliteCleanCloseSeal(',
+      '+export function writeSqliteCleanCloseSeal(',
+      '+export const SQLITE_CLEAN_CLOSE_FULL_VERIFICATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1_000;',
+      '+export function withVerifiedSqliteIntegrityReuse<T>(',
+      '+    const cleanCloseProof = takeAgentDatabaseCleanCloseProof(pathname);',
+      '+    writeSqliteCleanCloseSeal(database.path, resolveAgentSchemaIdentity(), { verifiedAt });',
+      '+    revokeAgentDatabaseCleanCloseProof(database.path);',
+      'skips the whole-file check after a clean close and keeps the original check time',
+    ]);
   });
 
   test('keeps background process snapshots below the system prompt cache boundary', () => {

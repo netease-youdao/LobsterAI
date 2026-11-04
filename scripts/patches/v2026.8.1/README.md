@@ -1301,3 +1301,60 @@ turns' first requests should read most of the history from cache again
 (TokenProxy `prompt prefix ... boundary=turn` with a high `cachedTokens`). Drop
 the first patch when the pinned upstream includes #168157. Drop the second when
 upstream #159799 summarizes byte-bounded history itself.
+
+## Clean-close seal for agent database integrity checks (upstream backport)
+
+`openclaw-agent-db-clean-close-seal.patch` backports the idea of upstream
+v2026.10.10 `src/infra/sqlite-clean-close-seal.ts`, reduced to agent databases.
+In v2026.8.1 every physical open of `agents/<id>/agent/openclaw-agent.sqlite`
+runs a whole-file `PRAGMA integrity_check` plus `foreign_key_check`. That cost
+grows with the file, and startup pays it more than once per agent:
+`runStartupSessionMigration` opens, closes and reopens every agent database.
+
+Why: on 2026-11-04 a macOS user with a 616 MB main agent database (428 MB of
+`transcript_events`) measured gateway readiness at 19-27 s, against 4 s for an
+empty profile on the same build. `OPENCLAW_GATEWAY_STARTUP_TRACE=1` put 6.5 s in
+`startup.maintenance`. On an isolated copy of that file the check took about
+0.5 s with a warm page cache and 2.3-3.4 s cold. The machine was swapping, so
+the host-side prewarm (`openclawStateDbPrewarm.ts`) did not keep the file cached.
+
+How it works:
+- A clean close writes `<db>.seal`. The seal records the file's dev, inode,
+  birth time, size and mtime in ns, plus the schema identity (agent schema
+  version and a hash of the schema SQL), the time of the last full check and a
+  checksum. It is written only after the handle closes and only when no `-wal`
+  or `-journal` content remains.
+- An open consumes the seal before SQLite touches the file. A valid seal lets
+  `verifyAndRepairCanonicalSqliteIndexes` skip the whole-file pass for that one
+  connection. Canonical index checks, owner and version gates and the schema
+  assertions still run. Only the current-schema branch can reuse a seal;
+  pending migrations always run the full check.
+- Any mismatch, a missing seal (crash, SIGKILL, or a first run with this patch),
+  a seal older than 7 days or a schema change falls back to the full check. A
+  reused seal keeps its original check time, so a full check still runs at
+  least weekly.
+- Disposal, integrity reconfirmation and recorded open failures revoke the
+  proof, so no seal is ever left on a suspect or deleted file.
+
+Differences from upstream: no worker-thread admission, no lease-class gating,
+and the seal is consumed (deleted) at open rather than validated against
+retained generation facts. A seal left beside a database that was later
+replaced cannot match the new inode and birth time.
+
+The seal only pays off when the gateway exits cleanly. In the same logs every
+quit with this profile hit LobsterAI's 6 s stop grace and ended in SIGKILL,
+because the Weixin channel waited on its 35 s `getUpdates` long-poll. The
+plugin patch `scripts/openclaw-plugin-patches/weixin-long-poll-abort.cjs`
+(a backport from plugin 2.4.10) fixes that. Ship them together.
+
+Verify with:
+
+```sh
+node_modules/.bin/vitest run src/infra/sqlite-clean-close-seal.test.ts src/state/openclaw-agent-db.clean-close-seal.test.ts src/state/openclaw-agent-db.test.ts src/state/openclaw-agent-db.cache-eviction.test.ts src/infra/sqlite-index-schema.test.ts
+```
+
+After rebuilding the runtime, quit the app once normally so the seals are
+written. On the next start the gateway log should show `reused clean-close
+integrity proof` (debug) instead of `slow OpenClaw agent database open`, and the
+startup trace should show a much shorter `startup.maintenance`. Remove this patch
+when the pinned upstream reaches v2026.10.10, which ships its own seal.
