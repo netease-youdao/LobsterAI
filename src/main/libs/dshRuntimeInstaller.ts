@@ -29,6 +29,17 @@ const INSTALL_SENTINEL = '.lobsterai-install-ok.json';
 const MAX_REDIRECTS = 5;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 
+// Windows refuses to rename or delete a directory while another process holds
+// a handle inside it. Virus scanners and indexers open freshly extracted files,
+// and dsh 0.2's ~29k-file tree gives them plenty to open: one Win11 box failed
+// the final rename with EBUSY because a background scanner held two
+// directories of the new tree for over three minutes. These codes are waited
+// out there; on other platforms they mean a real permission problem.
+const WIN32_BUSY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const BUSY_RETRY_BUDGET_MS = 5 * 60_000;
+const BUSY_RETRY_INITIAL_DELAY_MS = 100;
+const BUSY_RETRY_MAX_DELAY_MS = 2_000;
+
 export interface DshRuntimeManifest {
   version: string;
   target: string;
@@ -131,6 +142,41 @@ export function resolveTarCommand(
   // `path.join` would use posix separators and produce a path that never matches.
   const systemTar = path.win32.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe');
   return exists(systemTar) ? systemTar : 'tar';
+}
+
+export interface BusyRetryOptions {
+  platform?: NodeJS.Platform;
+  budgetMs?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+// Runs a filesystem operation, retrying with backoff while Windows reports the
+// path as held by another process. Asynchronous on purpose: the install runs
+// in the Electron main process, which must keep serving IPC while it waits.
+export async function retryWhileBusy<T>(operation: () => Promise<T>, options: BusyRetryOptions = {}): Promise<T> {
+  const {
+    platform = process.platform,
+    budgetMs = BUSY_RETRY_BUDGET_MS,
+    now = Date.now,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  } = options;
+  const deadline = now() + budgetMs;
+  let delayMs = BUSY_RETRY_INITIAL_DELAY_MS;
+  for (;;) {
+    try {
+      return await operation();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (platform !== 'win32' || !code || !WIN32_BUSY_CODES.has(code) || now() + delayMs > deadline) throw error;
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
+    }
+  }
+}
+
+function removeDirWhenFree(dir: string): Promise<void> {
+  return retryWhileBusy(() => fs.promises.rm(dir, { recursive: true, force: true }));
 }
 
 export function installedDshRuntimeRoot(baseDir: string, version: string): string {
@@ -356,7 +402,8 @@ export async function installDshRuntime(options: {
     }
 
     onProgress?.({ stage: DshInstallStage.Extract });
-    fs.rmSync(stagingRoot, { recursive: true, force: true });
+    // A failed attempt can leave a staging tree a scanner is still reading.
+    await removeDirWhenFree(stagingRoot);
     fs.mkdirSync(stagingRoot, { recursive: true });
     // No shell: the paths below are absolute and may contain spaces, which a
     // shell would re-split.
@@ -384,12 +431,22 @@ export async function installDshRuntime(options: {
     );
 
     const finalRoot = installedDshRuntimeRoot(baseDir, artifact.version);
-    fs.rmSync(finalRoot, { recursive: true, force: true });
-    fs.renameSync(stagingRoot, finalRoot);
+    await removeDirWhenFree(finalRoot);
+    try {
+      await retryWhileBusy(() => fs.promises.rename(stagingRoot, finalRoot));
+    } catch (error) {
+      throw new Error(
+        `Could not move the extracted runtime into place (another process, often a virus scanner, ` +
+          `may still be reading it): ${(error as Error).message}`
+      );
+    }
     return { root: finalRoot, version: artifact.version, alreadyInstalled: false };
   } finally {
-    fs.rmSync(archiveTempPath, { force: true });
-    fs.rmSync(stagingRoot, { recursive: true, force: true });
+    // Best effort: a scanner may still hold these, and a failed cleanup must
+    // neither mask the install's own error nor fail an install that worked.
+    // The next attempt clears the staging tree before it extracts.
+    await fs.promises.rm(archiveTempPath, { force: true }).catch((): void => undefined);
+    await fs.promises.rm(stagingRoot, { recursive: true, force: true }).catch((): void => undefined);
   }
 }
 
