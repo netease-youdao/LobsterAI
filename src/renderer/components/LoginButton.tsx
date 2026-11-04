@@ -46,18 +46,23 @@ import { ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME } from './accountMenuStyles';
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
 import { DailyCheckInAccountMenuEntry } from './DailyCheckInActivity';
 import { getDailyCheckInAuthScopeKey } from './dailyCheckInActivityState';
+import { waitForDailyCheckInRefresh } from './dailyCheckInSnapshotStore';
 import UserAvatarIcon from './icons/UserAvatarIcon';
 import {
   type StartupCreditCampaignEntry,
   useStartupCreditCampaignEntry,
 } from './startupCreditCampaignBridge';
 import {
+  type DailyCheckInLoadResult,
   DailyCheckInLoadResultStatus,
   type DailyCheckInSnapshot,
-  loadDailyCheckInSnapshot,
+  dailyCheckInSnapshotStore,
 } from './useDailyCheckInActivity';
 
 const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
+// With no snapshot cached yet, the first open waits this long at most so the
+// check-in entry usually renders with the menu instead of shifting it later.
+const DAILY_CHECK_IN_MENU_OPEN_WAIT_MS = 250;
 const reportAccountMenuAction = (
   actionType: string,
   options: {
@@ -100,6 +105,24 @@ const writeAccountMenuRendererLog = (
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.debug(`[LoginButton] renderer log unavailable: ${errorMessage}`);
+  }
+};
+
+const refreshMenuDailyCheckIn = async (
+  accountScope: string,
+): Promise<DailyCheckInLoadResult> => {
+  try {
+    const result = await dailyCheckInSnapshotStore.refresh(accountScope);
+    if (result.status === DailyCheckInLoadResultStatus.Failed) {
+      const message = `daily check-in refresh failed for account menu code=${result.code ?? 'unknown'}`;
+      console.warn(`[LoginButton] ${message}`);
+      writeAccountMenuRendererLog('warn', message);
+    }
+    return result;
+  } catch (error) {
+    console.warn('[LoginButton] failed to refresh daily check-in for account menu:', error);
+    writeAccountMenuRendererLog('warn', 'failed to refresh daily check-in for account menu');
+    return { status: DailyCheckInLoadResultStatus.Failed };
   }
 };
 
@@ -803,8 +826,27 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   );
   const finalRewardText = getFinalRewardText(finalReward);
   const finalRewardOpen = finalReward !== undefined;
+  const canLoadMenuDailyCheckIn = isLoggedIn
+    && !connectionState
+    && !enterpriseAccountContext
+    && startupCreditEntry.resolved
+    && !startupCreditEntry.available;
 
   authAccountScopeRef.current = authAccountScope;
+
+  const prefetchMenuDailyCheckIn = useCallback(() => {
+    if (!canLoadMenuDailyCheckIn
+        || dailyCheckInSnapshotStore.isFresh(authAccountScope)) return;
+    dailyCheckInSnapshotStore.refresh(authAccountScope).catch((error: unknown) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.debug(`[LoginButton] daily check-in prefetch failed: ${errorMessage}`);
+    });
+  }, [authAccountScope, canLoadMenuDailyCheckIn]);
+
+  // Warm the snapshot once the account is ready so the first open is instant.
+  useEffect(() => {
+    prefetchMenuDailyCheckIn();
+  }, [prefetchMenuDailyCheckIn]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -917,48 +959,55 @@ const LoginButton: React.FC<LoginButtonProps> = ({
 
       const requestId = ++menuOpenRequestRef.current;
       const requestAccountScope = authAccountScope;
-      const selectedStartupCreditEntry = startupCreditEntry;
-      const shouldLoadDailyCheckIn = !enterpriseAccountContext
-        && selectedStartupCreditEntry.resolved
-        && !selectedStartupCreditEntry.available;
-      setMenuOpening(true);
-      setMenuStartupCreditEntry(selectedStartupCreditEntry);
-      setMenuDailyCheckInSnapshot(null);
+      const isCurrentMenuRequest = () => (
+        mountedRef.current
+        && menuOpenRequestRef.current === requestId
+        && authAccountScopeRef.current === requestAccountScope
+      );
+      setMenuStartupCreditEntry(startupCreditEntry);
       setMenuPennyActivityEntryVisible(false);
       reportAccountMenuAction('open_menu', {
         creditItemCount,
         hasCredits: creditItemCount > 0,
         isLoggedIn: true,
       });
-      let dailyCheckInSnapshot: DailyCheckInSnapshot | null = null;
-      try {
-        if (shouldLoadDailyCheckIn) {
-          const result = await loadDailyCheckInSnapshot();
-          if (result.status === DailyCheckInLoadResultStatus.Ready) {
-            dailyCheckInSnapshot = result.snapshot;
-          } else if (result.status === DailyCheckInLoadResultStatus.Failed) {
-            const message = `daily check-in preload failed before opening account menu code=${result.code ?? 'unknown'}`;
-            console.warn(`[LoginButton] ${message}`);
-            writeAccountMenuRendererLog('warn', message);
-          }
-        }
-      } catch (error) {
-        console.warn('[LoginButton] failed to preload daily check-in before opening account menu:', error);
-        writeAccountMenuRendererLog(
-          'warn',
-          'failed to preload daily check-in before opening account menu',
-        );
-      } finally {
-        if (
-          mountedRef.current
-          && menuOpenRequestRef.current === requestId
-          && authAccountScopeRef.current === requestAccountScope
-        ) {
-          setMenuDailyCheckInSnapshot(dailyCheckInSnapshot);
-          setShowMenu(true);
-          setMenuOpening(false);
-        }
+      if (!canLoadMenuDailyCheckIn) {
+        setMenuDailyCheckInSnapshot(null);
+        setShowMenu(true);
+        return;
       }
+
+      // The store may have dropped a refresh that lost to a claim, so read it
+      // back instead of trusting the refresh result directly.
+      const showLatestDailyCheckIn = () => {
+        if (!isCurrentMenuRequest()) return;
+        setMenuDailyCheckInSnapshot(dailyCheckInSnapshotStore.get(requestAccountScope));
+      };
+      const cachedSnapshot = dailyCheckInSnapshotStore.get(requestAccountScope);
+      const refreshRequest = dailyCheckInSnapshotStore.isFresh(requestAccountScope)
+        ? null
+        : refreshMenuDailyCheckIn(requestAccountScope);
+
+      // A known snapshot opens the menu at once; the refresh updates the entry
+      // in place, which keeps the layout steady.
+      if (cachedSnapshot || !refreshRequest) {
+        setMenuDailyCheckInSnapshot(cachedSnapshot);
+        setShowMenu(true);
+        void refreshRequest?.then(showLatestDailyCheckIn);
+        return;
+      }
+
+      setMenuOpening(true);
+      setMenuDailyCheckInSnapshot(null);
+      const earlyResult = await waitForDailyCheckInRefresh(
+        refreshRequest,
+        DAILY_CHECK_IN_MENU_OPEN_WAIT_MS,
+      );
+      if (!isCurrentMenuRequest()) return;
+      setMenuDailyCheckInSnapshot(dailyCheckInSnapshotStore.get(requestAccountScope));
+      setShowMenu(true);
+      setMenuOpening(false);
+      if (earlyResult === null) void refreshRequest.then(showLatestDailyCheckIn);
       return;
     }
     if (showMenu) {
@@ -1024,6 +1073,8 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       <button
         type="button"
         onClick={handleClick}
+        onFocus={prefetchMenuDailyCheckIn}
+        onPointerEnter={prefetchMenuDailyCheckIn}
         disabled={isLoading}
         aria-busy={isLoading}
         title={connectionState ? i18nService.t(isLoading ? 'authRestoringSession' : 'authConnectionUnavailable') : undefined}
