@@ -2682,6 +2682,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     lowCreditOfferTaskFirstTitle: '积分已用尽，{discount}折升级订阅套餐',
     lowCreditOfferTaskReturningTitle: '积分已用尽，限时购买{discount}折',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制，请缩短对话内容后重试。',
+    coworkErrorContextRecoveryFailed: '上下文超出模型限制，自动压缩未能恢复本轮，会话记录已保留。请缩短本次输入，或在新会话中分批发送。',
     coworkErrorMessageTooLarge:
       '本次消息过大，请减少附件、压缩图片或拆分提交。（单次整体需小于 30MB）',
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。请尝试将 PDF 转换为文本格式后重新发送。',
@@ -7526,6 +7527,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     lowCreditOfferTaskReturningTitle: 'Credits used up. Limited {discount}0% price',
     coworkErrorInputTooLong:
       'Input too long, exceeding model context limit. Please shorten the conversation and try again.',
+    coworkErrorContextRecoveryFailed: 'The context exceeds the model limit and automatic compaction could not recover this turn. Your conversation history has been kept. Shorten this input, or split it across a new conversation.',
     coworkErrorMessageTooLarge:
       'This message is too large. Reduce attachments, compress images, or split it up. (Keep each message under about 30 MB.)',
     coworkErrorCouldNotProcessPdf:

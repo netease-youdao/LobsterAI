@@ -1,5 +1,36 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Recover compaction after context overflow
+
+`zzzz-openclaw-compaction-context-overflow-retry.patch` subdivides a failed
+summary chunk when the provider rejects its context length. It preserves tool
+groups and can split a single long user text in the temporary summary input.
+Completed chunks are reused; the original session history stays intact.
+Subdivision is bounded and cancellation stops further work. Every fragment
+must succeed before recovery can use the summary. Recovery lives in the shared
+core summary path, covering default and safeguard compaction; it has no clean
+LobsterAI adapter hook.
+
+Regression coverage checks text completeness, Unicode boundaries, bounded
+failure, incomplete-summary rejection, transient recovery, and cancellation.
+
+Rebuild the runtime after applying the patch. Remove it when the pinned upstream
+supports bounded subdivision with the same completeness guarantees.
+
+## Show compaction progress during overflow recovery
+
+`zzzz-openclaw-recovery-compaction-events.patch` publishes the existing
+compaction start/end events around overflow recovery. This path runs outside
+the session subscriber, so the adapter otherwise cannot show its existing
+progress indicator. The end event is also emitted on failure or cancellation;
+completion is reported only after the recovered transcript is accepted.
+The following model retry still owns the task's final result.
+
+Regression coverage checks pending work, success, failure, exceptions, and
+cancellation. Rebuild the runtime after applying it. Remove the patch when the
+pinned upstream emits this lifecycle from the recovery owner. There is no
+adapter hook for the missing start event; log parsing is intentionally avoided.
+
 ## Stable prefixes across LobsterAI tasks
 
 `zzz-openclaw-session-prefix-cache.patch` moves sessionKey/sessionId/sessionUrl

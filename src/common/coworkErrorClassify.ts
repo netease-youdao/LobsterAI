@@ -24,6 +24,7 @@ export const CoworkErrorI18nKey = {
   NetworkErrorViaSystemProxy: 'coworkErrorNetworkErrorViaSystemProxy',
   ServerError: 'coworkErrorServerError',
   TranscriptOversized: 'coworkErrorTranscriptOversized',
+  ContextRecoveryFailed: 'coworkErrorContextRecoveryFailed',
   GatewayHeapOutOfMemory: 'coworkErrorGatewayHeapOutOfMemory',
   WorkspaceAliasRepointed: 'coworkErrorWorkspaceAliasRepointed',
 } as const;
@@ -63,7 +64,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   // Oversized Cowork/OpenClaw gateway message payloads.
   [/chat\.send payload too large|max payload size exceeded|gateway closed \(1009\)|message too big/i, 'coworkErrorMessageTooLarge'],
   // Input too long: context length, HTTP 413, Qwen, payload too large
-  [/input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
+  [/Auto-compaction could not recover this turn.*kept this conversation mapped to the current session/i, CoworkErrorI18nKey.ContextRecoveryFailed],
+  [/input.*too.*long|context.*length.*exceeded|context_window_exceeded|maximum context length|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
   // PDF processing failure
   [/could not process pdf/i, 'coworkErrorCouldNotProcessPdf'],
   // Model not found: standard, Qwen, Ollama

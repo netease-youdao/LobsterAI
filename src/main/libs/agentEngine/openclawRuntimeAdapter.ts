@@ -1150,10 +1150,11 @@ export function isPlanModeResponseComplete(text: string): boolean {
 }
 
 function isOpenClawFailureFinalText(text: string): boolean {
-  const trimmed = text.trim();
-  return trimmed.includes(OpenClawFailureFinalText.AgentFailedBeforeReply)
-    || trimmed.includes(OpenClawFailureFinalText.SessionFileLocked)
-    || trimmed.includes(OpenClawFailureFinalText.GenericRunFailure);
+  // Match the runtime failure envelope; normal replies can quote these diagnostics.
+  const trimmed = text.trim().replace(/^⚠️?\s*/, '');
+  return trimmed.startsWith(OpenClawFailureFinalText.AgentFailedBeforeReply)
+    || trimmed.startsWith(OpenClawFailureFinalText.SessionFileLocked)
+    || trimmed.startsWith(OpenClawFailureFinalText.GenericRunFailure);
 }
 
 export function isSignificantAssistantStreamReset(previousLength: number, nextLength: number): boolean {

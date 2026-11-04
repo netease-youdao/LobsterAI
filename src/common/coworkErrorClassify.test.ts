@@ -5,6 +5,19 @@ import { classifyErrorKey, CoworkErrorI18nKey, isLobsterAIQuotaExhaustedError } 
 
 const classifyError = (error: string) => classifyErrorKey(error) ?? error;
 
+test('context: preserves the session when automatic compaction cannot recover', () => {
+  const error = '⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.';
+  expect(classifyErrorKey(error)).toBe(CoworkErrorI18nKey.ContextRecoveryFailed);
+  expect(classifyErrorKey('Compaction failed: fetch failed')).toBe(CoworkErrorI18nKey.NetworkError);
+});
+
+test.each([
+  "This model's maximum context length is 1048576 tokens. However, you requested 1240758 tokens.",
+  '{"error":{"code":50206,"category":"context_window_exceeded","message":"Request rejected"}}',
+])('context: recognizes the retained upstream rejection: %s', (error) => {
+  expect(classifyErrorKey(error)).toBe('coworkErrorInputTooLong');
+});
+
 // ==================== Auth errors ====================
 
 test('auth: Anthropic authentication_error', () => {

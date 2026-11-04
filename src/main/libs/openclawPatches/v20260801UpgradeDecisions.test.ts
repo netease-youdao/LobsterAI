@@ -91,6 +91,8 @@ const RETAINED_PATCHES = [
   'zzz-openclaw-plugin-degraded-startup.patch',
   'zzz-openclaw-session-prefix-cache.patch',
   'zzz-openclaw-stream-drop-reconnect.patch',
+  'zzzz-openclaw-compaction-context-overflow-retry.patch',
+  'zzzz-openclaw-recovery-compaction-events.patch',
 ] as const;
 
 const RETIRED_PATCHES = [
