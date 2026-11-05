@@ -1006,6 +1006,8 @@ contextBridge.exposeInMainWorld('electron', {
   clipboard: {
     writeText: (text: string) =>
       ipcRenderer.invoke(ClipboardIpc.WriteText, text),
+    writeTextAndHtml: (content: { text: string; html: string }) =>
+      ipcRenderer.invoke(ClipboardIpc.WriteTextAndHtml, content),
     writeImageFromFile: (filePath: string) =>
       ipcRenderer.invoke(ClipboardIpc.WriteImageFromFile, filePath),
     writeImageFromDataUrl: (dataUrl: string) =>

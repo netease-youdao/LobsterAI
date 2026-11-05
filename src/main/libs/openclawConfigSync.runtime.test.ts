@@ -35,6 +35,7 @@ vi.mock('electron', () => ({
 
 const mockRuntimeState = vi.hoisted(() => ({
   proxyPort: null as number | null,
+  bundledExtensionsDir: null as string | null,
   thirdPartyExtensionsDir: null as string | null,
   modelCompatPluginAvailable: true,
   serverModels: [] as Array<{
@@ -122,7 +123,7 @@ vi.mock('./claudeSettings', () => ({
 }));
 
 vi.mock('./openclawLocalExtensions', () => ({
-  findBundledExtensionsDir: () => null,
+  findBundledExtensionsDir: () => mockRuntimeState.bundledExtensionsDir,
   findThirdPartyExtensionsDir: () => mockRuntimeState.thirdPartyExtensionsDir,
   hasBundledOpenClawExtension: (id: string) => (
     id !== 'qwen-portal-auth'
@@ -151,6 +152,7 @@ describe('OpenClawConfigSync runtime config output', () => {
 
   beforeEach(() => {
     mockRuntimeState.proxyPort = null;
+    mockRuntimeState.bundledExtensionsDir = null;
     mockRuntimeState.thirdPartyExtensionsDir = null;
     mockRuntimeState.modelCompatPluginAvailable = true;
     mockRuntimeState.serverModels = [];
@@ -681,6 +683,92 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.plugins).toEqual(plugins);
     expect(config.gateway).toEqual({ mode: 'remote', remote: { url: 'wss://gateway.example.test' } });
+  });
+
+  describe('when another LobsterAI install wrote the shared profile', () => {
+    // E.g. `npm run electron:dev` after the installed app, a reinstall to
+    // another directory, or a moved macOS app bundle.
+    const installedRoot = 'C:\\Users\\dev\\AppData\\Local\\Programs\\LobsterAI';
+    const installedExtensions = `${installedRoot}\\resources\\cfmind\\third-party-extensions`;
+    const installedLaunch = {
+      command: `${installedRoot}\\LobsterAI.exe`,
+      args: [`${installedRoot}\\resources\\app.asar\\node_modules\\local-tools\\server.mjs`],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    };
+    const userExtensions = 'C:\\Users\\dev\\AppData\\Roaming\\LobsterAI\\third-party-extensions';
+    // Same final directory name, but not inside a LobsterAI runtime.
+    const linkedPlugins = 'D:\\plugins\\third-party-extensions';
+    const currentServer = {
+      name: 'local-tools',
+      transportType: 'stdio' as const,
+      command: process.execPath,
+      args: [path.join(process.cwd(), 'node_modules', 'local-tools', 'server.mjs')],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    };
+    const currentLaunch = { command: currentServer.command, args: currentServer.args, env: currentServer.env };
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    beforeEach(() => {
+      mockRuntimeState.bundledExtensionsDir = path.join(tmpDir, 'vendor', 'openclaw-runtime', 'current', 'third-party-extensions');
+      fs.writeFileSync(configPath, JSON.stringify({
+        gateway: { mode: 'local' },
+        plugins: {
+          allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID],
+          load: { paths: [installedExtensions, userExtensions, linkedPlugins] },
+        },
+        mcp: { servers: { 'local-tools': installedLaunch, 'uninstalled-tools': installedLaunch } },
+      }, null, 2));
+    });
+
+    test('renders this install\'s runtime paths on the first sync while no model is configured', async () => {
+      mockRuntimeState.rawApiConfig.config = null;
+      const sync = await createSync({ getResolvedMcpServers: () => [currentServer] });
+
+      expect(sync.sync('startup')).toMatchObject({ ok: true, changed: true });
+      const config = read();
+      expect(config.plugins.load.paths).toEqual([mockRuntimeState.bundledExtensionsDir, userExtensions, linkedPlugins]);
+      expect(config.mcp).toEqual({ servers: { 'local-tools': currentLaunch } });
+      expect(sync.sync('restart')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('renders this install\'s runtime paths on the first full sync', async () => {
+      const sync = await createSync({ getResolvedMcpServers: () => [currentServer] });
+
+      expect(sync.sync('startup')).toMatchObject({ ok: true, changed: true });
+      const config = read();
+      expect(config.plugins.load.paths).toEqual([mockRuntimeState.bundledExtensionsDir]);
+      expect(config.mcp).toEqual({ servers: { 'local-tools': currentLaunch } });
+      expect(sync.sync('restart')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('drops the inherited runtime entries when this install bundles neither', async () => {
+      mockRuntimeState.bundledExtensionsDir = null;
+      mockRuntimeState.rawApiConfig.config = null;
+      const sync = await createSync();
+
+      expect(sync.sync('startup')).toMatchObject({ ok: true, changed: true });
+      const config = read();
+      expect(config.plugins.load.paths).toEqual([userExtensions, linkedPlugins]);
+      expect(config).not.toHaveProperty('mcp');
+      expect(sync.sync('restart')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('keeps rendered MCP servers unchanged across logout and model recovery', async () => {
+      const sync = await createSync({ getResolvedMcpServers: () => [currentServer] });
+      expect(sync.sync('configured')).toMatchObject({ ok: true, changed: true });
+      const configured = read();
+
+      const apiConfig = mockRuntimeState.rawApiConfig.config;
+      mockRuntimeState.rawApiConfig.config = null;
+      expect(sync.sync('logout')).toMatchObject({ ok: true, changed: true });
+      const loggedOut = read();
+      expect(loggedOut.mcp).toEqual(configured.mcp);
+      expect(loggedOut.plugins.load).toEqual(configured.plugins.load);
+
+      mockRuntimeState.rawApiConfig.config = apiConfig;
+      expect(sync.sync('models-recovered')).toMatchObject({ ok: true, changed: true });
+      expect(read().mcp).toEqual(configured.mcp);
+    });
   });
 
   test('emits stable explicit ownership after an upgrade and preserves channel routing', async () => {
