@@ -44,6 +44,7 @@ const RETAINED_PATCHES = [
   'openclaw-managed-image-replay.patch',
   'openclaw-managed-npm-junction-cleanup.patch',
   'openclaw-managed-workspace-alias-follow.patch',
+  'openclaw-memory-knn-child-electron-node-env.patch',
   'openclaw-memory-sidecar-archive-generations.patch',
   'openclaw-model-preset-context-windows.patch',
   'openclaw-model-preset-window-metadata.patch',
@@ -241,6 +242,11 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
     ]);
     expectPatchContains('openclaw-shell-snapshot-electron-node-env.patch', [
       'ELECTRON_RUN_AS_NODE=1',
+    ]);
+    expectPatchContains('openclaw-memory-knn-child-electron-node-env.patch', [
+      '+  if (typeof process.versions.electron === "string") {',
+      '+    childEnv.ELECTRON_RUN_AS_NODE = "1";',
+      'launches the child in Node mode under an Electron host',
     ]);
     expectPatchContains('openclaw-skip-disabled-web-search-discovery.patch', [
       'const searchEnabled = search?.enabled !== false',

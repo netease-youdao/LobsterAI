@@ -589,7 +589,7 @@ import {
 import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './libs/openclawUserConfigOverlay';
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
-import { collectOpenWithArgv, OpenWithPathQueue } from './libs/openWithPathQueue';
+import { collectOpenWithArgv, findBundledPathArg, OpenWithPathQueue } from './libs/openWithPathQueue';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { recordSessionModelChange } from './libs/sessionModelChange';
@@ -5400,6 +5400,18 @@ if (!gotTheLock) {
 
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
     console.debug('[Main] second-instance event', { commandLine, workingDirectory });
+    // An OpenClaw child that runs a bundled script through the app binary
+    // without ELECTRON_RUN_AS_NODE lands here; it must not attach the script
+    // to the prompt or pull the window to the front.
+    const bundledPathArg = findBundledPathArg(commandLine, {
+      cwd: workingDirectory,
+      bundledRoots: [process.resourcesPath, openClawEngineManager?.getRuntimeRoot()]
+        .filter((root): root is string => Boolean(root)),
+    });
+    if (bundledPathArg) {
+      console.warn(`[Main] ignored a second instance started with a bundled file: ${bundledPathArg}`);
+      return;
+    }
     if (isDataMigrationRestoreInProgress) {
       console.log('[DataMigration] ignored second-instance activation while restore is in progress.');
       return;
