@@ -14,6 +14,17 @@ export const DSH_RUNTIME_ENTRY_RELPATH = 'lib/bin.js';
 // running Electron in Node mode on every platform.
 export const DSH_NODE_EXEC_ARGV = ['--expose-internals'];
 
+// The runtime build unpacks the pinned pnpm npm package here, outside dsh's own
+// node_modules so it never joins dsh's dependency graph. Runtimes built before
+// pnpm was bundled lack it; plugin installs then fall back to pnpm on PATH.
+export const DSH_PNPM_PACKAGE_RELPATH = 'package-manager/pnpm';
+
+// Written under userData on every start. `dsh web` run directly calls
+// runCli() without a package manager, so this wrapper is how the bundled pnpm
+// reaches dsh's plugin manager.
+export const DSH_LAUNCHER_DIR_NAME = 'dsh-launcher';
+export const DSH_LAUNCHER_FILENAME = 'launch.mjs';
+
 const DSH_PLUGIN_LOAD_FAILURE_PATTERN =
   /(?:Cannot find package|ERR_MODULE_NOT_FOUND)[\s\S]{0,500}cordis-plugin-loader/i;
 
@@ -22,6 +33,8 @@ export interface DshRuntimeBuildInfo {
   dshVersion: string;
   patchHash: string;
   builtAt?: string;
+  /** Version of the bundled pnpm; absent on runtimes built without one. */
+  pnpmVersion?: string;
 }
 
 export interface DshRuntimeLayoutCheck {
@@ -48,6 +61,7 @@ export function parseDshRuntimeBuildInfo(raw: string): DshRuntimeBuildInfo | nul
       dshVersion: record.dshVersion,
       patchHash: record.patchHash,
       builtAt: typeof record.builtAt === 'string' ? record.builtAt : undefined,
+      ...(typeof record.pnpmVersion === 'string' ? { pnpmVersion: record.pnpmVersion } : {}),
     };
   } catch {
     return null;
@@ -132,6 +146,81 @@ export function buildDshSpawnEnv(options: DshSpawnEnvOptions): Record<string, st
 // unless told not to, and the workbench window is the only UI we want.
 export function buildDshWebArgs(entryPath: string, port: number): string[] {
   return [entryPath, 'web', '--port', String(port), '--no-open'];
+}
+
+// Reads the pnpm entry script from the bundled package's own manifest, so a
+// pnpm release that renames its bin (pnpm.cjs became pnpm.mjs) needs no code
+// change. Returns the path relative to the package root, or null.
+export function parseDshPnpmBinRelPath(packageJsonRaw: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(packageJsonRaw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const bin = (parsed as Record<string, unknown>).bin;
+    const relPath =
+      typeof bin === 'string' ? bin : bin && typeof bin === 'object' ? (bin as Record<string, unknown>).pnpm : undefined;
+    if (typeof relPath !== 'string') return null;
+    const normalized = relPath.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!normalized || normalized.startsWith('/') || normalized.split('/').includes('..')) return null;
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
+/** The installation-owned package runtime dsh's plugin manager runs pnpm with. */
+export interface DshPackageManager {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+export interface DshPackageManagerOptions {
+  /** Electron binary that runs pnpm in Node mode. */
+  electronPath: string;
+  /** Absolute path of the bundled pnpm entry script. */
+  pnpmEntry: string;
+  /** Directory holding LobsterAI's node/npm/npx shims, prepended to PATH. */
+  nodeShimDir: string | null;
+  /** Bundled npm bin directory the Windows npm/npx shims resolve through. */
+  npmBinDir: string | null;
+  /** Environment the PATH extends; only its PATH entry is read. */
+  baseEnv: Record<string, string | undefined>;
+  delimiter: string;
+}
+
+// pnpm runs as Electron in Node mode. Dependency build scripts call `node`,
+// which a GUI-launched app does not have on PATH, so LobsterAI's node shim goes
+// first. dsh applies this environment only to its package-manager children and
+// merges it after its own scrubbed environment, so PATH keeps the casing the
+// base environment uses: on Windows that is usually `Path`, and a second
+// `PATH` key would leave which one wins to the child's key ordering.
+export function buildDshPackageManager(options: DshPackageManagerOptions): DshPackageManager {
+  const { electronPath, pnpmEntry, nodeShimDir, npmBinDir, baseEnv, delimiter } = options;
+  const pathKey = Object.keys(baseEnv).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+  const basePath = baseEnv[pathKey] ?? '';
+  const env: Record<string, string> = {
+    ELECTRON_RUN_AS_NODE: '1',
+    LOBSTERAI_ELECTRON_PATH: electronPath,
+    [pathKey]: [nodeShimDir, basePath].filter((entry): entry is string => !!entry).join(delimiter),
+  };
+  if (npmBinDir) env.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
+  return { command: electronPath, args: [pnpmEntry], env };
+}
+
+// The launcher statically imports the runtime entry so the module graph under
+// the process entry still contains dsh itself: dsh's HMR treats that graph as
+// host code that is never reloaded. A dynamic import() would leave dsh's own
+// modules outside it. Importing the entry does not run it (it only starts
+// itself as the main module); runCli then parses process.argv the same way.
+export function buildDshLauncherSource(entryFileUrl: string, packageManager: DshPackageManager): string {
+  return [
+    '// Generated by LobsterAI on every DeepSeek Harness start; edits are overwritten.',
+    '// Starts the dsh CLI with the package manager bundled in its runtime.',
+    `import { runCli } from ${JSON.stringify(entryFileUrl)};`,
+    '',
+    `await runCli({ packageManager: ${JSON.stringify(packageManager, null, 2)} });`,
+    '',
+  ].join('\n');
 }
 
 // The child's cwd becomes the workbench's default session directory and the

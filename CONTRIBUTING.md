@@ -91,6 +91,8 @@ When behavior has to change inside OpenClaw, prefer a LobsterAI-side integration
 
 The pinned dsh version and one archive descriptor per platform live in `package.json` under `dsh`. Development reads `vendor/dsh-runtime/current`; shipped apps download the archive on first use and verify it against the digest they carry.
 
+Each runtime also bundles the exact pnpm release pinned in `dsh.pnpm`, unpacked to `package-manager/pnpm`. dsh's plugin manager installs plugins with pnpm, and a Dock- or Start-menu-launched app has none on PATH, so the app starts dsh through a generated launcher that hands this pnpm to `runCli({ packageManager })`. Keep `dsh.pnpm` on the major that upstream pins in its root `packageManager` field. Changing it requires rebuilding and re-uploading every target.
+
 ```bash
 # Build and activate the current-platform runtime
 npm run dsh:runtime:host
@@ -138,7 +140,7 @@ Step 3 writes `dsh.runtimes[target]` into `package.json`; commit that hunk so ev
 <details>
 <summary>Update to a newer dsh version</summary>
 
-1. Bump `dsh.version` in `package.json`.
+1. Bump `dsh.version` in `package.json`, and check that `dsh.pnpm` is still on the major in upstream's `packageManager` field.
 2. Copy the patch directory to the new version before that directory exists: `cp -R scripts/dsh-patches/<old> scripts/dsh-patches/<new>` (if `<new>` already exists, `cp` nests the copy one level down and the build finds no patches). Patches are found by version, and a missing directory applies **no** patches without failing — the Windows console-hiding fix would vanish silently. After copying, the build's sentinels re-verify each patch still lands, and fail if upstream moved the code: retarget the patch and add its sentinel to `PATCH_SENTINELS` in `scripts/build-dsh-runtime.cjs`, or drop it once upstream carries the fix (the directory-picker fix is upstream from 0.1.5, the console-hiding fix from 0.1.6-alpha.2).
 3. Empty `dsh.runtimes`. A descriptor left pointing at the previous archive still passes its digest check, so the old runtime would install under the new version's name.
 4. Rebuild, upload, and record all three targets as above.

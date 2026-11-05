@@ -90,6 +90,8 @@ OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
 
 锁定的 dsh 版本以及各平台的分发包描述位于 `package.json` 的 `dsh` 字段。开发环境读取 `vendor/dsh-runtime/current`；发布版在首次使用时下载分发包，并用应用自带的摘要校验。
 
+每个 runtime 还会内置 `dsh.pnpm` 锁定的那个 pnpm 版本，解压在 `package-manager/pnpm`。dsh 的插件管理器用 pnpm 安装插件，而从 Dock 或开始菜单启动的应用 PATH 里没有 pnpm，所以应用通过一个生成的启动入口启动 dsh，把这份 pnpm 交给 `runCli({ packageManager })`。`dsh.pnpm` 要和上游仓库根目录 `packageManager` 字段锁定的 pnpm 保持同一大版本。修改它之后，每个平台都要重新构建并上传。
+
 ```bash
 # 构建并激活当前平台的 runtime
 npm run dsh:runtime:host
@@ -136,7 +138,7 @@ npm run dsh:runtime:verify-urls mac-arm64
 <details>
 <summary>升级 dsh 版本</summary>
 
-1. 修改 `package.json` 的 `dsh.version`。
+1. 修改 `package.json` 的 `dsh.version`，并对照上游 `packageManager` 字段确认 `dsh.pnpm` 仍在同一大版本。
 2. 在新版本目录尚不存在时复制补丁目录：`cp -R scripts/dsh-patches/<旧版本> scripts/dsh-patches/<新版本>`（`<新版本>` 目录已存在时，`cp` 会把副本嵌套到下一层，构建时一个补丁都找不到）。补丁按版本号查找，目录缺失时**一个补丁都不会应用且不会报错**——Windows 控制台隐藏修复会就此静默消失。复制后构建时的 sentinel 会重新校验每个补丁是否仍能落地，上游挪动代码时构建失败：此时改写补丁目标，并在 `scripts/build-dsh-runtime.cjs` 的 `PATCH_SENTINELS` 中登记新的 sentinel；上游已带上修复则删掉该补丁（目录选择器修复自 0.1.5 起已在上游，控制台隐藏修复自 0.1.6-alpha.2 起在上游）。
 3. 清空 `dsh.runtimes`。残留的旧描述仍能通过摘要校验，于是旧 runtime 会被安装到新版本号命名的目录下。
 4. 按上文重新构建、上传并登记三个平台。

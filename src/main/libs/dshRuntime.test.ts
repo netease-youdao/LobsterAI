@@ -1,14 +1,21 @@
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { describe, expect, test } from 'vitest';
 
 import { DshEngineErrorCode, DshInstallStage } from '../../shared/dshEngine/constants';
 import {
+  buildDshLauncherSource,
+  buildDshPackageManager,
   buildDshSpawnEnv,
   buildDshWebArgs,
   classifyDshStartupError,
   DSH_NODE_EXEC_ARGV,
   DSH_RUNTIME_ENTRY_RELPATH,
   dshInstallPercent,
+  parseDshPnpmBinRelPath,
   parseDshRuntimeBuildInfo,
   resolveDshRuntimeCandidates,
   resolveDshWorkingDirectory,
@@ -22,6 +29,13 @@ describe('parseDshRuntimeBuildInfo', () => {
       JSON.stringify({ target: 'mac-arm64', dshVersion: '0.1.0-rc.6', patchHash: 'none', builtAt: '2026-08-16T00:00:00Z' })
     );
     expect(info).toEqual({ target: 'mac-arm64', dshVersion: '0.1.0-rc.6', patchHash: 'none', builtAt: '2026-08-16T00:00:00Z' });
+  });
+
+  test('keeps the bundled pnpm version when the build recorded one', () => {
+    const info = parseDshRuntimeBuildInfo(
+      JSON.stringify({ target: 'mac-arm64', dshVersion: '0.2.1-rc.5', patchHash: 'none', pnpmVersion: '11.28.5' })
+    );
+    expect(info?.pnpmVersion).toBe('11.28.5');
   });
 
   test('rejects payloads missing required fields', () => {
@@ -158,6 +172,118 @@ describe('spawn argument helpers', () => {
 
   test('exec argv carries the loader internals flag', () => {
     expect(DSH_NODE_EXEC_ARGV).toContain('--expose-internals');
+  });
+});
+
+describe('parseDshPnpmBinRelPath', () => {
+  test('reads the pnpm entry from a bin map or a bare bin string', () => {
+    expect(parseDshPnpmBinRelPath(JSON.stringify({ bin: { pn: 'bin/pnpm.mjs', pnpm: 'bin/pnpm.mjs' } }))).toBe(
+      'bin/pnpm.mjs'
+    );
+    expect(parseDshPnpmBinRelPath(JSON.stringify({ bin: './bin/pnpm.cjs' }))).toBe('bin/pnpm.cjs');
+  });
+
+  test('rejects manifests without a pnpm bin, escaping paths, and invalid JSON', () => {
+    expect(parseDshPnpmBinRelPath(JSON.stringify({ bin: { pnpx: 'bin/pnpx.mjs' } }))).toBeNull();
+    expect(parseDshPnpmBinRelPath(JSON.stringify({ bin: { pnpm: '../outside.mjs' } }))).toBeNull();
+    expect(parseDshPnpmBinRelPath(JSON.stringify({ bin: { pnpm: '/abs/pnpm.mjs' } }))).toBeNull();
+    expect(parseDshPnpmBinRelPath('{oops')).toBeNull();
+  });
+});
+
+describe('buildDshPackageManager', () => {
+  const base = {
+    electronPath: '/Apps/LobsterAI Helper',
+    pnpmEntry: '/rt/package-manager/pnpm/bin/pnpm.mjs',
+    npmBinDir: '/app/node_modules/npm/bin',
+    delimiter: ':',
+  };
+
+  test('runs pnpm on Electron in Node mode with the node shims first on PATH', () => {
+    const manager = buildDshPackageManager({
+      ...base,
+      nodeShimDir: '/userData/cowork/bin',
+      baseEnv: { PATH: '/usr/bin:/bin', HOME: '/Users/me' },
+    });
+    expect(manager).toEqual({
+      command: '/Apps/LobsterAI Helper',
+      args: ['/rt/package-manager/pnpm/bin/pnpm.mjs'],
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        LOBSTERAI_ELECTRON_PATH: '/Apps/LobsterAI Helper',
+        LOBSTERAI_NPM_BIN_DIR: '/app/node_modules/npm/bin',
+        PATH: '/userData/cowork/bin:/usr/bin:/bin',
+      },
+    });
+  });
+
+  // dsh merges this env over its own copy of the parent env; a `PATH` beside
+  // Windows' `Path` would leave the winner to the child's key ordering.
+  test('keeps the PATH key casing of the base environment', () => {
+    const manager = buildDshPackageManager({
+      ...base,
+      delimiter: ';',
+      nodeShimDir: 'C:\\userData\\cowork\\bin',
+      baseEnv: { Path: 'C:\\Windows\\system32' },
+    });
+    expect(manager.env.Path).toBe('C:\\userData\\cowork\\bin;C:\\Windows\\system32');
+    expect(manager.env.PATH).toBeUndefined();
+  });
+
+  test('leaves PATH alone without shims and omits a missing npm bin dir', () => {
+    const manager = buildDshPackageManager({
+      ...base,
+      nodeShimDir: null,
+      npmBinDir: null,
+      baseEnv: { PATH: '/usr/bin' },
+    });
+    expect(manager.env.PATH).toBe('/usr/bin');
+    expect(manager.env.LOBSTERAI_NPM_BIN_DIR).toBeUndefined();
+  });
+});
+
+describe('buildDshLauncherSource', () => {
+  // Runs the generated launcher against a stand-in entry that, like dsh's
+  // bin.js, starts itself only as the main module and otherwise exports runCli.
+  test('hands the package manager to runCli without the entry starting itself', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-launcher-'));
+    try {
+      const entryPath = path.join(dir, 'runtime dir', 'bin.js');
+      fs.mkdirSync(path.dirname(entryPath));
+      fs.writeFileSync(path.join(dir, 'runtime dir', 'package.json'), JSON.stringify({ type: 'module' }));
+      fs.writeFileSync(
+        entryPath,
+        [
+          'export async function runCli(options = {}) {',
+          '  console.log(JSON.stringify({ options, args: process.argv.slice(2) }));',
+          '}',
+          'if (import.meta.main) console.log("entry started itself");',
+          '',
+        ].join('\n')
+      );
+      const packageManager = buildDshPackageManager({
+        electronPath: '/Apps/Electron',
+        pnpmEntry: '/rt/pnpm.mjs',
+        nodeShimDir: '/shims',
+        npmBinDir: null,
+        baseEnv: { PATH: '/usr/bin' },
+        delimiter: ':',
+      });
+      const launcherPath = path.join(dir, 'launch.mjs');
+      fs.writeFileSync(launcherPath, buildDshLauncherSource(pathToFileURL(entryPath).href, packageManager));
+
+      const result = spawnSync(process.execPath, [launcherPath, 'web', '--port', '1234', '--no-open'], {
+        encoding: 'utf8',
+      });
+      expect(result.stderr).toBe('');
+      expect(result.stdout).not.toContain('entry started itself');
+      expect(JSON.parse(result.stdout)).toEqual({
+        options: { packageManager },
+        args: ['web', '--port', '1234', '--no-open'],
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

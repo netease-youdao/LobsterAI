@@ -4,7 +4,7 @@
 // server and no task is forwarded to it through LobsterAI. Keeps all dsh
 // wiring out of main.ts except one register call.
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -15,8 +15,9 @@ import {
   DshIpcChannel,
 } from '../../../shared/dshEngine/constants';
 import type { ProviderConfig } from '../../../shared/providers/types';
+import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../../libs/coworkUtil';
 import { DshManagedSettings, DshPlanProviderInput, renderDshManagedSettings } from '../../libs/dshConfigSync';
-import { getDshEngineManager } from '../../libs/dshEngineManager';
+import { DshNodeToolchain, getDshEngineManager } from '../../libs/dshEngineManager';
 import {
   clearWriterLock,
   DshSharedHomeDecision,
@@ -88,6 +89,21 @@ function computeManagedSettings(): DshManagedSettings | null {
   return renderDshManagedSettings(providers, { preferredDefault, planProvider });
 }
 
+// The bundled pnpm runs dependency build scripts that call `node`, `npm`, or
+// `npx`. These are the same Electron-as-Node shims cowork and the gateway use.
+function resolveDshNodeToolchain(): DshNodeToolchain {
+  const electronPath = getElectronNodeRuntimePath();
+  const npmBinDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+    : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+  const hasNpm = fs.existsSync(npmBinDir);
+  return {
+    electronPath,
+    nodeShimDir: ensureElectronNodeShim(electronPath, hasNpm ? npmBinDir : undefined),
+    npmBinDir: hasNpm ? npmBinDir : null,
+  };
+}
+
 // Starts the engine on demand (settings sync included) and resolves the
 // authenticated web URL for the workbench window. The URL carries the
 // runtime's launch token, so it stays in the main process.
@@ -114,6 +130,7 @@ export async function ensureDshEngineReady(): Promise<string> {
   manager.setHomeDirectorySource(() => resolution.dataHome);
   manager.setManagedSettingsSource(computeManagedSettings);
   manager.setWorkingDirectorySource(() => moduleDeps?.getDefaultCwd() ?? '');
+  manager.setNodeToolchainSource(resolveDshNodeToolchain);
   manager.setSharedHomeLock(
     resolution.dataHome
       ? { claim: (port) => writeWriterLock(sharedHome, port), release: () => clearWriterLock(sharedHome) }
