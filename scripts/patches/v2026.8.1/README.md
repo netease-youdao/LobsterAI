@@ -1085,9 +1085,16 @@ shipped dist chunks in a console-less Electron process, the first
 `getWindowsInstallRoots()` dropped from 197-291 ms to 1.2-2.3 ms (9-17 ms when
 koffi is not loaded yet). The first `resolveWindowsConsoleEncoding()` dropped
 from 69-129 ms to under 1 ms. Both versions return the same roots and encoding.
-On this baseline the main thread stays saturated for the first 3 s after
-`ready` either way, so the freed time lets the remaining startup work run
-sooner rather than appearing as idle time.
+Without the dreaming-scrub patch below, the main thread stays saturated for the
+first 3 s after `ready` either way, so the freed time only lets the remaining
+startup work run sooner.
+
+With both patches (the merged release runtime), "before" was produced by making
+only these two koffi bindings fail, so the unchanged fallback ran. That gave
+the same 8 child processes and 435-485 ms of synchronous time as a separately
+built runtime without the patch. Idle time in the first 1.8 s after `ready` went
+from a median 277 ms to 490 ms. Those medians cover the runs whose startup was
+not swamped by other load on the shared machine; the spread is large.
 
 Verify with `node_modules/.bin/vitest run src/infra/windows-install-roots.test.ts
 src/infra/windows-encoding.test.ts src/infra/detect-binary.test.ts`. On Windows
