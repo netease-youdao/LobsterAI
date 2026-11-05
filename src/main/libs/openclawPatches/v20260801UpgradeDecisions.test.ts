@@ -81,6 +81,7 @@ const RETAINED_PATCHES = [
   'openclaw-windows-native-plugin-require.patch',
   'openclaw-windows-private-directory-native.patch',
   'openclaw-windows-process-identity.patch',
+  'openclaw-windows-registry-codepage-native.patch',
   'openclaw-workspace-attestation-quarantine.patch',
   'openclaw-workspace-setup-recovery.patch',
   'zz-openclaw-channel-scheduling-authority.patch',
@@ -174,6 +175,20 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+        return getLastError() === ERROR_INVALID_PARAMETER ? null : undefined;',
       '+  const nativeStartTime = readNativeStartTime(pid);',
       '+    "matches .NET Process.StartTime for live processes and rejects gone ones",',
+    ]);
+  });
+
+  test('reads Windows registry values and the console code page natively before spawning', () => {
+    expectPatchContains('openclaw-windows-registry-codepage-native.patch', [
+      '+function loadNativeRegistryReader(): NativeRegistryReader | null {',
+      '+      "int32_t __stdcall RegGetValueW(intptr_t key, str16 subKey, str16 valueName, uint32_t flags, _Out_ uint32_t *type, _Out_ void *data, _Inout_ uint32_t *size)",',
+      '+      for (const view of [RRF_SUBKEY_WOW6464KEY, 0]) {',
+      '+  const nativeValue = readNativeRegistryValue(key, valueName);',
+      '+    const getConsoleOutputCP = kernel32.func("uint32_t __stdcall GetConsoleOutputCP()");',
+      '+      const configured = queryWindowsRegistryDwordNative("HKCU\\\\Console", "CodePage");',
+      '+  const nativeCodePage = readNativeConsoleCodePage();',
+      '+    "matches reg.exe for trusted roots and DWORDs without starting it",',
+      '+    "matches the chcp probe for this process\'s console state",',
     ]);
   });
 
