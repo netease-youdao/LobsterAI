@@ -91,6 +91,15 @@ const GATEWAY_RESTART_BUDGET_RESET_MS = 60_000;
 // config change) is trusted to complete before LobsterAI resumes managing the
 // process itself.
 const GATEWAY_SELF_RESTART_WINDOW_MS = 30_000;
+// startGateway callers that arrive right after the startup readiness wait
+// (config confirmation, the first client connect) trust that result instead of
+// probing a gateway that is still busy with its post-ready startup work.
+const GATEWAY_STARTUP_READY_TRUST_MS = 5_000;
+// The gateway colors its subsystem tag and message separately:
+// `\x1b[36m[gateway]\x1b[39m \x1b[36mloading configuration…`.
+const GATEWAY_LOADING_CONFIG_RE = new RegExp(
+  `\\[gateway\\](?:${String.fromCharCode(27)}\\[[0-9;]*m|\\s)*loading configuration`,
+);
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB = 4096;
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_OPTION = `--max-old-space-size=${OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB}`;
 const NODE_MAX_OLD_SPACE_RE = /(?:^|\s)--max-old-space-size(?:=|\s|$)/;
@@ -125,6 +134,12 @@ const OPENCLAW_GATEWAY_HEAP_OOM_PATTERNS = [
 ];
 
 export type { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+
+export const OpenClawEngineManagerEvent = {
+  /** The gateway finished loading its modules and is reading its config (once per process). */
+  GatewayLoadingConfig: 'gatewayLoadingConfig',
+} as const;
+export type OpenClawEngineManagerEvent = typeof OpenClawEngineManagerEvent[keyof typeof OpenClawEngineManagerEvent];
 
 export interface OpenClawEngineStatus {
   phase: OpenClawEnginePhase;
@@ -233,6 +248,7 @@ export const isOpenClawGatewayHeapOutOfMemory = (
 interface OpenClawEngineManagerEvents {
   status: (status: OpenClawEngineStatus) => void;
   configAutoRestored: (event: OpenClawConfigAutoRestoreEvent) => void;
+  [OpenClawEngineManagerEvent.GatewayLoadingConfig]: () => void;
 }
 
 type RuntimeMetadata = {
@@ -425,6 +441,8 @@ export class OpenClawEngineManager extends EventEmitter {
   private readonly gatewayFailureByProcess = new WeakMap<GatewayProcess, OpenClawGatewayFailureSnapshot>();
   private readonly expectedGatewayExits = new WeakSet<object>();
   private readonly gatewayReadyProcesses = new WeakSet<GatewayProcess>();
+  /** The last process that passed its startup readiness wait, and when. */
+  private gatewayStartupReadyAt: { child: GatewayProcess; at: number } | null = null;
   private dreamingRecoverySummary?: OpenClawDreamingRecoverySummary;
   private configApplyStall: { detail: string } | null = null;
   private gatewayGeneration = 0;
@@ -954,6 +972,13 @@ export class OpenClawEngineManager extends EventEmitter {
     return this.getStatus();
   }
 
+  private hasRecentStartupReadiness(child: GatewayProcess): boolean {
+    const confirmed = this.gatewayStartupReadyAt;
+    return confirmed?.child === child
+      && this.status.phase === OpenClawEnginePhase.Running
+      && Date.now() - confirmed.at < GATEWAY_STARTUP_READY_TRUST_MS;
+  }
+
   private async doStartGateway(): Promise<OpenClawEngineStatus> {
     this.shutdownRequested = false;
     const t0 = Date.now();
@@ -987,9 +1012,10 @@ export class OpenClawEngineManager extends EventEmitter {
       const port = this.gatewayPort ?? this.readGatewayPort();
       if (port) {
         this.gatewayPort = port;
-        const startupReady = await this.isGatewayStartupReady(port, true);
+        const trustedStartup = this.hasRecentStartupReadiness(existingChild);
+        const startupReady = trustedStartup || await this.isGatewayStartupReady(port, true);
         if (this.shutdownRequested || this.gatewayProcess !== existingChild) return this.getStatus();
-        console.log(`[OpenClaw] startGateway: existing process startup check (${elapsed()}), ready=${startupReady}`);
+        console.log(`[OpenClaw] startGateway: existing process startup check (${elapsed()}), ready=${startupReady}${trustedStartup ? ' (startup readiness just confirmed)' : ''}`);
         if (startupReady) {
           this.clearScheduledGatewayRestart();
           if (this.status.phase !== OpenClawEnginePhase.Running) {
@@ -2264,6 +2290,7 @@ export class OpenClawEngineManager extends EventEmitter {
         }
         if (ready && isGatewayProcessAlive(child)) {
           this.gatewayReadyProcesses.add(child);
+          this.gatewayStartupReadyAt = { child, at: Date.now() };
           console.log(`[OpenClaw] waitForGatewayReady: gateway startup complete after ${elapsedMs}ms (${pollCount} polls)`);
           resolve(true);
           return;
@@ -2394,6 +2421,12 @@ export class OpenClawEngineManager extends EventEmitter {
         console.log(`[OpenClaw] startup milestone (${elapsed}ms since spawn): ${summary}`);
       }
     };
+    let loadingConfigNoted = false;
+    const noteLoadingConfig = (text: string) => {
+      if (loadingConfigNoted || !GATEWAY_LOADING_CONFIG_RE.test(text)) return;
+      loadingConfigNoted = true;
+      this.emit(OpenClawEngineManagerEvent.GatewayLoadingConfig);
+    };
 
     // A read-time restore means the gateway runs a config LobsterAI did not write.
     const noteConfigAutoRestore = (text: string) => {
@@ -2412,6 +2445,7 @@ export class OpenClawEngineManager extends EventEmitter {
       logStartupMilestone(text);
       console.log(`[OpenClaw stdout] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
       noteConfigAutoRestore(text);
+      noteLoadingConfig(text);
     });
     child.stderr?.on('data', (chunk) => {
       this.noteGatewayOutput(child);
@@ -2422,6 +2456,7 @@ export class OpenClawEngineManager extends EventEmitter {
       logStartupMilestone(text);
       console.error(`[OpenClaw stderr] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
       noteConfigAutoRestore(text);
+      noteLoadingConfig(text);
     });
   }
 

@@ -1097,6 +1097,40 @@ the suite compares the native values with real `reg.exe` and `chcp` output.
 values without starting child processes. As of 2026-11, upstream `main` still
 uses `reg.exe` and `chcp`.
 
+## Dreaming startup scrub only when dreaming is enabled
+
+`zz-openclaw-dreaming-cleanup-only-when-enabled.patch` makes memory-core's
+`gateway_start` hook skip `startDreamingSessionCleanup` when the startup
+dreaming config resolves to disabled. The scrub reclaims `dreaming-narrative-*`
+session entries and transcripts that an interrupted dreaming run left behind.
+It runs once right after `gateway_start` and again five minutes later, for every
+configured agent, whether or not dreaming is enabled. Even with nothing to
+remove, its planning step opens each agent database for writing: the lease,
+integrity check, schema contract, index verification and deletion path fence.
+That is about 130 ms per agent of synchronous work right after the gateway
+reports ready. Requests wait behind it, including the desktop client's first
+handshake.
+
+LobsterAI defaults dreaming to off and always writes
+`plugins.entries.memory-core.config.dreaming.enabled`, so for most users the
+scrub never finds anything. The enabled check uses the same startup plugin-config
+fallback as cron reconciliation. It is resolved independently, so a failed cron
+reconciliation still cleans up when dreaming is enabled. If the config cannot be
+resolved, the scrub runs as before. Leftovers from an earlier period with
+dreaming enabled stay until the first gateway start after dreaming is enabled
+again; changing the memory-core plugin config restarts the gateway.
+
+Measured on Windows with the same state (4 agents, dreaming disabled), runtime
+rebuilt with only this patch added. Gateway CPU profile, 1.8 s after `ready`:
+idle 160 ms -> 851 ms, and the scrub and its SQLite checks (about 560 ms) are
+gone. Dev app on the production renderer, warm starts: `ready` to the desktop
+client's handshake went from 1.16-1.21 s to 0.67-0.71 s, and to 1.01 s in one
+run that was slower throughout.
+
+Verify with `node_modules/.bin/vitest run
+extensions/memory-core/src/dreaming-startup-cleanup.test.ts`. Remove when
+upstream gates the startup scrub on dreaming itself.
+
 ## Web fetch follows the desktop proxy preference
 
 `openclaw-web-fetch-proxy.patch` lets LobsterAI enable the existing

@@ -1720,6 +1720,15 @@ v20260801StrongPatchValidators['zz-openclaw-windows-process-start-native.patch']
     ],
   },
 ];
+v20260801StrongPatchValidators['zz-openclaw-dreaming-cleanup-only-when-enabled.patch'] = [
+  {
+    file: 'extensions/memory-core/src/dreaming.ts',
+    snippets: [
+      'const isStartupDreamingEnabled = (startupCfg: OpenClawConfig): boolean => {',
+      'if (isStartupDreamingEnabled(startupConfig)) {',
+    ],
+  },
+];
 
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators

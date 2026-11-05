@@ -127,6 +127,7 @@ import {
   type OpenClawEngineStatus,
   type OpenClawGatewayConnectionInfo,
 } from '../openclawEngineManager';
+import { loadGatewayClientCtor as loadOpenClawGatewayClientCtor } from '../openclawGatewayClientLoader';
 import {
   extractGatewayHistoryEntries,
   extractGatewayMessageText,
@@ -7594,40 +7595,24 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private async loadGatewayClientCtor(clientEntryPath: string): Promise<GatewayClientCtor> {
     // Use require() with file path directly. TypeScript's CJS output downgrades
     // dynamic import() to require(), which doesn't support file:// URLs.
-    const loaded = require(clientEntryPath) as Record<string, unknown>;
-    const direct = loaded.GatewayClient;
-    if (typeof direct === 'function') {
-      return direct as GatewayClientCtor;
-    }
+    return loadOpenClawGatewayClientCtor<GatewayClientCtor>(
+      clientEntryPath,
+      (modulePath) => require(modulePath) as Record<string, unknown>,
+    );
+  }
 
-    const exportedValues = Object.values(loaded);
-    for (const candidate of exportedValues) {
-      if (typeof candidate !== 'function') {
-        continue;
-      }
-      const maybeCtor = candidate as {
-        name?: string;
-        prototype?: {
-          start?: unknown;
-          stop?: unknown;
-          request?: unknown;
-        };
-      };
-      if (maybeCtor.name === 'GatewayClient') {
-        return candidate as GatewayClientCtor;
-      }
-      const proto = maybeCtor.prototype;
-      if (proto
-        && typeof proto.start === 'function'
-        && typeof proto.stop === 'function'
-        && typeof proto.request === 'function') {
-        return candidate as GatewayClientCtor;
-      }
-    }
-
-    const exportKeysPreview = Object.keys(loaded).slice(0, 20).join(', ');
-    throw new Error(
-      `Invalid OpenClaw gateway client module: ${clientEntryPath} (exports: ${exportKeysPreview || 'none'})`,
+  /**
+   * Loads the gateway client module ahead of the first connection. The load
+   * blocks the main thread, so callers run it while the gateway is still
+   * booting instead of between gateway readiness and the client handshake.
+   */
+  prewarmGatewayClient(): void {
+    const { clientEntryPath } = this.engineManager.getGatewayConnectionInfo();
+    if (!clientEntryPath) return;
+    const startedAt = Date.now();
+    void this.loadGatewayClientCtor(clientEntryPath).then(
+      () => console.log(`[ChannelSync] gateway client module prewarmed in ${Date.now() - startedAt}ms`),
+      (error: unknown) => console.warn('[ChannelSync] gateway client module prewarm failed:', error),
     );
   }
 
