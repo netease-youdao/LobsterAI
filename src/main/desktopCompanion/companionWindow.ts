@@ -87,8 +87,9 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
     // Use WS_EX_TOOLWINDOW so Windows excludes companion surfaces from taskbar
     // previews even when they are shown again after skipTaskbar removed the tab.
     ...(process.platform === 'win32' ? { type: 'toolbar' as const } : {}),
-    // Native panels can hide on app deactivation even when our result card is pinned.
-    ...(process.platform === 'darwin' && options.surface !== DesktopCompanionSurface.Result ? { type: 'panel' as const } : {}),
+    // macOS shows only panel windows over another app's full-screen Space, so a task card needs it too.
+    // Its occlusion `hide` events (app switch, Space change) leave the window visible; handlers check isVisible().
+    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
     webPreferences: {
       preload: env.preloadPath,
       nodeIntegration: false,
@@ -97,8 +98,11 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
       webSecurity: true,
       navigateOnDragDrop: false,
       spellcheck: false,
-      // Reopening waits for a freshly painted composer frame while the window is hidden.
-      ...(options.surface === DesktopCompanionSurface.Panel ? { backgroundThrottling: false } : {}),
+      // Reopening waits for a freshly painted composer frame while the window is hidden. The selection
+      // toolbar and the stage are placed by the size their renderer measures in an animation frame,
+      // which a hidden, throttled page never runs: they would open at the default size, then jump.
+      ...(options.surface === DesktopCompanionSurface.Panel || isSelection || options.surface === DesktopCompanionSurface.Stage
+        ? { backgroundThrottling: false } : {}),
       ...(options.surface === DesktopCompanionSurface.LanguageTools ? { autoplayPolicy: 'no-user-gesture-required' as const } : {}),
     },
   });

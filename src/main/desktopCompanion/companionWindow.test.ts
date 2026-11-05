@@ -1,10 +1,24 @@
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, BrowserWindowConstructorOptions } from 'electron';
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { dismissCompanionPanelOnBlur } from './companionWindow';
+import { DesktopCompanionSurface } from '../../shared/desktopCompanion/constants';
+import { createCompanionWindow, dismissCompanionPanelOnBlur } from './companionWindow';
 
-vi.mock('electron', () => ({ BrowserWindow: vi.fn() }));
+const { windowOptions } = vi.hoisted(() => ({ windowOptions: [] as BrowserWindowConstructorOptions[] }));
+
+vi.mock('electron', () => ({
+  BrowserWindow: class {
+    webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn() };
+    setMenu = vi.fn();
+    setBounds = vi.fn();
+    setAlwaysOnTop = vi.fn();
+    setVisibleOnAllWorkspaces = vi.fn();
+    loadURL = vi.fn(() => Promise.resolve());
+    loadFile = vi.fn(() => Promise.resolve());
+    constructor(options: BrowserWindowConstructorOptions) { windowOptions.push(options); }
+  },
+}));
 
 class ComposerWindow extends EventEmitter {
   visible = false;
@@ -156,5 +170,31 @@ describe('composer outside dismissal', () => {
     win.emit('blur');
     vi.advanceTimersByTime(200);
     expect(dismiss).toHaveBeenCalledOnce();
+  });
+});
+
+describe('companion window creation', () => {
+  const env = { preloadPath: '/app/preload.js', rendererDirectory: '/app/renderer', title: 'LobsterAI' };
+  const create = (surface: DesktopCompanionSurface): BrowserWindowConstructorOptions => {
+    windowOptions.length = 0;
+    createCompanionWindow(env, { surface, bounds: { x: 0, y: 0, width: 100, height: 100 }, focusable: false });
+    return windowOptions[0];
+  };
+
+  test('hidden content-sized surfaces keep running animation frames, so they are measured before they open', () => {
+    expect(create(DesktopCompanionSurface.Selection).webPreferences?.backgroundThrottling).toBe(false);
+    expect(create(DesktopCompanionSurface.Stage).webPreferences?.backgroundThrottling).toBe(false);
+    expect(create(DesktopCompanionSurface.Panel).webPreferences?.backgroundThrottling).toBe(false);
+    expect(create(DesktopCompanionSurface.Mascot).webPreferences?.backgroundThrottling).toBeUndefined();
+  });
+
+  test('on macOS every surface, task cards included, is a panel so it stays above full-screen apps', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      for (const surface of Object.values(DesktopCompanionSurface)) expect(create(surface).type).toBe('panel');
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 });
