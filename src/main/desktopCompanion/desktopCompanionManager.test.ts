@@ -2055,3 +2055,109 @@ describe('stage: hints and drops', () => {
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
   });
 });
+
+describe('sign-in from a companion card', () => {
+  const journeyId = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const events = (interactionType: string) => reportAnalytics.mock.calls.map(([event]) => event)
+    .filter(event => event.interactionType === interactionType);
+
+  function openTranslation() {
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Translate, text: 'Selected words' });
+    const window = mocks.windows[1];
+    window.focus();
+    return window;
+  }
+
+  test('a translation card stays through the browser, survives the login reset and reopens with its follow-up', () => {
+    create();
+    const window = openTranslation();
+    const firstInput = invoke(LanguageToolsIpc.GetInput, undefined, window.webContents);
+    reportAnalytics.mockClear();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'ask', journeyId, resume: { question: '  Which tense is this?  ' } }, window.webContents);
+    expect(window.webContents.send).toHaveBeenCalledWith(LanguageToolsIpc.Pinned, true);
+    expect(events(Interaction.LoginClick)).toEqual([expect.objectContaining({
+      action: AnalyticsAction.Action, source: AnalyticsSource.LanguageTools, tool: 'ask', journeyId,
+    })]);
+    // The browser takes focus; the pinned card stays.
+    window.blur();
+    expect(window.visible).toBe(true);
+    // The exchange resets language tools before the companion hears about the login.
+    manager.resetLanguageTools();
+    expect(window.visible).toBe(false);
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(true);
+    expect(window.focused).toBe(false);
+    const sent = window.webContents.send.mock.calls.filter(([channel]: [string]) => channel === LanguageToolsIpc.Input).at(-1)[1];
+    expect(sent).toMatchObject({
+      tool: LanguageTool.Translate, text: 'Selected words', pinned: true, resume: { question: 'Which tense is this?' },
+    });
+    expect(sent.id).not.toBe(firstInput.id);
+    // The question is delivered once; a renderer that reloads reads the card without it.
+    const input = invoke(LanguageToolsIpc.GetInput, undefined, window.webContents);
+    expect(input).toMatchObject({ id: sent.id, pinned: true });
+    expect(input.resume).toBeUndefined();
+    expect(events(Interaction.LoginSuccess)).toEqual([expect.objectContaining({
+      source: AnalyticsSource.LanguageTools, tool: 'ask', journeyId, durationMs: expect.any(Number),
+    })]);
+    // Continuing is not a new use of the tool.
+    expect(events(Interaction.Run)).toEqual([]);
+    window.blur();
+    expect(window.visible).toBe(true);
+    // A later login does not bring it back again.
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+  });
+
+  test('closing the card, a new request or a stale sign-in drops the continuation', () => {
+    vi.useFakeTimers();
+    create();
+    let window = openTranslation();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'ask', resume: { question: 'Why?' } }, window.webContents);
+    invoke(LanguageToolsIpc.Close, undefined, window.webContents);
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+    // The sign-in still came from the prompt.
+    expect(events(Interaction.LoginSuccess)).toHaveLength(1);
+
+    window = openTranslation();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'tts' }, window.webContents);
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts, text: 'Something else' });
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+
+    window = openTranslation();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'translate' }, window.webContents);
+    vi.advanceTimersByTime(31 * 60_000);
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+    expect(events(Interaction.LoginSuccess)).toHaveLength(2);
+  });
+
+  test('only selection and language tools cards report the prompt or start a sign-in', () => {
+    create();
+    const selectionWindow = new BrowserWindow();
+    const selectionId = vi.spyOn(CompanionSelectionController.prototype, 'webContentsId', 'get')
+      .mockReturnValue(selectionWindow.webContents.id);
+    const hold = vi.spyOn(CompanionSelectionController.prototype, 'holdForLogin');
+    try {
+      const shown = { action: AnalyticsAction.Action, source: AnalyticsSource.Panel, interactionType: Interaction.LoginShown, tool: 'explain', journeyId };
+      invoke(DesktopCompanionIpc.ReportAnalytics, shown, selectionWindow.webContents);
+      invoke(DesktopCompanionIpc.ReportAnalytics, shown);
+      expect(events(Interaction.LoginShown)).toEqual([expect.objectContaining({ source: AnalyticsSource.Selection, tool: 'explain', journeyId })]);
+
+      invoke(DesktopCompanionIpc.LoginStart, { tool: 'explain' });
+      invoke(DesktopCompanionIpc.LoginStart, { tool: 'shell' }, selectionWindow.webContents);
+      expect(hold).not.toHaveBeenCalled();
+      invoke(DesktopCompanionIpc.LoginStart, { tool: 'explain', journeyId }, selectionWindow.webContents);
+      expect(hold).toHaveBeenCalledTimes(1);
+      expect(events(Interaction.LoginClick)).toEqual([expect.objectContaining({ source: AnalyticsSource.Selection, tool: 'explain', journeyId })]);
+    } finally {
+      selectionId.mockRestore();
+      hold.mockRestore();
+    }
+  });
+});

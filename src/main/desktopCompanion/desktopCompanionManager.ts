@@ -78,6 +78,7 @@ import { t } from '../i18n';
 import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companionAnalytics';
 import { copyCompanionText } from './companionClipboard';
 import { CompanionHintsController } from './companionHints';
+import { CompanionLoginTracker, isCompanionLoginSource, normalizeCompanionLoginStart } from './companionLogin';
 import { CompanionResultsController } from './companionResults';
 import { CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
@@ -225,10 +226,12 @@ export class DesktopCompanionManager {
   private readonly screenshot: CompanionScreenshotController;
   private readonly results: CompanionResultsController;
   private readonly analytics: CompanionAnalytics;
+  private readonly login: CompanionLoginTracker;
 
   constructor(private readonly options: DesktopCompanionOptions) {
     this.enginePhase = options.enginePhase;
     this.analytics = new CompanionAnalytics(options.reportAnalytics, options.getAnalyticsOwner);
+    this.login = new CompanionLoginTracker(this.analytics);
     const { store } = options;
     this.preferences = normalizeCompanionPreferences(store.get(DesktopCompanionStoreKey.Preferences));
     this.draft = normalizeCompanionDraft(store.get(DesktopCompanionStoreKey.Draft));
@@ -287,6 +290,7 @@ export class DesktopCompanionManager {
       analytics: this.analytics,
       preferences: () => this.preferences,
       isAvailable: () => this.isPresent() && !this.capturing,
+      isCapturing: () => this.capturing,
       createWindow: (surface, focusable) => this.createWindow(surface, focusable),
       setPreferences: patch => { this.setPreferences(patch, AnalyticsSource.Selection); },
       publish: () => this.publish(),
@@ -426,6 +430,20 @@ export class DesktopCompanionManager {
   }
 
   resetLanguageTools(): void { this.languageTools.reset(); this.clearTaskAnalytics(); }
+
+  /**
+   * Call once a user login has switched the account in and its session reset has been sent.
+   * A selection card kept open for the sign-in runs its request itself when it sees the new session.
+   */
+  handleLoginSucceeded(): void {
+    // Runs inside the auth exchange: a companion failure must never turn a successful login into an error.
+    try {
+      if (this.login.succeed()) this.languageTools.resumeAfterLogin();
+      else this.languageTools.dropLoginResume();
+    } catch (error) {
+      console.warn('[DesktopCompanion] Continuing a card after login failed:', error);
+    }
+  }
 
   clearTaskAnalytics(): void { this.analytics.clearTasks(); this.panelJourneyId = undefined; }
 
@@ -990,7 +1008,18 @@ export class DesktopCompanionManager {
         this.analytics.report({ ...event, source });
       } else if (event.action === AnalyticsAction.Action && event.interactionType === Interaction.Stop && source === AnalyticsSource.Result) {
         this.analytics.report({ ...event, source });
+      } else if (event.action === AnalyticsAction.Action && event.interactionType === Interaction.LoginShown && isCompanionLoginSource(source)) {
+        this.analytics.report({ ...event, source });
       }
+    });
+    handle(DesktopCompanionIpc.LoginStart, (value, sender) => {
+      const source = this.analyticsSource(sender.id);
+      const request = normalizeCompanionLoginStart(value);
+      if (!request || !isCompanionLoginSource(source)) return;
+      // The browser takes focus next; an unpinned card would close and lose what the user asked for.
+      if (source === AnalyticsSource.Selection) this.selection.holdForLogin();
+      else this.languageTools.holdForLogin(request.resume);
+      this.login.begin(source, request);
     });
     handle(DesktopCompanionIpc.GetState, () => this.getState());
     handle(DesktopCompanionIpc.SetPreferences, (value, sender) => this.setPreferences(value as Partial<DesktopCompanionPreferences>, this.analyticsSource(sender.id)));

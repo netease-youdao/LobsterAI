@@ -100,6 +100,8 @@ export interface SelectionHost {
   preferences(): DesktopCompanionPreferences;
   /** False while the companion is off or hidden by a snooze. */
   isAvailable(): boolean;
+  /** A screenshot is being taken; companion surfaces step aside for it. */
+  isCapturing?(): boolean;
   createWindow(surface: typeof DesktopCompanionSurface.Selection, focusable: boolean): BrowserWindow;
   setPreferences(patch: Partial<DesktopCompanionPreferences>): void;
   publish(): void;
@@ -275,7 +277,12 @@ export class CompanionSelectionController {
     if (!wanted) {
       this.status = CompanionCapability.Off;
       this.stopHook();
-      this.hide();
+      // A pinned answer belongs to the user: it outlives a gateway restart (a sign-in always causes one)
+      // and a pause, and closes only when the toolbar is turned off or a screenshot needs the screen.
+      const selection = this.selection;
+      const keep = selection?.mode === DesktopCompanionSelectionMode.Answer && selection.pinned
+        && preferences.enabled && preferences.selectionToolbar && !this.host.isCapturing?.();
+      if (!keep) this.hide();
     } else {
       // Load the native module only once someone actually wants the toolbar.
       if (this.module === undefined) this.module = this.loadModule();
@@ -423,6 +430,14 @@ export class CompanionSelectionController {
     this.place();
     if (this.selection.menuUp !== previousMenuUp) this.sendSelection();
     if (this.pendingShow) this.reveal();
+  }
+
+  /** Pins an answer card through a browser sign-in; the renderer runs its request once the session changes. */
+  holdForLogin(): void {
+    const selection = this.selection;
+    if (selection?.mode !== DesktopCompanionSelectionMode.Answer || selection.pinned) return;
+    this.selection = { ...selection, pinned: true };
+    this.sendSelection();
   }
 
   hide(): void {

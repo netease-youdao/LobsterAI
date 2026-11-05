@@ -2,7 +2,7 @@ import type { CompanionAnalyticsEvent } from './analytics';
 import type { CompanionAppCategory } from './appCategories';
 import type { CompanionFileKind } from './fileKinds';
 import type { CompanionHintTopic } from './hintPolicy';
-import type { LanguageToolsBridge, SpeechStatus } from './languageTools';
+import type { LanguageToolResume, LanguageToolsBridge, SpeechStatus } from './languageTools';
 import type { CompanionResultsBridge, CompanionResultState } from './results';
 import type { CompanionScreenshotBridge } from './screenshot';
 import type { CompanionSelectionAction } from './selectionActions';
@@ -47,6 +47,8 @@ export const DesktopCompanionIpc = {
   PanelLoginVisible: 'desktop-companion:panel-login-visible',
   /** The composer has painted its opening frame and can reveal the native window. */
   PanelReady: 'desktop-companion:panel-ready',
+  /** A selection or language tools card is about to open sign-in in the browser. */
+  LoginStart: 'desktop-companion:login-start',
 } as const;
 
 export const DesktopCompanionMainPage = {
@@ -309,8 +311,19 @@ export interface CompanionSurfaceSize {
   height: number;
 }
 
+export interface DesktopCompanionLoginStart {
+  /** The built-in tool the sign-in prompt was shown for. */
+  tool: NonNullable<CompanionAnalyticsEvent['tool']>;
+  /** Connects the prompt's shown, click and success events. */
+  journeyId?: string;
+  /** What a language tools card picks up again once the sign-in succeeds. */
+  resume?: LanguageToolResume;
+}
+
 export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge {
   reportAnalytics(event: CompanionAnalyticsEvent): Promise<void>;
+  /** Keeps the card open through the browser sign-in so it can continue afterwards. */
+  startLogin(request: DesktopCompanionLoginStart): Promise<void>;
   getState(): Promise<DesktopCompanionState>;
   setPreferences(patch: Partial<DesktopCompanionPreferences>): Promise<DesktopCompanionResult>;
   getSelectionExcludedApps(): Promise<CompanionSelectionApp[]>;
