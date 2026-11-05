@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, expect, it, vi } from 'vitest';
 
+import { AgentAvatarSvg, encodeAgentAvatarIcon } from '../../shared/agent/avatar';
 import type { RemoteAgentCatalogItem } from '../../shared/remote/constants';
 import { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash } from './canonical';
@@ -503,4 +504,39 @@ it('isolates confirmed icon modes by target and actor while preserving monotonic
   expect(catalog.summary('session', other)).toBeNull();
   expect(ownership.get('mine')!.version).toBe(third.version);
   expect(store.entries<any>('agentIconProjection:').filter(entry => entry.key.includes('mine'))).toEqual(projections);
+});
+
+it.each(Object.values(AgentAvatarSvg))('publishes negotiated %s for catalogs and session summaries without changing the local avatar', async svg => {
+  const { db, store, ownership, catalog } = fixture();
+  const localIcon = encodeAgentAvatarIcon({ svg });
+  ownership.transaction(() => db.prepare('UPDATE agents SET icon = ? WHERE id = ?').run(localIcon, 'mine'));
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES('avatar-session','Task',1,1,'idle','mine')").run();
+    store.assignNew('avatar-session', owner, 'local_create');
+  });
+  catalog.configureIconKeys(owner, true);
+  const items = await catalog.refresh(owner, 'device', () => true);
+  const wireIcon = localIcon;
+  expect(items.find(item => item.agentId === 'mine')?.icon).toBe(wireIcon);
+  expect(catalog.summary('avatar-session', owner)?.icon).toBe(wireIcon);
+  expect(wireIcon).toBe(`agent-avatar-svg:${svg}`);
+  expect(Buffer.byteLength(wireIcon)).toBeLessThanOrEqual(128);
+  expect(db.prepare('SELECT icon FROM agents WHERE id = ?').get('mine')).toEqual({ icon: localIcon });
+});
+
+it.each([
+  ['agent-avatar-svg_code', 'agent-avatar-svg_code'],
+  ['legacy-icon', 'legacy-icon'],
+  ['🤖', '🤖'],
+  ['', null],
+  ['agent-avatar-svg:unknown', null],
+  ['agent-avatar-svg:code:extra', null],
+  ['https://example.com/avatar.svg', null],
+  ['data:image/svg+xml,<svg/>', null],
+  ['a'.repeat(129), null],
+])('preserves remote icon validation for %s', async (icon, expected) => {
+  const { db, ownership, catalog } = fixture();
+  ownership.transaction(() => db.prepare('UPDATE agents SET icon = ? WHERE id = ?').run(icon, 'mine'));
+  const items = await catalog.refresh(owner, 'device', () => true);
+  expect(items.find(item => item.agentId === 'mine')?.icon).toBe(expected);
 });
