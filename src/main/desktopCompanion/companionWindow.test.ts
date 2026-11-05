@@ -26,6 +26,8 @@ class ComposerWindow extends EventEmitter {
   focusable = true;
   enabled = true;
   destroyed = false;
+  /** AppKit declined to make the window key. */
+  refusesFocus = false;
   children: ComposerWindow[] = [];
   isDestroyed = () => this.destroyed;
   isVisible = () => this.visible;
@@ -36,6 +38,11 @@ class ComposerWindow extends EventEmitter {
   show() { this.visible = true; this.focused = true; this.emit('show'); }
   showInactive() { this.visible = true; this.focused = false; this.emit('show'); }
   hide() { this.visible = false; this.emit('hide'); }
+  focus() {
+    if (this.refusesFocus || !this.visible) return;
+    this.focused = true;
+    this.emit('focus');
+  }
 }
 
 let win: ComposerWindow;
@@ -150,6 +157,44 @@ describe('composer outside dismissal', () => {
     win.destroyed = true;
     win.emit('closed');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('a panel reopened without key focus asks for it again instead of closing', () => {
+    // Closing from the orb can leave the hidden panel marked key, so the next show() opens it unfocused.
+    win.emit('focus');
+    win.showInactive();
+    const focus = vi.spyOn(win, 'focus');
+    vi.advanceTimersByTime(130);
+    expect(focus).toHaveBeenCalledOnce();
+    expect(win.focused).toBe(true);
+    vi.advanceTimersByTime(500);
+    expect(dismiss).not.toHaveBeenCalled();
+    // Once it has had focus, an outside click closes it as usual.
+    win.focused = false;
+    vi.advanceTimersByTime(300);
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
+  test('a panel macOS will not make key stays open rather than flashing closed', () => {
+    win.refusesFocus = true;
+    const focus = vi.spyOn(win, 'focus');
+    win.showInactive();
+    win.emit('blur');
+    vi.advanceTimersByTime(2_000);
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(win.visible).toBe(true);
+    expect(focus).toHaveBeenCalledTimes(2);
+    // Clicking into it gives it focus; leaving it afterwards dismisses it.
+    win.focused = true;
+    vi.advanceTimersByTime(130);
+    win.focused = false;
+    vi.advanceTimersByTime(300);
+    expect(dismiss).toHaveBeenCalledOnce();
+    // The next opening gets its own attempts.
+    win.showInactive();
+    vi.advanceTimersByTime(2_000);
+    expect(focus).toHaveBeenCalledTimes(4);
+    expect(dismiss).toHaveBeenCalledOnce();
   });
 
   test('a delayed native hide does not stop outside dismissal after reopening', () => {

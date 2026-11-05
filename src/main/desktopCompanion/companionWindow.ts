@@ -17,20 +17,27 @@ export interface CompanionWindowOptions {
 }
 
 const PANEL_BLUR_DELAY_MS = 120;
+/** Focus requests for a macOS panel that has not become key since it was shown. */
+const PANEL_REFOCUS_ATTEMPTS = 2;
 
 /** Dismiss interactive panels on blur, preserving passive notifications and native dialogs. */
 export function dismissCompanionPanelOnBlur(win: BrowserWindow, dismiss: () => void, shouldDismiss = () => true): void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let focusTimer: ReturnType<typeof setInterval> | undefined;
   let sheetOpen = false;
+  // Clicking the orb can leave a macOS panel still marked key after it hides. The next
+  // show() then cannot make it key, so it opens without focus: no outside click took it.
+  let focusedWhileShown = false;
+  let refocusAttempts = 0;
   const cancel = () => { clearTimeout(timer); timer = undefined; };
+  const neverFocused = () => process.platform === 'darwin' && !focusedWhileShown;
   const scheduleDismiss = () => {
     if (timer) return;
     // Native dialogs may begin just after blur. Allow them to establish their
     // sheet/disabled-owner state before deciding this was an outside click.
     timer = setTimeout(() => {
       timer = undefined;
-      if (win.isDestroyed() || !win.isVisible() || !shouldDismiss() || win.isFocused() || sheetOpen || !win.isEnabled()) return;
+      if (win.isDestroyed() || !win.isVisible() || !shouldDismiss() || win.isFocused() || neverFocused() || sheetOpen || !win.isEnabled()) return;
       if (win.getChildWindows().some(child => !child.isDestroyed() && child.isVisible() && child.isModal())) return;
       dismiss();
     }, PANEL_BLUR_DELAY_MS);
@@ -46,20 +53,37 @@ export function dismissCompanionPanelOnBlur(win: BrowserWindow, dismiss: () => v
   // opening a follow-up makes the same visible window focusable again.
   const watchFocus = () => {
     stop();
+    // Occlusion also emits `show` for a window that stayed open; it only adds evidence of focus.
+    if (win.isFocused()) focusedWhileShown = true;
     if (process.platform !== 'darwin') return;
     focusTimer = setInterval(() => {
       if (win.isDestroyed() || !win.isVisible()) { stop(); return; }
-      if (!shouldDismiss() || win.isFocused()) cancel();
-      else scheduleDismiss();
+      if (win.isFocused()) { focusedWhileShown = true; cancel(); return; }
+      if (!shouldDismiss()) { cancel(); return; }
+      if (focusedWhileShown) { scheduleDismiss(); return; }
+      // Ask again once AppKit has settled which window is key; never dismiss a panel for focus it never had.
+      if (refocusAttempts < PANEL_REFOCUS_ATTEMPTS) {
+        refocusAttempts += 1;
+        console.debug(`[DesktopCompanion] Panel opened without key focus; requesting it (attempt ${refocusAttempts})`);
+        win.focus();
+      }
     }, PANEL_BLUR_DELAY_MS);
   };
   win.on('blur', scheduleDismiss);
   win.on('show', watchFocus);
   win.on('sheet-begin', () => { sheetOpen = true; cancel(); });
   win.on('sheet-end', () => { sheetOpen = false; });
-  win.on('focus', cancel);
+  win.on('focus', () => {
+    if (win.isVisible()) focusedWhileShown = true;
+    cancel();
+  });
   // A delayed native hide notification may belong to an earlier opening.
-  win.on('hide', () => { if (!win.isVisible()) stop(); });
+  win.on('hide', () => {
+    if (win.isVisible()) return;
+    focusedWhileShown = false;
+    refocusAttempts = 0;
+    stop();
+  });
   win.on('closed', stop);
 }
 
