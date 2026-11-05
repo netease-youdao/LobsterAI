@@ -1011,6 +1011,43 @@ src/plugins/discovery.test.ts src/plugins/manifest-registry.test.ts
 src/plugins/plugin-registry-snapshot.test.ts`, then rebuild the runtime. Remove
 when upstream resolves plugin paths through cached parents itself.
 
+## Native Windows process start times
+
+`zz-openclaw-windows-process-start-native.patch` lets
+`readWindowsProcessStartTimeSync` (added by
+`openclaw-windows-process-identity.patch`, switched to .NET `Process.StartTime`
+by `zz-openclaw-lock-owner-recovery.patch`) read the creation time through
+koffi and `kernel32!GetProcessTimes` before it starts PowerShell. Gateway lock
+acquisition, the state lock and the agent database lease all ask for the
+gateway's own start time; each call was a synchronous `powershell.exe -Command`
+spawn of 0.4-1 s on the startup path, six per Windows gateway start (five before
+`ready`). A non-Microsoft process launching PowerShell with `-Command` is also a
+common EDR rule, and AMSI scans every one.
+
+`GetProcessTimes` is the source .NET reads for `Process.StartTime`, and the value
+is truncated to milliseconds the way `Date.parse` truncates PowerShell's 7-digit
+fraction, so stored lock identities compare equal across versions and with
+LobsterAI's own lock-recovery inspection. The gateway's own pid uses the
+`GetCurrentProcess` pseudo handle and is cached; other pids use
+`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`. A pid that does not exist
+(`ERROR_INVALID_PARAMETER`) or whose exit time is set returns `null`, as
+`GetProcessById` and WMIC already did. Any other outcome (koffi unavailable,
+access denied, a native error) falls through to the unchanged PowerShell/WMIC
+chain. koffi is the same package Windows runtimes keep for
+`openclaw-windows-private-directory-native.patch`.
+
+Measured end to end with the dev app on the production renderer, warm start,
+same machine and state, runtime rebuilt with only this patch added: PowerShell
+spawns per start 6 (2.5 s synchronous) -> 0, gateway spawn to `ready`
+18.9 s -> 16.8 s, LobsterAI seeing the gateway ready 23.4 s -> 21.6 s. A second
+gateway started on the same state directory still identifies the live owner by
+pid and start time and refuses to run, without PowerShell or WMIC.
+
+Verify with `node_modules/.bin/vitest run src/infra/windows-process-start.test.ts
+src/infra/gateway-lock.test.ts src/shared/pid-alive.test.ts`; on Windows the
+suite compares the native value with a real `Process.StartTime` for this process
+and its parent. Remove when upstream reads Windows process times natively.
+
 ## Web fetch follows the desktop proxy preference
 
 `openclaw-web-fetch-proxy.patch` lets LobsterAI enable the existing
