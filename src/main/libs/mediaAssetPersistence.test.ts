@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { describe, expect, test, vi } from 'vitest';
 
 import {
@@ -12,6 +13,7 @@ import {
   persistGeneratedVideoAssets,
   sanitizeGeneratedImageFileName,
 } from './mediaAssetPersistence';
+import { mediaSourceKey } from './mediaMetadataCompaction';
 
 const pngBuffer = Buffer.from([
   0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
@@ -189,6 +191,10 @@ describe('mediaAssetPersistence', () => {
     expect(result.saved[0].filename).toBe('generated-image-20260514-115032-1.png');
     expect(result.saved[0].mimeType).toBe('image/png');
     expect(await fs.promises.readFile(result.saved[0].filePath)).toEqual(pngBuffer);
+    // The saved asset references the file and a hash of the source, never the inline bytes.
+    expect(result.saved[0].url).toBe(pathToFileURL(result.saved[0].filePath).href);
+    expect(result.saved[0].originalUrl).toBe(mediaSourceKey(dataUrl));
+    expect(result.saved[0].originalUrl).not.toContain('base64');
   });
 
   test('persists image data urls using byte-detected extension over declared filename', async () => {

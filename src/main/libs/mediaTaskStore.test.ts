@@ -1,6 +1,7 @@
+import { pathToFileURL } from 'url';
 import { describe, expect, test } from 'vitest';
 
-import { MEDIA_INTENT_BODY_KEY_PREFIX, MEDIA_INTENT_STORE_KEY, MediaProtocol } from '../../shared/media/constants';
+import { MEDIA_INTENT_BODY_KEY_PREFIX, MEDIA_INTENT_STORE_KEY, MEDIA_TASK_STORE_KEY, MediaProtocol } from '../../shared/media/constants';
 import {
   MEDIA_INTENT_RETENTION_MS,
   MEDIA_INTENT_RETRY_WINDOW_MS,
@@ -121,5 +122,29 @@ describe('media intent request bodies', () => {
     const replay = { ...intent, callKey: 'session:settled', toolCallId: 'settled' };
     expect(restored.beginIntent({ ...replay, requestBody: largeBody }).key).toBe('settled');
     expect(() => restored.beginIntent({ ...replay, requestBody: '{}' })).toThrow();
+  });
+});
+
+describe('media task saved assets', () => {
+  const dataUrl = `data:image/png;base64,${'A'.repeat(1_000_000)}`;
+  const savedAsset = { type: 'image' as const, url: dataUrl, originalUrl: dataUrl, mimeType: 'image/png',
+    filename: 'generated.png', filePath: '/tmp/generated.png', localPath: '/tmp/generated.png' };
+
+  test('stores saved assets as file references', () => {
+    const { store, values } = fixture();
+    store.save({ ...task, savedAssets: [savedAsset] });
+    expect(JSON.stringify(values.get(MEDIA_TASK_STORE_KEY)).length).toBeLessThan(2_000);
+    expect(store.tasks()[0].savedAssets?.[0]).toMatchObject({
+      url: pathToFileURL('/tmp/generated.png').href,
+      filePath: '/tmp/generated.png',
+    });
+  });
+
+  test('migrates inline assets written by older builds on first read', () => {
+    const { kv, values } = fixture();
+    kv.set(MEDIA_TASK_STORE_KEY, [{ ...task, savedAssets: [savedAsset] }, { ...task, taskId: 'no-assets' }]);
+    const restored = new MediaTaskStore(kv);
+    expect(restored.tasks().map(record => record.taskId)).toEqual([task.taskId, 'no-assets']);
+    expect(JSON.stringify(values.get(MEDIA_TASK_STORE_KEY))).not.toContain('base64');
   });
 });

@@ -8,6 +8,7 @@ import {
   MediaProtocol,
 } from '../../shared/media/constants';
 import type { PersistedGeneratedImageAsset } from './mediaAssetPersistence';
+import { compactPersistedMediaAsset } from './mediaMetadataCompaction';
 
 /** Unacknowledged intents older than this are no longer resubmitted. */
 export const MEDIA_INTENT_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -70,6 +71,15 @@ interface MediaKvStore {
   delete(key: string): void;
 }
 
+/** Saved assets reference their files; older builds kept each image inline, twice. */
+const compactTrackerAssets = (tracker: MediaTaskTracker): MediaTaskTracker => {
+  if (!tracker.savedAssets?.length) return tracker;
+  const savedAssets = tracker.savedAssets.map(compactPersistedMediaAsset);
+  return savedAssets.some((asset, index) => asset !== tracker.savedAssets![index])
+    ? { ...tracker, savedAssets }
+    : tracker;
+};
+
 const hashRequestBody = (requestBody: string): string => crypto.createHash('sha256').update(requestBody).digest('hex');
 const intentBodyKey = (intentKey: string): string => `${MEDIA_INTENT_BODY_KEY_PREFIX}${intentKey}`;
 
@@ -84,7 +94,17 @@ export class MediaTaskStore {
     private readonly now: () => number = Date.now,
   ) {}
 
-  tasks(): MediaTaskTracker[] { return this.kv.get<MediaTaskTracker[]>(MEDIA_TASK_STORE_KEY) ?? []; }
+  /** The task index is read on every recovery tick; inline assets left by older builds are dropped once. */
+  tasks(): MediaTaskTracker[] {
+    const records = this.kv.get<MediaTaskTracker[]>(MEDIA_TASK_STORE_KEY) ?? [];
+    const compacted = records.map(compactTrackerAssets);
+    const changed = compacted.filter((record, index) => record !== records[index]).length;
+    if (changed > 0) {
+      this.kv.set(MEDIA_TASK_STORE_KEY, compacted);
+      console.log(`[MediaGeneration] compacted media task index: replaced inline assets in ${changed}/${records.length} tasks.`);
+    }
+    return compacted;
+  }
 
   intents(): MediaGenerationIntent[] {
     const records = this.kv.get<StoredMediaGenerationIntent[]>(MEDIA_INTENT_STORE_KEY) ?? [];
@@ -107,7 +127,8 @@ export class MediaTaskStore {
     if (tracker.protocolVersion !== MediaProtocol.Durable) return;
     const records = this.tasks();
     const index = records.findIndex(item => this.sameTask(item, tracker));
-    if (index < 0) records.push({ ...tracker }); else records[index] = { ...tracker };
+    const record = compactTrackerAssets({ ...tracker });
+    if (index < 0) records.push(record); else records[index] = record;
     this.kv.set(MEDIA_TASK_STORE_KEY, records);
   }
 

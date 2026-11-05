@@ -1,6 +1,7 @@
 import { ArrowUpTrayIcon, FolderIcon, PhotoIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
+import { LocalFileThumbnailFit } from '../../../../shared/artifactPreview/localFileThumbnail';
 import { ImageEditOperation } from '../../../../shared/imageEditing/types';
 import { i18nService } from '../../../services/i18n';
 import { openImageInStudio } from '../../../services/imageEditing';
@@ -13,7 +14,7 @@ import MessageCopyIcon from '../../icons/MessageCopyIcon';
 import { ArtifactPreviewActionSource, ArtifactPublishEntryPoint, reportArtifactPreviewAction } from '../artifactAnalytics';
 import { useOptionalArtifactFileShare } from '../ArtifactFileShareController';
 import { isArtifactFileShareable } from '../artifactFileSharePolicy';
-import { getImageArtifactSrc } from '../renderers/imageArtifactSource';
+import { getImageArtifactDisplaySrc, getImageArtifactSrc } from '../renderers/imageArtifactSource';
 import { PaletteBrushIcon } from './ImageEditingIcons';
 import { isImageStudioAvailable } from './imageStudioAvailability';
 
@@ -27,6 +28,14 @@ const SINGLE_IMAGE_MAX_HEIGHT = 420;
 const SINGLE_IMAGE_PLACEHOLDER_SIZE = { width: 320, height: 240 };
 
 const imageSrc = getImageArtifactSrc;
+/** Long edge, in CSS pixels, of a lone image: 420px tall at most, or as wide as the conversation column. */
+const SINGLE_IMAGE_DISPLAY_EDGE = 768;
+/** Grid tiles are about 240px squares, filled by cropping, so the short side of the image must cover them. */
+const GRID_TILE_DISPLAY_EDGE = 240;
+// Tiles load a copy sized to the screen; opening an image, copying it and editing it use the original.
+const tileSrc = (artifact: Artifact, single: boolean): string => (single
+  ? getImageArtifactDisplaySrc(artifact, SINGLE_IMAGE_DISPLAY_EDGE, LocalFileThumbnailFit.Contain)
+  : getImageArtifactDisplaySrc(artifact, GRID_TILE_DISPLAY_EDGE, LocalFileThumbnailFit.Cover));
 const imageName = (artifact: Artifact): string => artifact.fileName || artifact.title || t('artifactImageAlt');
 const toast = (message: string) => window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
 
@@ -42,9 +51,12 @@ const singleImageStyle = (size: ImageSize | null, loaded: boolean): React.CSSPro
   return loaded ? undefined : SINGLE_IMAGE_PLACEHOLDER_SIZE;
 };
 
-/** Decodes image artifacts before they reach the conversation, so they render at their final size at once. */
+/**
+ * Decodes image artifacts before they reach the conversation, so a lone image renders at its final size at
+ * once. Grid tiles have a fixed square box and need no measuring.
+ */
 export const preloadInlineImages = (artifacts: Artifact[]): Promise<void> => measureImageSizes(
-  artifacts.filter(artifact => artifact.type === ArtifactTypeValue.Image).map(imageSrc),
+  artifacts.filter(artifact => artifact.type === ArtifactTypeValue.Image).map(artifact => tileSrc(artifact, true)),
 );
 
 function TileAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
@@ -64,7 +76,7 @@ function ImageTile({ artifact, single, hiddenCount, editable, canShare, onOpen, 
   const imageRef = useRef<HTMLImageElement>(null);
   useEffect(() => () => { if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current); }, []);
   const name = imageName(artifact);
-  const src = imageSrc(artifact);
+  const src = tileSrc(artifact, single);
   const markLoaded = (image: HTMLImageElement) => {
     rememberImageSize(src, image.naturalWidth, image.naturalHeight);
     setState(LoadState.Loaded);
@@ -90,7 +102,7 @@ function ImageTile({ artifact, single, hiddenCount, editable, canShare, onOpen, 
       className={`relative block cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${single ? '' : 'h-full w-full'}`}>
       {state === LoadState.Failed
         ? <span className="flex h-40 w-64 max-w-full flex-col items-center justify-center gap-2 text-xs text-muted"><PhotoIcon className="h-6 w-6" />{t('imageStudioLoadFailed')}</span>
-        : <img ref={imageRef} src={src} alt={name} draggable={false} onLoad={event => markLoaded(event.currentTarget)} onError={() => setState(LoadState.Failed)}
+        : <img ref={imageRef} src={src} alt={name} draggable={false} loading="lazy" decoding="async" onLoad={event => markLoaded(event.currentTarget)} onError={() => setState(LoadState.Failed)}
           className={`${single ? 'block max-h-[420px] w-auto max-w-full' : 'h-full w-full object-cover'} transition-[opacity,transform] duration-300 ease-out group-hover:scale-[1.015] ${loaded ? 'opacity-100' : 'opacity-0'}`}
           style={single ? singleImageStyle(getCachedImageSize(src), loaded) : undefined} />}
       {state === LoadState.Loading && <span aria-hidden="true" className="absolute inset-0 animate-pulse bg-black/[0.04] dark:bg-white/[0.05]" />}
