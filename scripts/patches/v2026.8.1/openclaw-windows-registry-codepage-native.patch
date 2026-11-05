@@ -1,0 +1,541 @@
+LobsterAI patch (no upstream equivalent as of 2026-11): read the Windows
+install roots and the console code page without starting child processes.
+
+v2026.8.1 resolves trusted System32 paths from HKLM by running reg.exe four
+times, and finds the console code page by running `cmd.exe /d /s /c chcp`.
+Both run synchronously right after the gateway reports ready (~470 ms
+together), and non-Microsoft processes starting reg.exe/cmd.exe trip common
+EDR heuristics. Read the same HKLM values through koffi and
+advapi32!RegGetValueW (64-bit view, then default view, reg.exe text form),
+and the code page through kernel32 (GetConsoleOutputCP when a console is
+attached, else the HKCU\Console CodePage override or GetOEMCP, which is what
+the new console chcp ran in reported). Environment variables stay untrusted
+for these roots. reg.exe and chcp remain the fallback when the native helper
+cannot answer. Retire when upstream reads these values natively.
+
+diff --git a/src/infra/detect-binary.test.ts b/src/infra/detect-binary.test.ts
+index 815a3f1f..ce82aa3c 100644
+--- a/src/infra/detect-binary.test.ts
++++ b/src/infra/detect-binary.test.ts
+@@ -11,15 +11,18 @@ vi.mock("../process/exec.js", () => ({
+ }));
+ 
+ import { detectBinary } from "./detect-binary.js";
++import { setWindowsRegistryNativeReaderForTests } from "./windows-install-roots.js";
+ 
+ afterEach(() => {
+   vi.restoreAllMocks();
+   vi.unstubAllEnvs();
+   runCommandWithTimeoutMock.mockReset();
++  setWindowsRegistryNativeReaderForTests(undefined);
+ });
+ 
+ describe("detectBinary", () => {
+   it("uses the trusted Windows where.exe when probing PATH", async () => {
++    setWindowsRegistryNativeReaderForTests(null);
+     const accessSync = fs.accessSync.bind(fs);
+     vi.spyOn(fs, "accessSync").mockImplementation((filePath, mode) => {
+       if (String(filePath).toLowerCase() === "c:\\windows\\system32\\reg.exe") {
+diff --git a/src/infra/windows-encoding.test.ts b/src/infra/windows-encoding.test.ts
+index 8a042cd7..41242900 100644
+--- a/src/infra/windows-encoding.test.ts
++++ b/src/infra/windows-encoding.test.ts
+@@ -147,7 +147,10 @@ describe("windows output encoding", () => {
+     const {
+       decodeWindowsOutputBuffer: decodeOutputWithFreshCache,
+       decodeWindowsTextFileBuffer: decodeTextWithFreshCache,
++      setWindowsConsoleCodePageNativeReaderForTests,
+     } = await import("./windows-encoding.js");
++    // This case covers the chcp probe used when the native helper is unavailable.
++    setWindowsConsoleCodePageNativeReaderForTests(null);
+     const undecodableByte = Buffer.from([0x80]);
+ 
+     expect(decodeOutputWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
+@@ -190,6 +193,67 @@ describe("windows output encoding", () => {
+     );
+   });
+ 
++  it("reads the console code page natively without starting cmd.exe", async () => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    vi.resetModules();
++    const { resolveWindowsConsoleEncoding, setWindowsConsoleCodePageNativeReaderForTests } =
++      await import("./windows-encoding.js");
++    const reader = vi.fn(() => 936);
++    setWindowsConsoleCodePageNativeReaderForTests(reader);
++
++    expect(resolveWindowsConsoleEncoding()).toBe("gbk");
++    expect(resolveWindowsConsoleEncoding()).toBe("gbk");
++    expect(reader).toHaveBeenCalledOnce();
++    expect(spawnSyncMock).not.toHaveBeenCalled();
++
++    // Pages without a legacy decoder stay unavailable, as they were from chcp.
++    setWindowsConsoleCodePageNativeReaderForTests(() => 437);
++    expect(resolveWindowsConsoleEncoding()).toBeNull();
++    expect(spawnSyncMock).not.toHaveBeenCalled();
++  });
++
++  it.each([
++    ["cannot decide", () => undefined],
++    [
++      "throws",
++      () => {
++        throw new Error("native failure");
++      },
++    ],
++  ])("falls back to chcp when the native console reader %s", async (_label, reader) => {
++    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
++    spawnSyncMock.mockReturnValue({ status: 0, stdout: "Active code page: 950\r\n", stderr: "" });
++    vi.resetModules();
++    const { resolveWindowsConsoleEncoding, setWindowsConsoleCodePageNativeReaderForTests } =
++      await import("./windows-encoding.js");
++    setWindowsConsoleCodePageNativeReaderForTests(reader);
++
++    expect(resolveWindowsConsoleEncoding()).toBe("big5");
++    expect(spawnSyncMock).toHaveBeenCalledOnce();
++    expect(spawnSyncMock.mock.calls[0]?.[1]).toEqual(["/d", "/s", "/c", "chcp"]);
++  });
++
++  it.runIf(process.platform === "win32")(
++    "matches the chcp probe for this process's console state",
++    async () => {
++      const childProcess =
++        await vi.importActual<typeof import("node:child_process")>("node:child_process");
++      spawnSyncMock.mockImplementation(childProcess.spawnSync);
++      vi.resetModules();
++      const { resolveWindowsConsoleEncoding, setWindowsConsoleCodePageNativeReaderForTests } =
++        await import("./windows-encoding.js");
++
++      setWindowsConsoleCodePageNativeReaderForTests(null);
++      const viaChcp = resolveWindowsConsoleEncoding();
++      expect(spawnSyncMock).toHaveBeenCalledOnce();
++
++      spawnSyncMock.mockClear();
++      setWindowsConsoleCodePageNativeReaderForTests(undefined);
++      expect(resolveWindowsConsoleEncoding()).toBe(viaChcp);
++      expect(spawnSyncMock).not.toHaveBeenCalled();
++    },
++  );
++
+   it("decodes GBK output on Windows when UTF-8 is invalid and code page is known", () => {
+     const raw = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]);
+ 
+diff --git a/src/infra/windows-encoding.ts b/src/infra/windows-encoding.ts
+index fcc4662f..9445021c 100644
+--- a/src/infra/windows-encoding.ts
++++ b/src/infra/windows-encoding.ts
+@@ -1,7 +1,74 @@
+ // Detects Windows console/OEM code pages and decodes console output encodings.
+ import { spawnSync } from "node:child_process";
++import { createRequire } from "node:module";
+ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+-import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
++import {
++  getWindowsCmdExePath,
++  queryWindowsRegistryDwordNative,
++  queryWindowsRegistryValue,
++} from "./windows-install-roots.js";
++
++const require = createRequire(import.meta.url);
++
++/** Native console code page lookup; `undefined` lets the `chcp` probe answer instead. */
++type NativeConsoleCodePageReader = () => number | undefined;
++
++let nativeConsoleCodePageReader: NativeConsoleCodePageReader | null | undefined;
++
++function loadNativeConsoleCodePageReader(): NativeConsoleCodePageReader | null {
++  if (process.platform !== "win32") {
++    return null;
++  }
++  try {
++    const koffi: typeof import("koffi").default = require("koffi");
++    const kernel32 = koffi.load("kernel32.dll");
++    const getConsoleOutputCP = kernel32.func("uint32_t __stdcall GetConsoleOutputCP()");
++    const getOEMCP = kernel32.func("uint32_t __stdcall GetOEMCP()");
++    const isValidCodePage = kernel32.func("int32_t __stdcall IsValidCodePage(uint32_t codePage)");
++
++    return () => {
++      // `chcp` printed the code page of the console it ran in: ours when one is
++      // attached (0 means none, e.g. a GUI-subsystem host such as Electron)...
++      const attached: number = getConsoleOutputCP();
++      if (attached) {
++        return attached;
++      }
++      // ...otherwise the new console Windows created for it, which starts on a
++      // valid HKCU\Console CodePage override, else on the OEM code page.
++      const configured = queryWindowsRegistryDwordNative("HKCU\\Console", "CodePage");
++      if (configured && isValidCodePage(configured)) {
++        return configured;
++      }
++      const oem: number = getOEMCP();
++      return oem || undefined;
++    };
++  } catch {
++    return null;
++  }
++}
++
++function readNativeConsoleCodePage(): number | undefined {
++  // `null` records that the helper is unavailable; only `undefined` loads it.
++  if (nativeConsoleCodePageReader === undefined) {
++    nativeConsoleCodePageReader = loadNativeConsoleCodePageReader();
++  }
++  if (!nativeConsoleCodePageReader) {
++    return undefined;
++  }
++  try {
++    return nativeConsoleCodePageReader();
++  } catch {
++    return undefined;
++  }
++}
++
++/** Replace the native console code page reader; `null` disables it, `undefined` restores loading. */
++export function setWindowsConsoleCodePageNativeReaderForTests(
++  reader: NativeConsoleCodePageReader | null | undefined,
++): void {
++  nativeConsoleCodePageReader = reader;
++  cachedWindowsConsoleEncoding = undefined;
++}
+ 
+ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
+   65001: "utf-8",
+@@ -91,6 +158,13 @@ export function resolveWindowsConsoleEncoding(): string | null {
+   if (cachedWindowsConsoleEncoding !== undefined) {
+     return cachedWindowsConsoleEncoding;
+   }
++  // Kernel32 gives the same answer without starting cmd.exe, which blocked
++  // gateway startup ~100 ms and is a common security-software trigger.
++  const nativeCodePage = readNativeConsoleCodePage();
++  if (nativeCodePage !== undefined) {
++    cachedWindowsConsoleEncoding = WINDOWS_CODEPAGE_ENCODING_MAP[nativeCodePage] ?? null;
++    return cachedWindowsConsoleEncoding;
++  }
+   try {
+     const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
+       windowsHide: true,
+diff --git a/src/infra/windows-install-roots.test.ts b/src/infra/windows-install-roots.test.ts
+index 89dfb6aa..d4af17c7 100644
+--- a/src/infra/windows-install-roots.test.ts
++++ b/src/infra/windows-install-roots.test.ts
+@@ -15,16 +15,159 @@ import {
+   getWindowsProgramFilesRoots,
+   getWindowsSystem32ExePath,
+   getWindowsWmicExePath,
++  queryWindowsRegistryDwordNative,
++  queryWindowsRegistryValue,
++  setWindowsRegistryNativeReaderForTests,
+ } from "./windows-install-roots.js";
+ 
++const WINDOWS_NT_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
++const WINDOWS_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion";
++const REGISTRY_ROOTS: Record<string, string> = {
++  SystemRoot: "D:\\Windows",
++  ProgramFilesDir: "E:\\Programs",
++  "ProgramFilesDir (x86)": "F:\\Programs (x86)",
++  ProgramW6432Dir: "E:\\Programs",
++};
++
++function stubPoisonedRootEnv() {
++  vi.stubEnv("SystemRoot", "C:\\PoisonedWindows");
++  vi.stubEnv("ProgramFiles", "C:\\Poisoned Programs");
++  vi.stubEnv("ProgramFiles(x86)", "C:\\Poisoned Programs (x86)");
++  vi.stubEnv("ProgramW6432", "C:\\Poisoned Programs");
++}
++
++function mockRegExeRoots() {
++  vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
++  execFileSyncMock.mockImplementation((_file, args: string[]) => {
++    const valueName = args[3];
++    const value = valueName ? REGISTRY_ROOTS[valueName] : undefined;
++    return value ? `${valueName}    REG_SZ    ${value}\r\n` : "";
++  });
++}
++
+ afterEach(() => {
+   vi.unstubAllEnvs();
+   vi.restoreAllMocks();
+   execFileSyncMock.mockReset();
++  setWindowsRegistryNativeReaderForTests(undefined);
++});
++
++describe("getWindowsInstallRoots native registry reads", () => {
++  it("reads HKLM roots natively without reg.exe or the environment", () => {
++    const reader = vi.fn((_key: string, valueName: string) => REGISTRY_ROOTS[valueName] ?? null);
++    setWindowsRegistryNativeReaderForTests(reader);
++    stubPoisonedRootEnv();
++
++    expect(getWindowsInstallRoots()).toEqual({
++      systemRoot: "D:\\Windows",
++      programFiles: "E:\\Programs",
++      programFilesX86: "F:\\Programs (x86)",
++      programW6432: "E:\\Programs",
++    });
++    expect(reader).toHaveBeenCalledWith(WINDOWS_NT_CURRENT_VERSION_KEY, "SystemRoot");
++    expect(reader).toHaveBeenCalledWith(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir");
++    expect(reader).toHaveBeenCalledWith(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir (x86)");
++    expect(reader).toHaveBeenCalledWith(WINDOWS_CURRENT_VERSION_KEY, "ProgramW6432Dir");
++    expect(execFileSyncMock).not.toHaveBeenCalled();
++  });
++
++  it("treats values missing from the registry as absent without asking reg.exe", () => {
++    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
++    setWindowsRegistryNativeReaderForTests(() => null);
++    vi.stubEnv("SystemRoot", "D:\\Windows");
++
++    expect(getWindowsInstallRoots().systemRoot).toBe("D:\\Windows");
++    expect(execFileSyncMock).not.toHaveBeenCalled();
++  });
++
++  it.each([
++    ["cannot decide", () => undefined],
++    [
++      "throws",
++      () => {
++        throw new Error("native failure");
++      },
++    ],
++  ])("falls back to reg.exe when the native reader %s", (_label, reader) => {
++    setWindowsRegistryNativeReaderForTests(reader);
++    mockRegExeRoots();
++    stubPoisonedRootEnv();
++
++    expect(getWindowsInstallRoots().systemRoot).toBe("D:\\Windows");
++    expect(execFileSyncMock.mock.calls[0]?.[0]).toBe("C:\\Windows\\System32\\reg.exe");
++  });
++
++  it("returns native values in reg.exe's text form", () => {
++    const values: Record<string, string | number> = {
++      Text: "  C:\\Windows  ",
++      Blank: "   ",
++      Flags: 0x1b5,
++    };
++    setWindowsRegistryNativeReaderForTests((_key, valueName) => values[valueName] ?? null);
++
++    expect(queryWindowsRegistryValue("HKLM\\Test", "Text")).toBe("C:\\Windows");
++    expect(queryWindowsRegistryValue("HKLM\\Test", "Blank")).toBeNull();
++    expect(queryWindowsRegistryValue("HKLM\\Test", "Flags")).toBe("0x1b5");
++    expect(queryWindowsRegistryDwordNative("HKLM\\Test", "Flags")).toBe(0x1b5);
++    expect(queryWindowsRegistryDwordNative("HKLM\\Test", "Text")).toBeNull();
++    expect(queryWindowsRegistryDwordNative("HKLM\\Test", "Missing")).toBeNull();
++    expect(execFileSyncMock).not.toHaveBeenCalled();
++  });
++
++  it("does not read DWORDs through reg.exe when the native reader is unavailable", () => {
++    setWindowsRegistryNativeReaderForTests(null);
++    mockRegExeRoots();
++
++    expect(queryWindowsRegistryDwordNative("HKCU\\Console", "CodePage")).toBeNull();
++    expect(execFileSyncMock).not.toHaveBeenCalled();
++  });
++
++  it.runIf(process.platform === "win32")(
++    "matches reg.exe for trusted roots and DWORDs without starting it",
++    async () => {
++      const childProcess =
++        await vi.importActual<typeof import("node:child_process")>("node:child_process");
++      const viaRegExe = (key: string, valueName: string) => {
++        const escaped = valueName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++        const stdout = childProcess.execFileSync(
++          "C:\\Windows\\System32\\reg.exe",
++          ["query", key, "/v", valueName, "/reg:64"],
++          { encoding: "utf8", windowsHide: true },
++        );
++        return stdout.match(new RegExp(`^\\s*${escaped}\\s+REG_[A-Z0-9_]+\\s+(.+)$`, "im"))?.[1];
++      };
++      const queries: Array<[string, string]> = [
++        [WINDOWS_NT_CURRENT_VERSION_KEY, "SystemRoot"],
++        [WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir"],
++        [WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir (x86)"],
++        [WINDOWS_CURRENT_VERSION_KEY, "ProgramW6432Dir"],
++        ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage", "OEMCP"],
++        [WINDOWS_NT_CURRENT_VERSION_KEY, "CurrentMajorVersionNumber"],
++      ];
++      const expected = queries.map(([key, valueName]) => viaRegExe(key, valueName)?.trim());
++
++      setWindowsRegistryNativeReaderForTests(undefined);
++      expect(queries.map(([key, valueName]) => queryWindowsRegistryValue(key, valueName))).toEqual(
++        expected,
++      );
++      expect(
++        queryWindowsRegistryDwordNative(
++          WINDOWS_NT_CURRENT_VERSION_KEY,
++          "CurrentMajorVersionNumber",
++        ),
++      ).toBe(Number.parseInt(expected.at(-1) ?? "", 16));
++      expect(queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "OpenClawMissing")).toBeNull();
++      expect(queryWindowsRegistryValue("HKLM\\SOFTWARE\\OpenClawMissing", "Value")).toBeNull();
++      expect(getWindowsInstallRoots().systemRoot).toBe(expected[0]);
++      expect(execFileSyncMock).not.toHaveBeenCalled();
++    },
++  );
+ });
+ 
+ describe("getWindowsInstallRoots", () => {
+   it("prefers HKLM registry roots over process environment values", () => {
++    // This case covers the reg.exe path used when the native helper is unavailable.
++    setWindowsRegistryNativeReaderForTests(null);
+     vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+     execFileSyncMock.mockImplementation((_file, args: string[]) => {
+       const valueName = args[3];
+diff --git a/src/infra/windows-install-roots.ts b/src/infra/windows-install-roots.ts
+index 74bb2a57..b6c8a414 100644
+--- a/src/infra/windows-install-roots.ts
++++ b/src/infra/windows-install-roots.ts
+@@ -1,9 +1,12 @@
+ // Resolves Windows system and Program Files install roots.
+ import { execFileSync } from "node:child_process";
+ import fs from "node:fs";
++import { createRequire } from "node:module";
+ import path from "node:path";
+ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+ 
++const require = createRequire(import.meta.url);
++
+ const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
+ const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
+ const DEFAULT_PROGRAM_FILES_X86 = "C:\\Program Files (x86)";
+@@ -128,7 +131,125 @@ function runRegQuery(
+   });
+ }
+ 
++/**
++ * Native registry read: a REG_SZ/REG_EXPAND_SZ value as stored (unexpanded,
++ * as reg.exe prints it), a REG_DWORD as a number, `null` when the value is
++ * absent from both registry views, or `undefined` when the native read could
++ * not decide (helper unavailable, unsupported root or type, access denied) and
++ * reg.exe should answer instead.
++ */
++type NativeRegistryReader = (key: string, valueName: string) => string | number | null | undefined;
++
++// Predefined HKEYs are sign-extended 32-bit handles, so pass them as intptr_t.
++const NATIVE_REGISTRY_ROOTS: Readonly<Record<string, number>> = {
++  HKLM: 0x8000_0002 | 0,
++  HKEY_LOCAL_MACHINE: 0x8000_0002 | 0,
++  HKCU: 0x8000_0001 | 0,
++  HKEY_CURRENT_USER: 0x8000_0001 | 0,
++};
++const REG_DWORD = 4;
++const RRF_RT_REG_SZ = 0x2;
++const RRF_RT_REG_EXPAND_SZ = 0x4;
++const RRF_RT_REG_DWORD = 0x10;
++const RRF_SUBKEY_WOW6464KEY = 0x1_0000;
++const RRF_NOEXPAND = 0x1000_0000;
++const ERROR_FILE_NOT_FOUND = 2;
++const ERROR_MORE_DATA = 234;
++
++let nativeRegistryReader: NativeRegistryReader | null | undefined;
++
++function loadNativeRegistryReader(): NativeRegistryReader | null {
++  if (process.platform !== "win32") {
++    return null;
++  }
++  try {
++    const koffi: typeof import("koffi").default = require("koffi");
++    const advapi32 = koffi.load("advapi32.dll");
++    const regGetValue = advapi32.func(
++      "int32_t __stdcall RegGetValueW(intptr_t key, str16 subKey, str16 valueName, uint32_t flags, _Out_ uint32_t *type, _Out_ void *data, _Inout_ uint32_t *size)",
++    );
++
++    return (key, valueName) => {
++      const separator = key.indexOf("\\");
++      const rootName = separator < 0 ? key : key.slice(0, separator);
++      const root = NATIVE_REGISTRY_ROOTS[rootName.toUpperCase()];
++      if (root === undefined) {
++        return undefined;
++      }
++      const subKey = separator < 0 ? null : key.slice(separator + 1);
++      let undecided = false;
++      // Same order as the reg.exe queries: the 64-bit view, then the default view.
++      for (const view of [RRF_SUBKEY_WOW6464KEY, 0]) {
++        const flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_DWORD | RRF_NOEXPAND | view;
++        const type: [number] = [0];
++        let data = Buffer.alloc(512);
++        const size: [number] = [data.length];
++        let status: number = regGetValue(root, subKey, valueName, flags, type, data, size);
++        if (status === ERROR_MORE_DATA) {
++          data = Buffer.alloc(size[0]);
++          size[0] = data.length;
++          status = regGetValue(root, subKey, valueName, flags, type, data, size);
++        }
++        if (status === ERROR_FILE_NOT_FOUND) {
++          continue;
++        }
++        if (status !== 0) {
++          undecided = true;
++          continue;
++        }
++        if (type[0] === REG_DWORD) {
++          return data.readUInt32LE(0);
++        }
++        // RegGetValueW null-terminates strings; keep the text before the terminator.
++        const text = data.toString("utf16le", 0, size[0]);
++        const end = text.indexOf("\0");
++        return end < 0 ? text : text.slice(0, end);
++      }
++      return undecided ? undefined : null;
++    };
++  } catch {
++    return null;
++  }
++}
++
++function readNativeRegistryValue(
++  key: string,
++  valueName: string,
++): string | number | null | undefined {
++  // `null` records that the helper is unavailable; only `undefined` loads it.
++  if (nativeRegistryReader === undefined) {
++    nativeRegistryReader = loadNativeRegistryReader();
++  }
++  if (!nativeRegistryReader) {
++    return undefined;
++  }
++  try {
++    return nativeRegistryReader(key, valueName);
++  } catch {
++    return undefined;
++  }
++}
++
++/** Replace the native registry reader; `null` disables it, `undefined` restores loading. */
++export function setWindowsRegistryNativeReaderForTests(
++  reader: NativeRegistryReader | null | undefined,
++): void {
++  nativeRegistryReader = reader;
++  cachedProcessInstallRoots = null;
++}
++
+ function defaultQueryRegistryValue(key: string, valueName: string): string | null {
++  // RegGetValueW reads the same values without starting reg.exe, which blocked
++  // gateway startup ~55 ms per value and is a common security-software trigger.
++  const nativeValue = readNativeRegistryValue(key, valueName);
++  if (typeof nativeValue === "number") {
++    // reg.exe prints REG_DWORD data as lowercase hex.
++    return `0x${nativeValue.toString(16)}`;
++  }
++  if (nativeValue !== undefined) {
++    return nativeValue?.trim() || null;
++  }
++
+   const regExe = locateWindowsRegExe();
+   if (!regExe) {
+     return null;
+@@ -234,11 +355,17 @@ export function getWindowsCmdExePath(
+   return getWindowsSystem32ExePath("cmd.exe", env);
+ }
+ 
+-/** Queries one Windows registry string value via reg.exe; null when absent or unreadable. */
++/** Queries one Windows registry string value natively or via reg.exe; null when absent or unreadable. */
+ export function queryWindowsRegistryValue(key: string, valueName: string): string | null {
+   return queryRegistryValueFn(key, valueName);
+ }
+ 
++/** Reads one REG_DWORD without reg.exe; null when absent, not a DWORD, or unreadable natively. */
++export function queryWindowsRegistryDwordNative(key: string, valueName: string): number | null {
++  const value = readNativeRegistryValue(key, valueName);
++  return typeof value === "number" ? value : null;
++}
++
+ export function getWindowsSystem32ExePath(
+   executableName: string,
+   env: Record<string, string | undefined> = process.env,

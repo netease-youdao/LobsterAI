@@ -1681,6 +1681,35 @@ v20260801StrongPatchValidators['openclaw-windows-native-plugin-require.patch'] =
     ],
   },
 ];
+v20260801StrongPatchValidators['openclaw-windows-registry-codepage-native.patch'] = [
+  {
+    file: 'src/infra/windows-install-roots.ts',
+    snippets: [
+      'function loadNativeRegistryReader(): NativeRegistryReader | null {',
+      '"int32_t __stdcall RegGetValueW(intptr_t key, str16 subKey, str16 valueName, uint32_t flags, _Out_ uint32_t *type, _Out_ void *data, _Inout_ uint32_t *size)"',
+      'const nativeValue = readNativeRegistryValue(key, valueName);',
+      'export function queryWindowsRegistryDwordNative(key: string, valueName: string): number | null {',
+    ],
+    orderedSnippets: [
+      'function defaultQueryRegistryValue(key: string, valueName: string): string | null {',
+      'const nativeValue = readNativeRegistryValue(key, valueName);',
+      'const regExe = locateWindowsRegExe();',
+    ],
+  },
+  {
+    file: 'src/infra/windows-encoding.ts',
+    snippets: [
+      'function loadNativeConsoleCodePageReader(): NativeConsoleCodePageReader | null {',
+      'kernel32.func("uint32_t __stdcall GetConsoleOutputCP()")',
+      'queryWindowsRegistryDwordNative("HKCU\\\\Console", "CodePage")',
+    ],
+    orderedSnippets: [
+      'export function resolveWindowsConsoleEncoding(): string | null {',
+      'const nativeCodePage = readNativeConsoleCodePage();',
+      '["/d", "/s", "/c", "chcp"]',
+    ],
+  },
+];
 v20260801StrongPatchValidators['zz-openclaw-windows-process-start-native.patch'] = [
   {
     file: 'src/infra/windows-process-start.ts',

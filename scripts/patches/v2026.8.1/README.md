@@ -1048,6 +1048,55 @@ src/infra/gateway-lock.test.ts src/shared/pid-alive.test.ts`; on Windows the
 suite compares the native value with a real `Process.StartTime` for this process
 and its parent. Remove when upstream reads Windows process times natively.
 
+## Native Windows registry reads and console code page
+
+`openclaw-windows-registry-codepage-native.patch` removes the synchronous child
+processes the gateway started on Windows right after `ready`. Resolving the
+trusted install roots (`getWindowsInstallRoots`, used for every System32 tool
+path) ran `reg.exe query` four times (`SystemRoot`, `ProgramFilesDir`,
+`ProgramFilesDir (x86)`, `ProgramW6432Dir`, 50-60 ms each). The first decode of
+child output then ran `cmd.exe /d /s /c chcp` (about 100 ms). A non-Microsoft
+process starting `reg.exe` or `cmd.exe` is also a common EDR heuristic.
+
+Registry values now come from koffi and `advapi32!RegGetValueW`, still from HKLM
+and never from environment variables, which upstream deliberately distrusts for
+these roots. The read follows reg.exe's order (64-bit view, then the default
+view) and returns what reg.exe printed: string data unexpanded and trimmed,
+`REG_DWORD` as lowercase `0x` hex, `null` when the value is missing from both
+views. Any other outcome (koffi unavailable, an unsupported root or type, access
+denied) falls through to the unchanged reg.exe path.
+
+The console encoding comes from `kernel32`. `chcp` printed the code page of the
+console it ran in: the gateway's own when one is attached
+(`GetConsoleOutputCP`), otherwise the new console Windows created for `cmd.exe`.
+LobsterAI starts the gateway through Electron, a GUI-subsystem binary with no
+console, so the second case is the normal one. A new console starts on a valid
+`HKCU\Console` `CodePage` override, otherwise on the OEM code page (`GetOEMCP`).
+Per-executable console subkeys are not consulted. When the helper cannot load,
+the `chcp` probe runs as before.
+
+Measured on a warm gateway start with the same machine and state, comparing
+runtimes built from `release/2026.11.2` with and without this patch (four
+interleaved runs each after a warm-up). Child processes per start dropped from
+8 to 3. Only the two SQLite read-only workers and an async `git rev-parse`
+remain, and `reg.exe`/`cmd.exe` went from 5 to 0. Synchronous child-process
+time after `ready` went from a median 466 ms to 0. Timed directly from the
+shipped dist chunks in a console-less Electron process, the first
+`getWindowsInstallRoots()` dropped from 197-291 ms to 1.2-2.3 ms (9-17 ms when
+koffi is not loaded yet). The first `resolveWindowsConsoleEncoding()` dropped
+from 69-129 ms to under 1 ms. Both versions return the same roots and encoding.
+On this baseline the main thread stays saturated for the first 3 s after
+`ready` either way, so the freed time lets the remaining startup work run
+sooner rather than appearing as idle time.
+
+Verify with `node_modules/.bin/vitest run src/infra/windows-install-roots.test.ts
+src/infra/windows-encoding.test.ts src/infra/detect-binary.test.ts`. On Windows
+the suite compares the native values with real `reg.exe` and `chcp` output.
+`detect-binary.test.ts` now disables the native reader explicitly, because hiding
+`reg.exe` no longer turns off registry lookups. Remove when upstream reads these
+values without starting child processes. As of 2026-11, upstream `main` still
+uses `reg.exe` and `chcp`.
+
 ## Dreaming startup scrub only when dreaming is enabled
 
 `zz-openclaw-dreaming-cleanup-only-when-enabled.patch` makes memory-core's
