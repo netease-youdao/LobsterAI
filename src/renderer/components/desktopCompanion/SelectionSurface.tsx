@@ -11,6 +11,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { CompanionAnalyticsSource } from '../../../shared/desktopCompanion/analytics';
 import {
   COMPANION_COPY_MAX_BYTES,
   CompanionQuickAnswerErrorCode,
@@ -373,7 +374,10 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
           {streaming && (streaming.text
             ? <SelectionAnswer text={streaming.text} streaming />
             : <SelectionThinking label={t('desktopCompanionAnswerThinking')} />)}
-          {isLoggedIn === false ? <SelectionLoginRequired /> : error && (
+          {isLoggedIn === false ? (
+            <SelectionLoginRequired source={CompanionAnalyticsSource.Selection} tool={action} feature={actionLabel(action)}
+              contextId={selection.id} />
+          ) : error && (
             <SelectionError
               message={error}
               action={<button type="button" onClick={retry}>{t('desktopCompanionAnswerRetry')}</button>}

@@ -6,8 +6,11 @@ import {
 } from '@heroicons/react/24/outline';
 import { useEffect, useRef, useState } from 'react';
 
+import { CompanionAnalyticsSource, CompanionAnalyticsTool } from '../../../shared/desktopCompanion/analytics';
 import { type DesktopCompanionState } from '../../../shared/desktopCompanion/constants';
-import { LanguageTool, LanguageToolCode, SpeechStatus, TranslationTarget } from '../../../shared/desktopCompanion/languageTools';
+import {
+  LanguageTool, LanguageToolCode, type LanguageToolResume, SpeechStatus, TranslationTarget,
+} from '../../../shared/desktopCompanion/languageTools';
 import { CompanionSelectionAction } from '../../../shared/desktopCompanion/selectionActions';
 import { i18nService } from '../../services/i18n';
 import {
@@ -53,7 +56,18 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
   useMeasuredSurface(rootRef, !!input, input?.id);
   usePointerPassThrough(input?.id, api.setLanguageToolPassThrough);
 
-  useEffect(() => { setPinned(false); setCopied(false); setCopyError(''); setHandoffError(false); }, [input?.id]);
+  useEffect(() => {
+    setPinned(input?.pinned === true); setCopied(false); setCopyError(''); setHandoffError(false);
+  }, [input?.id, input?.pinned]);
+  // A follow-up that waited for a sign-in goes out once the card's fresh translation is back.
+  const resumeQuestion = useRef<string | undefined>();
+  useEffect(() => { resumeQuestion.current = input?.resume?.question; }, [input?.id, input?.resume?.question]);
+  useEffect(() => {
+    const question = resumeQuestion.current;
+    if (!question || translating || !translation) return;
+    resumeQuestion.current = undefined;
+    followUp.send(question);
+  }, [followUp, translating, translation]);
   // Dragging the card pins it in the main process.
   useEffect(() => api.onLanguageToolPinned(value => setPinned(value)), [api]);
   useEffect(() => {
@@ -77,6 +91,18 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
   const isTranslation = input.tool === LanguageTool.Translate;
   const loginRequired = tools.error === LanguageToolCode.Unauthorized || followUp.loginRequired;
   const translationLoginRequired = tools.error === LanguageToolCode.Unauthorized && tools.errorTool === LanguageTool.Translate;
+  // The prompt names what was blocked; after the sign-in the card reopens, reruns its tool and resends the question.
+  const loginTool = tools.error !== LanguageToolCode.Unauthorized ? CompanionAnalyticsTool.Ask
+    : tools.errorTool === LanguageTool.Tts ? CompanionAnalyticsTool.Tts : CompanionAnalyticsTool.Translate;
+  const loginFeature = t(loginTool === CompanionAnalyticsTool.Ask ? 'desktopToolsFollowUpFeature'
+    : loginTool === CompanionAnalyticsTool.Tts ? 'desktopToolsReadAloud' : 'desktopCompanionActionTranslate');
+  const loginResume: LanguageToolResume | undefined = followUp.pendingQuestion ? { question: followUp.pendingQuestion } : undefined;
+  // A blocked follow-up is answered by the prompt, so it sits under the question; a blocked tool sits under its result.
+  const loginInConversation = loginRequired && loginTool === CompanionAnalyticsTool.Ask;
+  const loginPrompt = loginRequired && (
+    <SelectionLoginRequired source={CompanionAnalyticsSource.LanguageTools} tool={loginTool} feature={loginFeature}
+      contextId={input.id ?? ''} resume={loginResume} />
+  );
   const speechVisible = !isTranslation || playback.status !== SpeechStatus.Idle;
   const speechActive = playback.status !== SpeechStatus.Idle;
   const speechLoading = playback.status === SpeechStatus.Loading;
@@ -151,7 +177,7 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
             </div>
           )}
 
-          {loginRequired && <SelectionLoginRequired />}
+          {loginRequired && !loginInConversation && loginPrompt}
           {tools.error !== null && tools.error !== LanguageToolCode.Unauthorized && (
             <SelectionError
               message={t(tools.error === LanguageToolCode.DailyLimit && tools.errorTool === LanguageTool.Translate
@@ -168,6 +194,7 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
               {followUp.streaming && (followUp.streaming.text
                 ? <SelectionAnswer text={followUp.streaming.text} streaming />
                 : <SelectionThinking label={t('desktopCompanionAnswerThinking')} />)}
+              {loginInConversation && loginPrompt}
               {followUp.error && !loginRequired && (
                 <SelectionError
                   message={followUp.error}

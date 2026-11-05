@@ -208,6 +208,27 @@
 .sel-error span { flex: 1; min-width: 0; }
 .sel-error button { flex-shrink: 0; color: var(--s-ink); font-weight: 500; text-decoration: underline; text-underline-offset: 2px; }
 
+/* Sign-in prompt: one quiet row, the reason on the left and a compact button on the right.
+   It sits where the answer would appear; once the browser is open, the button steps back. */
+.sel-login {
+  display: flex; align-items: center; gap: 12px; margin: 10px 0 2px; padding: 10px 10px 10px 14px; border-radius: 12px;
+  border: 1px solid var(--s-divider); background: var(--s-bg); animation: sel-in 0.18s ease-out;
+}
+.sel-login-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sel-login-text strong { color: var(--s-ink); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.sel-login-text > span { display: flex; align-items: center; gap: 6px; color: var(--s-ink-3); font-size: 12px; line-height: 1.5; }
+.sel-login[data-state="failed"] .sel-login-text > span { color: var(--s-danger); }
+.sel-login .sel-dots { flex-shrink: 0; }
+.sel-surface .sel-login-button {
+  flex-shrink: 0; height: 30px; padding: 0 14px; border-radius: 999px; white-space: nowrap;
+  background: var(--s-primary); color: var(--s-primary-ink); font-size: 12.5px; font-weight: 500;
+  transition: background-color 0.15s, transform 0.1s;
+}
+.sel-surface .sel-login-button:hover:not(:disabled) { background: var(--s-primary-hover); }
+.sel-surface .sel-login-button:active:not(:disabled) { transform: scale(0.97); }
+.sel-surface .sel-login-button[data-waiting="true"] { background: var(--s-fill); color: var(--s-ink); }
+.sel-surface .sel-login-button[data-waiting="true"]:hover:not(:disabled) { background: var(--s-fill-strong); }
+
 /* Under the newest answer: quiet icon actions, and the hand-off to a task at the end. */
 .sel-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; padding: 0 10px 4px; }
 .sel-action {

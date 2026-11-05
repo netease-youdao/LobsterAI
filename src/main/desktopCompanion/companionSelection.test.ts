@@ -552,6 +552,89 @@ describe('selection toolbar', () => {
     expect(quickAnswer.abortOwnedBy).toHaveBeenCalledWith(77);
   });
 
+  test('a sign-in pins only an answer card, so clicking into the browser does not close it', () => {
+    const controller = create();
+    select();
+    vi.advanceTimersByTime(200);
+    // The toolbar has no request to continue.
+    controller.holdForLogin();
+    expect(sentSelection()).toMatchObject({ mode: DesktopCompanionSelectionMode.Toolbar, pinned: false });
+    controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+    controller.holdForLogin();
+    expect(sentSelection()).toMatchObject({ mode: DesktopCompanionSelectionMode.Answer, action: CompanionSelectionAction.Explain, pinned: true });
+    FakeHook.last!.emit('mouse-down', { x: 5, y: 5, button: 0 });
+    expect(win.visible).toBe(true);
+  });
+
+  describe('when the toolbar becomes unavailable', () => {
+    let available: boolean;
+    let capturing: boolean;
+    function createWithAvailability() {
+      available = true;
+      capturing = false;
+      win = new FakeWindow();
+      quickAnswer = { abortOwnedBy: vi.fn() };
+      const controller = new CompanionSelectionController({
+        preferences: () => preferences,
+        isAvailable: () => available,
+        isCapturing: () => capturing,
+        createWindow: () => win as never,
+        setPreferences: patch => { preferences = { ...preferences, ...patch }; },
+        publish: vi.fn(),
+        openSettings: vi.fn(),
+      }, quickAnswer as never, () => FakeHook as never);
+      controller.sync();
+      select();
+      vi.advanceTimersByTime(200);
+      return controller;
+    }
+
+    test('a pinned answer outlives the gateway restart that follows a sign-in, and keeps its request', () => {
+      const controller = createWithAvailability();
+      controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+      controller.holdForLogin();
+      quickAnswer.abortOwnedBy.mockClear();
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(true);
+      // The answer that started on the new session keeps streaming.
+      expect(quickAnswer.abortOwnedBy).not.toHaveBeenCalled();
+      available = true;
+      controller.sync();
+      expect(win.visible).toBe(true);
+      expect(sentSelection()).toMatchObject({ mode: DesktopCompanionSelectionMode.Answer, pinned: true });
+    });
+
+    test('a toolbar or an unpinned answer still closes', () => {
+      const controller = createWithAvailability();
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(false);
+      available = true;
+      controller.sync();
+      select();
+      vi.advanceTimersByTime(200);
+      controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(false);
+    });
+
+    test.each([
+      ['the toolbar is turned off', () => { preferences = { ...preferences, selectionToolbar: false }; }],
+      ['the companion is turned off', () => { preferences = { ...preferences, enabled: false }; }],
+      ['a screenshot needs the screen', () => { capturing = true; }],
+    ])('a pinned answer closes when %s', (_reason, change) => {
+      const controller = createWithAvailability();
+      controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+      controller.holdForLogin();
+      change();
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(false);
+    });
+  });
+
   test('"hide in this app" remembers the app and closes the toolbar', () => {
     const controller = create();
     select('text', 'com.tencent.xinWeChat');

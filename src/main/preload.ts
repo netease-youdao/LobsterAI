@@ -170,6 +170,7 @@ import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 contextBridge.exposeInMainWorld('electron', {
   desktopCompanion: {
     reportAnalytics: event => ipcRenderer.invoke(DesktopCompanionIpc.ReportAnalytics, event),
+    startLogin: request => ipcRenderer.invoke(DesktopCompanionIpc.LoginStart, request),
     ...createLanguageToolsBridge(),
     openResult: sessionId => ipcRenderer.invoke(CompanionResultIpc.Open, sessionId),
     hideResult: () => ipcRenderer.invoke(CompanionResultIpc.Hide),

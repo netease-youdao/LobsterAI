@@ -8355,6 +8355,7 @@ if (!gotTheLock) {
         status: AuthSessionStatus.Authenticated,
         reason: AuthSessionChangeReason.UserLogin,
       }, _event.sender.id);
+      desktopCompanionManager?.handleLoginSucceeded();
       return {
         success: true,
         user: body.data.user,
