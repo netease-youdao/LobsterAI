@@ -93,6 +93,8 @@ The pinned dsh version and one archive descriptor per platform live in `package.
 
 Each runtime also bundles the exact pnpm release pinned in `dsh.pnpm`, unpacked to `package-manager/pnpm`. dsh's plugin manager installs plugins with pnpm, and a Dock- or Start-menu-launched app has none on PATH, so the app starts dsh through a generated launcher that hands this pnpm to `runCli({ packageManager })`. Keep `dsh.pnpm` on the major that upstream pins in its root `packageManager` field. Changing it requires rebuilding and re-uploading every target.
 
+On Windows, the launcher also adds the app's `resources/mingit/cmd` to the plugin installer's PATH so Git-sourced plugins work without system Git. This is app-side wiring; Git is not duplicated in the dsh archive. Run `npm run setup:mingit -- --required` before Windows `dsh:e2e`; that gate installs a local Git-sourced test plugin with system Git removed from PATH and checks that the same install fails without the bundled Git path.
+
 ```bash
 # Build and activate the current-platform runtime
 npm run dsh:runtime:host

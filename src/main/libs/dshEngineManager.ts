@@ -145,12 +145,13 @@ export interface DshEngineState {
 
 type DshChild = ChildProcess;
 
-/** How the host runs Node-mode children: the Electron binary plus its shims. */
+/** Tools the host supplies for pnpm and Git-sourced plugin installs. */
 export interface DshNodeToolchain {
   electronPath: string;
   /** Directory with node/npm/npx shims, or null when it could not be made. */
   nodeShimDir: string | null;
   npmBinDir: string | null;
+  gitBinDir: string | null;
 }
 
 export class DshEngineManager {
@@ -496,6 +497,7 @@ export class DshEngineManager {
       pnpmEntry,
       nodeShimDir: toolchain?.nodeShimDir ?? null,
       npmBinDir: toolchain?.npmBinDir ?? null,
+      gitBinDir: toolchain?.gitBinDir ?? null,
       baseEnv: process.env,
       delimiter: path.delimiter,
     });

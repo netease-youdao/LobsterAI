@@ -92,6 +92,8 @@ OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
 
 每个 runtime 还会内置 `dsh.pnpm` 锁定的那个 pnpm 版本，解压在 `package-manager/pnpm`。dsh 的插件管理器用 pnpm 安装插件，而从 Dock 或开始菜单启动的应用 PATH 里没有 pnpm，所以应用通过一个生成的启动入口启动 dsh，把这份 pnpm 交给 `runCli({ packageManager })`。`dsh.pnpm` 要和上游仓库根目录 `packageManager` 字段锁定的 pnpm 保持同一大版本。修改它之后，每个平台都要重新构建并上传。
 
+Windows 启动器还会把应用自带的 `resources/mingit/cmd` 加入插件安装进程的 PATH，让 Git 来源的插件不依赖系统 Git。这是应用端的接入，dsh 分发包里不会重复放一份 Git。Windows 执行 `dsh:e2e` 前先运行 `npm run setup:mingit -- --required`；该门禁会在 PATH 没有系统 Git 的环境中安装本地 Git 测试插件，并对照验证移除内置 Git 路径后同一次安装会失败。
+
 ```bash
 # 构建并激活当前平台的 runtime
 npm run dsh:runtime:host

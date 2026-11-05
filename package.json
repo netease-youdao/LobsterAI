@@ -121,6 +121,11 @@
         "url": "https://ydschool-video.nosdn.127.net/1793891934237dsh-runtime-0.2.2-rc.1-mac-x64.tar.gz",
         "sha256": "40ab2fd7360bf16c6a717e91b6023a261a8c56f68261d4457e96293d0db39192",
         "size": 160567308
+      },
+      "win-x64": {
+        "url": "https://ydschool-video.nosdn.127.net/1793895147603dsh-runtime-0.2.2-rc.1-win-x64.tar.gz",
+        "sha256": "471422a810be20b3a3fd9b048a7d99d4db2e2e1b0118aa70e782aac1878662b3",
+        "size": 153313442
       }
     }
   },

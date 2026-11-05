@@ -117,6 +117,7 @@ function writeProductionLauncher(installedRoot, launcherDir) {
     DSH_LAUNCHER_FILENAME,
     DSH_PNPM_PACKAGE_RELPATH,
     parseDshPnpmBinRelPath,
+    resolveDshBundledGitBinDir,
   } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshRuntime.js'));
   const pnpmRoot = path.join(installedRoot, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
   const binRelPath = parseDshPnpmBinRelPath(fs.readFileSync(path.join(pnpmRoot, 'package.json'), 'utf8'));
@@ -126,6 +127,7 @@ function writeProductionLauncher(installedRoot, launcherDir) {
     pnpmEntry: path.join(pnpmRoot, ...binRelPath.split('/')),
     nodeShimDir: null,
     npmBinDir: null,
+    gitBinDir: resolveDshBundledGitBinDir(path.join(rootDir, 'resources'), process.platform, fs.existsSync, path.join),
     baseEnv: process.env,
     delimiter: path.delimiter,
   });
@@ -240,6 +242,9 @@ function startRpc(booted, method, timeoutMs) {
     port: booted.port,
     path: `/api/${method}`,
     method: 'POST',
+    // Synchronous checks can outlive the server's keep-alive timeout while
+    // preventing Node from processing the old socket's close event.
+    agent: false,
     timeout: timeoutMs,
     headers: {
       'Content-Type': 'application/json',
@@ -499,6 +504,12 @@ async function main() {
   // Keep the manifest path exercised too: it is how dev builds install.
   const fromManifest = resolveDshArtifactFromManifest(distDir, manifestName);
   if (fromManifest.sha256 !== artifact.sha256) fail('manifest and config descriptors disagree');
+
+  if (process.platform === 'win32') {
+    step('Git plugin install without system Git', process.execPath, [
+      path.join(rootDir, 'scripts', 'verify-dsh-git-install.cjs'), installed.root,
+    ]);
+  }
 
   // [4/8] Start the mock LLM upstream, then render a LobsterAI provider that
   // points at it — the web profile patch on disk, the API key only in the

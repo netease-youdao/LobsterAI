@@ -183,25 +183,41 @@ export interface DshPackageManagerOptions {
   nodeShimDir: string | null;
   /** Bundled npm bin directory the Windows npm/npx shims resolve through. */
   npmBinDir: string | null;
+  /** Bundled Git cmd directory for Git-sourced plugins; null outside Windows. */
+  gitBinDir: string | null;
   /** Environment the PATH extends; only its PATH entry is read. */
   baseEnv: Record<string, string | undefined>;
   delimiter: string;
 }
 
+// Git for Windows' cmd/git.exe locates its own helpers and DLLs. Exposing only
+// cmd avoids putting Git's Unix tools (notably tar) ahead of Windows tools.
+export function resolveDshBundledGitBinDir(
+  resourcesDir: string,
+  platform: NodeJS.Platform,
+  exists: (absolutePath: string) => boolean,
+  joinPath: (...segments: string[]) => string
+): string | null {
+  if (platform !== 'win32') return null;
+  const gitBinDir = joinPath(resourcesDir, 'mingit', 'cmd');
+  return exists(joinPath(gitBinDir, 'git.exe')) ? gitBinDir : null;
+}
+
 // pnpm runs as Electron in Node mode. Dependency build scripts call `node`,
 // which a GUI-launched app does not have on PATH, so LobsterAI's node shim goes
-// first. dsh applies this environment only to its package-manager children and
+// first, followed by bundled Git for github: and other Git-sourced plugins.
+// dsh applies this environment only to its package-manager children and
 // merges it after its own scrubbed environment, so PATH keeps the casing the
 // base environment uses: on Windows that is usually `Path`, and a second
 // `PATH` key would leave which one wins to the child's key ordering.
 export function buildDshPackageManager(options: DshPackageManagerOptions): DshPackageManager {
-  const { electronPath, pnpmEntry, nodeShimDir, npmBinDir, baseEnv, delimiter } = options;
+  const { electronPath, pnpmEntry, nodeShimDir, npmBinDir, gitBinDir, baseEnv, delimiter } = options;
   const pathKey = Object.keys(baseEnv).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
   const basePath = baseEnv[pathKey] ?? '';
   const env: Record<string, string> = {
     ELECTRON_RUN_AS_NODE: '1',
     LOBSTERAI_ELECTRON_PATH: electronPath,
-    [pathKey]: [nodeShimDir, basePath].filter((entry): entry is string => !!entry).join(delimiter),
+    [pathKey]: [nodeShimDir, gitBinDir, basePath].filter((entry): entry is string => !!entry).join(delimiter),
   };
   if (npmBinDir) env.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
   return { command: electronPath, args: [pnpmEntry], env };

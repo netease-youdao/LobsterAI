@@ -17,6 +17,7 @@ import {
   dshInstallPercent,
   parseDshPnpmBinRelPath,
   parseDshRuntimeBuildInfo,
+  resolveDshBundledGitBinDir,
   resolveDshRuntimeCandidates,
   resolveDshWorkingDirectory,
   shouldPublishInstallProgress,
@@ -191,11 +192,30 @@ describe('parseDshPnpmBinRelPath', () => {
   });
 });
 
+describe('resolveDshBundledGitBinDir', () => {
+  const resourcesDir = 'C:\\Program Files\\LobsterAI\\resources';
+  const gitBinDir = path.win32.join(resourcesDir, 'mingit', 'cmd');
+  const exists = (candidate: string) => candidate === path.win32.join(gitBinDir, 'git.exe');
+
+  test('finds bundled Git in Windows resources, including paths with spaces', () => {
+    expect(resolveDshBundledGitBinDir(resourcesDir, 'win32', exists, path.win32.join)).toBe(gitBinDir);
+  });
+
+  test('leaves PATH fallback available when bundled Git is missing', () => {
+    expect(resolveDshBundledGitBinDir(resourcesDir, 'win32', () => false, path.win32.join)).toBeNull();
+  });
+
+  test.each(['darwin', 'linux'] as const)('does not inject Windows Git on %s', (platform) => {
+    expect(resolveDshBundledGitBinDir(resourcesDir, platform, exists, path.win32.join)).toBeNull();
+  });
+});
+
 describe('buildDshPackageManager', () => {
   const base = {
     electronPath: '/Apps/LobsterAI Helper',
     pnpmEntry: '/rt/package-manager/pnpm/bin/pnpm.mjs',
     npmBinDir: '/app/node_modules/npm/bin',
+    gitBinDir: null,
     delimiter: ':',
   };
 
@@ -228,6 +248,21 @@ describe('buildDshPackageManager', () => {
     });
     expect(manager.env.Path).toBe('C:\\userData\\cowork\\bin;C:\\Windows\\system32');
     expect(manager.env.PATH).toBeUndefined();
+  });
+
+  test('adds bundled Git after node shims without modifying the parent environment', () => {
+    const baseEnv = { Path: 'C:\\Windows\\System32' };
+    const gitBinDir = 'C:\\Program Files\\LobsterAI\\resources\\mingit\\cmd';
+    const manager = buildDshPackageManager({
+      ...base,
+      delimiter: ';',
+      nodeShimDir: 'C:\\userData\\cowork\\bin',
+      gitBinDir,
+      baseEnv,
+    });
+    expect(manager.env.Path).toBe(`C:\\userData\\cowork\\bin;${gitBinDir};C:\\Windows\\System32`);
+    expect(manager.env.PATH).toBeUndefined();
+    expect(baseEnv.Path).toBe('C:\\Windows\\System32');
   });
 
   test('leaves PATH alone without shims and omits a missing npm bin dir', () => {
@@ -266,6 +301,7 @@ describe('buildDshLauncherSource', () => {
         pnpmEntry: '/rt/pnpm.mjs',
         nodeShimDir: '/shims',
         npmBinDir: null,
+        gitBinDir: null,
         baseEnv: { PATH: '/usr/bin' },
         delimiter: ':',
       });

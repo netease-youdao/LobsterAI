@@ -18,6 +18,7 @@ import type { ProviderConfig } from '../../../shared/providers/types';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../../libs/coworkUtil';
 import { DshManagedSettings, DshPlanProviderInput, renderDshManagedSettings } from '../../libs/dshConfigSync';
 import { DshNodeToolchain, getDshEngineManager } from '../../libs/dshEngineManager';
+import { resolveDshBundledGitBinDir } from '../../libs/dshRuntime';
 import {
   clearWriterLock,
   DshSharedHomeDecision,
@@ -91,6 +92,7 @@ function computeManagedSettings(): DshManagedSettings | null {
 
 // The bundled pnpm runs dependency build scripts that call `node`, `npm`, or
 // `npx`. These are the same Electron-as-Node shims cowork and the gateway use.
+// Git-sourced plugins also need the Git shipped with the Windows app.
 function resolveDshNodeToolchain(): DshNodeToolchain {
   const electronPath = getElectronNodeRuntimePath();
   const npmBinDir = app.isPackaged
@@ -101,6 +103,12 @@ function resolveDshNodeToolchain(): DshNodeToolchain {
     electronPath,
     nodeShimDir: ensureElectronNodeShim(electronPath, hasNpm ? npmBinDir : undefined),
     npmBinDir: hasNpm ? npmBinDir : null,
+    gitBinDir: resolveDshBundledGitBinDir(
+      app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources'),
+      process.platform,
+      fs.existsSync,
+      path.join
+    ),
   };
 }
 
