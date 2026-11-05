@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { ArtifactPreviewHost, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import {
@@ -90,5 +90,29 @@ describe('artifact local file protocol', () => {
     expect(response.headers.get('content-length')).toBe('10');
     expect(response.headers.get('content-type')).toBe('video/mp4');
     expect(await response.text()).toBe('');
+  });
+
+  test('serves a thumbnail only when one is asked for and available', async () => {
+    const filePath = createTempFile('generated.png', 'original-bytes');
+    const thumbnailPath = path.join(tempDir!, 'thumbnail.jpg');
+    fs.writeFileSync(thumbnailPath, 'thumb');
+    const resolveThumbnail = vi.fn(async (_file: string, _stat: fs.Stats, edge: number, _fit: string) => (edge === 512 ? thumbnailPath : null));
+    const request = (query: string) => createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}${query}`), { resolveThumbnail });
+
+    const thumbnail = await request('?v=1&thumb=512');
+    expect(thumbnail.headers.get('content-type')).toBe('image/jpeg');
+    expect(await thumbnail.text()).toBe('thumb');
+    expect(resolveThumbnail).toHaveBeenLastCalledWith(filePath, expect.anything(), 512, 'contain');
+    await request('?v=1&thumb=512&thumbFit=cover');
+    expect(resolveThumbnail).toHaveBeenLastCalledWith(filePath, expect.anything(), 512, 'cover');
+
+    expect(await (await request('?v=1&thumb=2048')).text()).toBe('original-bytes');
+    expect(await (await request('?v=1')).text()).toBe('original-bytes');
+    expect(resolveThumbnail).toHaveBeenCalledTimes(3);
+
+    resolveThumbnail.mockRejectedValueOnce(new Error('thumbnailer crashed'));
+    const failed = await request('?v=1&thumb=512');
+    expect(failed.headers.get('content-type')).toBe('image/png');
+    expect(await failed.text()).toBe('original-bytes');
   });
 });
