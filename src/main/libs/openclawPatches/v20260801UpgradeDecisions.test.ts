@@ -84,6 +84,7 @@ const RETAINED_PATCHES = [
   'openclaw-workspace-attestation-quarantine.patch',
   'openclaw-workspace-setup-recovery.patch',
   'zz-openclaw-channel-scheduling-authority.patch',
+  'zz-openclaw-dreaming-cleanup-only-when-enabled.patch',
   'zz-openclaw-error-detail-preview.patch',
   'zz-openclaw-lock-owner-recovery.patch',
   'zz-openclaw-marketplace-clone-retry.patch',
@@ -174,6 +175,15 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+        return getLastError() === ERROR_INVALID_PARAMETER ? null : undefined;',
       '+  const nativeStartTime = readNativeStartTime(pid);',
       '+    "matches .NET Process.StartTime for live processes and rejects gone ones",',
+    ]);
+  });
+
+  test('skips the dreaming startup scrub while dreaming is disabled', () => {
+    expectPatchContains('zz-openclaw-dreaming-cleanup-only-when-enabled.patch', [
+      '+  const isStartupDreamingEnabled = (startupCfg: OpenClawConfig): boolean => {',
+      '+      if (isStartupDreamingEnabled(startupConfig)) {',
+      '+  it("skips the startup and deferred scrubs while dreaming is disabled", async () => {',
+      '+  it("reclaims leftovers on the first start after dreaming is enabled again", async () => {',
     ]);
   });
 
