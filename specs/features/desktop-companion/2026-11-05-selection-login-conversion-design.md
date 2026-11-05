@@ -54,6 +54,16 @@
 
 位置：翻译卡里被拦的追问，提示放在问题下方（回答的位置）；被拦的翻译或朗读放在结果下方；划词卡放在原文和问题下方。
 
+| 追问被拦 | 浏览器登录中 | 深色、英文 |
+| --- | --- | --- |
+| ![追问被拦](assets/selection-login-conversion/prompt-follow-up.png) | ![浏览器登录中](assets/selection-login-conversion/prompt-waiting.png) | ![深色英文](assets/selection-login-conversion/prompt-dark-en.png) |
+
+登录后自动接着做（实机截图）：
+
+| 翻译卡：重新翻译并发出被拦的追问 | 划词卡：自动出总结 |
+| --- | --- |
+| ![翻译卡续做](assets/selection-login-conversion/after-login-follow-up.png) | ![划词卡续做](assets/selection-login-conversion/after-login-summary.png) |
+
 ### FR-2：登录期间保留卡片
 
 渲染层打开浏览器前先调用 `desktop-companion:login-start`。主进程按发送窗口识别来源，只接受划词卡和翻译/朗读卡：
