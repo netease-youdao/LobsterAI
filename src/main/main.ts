@@ -536,6 +536,7 @@ import { createDiskCleanupThrottle, isDiskCleanupStopped } from './libs/openclaw
 import {
   isOpenClawConfigStartupFailure,
   OpenClawEngineManager,
+  OpenClawEngineManagerEvent,
   type OpenClawEngineStatus,
 } from './libs/openclawEngineManager';
 import {
@@ -2490,6 +2491,8 @@ const bindOpenClawStatusForwarder = (): void => {
     handleOpenClawUserConfigEngineStatus(status);
   });
   manager.on('configAutoRestored', handleOpenClawConfigAutoRestore);
+  // Load the gateway client while the gateway boots, off the ready-to-handshake path.
+  manager.on(OpenClawEngineManagerEvent.GatewayLoadingConfig, () => openClawRuntimeAdapter?.prewarmGatewayClient());
   openClawStatusForwarderBound = true;
   forwardOpenClawStatus(manager.getStatus());
 };
