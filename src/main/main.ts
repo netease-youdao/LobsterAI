@@ -289,7 +289,12 @@ import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { isDecisionModelFeatureActive, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
-import { ensureDshEngineReady, registerDshHandlers } from './ipcHandlers/dsh/handlers';
+import {
+  ensureDshEngineReady,
+  reclaimOrphanedDshRuntimesOnStartup,
+  registerDshHandlers,
+  stopDshFeatureRuntimes,
+} from './ipcHandlers/dsh/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerImageEditingHandlers } from './ipcHandlers/imageEditing';
 import { registerKitHandlers } from './ipcHandlers/kits';
@@ -15596,6 +15601,12 @@ if (!gotTheLock) {
     mediaStatusPollCounts.clear();
     const browserHost = agentBrowserHost;
     agentBrowserHost = null;
+    // dsh is a plain child process, so nothing stops it when this process
+    // exits, and app.exit() below skips the `will-quit` hook its manager
+    // relies on. Signal it now so its own shutdown overlaps the steps below.
+    const dshStopped = stopDshFeatureRuntimes().catch(error => {
+      console.error('[DSH] Failed to stop the runtime on quit:', error);
+    });
 
     if (browserHost) {
       currentAppCleanupStep = 'agent-browser-storage';
@@ -15650,6 +15661,9 @@ if (!gotTheLock) {
     });
 
     stopOpenClawTokenProxy();
+
+    currentAppCleanupStep = 'dsh-runtime';
+    await dshStopped;
 
     // Stop the cron job polling
     currentAppCleanupStep = 'cron-and-store';
@@ -15866,6 +15880,8 @@ if (!gotTheLock) {
       },
     });
     libraryIndexService.start();
+
+    reclaimOrphanedDshRuntimesOnStartup();
 
     // Dev/E2E convenience: boot the dsh engine once the app is ready and the
     // store can answer provider queries, so app-level checks can assert
