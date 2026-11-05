@@ -1,5 +1,7 @@
 import { type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { PassThrough } from 'stream';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -20,12 +22,13 @@ vi.mock('./openclawLocalExtensions', () => ({
   listLocalOpenClawExtensionIds: () => [],
 }));
 
-import { OpenClawEngineManager, type OpenClawEngineStatus } from './openclawEngineManager';
+import { OpenClawEngineManager, OpenClawEngineManagerEvent, type OpenClawEngineStatus } from './openclawEngineManager';
 
 interface SupervisorInternals {
   stateDir: string;
   startupCompatibilityRunner: ((mode: OpenClawStartupCompatibilityMode) => Promise<{ status: OpenClawStartupMigrationStatus; error?: string; dreamingRecovery?: OpenClawDreamingRecoverySummary }>) | null;
   gatewayReadyProcesses: WeakSet<ChildProcess>;
+  gatewayStartupReadyAt: { child: ChildProcess; at: number } | null;
   gatewayProcess: ChildProcess | null;
   gatewayRecentOutput: WeakMap<ChildProcess, string[]>;
   noteGatewayOutput: (child: ChildProcess) => void;
@@ -41,6 +44,7 @@ interface SupervisorInternals {
   stopGatewayProcess: (child: ChildProcess) => Promise<void>;
   setStatus: (status: OpenClawEngineStatus) => void;
   doStartGateway: () => Promise<OpenClawEngineStatus>;
+  attachGatewayProcessLogs: (child: ChildProcess) => void;
   resolveRuntimeMetadata: () => { root: string | null; version: string | null };
 }
 
@@ -105,6 +109,40 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+describe('gateway boot progress', () => {
+  test('announces config loading once per gateway process', () => {
+    const { manager, internals } = makeSupervisor();
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-boot-progress-'));
+    Object.assign(manager, { logsDir, gatewaySpawnedAt: Date.now() });
+    const loadingConfig = vi.fn();
+    manager.on(OpenClawEngineManagerEvent.GatewayLoadingConfig, loadingConfig);
+    const spawnWithOutput = () => {
+      const child = Object.assign(makeChild(), { stdout: new PassThrough() });
+      internals.attachGatewayProcessLogs(child);
+      return child;
+    };
+    // Real gateway output colors the timestamp, the subsystem tag and the message.
+    const esc = String.fromCharCode(27);
+    const line = (text: string) => Buffer.from(
+      `${esc}[90m2026-11-05T11:06:27.001+08:00${esc}[39m ${esc}[36m[gateway]${esc}[39m ${esc}[36m${text}${esc}[39m\n`,
+    );
+    try {
+      const first = spawnWithOutput();
+      first.stdout!.emit('data', line('starting...'));
+      expect(loadingConfig).not.toHaveBeenCalled();
+      first.stdout!.emit('data', line('loading configuration…'));
+      first.stderr!.emit('data', line('loading configuration…'));
+      expect(loadingConfig).toHaveBeenCalledOnce();
+
+      const second = spawnWithOutput();
+      second.stderr!.emit('data', line('loading configuration…'));
+      expect(loadingConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('terminal plugin startup block', () => {
@@ -418,6 +456,35 @@ describe('OpenClaw gateway restart supervision', () => {
     expect(internals.gatewayProcess).toBe(child);
     expect(stop).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('trusts a startup readiness confirmed moments ago for the same process instead of probing again', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    const probe = vi.spyOn(internals, 'isGatewayStartupReady').mockResolvedValue(true);
+    internals.gatewayStartupReadyAt = { child, at: Date.now() };
+
+    await expect(manager.startGateway('channel-sync-ensure-ready')).resolves.toMatchObject({ phase: OpenClawEnginePhase.Running });
+    expect(probe).not.toHaveBeenCalled();
+
+    // A confirmation for another process, or one that has aged, is probed as before.
+    internals.gatewayStartupReadyAt = { child: makeChild(), at: Date.now() };
+    await manager.startGateway('channel-sync-ensure-ready');
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    internals.gatewayStartupReadyAt = { child, at: Date.now() };
+    await vi.advanceTimersByTimeAsync(5_000);
+    await manager.startGateway('channel-sync-ensure-ready');
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not trust a startup readiness once the engine has left the running phase', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    internals.gatewayStartupReadyAt = { child, at: Date.now() };
+    internals.setStatus({ phase: OpenClawEnginePhase.Starting, version: '2026.8.1', canRetry: false });
+    const probe = vi.spyOn(internals, 'isGatewayStartupReady').mockResolvedValue(true);
+
+    await expect(manager.startGateway('channel-sync-ensure-ready')).resolves.toMatchObject({ phase: OpenClawEnginePhase.Running });
+    expect(probe).toHaveBeenCalledOnce();
   });
 
   test('still shows startup and waits for explicit readiness for a process that has never been ready', async () => {
