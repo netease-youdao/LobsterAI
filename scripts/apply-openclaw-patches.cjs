@@ -1681,6 +1681,16 @@ v20260801StrongPatchValidators['openclaw-windows-native-plugin-require.patch'] =
     ],
   },
 ];
+v20260801StrongPatchValidators['zz-openclaw-windows-process-start-native.patch'] = [
+  {
+    file: 'src/infra/windows-process-start.ts',
+    snippets: [
+      'function loadNativeStartTimeReader(): NativeStartTimeReader | null {',
+      'kernel32.func("__stdcall", "GetProcessTimes", "int32_t", [',
+      'const nativeStartTime = readNativeStartTime(pid);',
+    ],
+  },
+];
 
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators

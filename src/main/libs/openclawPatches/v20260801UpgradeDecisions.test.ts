@@ -89,6 +89,7 @@ const RETAINED_PATCHES = [
   'zz-openclaw-marketplace-clone-retry.patch',
   'zz-openclaw-plan-completion-check.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
+  'zz-openclaw-windows-process-start-native.patch',
   'zzz-openclaw-plugin-degraded-startup.patch',
   'zzz-openclaw-session-prefix-cache.patch',
   'zzz-openclaw-stream-drop-reconnect.patch',
@@ -163,6 +164,16 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+export function safeRealpathWithParentsSync(',
       '+        : realpathThroughParentSync(targetPath, (parentPath) =>',
       '+        const realCursor = safeRealpathWithParentsSync(cursor, cache);',
+    ]);
+  });
+
+  test('reads Windows process start times natively before PowerShell', () => {
+    expectPatchContains('zz-openclaw-windows-process-start-native.patch', [
+      '+function loadNativeStartTimeReader(): NativeStartTimeReader | null {',
+      '+    const getProcessTimes = kernel32.func("__stdcall", "GetProcessTimes", "int32_t", [',
+      '+        return getLastError() === ERROR_INVALID_PARAMETER ? null : undefined;',
+      '+  const nativeStartTime = readNativeStartTime(pid);',
+      '+    "matches .NET Process.StartTime for live processes and rejects gone ones",',
     ]);
   });
 
