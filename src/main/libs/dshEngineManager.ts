@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import * as readline from 'readline';
+import { pathToFileURL } from 'url';
 
 import {
   DSH_STATE_DIR_NAME,
@@ -21,12 +22,18 @@ import {
 import { DshManagedSettings, writeDshManagedSettings } from './dshConfigSync';
 import { spawnDshProcess } from './dshProcessLauncher';
 import {
+  buildDshLauncherSource,
+  buildDshPackageManager,
   buildDshSpawnEnv,
   buildDshWebArgs,
   classifyDshStartupError,
+  DSH_LAUNCHER_DIR_NAME,
+  DSH_LAUNCHER_FILENAME,
+  DSH_PNPM_PACKAGE_RELPATH,
   DSH_RUNTIME_ENTRY_RELPATH,
   dshInstallPercent,
   DshRuntimeBuildInfo,
+  parseDshPnpmBinRelPath,
   parseDshRuntimeBuildInfo,
   resolveDshRuntimeCandidates,
   resolveDshWorkingDirectory,
@@ -138,6 +145,15 @@ export interface DshEngineState {
 
 type DshChild = ChildProcess;
 
+/** Tools the host supplies for pnpm and Git-sourced plugin installs. */
+export interface DshNodeToolchain {
+  electronPath: string;
+  /** Directory with node/npm/npx shims, or null when it could not be made. */
+  nodeShimDir: string | null;
+  npmBinDir: string | null;
+  gitBinDir: string | null;
+}
+
 export class DshEngineManager {
   private child: DshChild | null = null;
   private generation = 0;
@@ -159,6 +175,14 @@ export class DshEngineManager {
   private workingDirectorySource: (() => string) | null = null;
   private sharedHomeLock: { claim: (port: number) => void; release: () => void } | null = null;
   private homeDirectorySource: (() => string | null) | null = null;
+  private nodeToolchainSource: (() => DshNodeToolchain | null) | null = null;
+
+  // The kit registers its Electron-as-Node toolchain so the bundled pnpm runs
+  // with a `node` on PATH for dependency build scripts. Without a source, pnpm
+  // still runs on this process's executable, just without the shims.
+  setNodeToolchainSource(source: (() => DshNodeToolchain | null) | null): void {
+    this.nodeToolchainSource = source;
+  }
 
   // DSH_HOME for the child. The kit points this at the machine's dsh home so
   // plugins, credentials, and presets match a standalone install; returning
@@ -404,7 +428,7 @@ export class DshEngineManager {
       dshHome,
       timeZone: resolveTimeZone(),
     });
-    const args = buildDshWebArgs(runtime.entry, port);
+    const args = buildDshWebArgs(this.resolveLaunchEntry(runtime), port);
 
     const workingDirectory = this.resolveWorkingDirectory(runtime.root);
     console.log(
@@ -446,6 +470,47 @@ export class DshEngineManager {
     this.setState({ phase: DshEnginePhase.Ready, port, errorCode: null });
     this.pruneSupersededInstalledRuntimes(runtime);
     return this.getState();
+  }
+
+  // dsh's plugin manager installs plugins with pnpm. Started directly, `dsh web`
+  // leaves pnpm to PATH, and a GUI-launched app has none (macOS hands it only
+  // /usr/bin:/bin:/usr/sbin:/sbin), so installs fail with "pnpm was not found"
+  // for anyone without a terminal-installed pnpm. When the runtime bundles
+  // pnpm, start through a generated launcher that hands it to runCli instead.
+  // Any failure here falls back to the direct entry: dsh still runs, only
+  // plugin installs go back to looking on PATH.
+  private resolveLaunchEntry(runtime: DshResolvedRuntime): string {
+    const pnpmEntry = resolveBundledPnpmEntry(runtime.root);
+    if (!pnpmEntry) {
+      console.warn(`[DSH] Runtime at ${runtime.root} bundles no pnpm; plugin installs will look for pnpm on PATH`);
+      return runtime.entry;
+    }
+
+    let toolchain: DshNodeToolchain | null = null;
+    try {
+      toolchain = this.nodeToolchainSource?.() ?? null;
+    } catch (error) {
+      console.warn('[DSH] Could not prepare the node shims for pnpm; installs that run build scripts may fail', error);
+    }
+    const packageManager = buildDshPackageManager({
+      electronPath: toolchain?.electronPath ?? process.execPath,
+      pnpmEntry,
+      nodeShimDir: toolchain?.nodeShimDir ?? null,
+      npmBinDir: toolchain?.npmBinDir ?? null,
+      gitBinDir: toolchain?.gitBinDir ?? null,
+      baseEnv: process.env,
+      delimiter: path.delimiter,
+    });
+
+    const launcherPath = path.join(app.getPath('userData'), DSH_LAUNCHER_DIR_NAME, DSH_LAUNCHER_FILENAME);
+    try {
+      writeFileIfChanged(launcherPath, buildDshLauncherSource(pathToFileURL(runtime.entry).href, packageManager));
+    } catch (error) {
+      console.error('[DSH] Could not write the launcher; plugin installs will look for pnpm on PATH', error);
+      return runtime.entry;
+    }
+    console.log(`[DSH] Plugin installs use the bundled pnpm ${runtime.buildInfo?.pnpmVersion ?? '(unknown version)'}`);
+    return launcherPath;
   }
 
   private pruneSupersededInstalledRuntimes(runtime: DshResolvedRuntime): void {
@@ -603,6 +668,35 @@ function readBuildInfo(runtimeRoot: string): DshRuntimeBuildInfo | null {
   const buildInfoPath = path.join(runtimeRoot, 'runtime-build-info.json');
   if (!fs.existsSync(buildInfoPath)) return null;
   return parseDshRuntimeBuildInfo(fs.readFileSync(buildInfoPath, 'utf8'));
+}
+
+function resolveBundledPnpmEntry(runtimeRoot: string): string | null {
+  const packageRoot = path.join(runtimeRoot, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8');
+  } catch {
+    return null;
+  }
+  const binRelPath = parseDshPnpmBinRelPath(raw);
+  if (!binRelPath) {
+    console.warn(`[DSH] Bundled pnpm at ${packageRoot} declares no usable bin entry`);
+    return null;
+  }
+  const entry = path.join(packageRoot, ...binRelPath.split('/'));
+  return fs.existsSync(entry) ? entry : null;
+}
+
+// The launcher is rewritten on every start; skipping identical writes keeps
+// its mtime stable so nothing watching userData sees churn.
+function writeFileIfChanged(filePath: string, content: string): void {
+  try {
+    if (fs.readFileSync(filePath, 'utf8') === content) return;
+  } catch {
+    // Missing or unreadable: write it below.
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf8');
 }
 
 function allocateLoopbackPort(): Promise<number> {
