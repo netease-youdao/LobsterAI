@@ -22,10 +22,12 @@ type RpcCall = { method: string; params: unknown };
 function createClient(handlers: {
   hash?: () => unknown;
   set?: (params: unknown, callIndex: number) => unknown;
+  /** The gateway's config before the first apply. */
+  initialRaw?: string;
 }): { client: OpenClawConfigRpcClient; calls: RpcCall[] } {
   const calls: RpcCall[] = [];
   let setCalls = 0;
-  let appliedRaw: string | undefined;
+  let appliedRaw: string | undefined = handlers.initialRaw;
   const client: OpenClawConfigRpcClient = {
     request: async <T,>(method: string, params?: unknown): Promise<T> => {
       calls.push({ method, params });
@@ -439,6 +441,80 @@ describe('deliverOpenClawConfigToGateway', () => {
     expect(result.detail).toContain('agents.ownership');
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
     expect(calls.filter(call => call.method === OpenClawConfigRpcMethod.Apply)).toHaveLength(retry ? 2 : 1);
+  });
+});
+
+describe('size-drop waiver for sign-out', () => {
+  const signedOut = {
+    meta: { lastTouchedVersion: '2026.8.1' },
+    gateway: { mode: 'local' },
+    agents: { defaults: { model: { primary: 'lobsterai-server/plan-model-0' } }, list: [{ id: 'main', default: true }] },
+    plugins: { allow: ['memory-core'] },
+  };
+  const signedIn = {
+    ...signedOut,
+    models: {
+      providers: {
+        'lobsterai-server': {
+          apiKey: 'proxy-managed',
+          models: Array.from({ length: 36 }, (_, index) => ({
+            id: `plan-model-${index}`, name: `Plan Model ${index}`, contextWindow: 128_000, maxTokens: 32_768,
+          })),
+        },
+      },
+    },
+  };
+  const signedInRaw = `${JSON.stringify(signedIn, null, 2)}\n`;
+  const signedOutRaw = `${JSON.stringify(signedOut, null, 2)}\n`;
+  const applyParams = (calls: RpcCall[]) => calls.find(call => call.method === OpenClawConfigRpcMethod.Apply)
+    ?.params as Record<string, unknown> | undefined;
+
+  test('removing the plan catalog applies with the waiver instead of falling back to a restart', async () => {
+    const { client, calls } = createClient({ initialRaw: signedInRaw });
+    const scheduleDeferredRestart = vi.fn();
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      reason: 'media-entitlement-changed',
+      readConfigFile: () => signedOutRaw,
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+    expect(applyParams(calls)).toEqual({ raw: signedOutRaw, baseHash: 'hash-1', allowConfigSizeDrop: true });
+  });
+
+  test('ordinary writes and sign-in never claim the waiver', async () => {
+    for (const [initialRaw, nextRaw] of [[FILE_CONTENT, FILE_CONTENT.replace('m-b', 'm-c')], [signedOutRaw, signedInRaw]]) {
+      const { client, calls } = createClient({ initialRaw });
+      await deliverOpenClawConfigToGateway(baseInput({
+        readConfigFile: () => nextRaw,
+        ensureRpcClient: async () => client,
+      }));
+
+      expect(applyParams(calls)).not.toHaveProperty('allowConfigSizeDrop');
+    }
+  });
+
+  test('a gateway without the waiver patch falls back to the restart path instead of rejecting', async () => {
+    const { client } = createClient({
+      initialRaw: signedInRaw,
+      set: () => {
+        throw new Error("INVALID_REQUEST: invalid config.apply params: at root: unexpected property 'allowConfigSizeDrop'");
+      },
+    });
+    const scheduleDeferredRestart = vi.fn();
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      reason: 'media-entitlement-changed',
+      readConfigFile: () => signedOutRaw,
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Fallback);
+    expect(result.restartScheduled).toBe(true);
+    expect(isPersistentConfigDeliveryFailure(result)).toBe(false);
+    expect(scheduleDeferredRestart).toHaveBeenCalledWith(`${CONFIG_DELIVERY_FALLBACK_REASON_PREFIX}media-entitlement-changed`);
   });
 });
 
