@@ -327,3 +327,180 @@ it('keeps the rejected publication when the confirming GET fails or the account 
   expect(store.get<any>(key).pending).toEqual(pending);
   expect(ownership.get('main')!.version).toBe(before);
 });
+
+it('keeps legacy icons until icon key capability is configured, then migrates each changed summary once', async () => {
+  const { db, store, ownership, catalog } = fixture();
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:code' WHERE id='mine'").run());
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES('session','Task',1,1,'idle','mine')").run();
+    store.assignNew('session', owner, 'local_create');
+  });
+  const legacy = catalog.summary('session', owner)!;
+  const revision = store.projectionRevision('session');
+  expect(legacy.icon).toBeNull();
+  catalog.configureIconKeys(owner, true);
+  const summary = catalog.summary('session', owner)!;
+  expect(summary.icon).toBe('agent-avatar-svg:code');
+  expect(BigInt(summary.version)).toBe(BigInt(legacy.version) + 1n);
+  expect(store.projectionRevision('session')).toBeGreaterThan(revision);
+  expect((await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')).toMatchObject(summaryWithoutState(summary));
+  catalog.configureIconKeys(owner, true);
+  expect(catalog.summary('session', owner)).toEqual(summary);
+  catalog.reset();
+  expect(catalog.summary('session', owner)).toEqual(summary);
+  expect(ownership.get('mine')?.version).toBe(summary.version);
+  catalog.configureIconKeys(owner, true);
+  expect(catalog.summary('session', owner)).toEqual(summary);
+});
+
+function summaryWithoutState(summary: { agentId: string; icon: string | null; version: string }) {
+  return { agentId: summary.agentId, icon: summary.icon, version: summary.version };
+}
+
+it('migrates an uncached built-in icon once and preserves emoji, simple identifiers and unsafe fallbacks', async () => {
+  const { db, ownership, catalog } = fixture();
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:lobster' WHERE id='main'").run());
+  const before = ownership.get('main')!.version;
+  catalog.configureIconKeys(owner, true);
+  expect(BigInt(ownership.get('main')!.version)).toBe(BigInt(before) + 1n);
+  for (const [icon, expected] of [
+    ['agent-avatar-svg:document', 'agent-avatar-svg:document'], ['agent-avatar-svg:future', null],
+    ['agent-avatar-svg:../code', null], [' agent-avatar-svg:code', null], ['agent-avatar-svg:code\n', null],
+    ['https://shared.ydstatic.com/expert.webp', null], ['data:image/svg+xml,<svg/>', null],
+    ['🤖', '🤖'], ['robot', 'robot'], ['', null],
+  ] as const) {
+    ownership.transaction(() => db.prepare("UPDATE agents SET icon=? WHERE id='main'").run(icon));
+    const sourceVersion = ownership.get('main')!.version;
+    expect((await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'main')?.icon).toBe(expected);
+    expect(ownership.get('main')!.version).toBe(sourceVersion);
+  }
+});
+
+it('uses higher Agent versions when capability projection changes, without changing identity or workspace', async () => {
+  const { db, ownership, catalog } = fixture();
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:code' WHERE id='mine'").run());
+  catalog.configureIconKeys(owner, true);
+  const first = (await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')!;
+  catalog.configureIconKeys(owner, false);
+  const second = (await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')!;
+  expect(second).toMatchObject({ agentId: first.agentId, icon: null, defaultWorkspaceId: first.defaultWorkspaceId });
+  expect(BigInt(second.version)).toBe(BigInt(first.version) + 1n);
+  catalog.configureIconKeys(owner, true);
+  const third = (await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')!;
+  expect(third.icon).toBe(first.icon);
+  expect(BigInt(third.version)).toBe(BigInt(second.version) + 1n);
+});
+
+it.each([false, true])('keeps an immutable publication through capability changes (previous support: %s)', async initialSupport => {
+  const { db, ownership, catalog, store } = fixture();
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:code' WHERE id='mine'").run());
+  catalog.configureIconKeys(owner, initialSupport);
+  let current: any = { deviceId: 'device', catalogVersion: '0', lastPublicationId: null, syncStatus: 'pending', items: [] };
+  const puts: any[] = [];
+  let fail = true;
+  const api = async (_path: string, method?: string, body?: any) => {
+    if (method !== 'PUT') return current;
+    puts.push(structuredClone(body));
+    if (fail) { fail = false; throw new Error('Offline'); }
+    current = { ...current, catalogVersion: String(BigInt(current.catalogVersion) + 1n), lastPublicationId: body.publicationId, syncStatus: 'ready', items: body.items };
+    return { deviceId: 'device', catalogVersion: current.catalogVersion, publicationId: body.publicationId };
+  };
+  await expect(catalog.publish(owner, 'device', '1', api, () => true)).rejects.toThrow('Offline');
+  const pending = structuredClone(store.entries<any>('agentCatalog:')[0].value.pending);
+  catalog.configureIconKeys(owner, !initialSupport);
+  expect(store.entries<any>('agentCatalog:')[0].value.pending).toEqual(pending);
+  await catalog.publish(owner, 'device', '2', api, () => true);
+  expect(puts[1]).toEqual({ ...puts[0], connectionGeneration: '2' });
+  await catalog.publish(owner, 'device', '2', api, () => true);
+  expect(puts[2].publicationId).not.toBe(pending.publicationId);
+  expect(puts[2].items.find((item: RemoteAgentCatalogItem) => item.agentId === 'mine')).toMatchObject({ icon: initialSupport ? null : 'agent-avatar-svg:code' });
+});
+
+it('retains and versions known tombstone icons without restoring deleted Agent execution access', () => {
+  const { db, store, ownership, catalog } = fixture();
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:code' WHERE id='mine'").run());
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES('session','Task',1,1,'idle','mine')").run();
+    store.assignNew('session', owner, 'local_create');
+  });
+  catalog.configureIconKeys(owner, true);
+  ownership.transaction(() => db.prepare("DELETE FROM agents WHERE id='mine'").run());
+  const removed = catalog.summary('session', owner)!;
+  const deletedAt = ownership.get('mine')!.deletedAt;
+  expect(removed).toMatchObject({ icon: 'agent-avatar-svg:code', state: 'deleted' });
+  catalog.configureIconKeys(owner, false);
+  const legacy = catalog.summary('session', owner)!;
+  expect(legacy).toMatchObject({ icon: null, state: 'deleted' });
+  expect(BigInt(legacy.version)).toBe(BigInt(removed.version) + 1n);
+  expect(ownership.get('mine')!.deletedAt).toBe(deletedAt);
+  expect(ownership.canPublish('mine', owner)).toBe(false);
+  catalog.configureIconKeys(owner, true);
+  const restoredDisplay = catalog.summary('session', owner)!;
+  expect(restoredDisplay).toMatchObject({ icon: 'agent-avatar-svg:code', state: 'deleted' });
+  expect(BigInt(restoredDisplay.version)).toBe(BigInt(legacy.version) + 1n);
+  expect(ownership.canView('mine', owner)).toBe(false);
+});
+
+
+it('advances past a newer legacy summary even when an older icon projection already exists', async () => {
+  const { db, store, ownership, catalog } = fixture();
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:code' WHERE id='mine'").run());
+  catalog.configureIconKeys(owner, false);
+  const old = store.get<any>('agentSummary:mine');
+  // An older desktop binary edits and publishes this version without updating the new projection record.
+  ownership.transaction(() => db.prepare("UPDATE agents SET name='Renamed' WHERE id='mine'").run());
+  const legacyVersion = ownership.get('mine')!.version;
+  store.put('agentSummary:mine', { ...old, name: 'Renamed', version: legacyVersion });
+  catalog.reset();
+  catalog.configureIconKeys(owner, true);
+  const item = (await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'mine')!;
+  expect(item).toMatchObject({ name: 'Renamed', icon: 'agent-avatar-svg:code' });
+  expect(BigInt(item.version)).toBe(BigInt(legacyVersion) + 1n);
+});
+
+it('does not restore a stale tombstone source after an older desktop changed the avatar', () => {
+  const { db, store, ownership, catalog } = fixture();
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:code' WHERE id='mine'").run());
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES('session','Task',1,1,'idle','mine')").run();
+    store.assignNew('session', owner, 'local_create');
+  });
+  catalog.configureIconKeys(owner, true);
+  const old = catalog.summary('session', owner)!;
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='https://shared.ydstatic.com/expert.webp' WHERE id='mine'").run());
+  store.put('agentSummary:mine', { ...old, icon: null, version: ownership.get('mine')!.version });
+  ownership.transaction(() => db.prepare("DELETE FROM agents WHERE id='mine'").run());
+  catalog.reset();
+  catalog.configureIconKeys(owner, true);
+  expect(catalog.summary('session', owner)).toMatchObject({ icon: null, state: 'deleted' });
+});
+
+it('isolates confirmed icon modes by target and actor while preserving monotonic display versions', async () => {
+  let targetId = Target.First as string;
+  const { db, store, ownership, catalog } = fixture(undefined, () => targetId);
+  ownership.transaction(() => db.prepare("UPDATE agents SET icon='agent-avatar-svg:code' WHERE id='mine'").run());
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES('session','Task',1,1,'idle','mine')").run();
+    store.assignNew('session', owner, 'local_create');
+  });
+  catalog.configureIconKeys(owner, true);
+  const first = catalog.summary('session', owner)!;
+  catalog.reset(); targetId = Target.Second;
+  // Negotiation is still unknown: preserve existing display instead of writing null at the same version.
+  expect(catalog.summary('session', owner)).toEqual(first);
+  catalog.configureIconKeys(owner, false);
+  const second = catalog.summary('session', owner)!;
+  expect(second.icon).toBeNull();
+  expect(BigInt(second.version)).toBe(BigInt(first.version) + 1n);
+  catalog.reset(); targetId = Target.First;
+  catalog.configureIconKeys(owner, true);
+  const third = catalog.summary('session', owner)!;
+  expect(third.icon).toBe(first.icon);
+  expect(BigInt(third.version)).toBe(BigInt(second.version) + 1n);
+  const projections = store.entries<any>('agentIconProjection:').filter(entry => entry.key.includes('mine'));
+  expect(projections).toHaveLength(2);
+  catalog.reset(); catalog.configureIconKeys(other, false);
+  expect(catalog.summary('session', other)).toBeNull();
+  expect(ownership.get('mine')!.version).toBe(third.version);
+  expect(store.entries<any>('agentIconProjection:').filter(entry => entry.key.includes('mine'))).toEqual(projections);
+});

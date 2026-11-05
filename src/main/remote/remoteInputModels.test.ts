@@ -43,6 +43,17 @@ beforeEach(() => {
 });
 
 describe('remote input model availability', () => {
+  it('reads public IDs directly from custom and subscription models, retaining virtual preset IDs', () => {
+    updateServerModelMetadata([{ modelId: 'yd-fast' }, { modelId: 'yd-ultra' }, { modelId: 'deepseek-flash-YoudaoInner' }]);
+    vi.mocked(resolveAllEnabledProviderConfigs).mockReturnValue([{
+      providerName: 'custom_0', apiKey: 'private-key', baseURL: 'https://provider.private.example', apiType: 'openai', codingPlanEnabled: false,
+      models: [{ id: 'vendor/model:free', name: 'Friendly name' }],
+    }]);
+    expect(listRemoteInputModels(server).map(model => model.modelId)).toEqual([
+      'vendor/model:free', 'yd-fast', 'yd-ultra', 'deepseek-flash-YoudaoInner',
+    ]);
+  });
+
   it('publishes custom provider display names and renames without changing the runtime identity', async () => {
     const providerName = 'custom_0';
     vi.mocked(resolveAllEnabledProviderConfigs).mockReturnValue([{

@@ -104,6 +104,7 @@ export interface RemoteSettingsApi {
   decide(requestId: string, decision: 'approve' | 'deny'): Promise<RemoteSettingsState>;
 }
 
+export const RemoteAgentIcon = { Capability: 'agent_icon_keys_v1' } as const;
 export const RemoteAgentState = { Available: 'available', Disabled: 'disabled', Deleted: 'deleted', Unknown: 'unknown' } as const;
 export const RemoteAgentReason = { Disabled: 'AGENT_DISABLED', WorkspaceUnavailable: 'WORKSPACE_UNAVAILABLE' } as const;
 export const REMOTE_AGENT_CATALOG_ITEMS = 200;

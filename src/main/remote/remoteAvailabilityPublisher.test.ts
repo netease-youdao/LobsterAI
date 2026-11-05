@@ -5,7 +5,9 @@ import { remoteConnectionFailure, remoteTaskContentSummary } from '../../rendere
 import { RemoteSyncHealthStatus, RemoteSyncLaneStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
+import { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash } from './canonical';
+import { RemoteAgentCatalog } from './remoteAgentCatalog';
 import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { ReplyModelDisplayVersion } from './remoteAvailabilityStore';
@@ -1372,5 +1374,84 @@ describe('acknowledged annotation display repair', () => {
     expect(attempts).toHaveLength(2); expect(attempts[1][2]).toEqual(first);
     expect(f.publisher.ledger.request(first.publicationId)).toEqual(saved);
     expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
+  });
+});
+
+
+describe('Agent icon availability facts', () => {
+  function iconFixture(supported: boolean) {
+    const f = fixture();
+    f.db.exec(`ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'main';
+      CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT,icon TEXT,enabled INTEGER,created_at INTEGER,updated_at INTEGER);
+      INSERT INTO agents VALUES('main','Main','agent-avatar-svg:code',1,1,1);`);
+    const ownership = new AgentOwnerStore(f.db);
+    const catalog = new RemoteAgentCatalog(f.store, ownership, () => ({ path: '/tmp', name: 'Workspace' }));
+    catalog.configureIconKeys(f.owner, supported);
+    f.store.setAgentSummaryResolver((sessionId, actor) => catalog.summary(sessionId, actor));
+    return { ...f, ownership, catalog };
+  }
+
+  it('publishes a later avatar edit without relying on Agent directory refresh', async () => {
+    const f = iconFixture(true);
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    const before = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    f.ownership.transaction(() => f.db.prepare("UPDATE agents SET icon='agent-avatar-svg:repair' WHERE id='main'").run());
+    const version = f.ownership.get('main')!.version;
+    await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.find((fact: any) => fact.eventType === 'session.upsert')?.payload.session.agent)
+      .toMatchObject({ agentId: 'main', icon: 'agent-avatar-svg:repair', version });
+    const after = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    expect(after).toBeGreaterThan(before);
+    f.catalog.configureIconKeys(f.owner, true);
+    await f.controls();
+    expect(f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get()).toEqual({ revision: after });
+  });
+
+  it('includes an icon migration discovered inside a reconciliation snapshot', async () => {
+    const f = iconFixture(false);
+    // Publication admission can arrive after capability negotiation without editing the Agent itself.
+    const admission = vi.spyOn(f.catalog as any, 'canPublishHere').mockReturnValue(false);
+    f.catalog.configureIconKeys(f.owner, true);
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    expect(state.controlRevision).toBe(String((f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision));
+    admission.mockReturnValue(true);
+    const reconnected = { ...f.context, routeEpoch: 1 };
+    f.setContext(reconnected);
+    await (f.publisher as any).facts(reconnected, state);
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.find((fact: any) => fact.eventType === 'session.upsert')?.payload.session.agent)
+      .toMatchObject({ agentId: 'main', icon: 'agent-avatar-svg:code' });
+  });
+
+  it('keeps a sealed facts batch unchanged across capability changes and follows it with the new display', async () => {
+    const f = iconFixture(false);
+    await f.controls();
+    f.catalog.configureIconKeys(f.owner, true);
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const normal = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('Offline');
+      return normal(...args);
+    });
+    await expect((f.publisher as any).facts(f.context, state)).rejects.toThrow('Offline');
+    const pending = structuredClone(f.publisher.ledger.pending(f.context.scope, 'control', 'local')
+      .find(request => request.pathname === '/control/facts/batches')!);
+    const pendingAgent = pending.body.facts.find((fact: any) => fact.eventType === 'session.upsert').payload.session.agent;
+    expect(pendingAgent.icon).toBe('agent-avatar-svg:code');
+    f.catalog.configureIconKeys(f.owner, false);
+    expect(f.publisher.ledger.request(pending.key)?.body).toEqual(pending.body);
+    f.request.mockImplementation(normal);
+    await (f.publisher as any).facts(f.context, state);
+    const retried = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').at(-1)![2];
+    expect(retried).toMatchObject({ batchId: pending.body.batchId, facts: pending.body.facts });
+    await (f.publisher as any).facts(f.context, f.publisher.ledger.session(f.context.scope, 'local')!);
+    const latest = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').at(-1)![2];
+    const agent = latest.facts.find((fact: any) => fact.eventType === 'session.upsert').payload.session.agent;
+    expect(latest.batchId).not.toBe(pending.body.batchId);
+    expect(agent.icon).toBeNull();
+    expect(BigInt(agent.version)).toBeGreaterThan(BigInt(pendingAgent.version));
   });
 });

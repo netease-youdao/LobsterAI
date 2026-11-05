@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { statSync } from 'fs';
 import { resolve } from 'path';
 
+import { parseAgentAvatarIcon } from '../../shared/agent/avatar';
 import { AgentId, AgentOwnerKind } from '../../shared/agent/constants';
 import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, type RemoteAgentCatalogItem, RemoteAgentReason, RemoteAgentState, type RemoteAgentSummary, type RemoteOwner } from '../../shared/remote/constants';
 import type { AgentOwnerStore } from '../agentOwnership';
@@ -12,6 +13,7 @@ import { SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
 interface AgentRow { id: string; name: string; icon: string; enabled: number }
+interface IconProjection { sourceIcon: string | null; icon: string | null; version: string; supported: boolean }
 interface WorkspaceBinding { agentId: string; workspaceId: string; path: string; available: boolean }
 interface Publication { publicationId: string; expectedCatalogVersion: string; items: RemoteAgentCatalogItem[] }
 const AGENT_VERSION_CONFLICT = 47029;
@@ -24,8 +26,9 @@ const safeName = (name: string): string => Array.from(name.replace(/[\u0000-\u00
 const emojiBase = (cp: number): boolean => cp >= 0x1f000 && cp <= 0x1faff || cp >= 0x2190 && cp <= 0x23ff
   || cp >= 0x2600 && cp <= 0x27bf || cp >= 0x2b00 && cp <= 0x2bff
   || [0xa9, 0xae, 0x20e3, 0x2122, 0x2139, 0x3030, 0x303d, 0x3297, 0x3299].includes(cp);
-const safeIcon = (icon: string): string | null => {
+const safeIcon = (icon: string, iconKeysSupported = false): string | null => {
   if (!icon || Buffer.byteLength(icon) > 128) return null;
+  if (iconKeysSupported && parseAgentAvatarIcon(icon) && icon === icon.trim()) return icon;
   if (/^[A-Za-z0-9_-]+$/u.test(icon)) return icon;
   const points = Array.from(icon, char => char.codePointAt(0)!);
   return points.some(emojiBase) && points.every(cp => emojiBase(cp) || cp >= 0xe0020 && cp <= 0xe007f
@@ -36,11 +39,12 @@ export const remoteAgentFailure = (detail: string): RemoteAgentError => new Remo
 /** A device publishes one bounded, durable snapshot; workspace aliases are never repointed. */
 export class RemoteAgentCatalog {
   private operationEpoch = 0;
+  private iconContext: { key: string; supported: boolean } | null = null;
   constructor(private readonly store: RemoteStore, private readonly ownership: AgentOwnerStore,
     private readonly getWorkspace: (agentId: string) => Promise<AgentWorkspace> | AgentWorkspace,
     private readonly getDefaultInput?: (owner: RemoteOwner, deviceId: string, agentId: string) => RemoteAgentCatalogItem['defaultInput'],
     private readonly getTargetId?: () => string | null) {}
-  reset(): void { this.operationEpoch++; }
+  reset(): void { this.operationEpoch++; this.iconContext = null; }
   private targetId(): string | undefined {
     const targetId = this.getTargetId?.();
     if (this.getTargetId && !targetId) throw new Error('Remote target is not ready');
@@ -60,6 +64,18 @@ export class RemoteAgentCatalog {
     if (!session) return null;
     return this.agentSummary(session.agent_id || AgentId.Main, actor);
   }
+  /** Configure only after the service target is verified; changed summaries dirty their existing sessions. */
+  configureIconKeys(actor: RemoteOwner, supported: boolean): void {
+    const key = this.scope([actor.userId, actor.scopeKey]);
+    if (this.iconContext?.key === key && this.iconContext.supported === supported) return;
+    const previous = this.iconContext;
+    this.iconContext = { key, supported };
+    try {
+      this.ownership.transaction(() => {
+        for (const identity of this.ownership.list()) this.agentSummary(identity.agentId, actor);
+      });
+    } catch (error) { this.iconContext = previous; throw error; }
+  }
   private agentSummary(agentId: string, actor: RemoteOwner): RemoteAgentSummary | null {
     if (!this.canPublishHere(agentId, actor)) return null;
     const identity = this.ownership.get(agentId);
@@ -67,11 +83,37 @@ export class RemoteAgentCatalog {
       || identity.ownerKind === AgentOwnerKind.Owned && !sameOwner(identity.owner, actor)) return null;
     const row = this.row(agentId);
     const cached = this.store.get<RemoteAgentSummary>(`agentSummary:${agentId}`);
-    if (!row) return cached ? { ...cached, version: identity.version, state: identity.deletedAt ? RemoteAgentState.Deleted : RemoteAgentState.Unknown } : null;
-    const summary: RemoteAgentSummary = { agentId, name: safeName(row.name), icon: safeIcon(row.icon),
-      kind: identity.ownerKind, version: identity.version, state: row.enabled ? RemoteAgentState.Available : RemoteAgentState.Disabled };
-    this.store.put(`agentSummary:${agentId}`, summary);
-    return summary;
+    if (!row && !cached) return null;
+    const projectionKey = `agentIconProjection:${this.scope([actor.userId, actor.scopeKey, agentId])}`;
+    const previous = this.store.get<IconProjection>(projectionKey);
+    const context = this.iconContext?.key === this.scope([actor.userId, actor.scopeKey]) ? this.iconContext : null;
+    // Unknown negotiation state retains this target's last confirmed format; reset is not a downgrade.
+    const supported = context?.supported ?? previous?.supported ?? false;
+    // A newer legacy cache may represent an avatar edit made by an older desktop binary.
+    const cachedSource = previous && (!cached || BigInt(previous.version) >= BigInt(cached.version))
+      ? previous.sourceIcon : cached?.icon;
+    const sourceIcon = safeIcon((row ? row.icon : cachedSource) ?? '', true);
+    const icon = !context && !previous && cached?.version === identity.version
+      ? cached.icon : safeIcon(sourceIcon ?? '', supported);
+    let version = identity.version;
+    const kind = identity.ownerKind;
+    return this.ownership.transaction(() => {
+      if (context || previous) {
+        if ([previous, cached].some(prior => prior && prior.version === version && prior.icon !== icon)
+          || !previous && !cached && supported && sourceIcon !== safeIcon(sourceIcon ?? '')) {
+          // Include tombstones only for display migration; ownership and deletion state stay unchanged.
+          this.ownership.touch(agentId, true);
+          version = this.ownership.get(agentId)!.version;
+        }
+        this.store.put(projectionKey, { sourceIcon, icon, version, supported });
+      }
+      const summary: RemoteAgentSummary = row
+        ? { agentId, name: safeName(row.name), icon, kind, version,
+          state: row.enabled ? RemoteAgentState.Available : RemoteAgentState.Disabled }
+        : { ...cached!, icon, version, state: identity.deletedAt ? RemoteAgentState.Deleted : RemoteAgentState.Unknown };
+      this.store.put(`agentSummary:${agentId}`, summary);
+      return summary;
+    });
   }
   async refresh(owner: RemoteOwner, deviceId: string, stillCurrent: () => boolean,
     canPublishAgent: (agentId: string) => boolean = () => true): Promise<RemoteAgentCatalogItem[]> {

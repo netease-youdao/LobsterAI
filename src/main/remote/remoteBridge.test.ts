@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
-import { RemoteCapability, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus } from '../../shared/remote/constants';
+import { RemoteAgentIcon, RemoteCapability, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteInputCapability } from '../../shared/remote/input';
@@ -941,6 +941,28 @@ describe('Agent protocol negotiation and lost claim recovery', () => {
     expect(extended.advertisedCapabilities()).toContain(RemoteCapability.AgentSelection);
     expect(store.get('controlQueue:10001:personal')).toEqual([]);
     extended.stop(); bridge.stop();
+  });
+  it('configures icon projection after verified target identity without removing selection support', () => {
+    const { bridge, store } = fixture();
+    const configureIconKeys = vi.fn();
+    bridge.agentCatalog = { configureIconKeys, summary: vi.fn() };
+    bridge.capabilitiesKnown = true;
+    bridge.agentCapabilities = [RemoteCapability.SessionAgent, RemoteCapability.AgentCatalog, RemoteCapability.AgentSelection];
+    bridge.capabilitySnapshot = { capabilities: [RemoteAgentIcon.Capability] };
+    const setIdentity = vi.spyOn(store, 'setProjectionIdentity');
+    bridge.applyProjectionCapabilities();
+    expect(configureIconKeys).not.toHaveBeenCalled();
+    bridge.targetId = 'target-a';
+    bridge.applyProjectionCapabilities();
+    expect(configureIconKeys).toHaveBeenLastCalledWith(owner, true);
+    expect(setIdentity.mock.invocationCallOrder[0]).toBeLessThan(configureIconKeys.mock.invocationCallOrder[0]);
+    bridge.capabilitySnapshot = { capabilities: [] };
+    bridge.applyProjectionCapabilities();
+    expect(configureIconKeys).toHaveBeenLastCalledWith(owner, false);
+    expect(bridge.agentCapabilities).toContain(RemoteCapability.AgentSelection);
+    bridge.capabilitiesKnown = false;
+    bridge.applyProjectionCapabilities();
+    expect(configureIconKeys).toHaveBeenCalledTimes(2);
   });
   for (const grantPermit of [false, true]) it(`recovers a lost claim with an invalid Agent using not-started evidence (new permit: ${grantPermit})`, async () => {
     const { bridge, store, envelope, execute, requestApi } = fixture();

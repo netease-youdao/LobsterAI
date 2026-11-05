@@ -1,5 +1,6 @@
-/** Version two transports references only. Provider configuration and paths stay local. */
+/** Execution uses opaque references; optional public model IDs support display. Provider configuration and paths stay local. */
 export const RemoteInputCapability = { Schema: 'input_schema_v2', Models: 'model_selection_v1', Attachments: 'input_attachments_v1' } as const;
+export const RemoteModelMetadata = { DisplayId: 'model_display_id_v1' } as const;
 export const RemoteInputMode = { Selected: 'selected', Agent: 'inherit_agent', Session: 'keep_session' } as const;
 export const RemoteInputIntent = { File: 'file', Image: 'image' } as const;
 export const RemoteInputStatus = { Ready: 'ready', Failed: 'failed', Invalidated: 'invalidated' } as const;
@@ -12,6 +13,8 @@ export const RemoteInputReason = {
 export const RemoteModelUnavailableReason = { PermissionDenied: 'PERMISSION_DENIED', Unsupported: 'UNSUPPORTED' } as const;
 export interface RemoteModelItem {
   modelRef: string; version: string; source: 'subscription' | 'custom'; displayName: string; providerLabel: string;
+  /** Display lookup only. Selection and execution continue to use modelRef/version. */
+  modelId?: string;
   available: boolean; unavailableReason: string | null;
   inputCapabilities: { text: boolean; image: boolean; toolCalling: boolean };
   thinking: { options: string[]; default?: string | null };

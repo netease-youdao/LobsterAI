@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { RemoteInputReason } from '../../shared/remote/input';
+import { RemoteInputReason, type RemoteModelItem, RemoteModelMetadata } from '../../shared/remote/input';
 import { type LocalRemoteModel, RemoteModelCatalog } from './remoteModelCatalog';
 import type { RemoteStore } from './remoteStore';
 
@@ -264,4 +264,240 @@ it('does not confirm a new local catalog changed while the old publication was i
   });
   await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(false);
   expect(api).toHaveBeenCalledTimes(2);
+});
+
+
+describe('remote model display IDs', () => {
+  function serverFixture() {
+    let supported = false;
+    let catalogVersion = '0';
+    let lastPublicationId: string | undefined;
+    let items: RemoteModelItem[] = [];
+    const publications: Array<{ publicationId: string; expectedCatalogVersion: string; items: RemoteModelItem[] }> = [];
+    const api = vi.fn(async (_path: string, method?: string, body?: typeof publications[number]) => {
+      if (method === 'POST') {
+        expect(body!.expectedCatalogVersion).toBe(catalogVersion);
+        for (const item of body!.items) {
+          if (!supported) expect(item).not.toHaveProperty('modelId');
+          const previous = items.find(value => value.modelRef === item.modelRef);
+          if (previous && JSON.stringify(previous) !== JSON.stringify(item)) {
+            expect(BigInt(item.version)).toBeGreaterThan(BigInt(previous.version));
+          }
+        }
+        publications.push(structuredClone(body!));
+        items = structuredClone(body!.items);
+        catalogVersion = String(BigInt(catalogVersion) + 1n);
+        lastPublicationId = body!.publicationId;
+      }
+      return { catalogVersion, lastPublicationId, items: structuredClone(items),
+        ...(supported ? { capabilities: [RemoteModelMetadata.DisplayId] } : {}) };
+    });
+    return { api, publications, support: (value: boolean) => { supported = value; } };
+  }
+
+  it('keeps legacy fingerprints and omits display IDs until the server advertises support', async () => {
+    const { catalog, change } = fixture();
+    const legacy = catalog.refresh(owner, 'pc')[0];
+    change({ modelId: 'deepseek-flash-YoudaoInner' });
+    const server = serverFixture();
+    await expect(catalog.publish(owner, 'pc', '1', server.api, () => true)).resolves.toBe(true);
+    expect(server.publications[0].items[0]).toEqual(legacy);
+    expect(catalog.resolve(owner, 'pc', legacy.modelRef, legacy.version).local.modelId).toBe('deepseek-flash-YoudaoInner');
+  });
+
+  it.each(['deepseek-flash-YoudaoInner', 'vendor/model-v1:free@channel+plan', 'yd-fast', 'yd-ultra', 'a'.repeat(200)])(
+    'publishes the exact safe public ID %s', async modelId => {
+      const { catalog, change } = fixture();
+      change({ modelId });
+      const server = serverFixture(); server.support(true);
+      await catalog.publish(owner, 'pc', '1', server.api, () => true);
+      expect(server.publications[0].items[0].modelId).toBe(modelId);
+      expect(JSON.stringify(server.publications[0].items)).not.toMatch(/secret-one|private.local|apiKey|baseURL|runtimeRef/u);
+    });
+
+  it.each(['', ' model ', 'a'.repeat(201), '模型', '/model', 'model?token=secret', 'model#secret',
+    'https://private.example/model', 'file://private/model', 'localHOST-model', 'model-192.168.1.1',
+    'sk-private-key', 'model-SK-private-key', 'model\n', 'model\u0000', 'model\\path'])
+  ('omits unsafe display IDs without preventing model publication: %j', async modelId => {
+    const { catalog, change } = fixture(); change({ modelId });
+    const server = serverFixture(); server.support(true);
+    await expect(catalog.publish(owner, 'pc', '1', server.api, () => true)).resolves.toBe(true);
+    const item = server.publications[0].items[0];
+    expect(item).not.toHaveProperty('modelId');
+    expect(catalog.resolve(owner, 'pc', item.modelRef, item.version).local.modelId).toBe(modelId);
+  });
+
+  it('increments item versions on upgrade and downgrade while preserving references and execution identity', async () => {
+    const { catalog, change } = fixture(); change({ modelId: 'deepseek-flash' });
+    const server = serverFixture();
+    for (const [index, supported] of [false, true, false, true].entries()) {
+      server.support(supported);
+      await expect(catalog.publish(owner, 'pc', String(index + 1), server.api, () => true)).resolves.toBe(true);
+      const item = server.publications[index].items[0];
+      expect(item.version).toBe(String(index + 1));
+      expect(item.modelRef).toBe(server.publications[0].items[0].modelRef);
+      if (supported) expect(item.modelId).toBe('deepseek-flash');
+      else expect(item).not.toHaveProperty('modelId');
+      expect(catalog.resolve(owner, 'pc', item.modelRef, item.version).local.runtimeRef).toBe('custom/model');
+    }
+    expect(() => catalog.resolve(owner, 'pc', server.publications[0].items[0].modelRef, '1')).toThrow(RemoteInputReason.ModelChanged);
+  });
+
+  it('discovers a server capability upgrade during the normal reconciliation interval', async () => {
+    const { catalog, change } = fixture(); change({ modelId: 'deepseek-flash' });
+    let now = 1000000; vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const server = serverFixture();
+    await catalog.publish(owner, 'pc', '1', server.api, () => true);
+    server.support(true); now += 299999;
+    await catalog.publish(owner, 'pc', '1', server.api, () => true);
+    expect(server.publications).toHaveLength(1);
+    now++;
+    await catalog.publish(owner, 'pc', '1', server.api, () => true);
+    expect(server.publications[1].items[0]).toMatchObject({ modelId: 'deepseek-flash', version: '2' });
+  });
+
+  it('increments the same reference when its public display ID changes', async () => {
+    const { catalog, change } = fixture(); change({ modelId: 'deepseek-flash' });
+    const server = serverFixture(); server.support(true);
+    await catalog.publish(owner, 'pc', '1', server.api, () => true);
+    const original = server.publications[0].items[0];
+    change({ modelId: 'deepseek-flash-YoudaoInner' });
+    await catalog.publish(owner, 'pc', '1', server.api, () => true);
+    expect(server.publications[1].items[0]).toMatchObject({ modelRef: original.modelRef, version: '3', modelId: 'deepseek-flash-YoudaoInner' });
+  });
+
+  it('replays an immutable legacy pending publication before publishing IDs after an upgrade', async () => {
+    const { catalog, change } = fixture(); change({ modelId: 'deepseek-flash' });
+    const server = serverFixture();
+    let pending: any;
+    const firstApi = async (path: string, method?: string, body?: any) => {
+      if (method === 'POST') { pending = structuredClone(body); throw new Error('not received'); }
+      return server.api(path, method, body);
+    };
+    await expect(catalog.publish(owner, 'pc', '1', firstApi, () => true)).rejects.toThrow('not received');
+    server.support(true);
+    await expect(catalog.publish(owner, 'pc', '2', server.api, () => true)).resolves.toBe(false);
+    expect(server.publications[0]).toEqual({ ...pending, connectionGeneration: '2' });
+    expect(server.publications[0].items[0]).not.toHaveProperty('modelId');
+    await expect(catalog.publish(owner, 'pc', '2', server.api, () => true)).resolves.toBe(true);
+    expect(server.publications[1]).toMatchObject({ expectedCatalogVersion: '1', items: [{ modelId: 'deepseek-flash', version: '2' }] });
+    expect(server.publications[1].publicationId).not.toBe(pending.publicationId);
+  });
+
+  it.each([false, true])('creates a new compatible receipt after downgrade when pending was accepted=%s', async accepted => {
+    const { catalog, change } = fixture(); change({ modelId: 'deepseek-flash' });
+    const server = serverFixture(); server.support(true);
+    let pending: any;
+    const firstApi = async (path: string, method?: string, body?: any) => {
+      if (method === 'POST') {
+        pending = structuredClone(body);
+        if (accepted) await server.api(path, method, body);
+        throw new Error('response lost');
+      }
+      return server.api(path, method, body);
+    };
+    await expect(catalog.publish(owner, 'pc', '1', firstApi, () => true)).rejects.toThrow('response lost');
+    const original = structuredClone(pending);
+    server.support(false);
+    await expect(catalog.publish(owner, 'pc', '2', server.api, () => true)).resolves.toBe(true);
+    const replacement = server.publications.at(-1)!;
+    expect(replacement.publicationId).not.toBe(pending.publicationId);
+    expect(replacement.expectedCatalogVersion).toBe(accepted ? '1' : '0');
+    expect(replacement.items[0]).toMatchObject({ modelRef: pending.items[0].modelRef, version: '3' });
+    expect(replacement.items[0]).not.toHaveProperty('modelId');
+    expect(pending).toEqual(original);
+  });
+
+  it('retries an unaccepted enriched publication without mutating its receipt', async () => {
+    const { catalog, change } = fixture(); change({ modelId: 'deepseek-flash' });
+    const server = serverFixture(); server.support(true);
+    let pending: any;
+    const firstApi = async (path: string, method?: string, body?: any) => {
+      if (method === 'POST') { pending = structuredClone(body); throw new Error('not received'); }
+      return server.api(path, method, body);
+    };
+    await expect(catalog.publish(owner, 'pc', '1', firstApi, () => true)).rejects.toThrow('not received');
+    await expect(catalog.publish(owner, 'pc', '2', server.api, () => true)).resolves.toBe(true);
+    expect(server.publications[0]).toEqual({ ...pending, connectionGeneration: '2' });
+  });
+
+  it('uses a new legacy publication after an explicit old-node rejection and suppresses advertised support for five minutes', async () => {
+    const { catalog, change } = fixture(); change({ modelId: 'deepseek-flash' });
+    let now = 1000000; vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const server = serverFixture(); server.support(true);
+    let oldPostNode = true;
+    let rejected: any;
+    const api = vi.fn(async (path: string, method?: string, body?: any) => {
+      if (method === 'POST' && oldPostNode && body.items.some((item: RemoteModelItem) => item.modelId)) {
+        rejected = structuredClone(body);
+        throw Object.assign(new Error('Unknown request field'), { code: 47019, httpStatus: 400 });
+      }
+      return server.api(path, method, body);
+    });
+    await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(false);
+    await expect(catalog.publish(owner, 'pc', '1', api, () => true)).resolves.toBe(true);
+    const legacy = server.publications[0];
+    expect(legacy.publicationId).not.toBe(rejected.publicationId);
+    expect(legacy.expectedCatalogVersion).toBe('0');
+    expect(legacy.items[0]).toMatchObject({ modelRef: rejected.items[0].modelRef, version: '3' });
+    expect(legacy.items[0]).not.toHaveProperty('modelId');
+    now += 299999;
+    // A reconnect fetches the advertising node again but must retain the downgrade window.
+    await expect(catalog.publish(owner, 'pc', '2', api, () => true)).resolves.toBe(true);
+    expect(server.publications).toHaveLength(1);
+    oldPostNode = false; now += 300000;
+    await expect(catalog.publish(owner, 'pc', '2', api, () => true)).resolves.toBe(true);
+    expect(server.publications[1].items[0]).toMatchObject({ modelRef: legacy.items[0].modelRef, modelId: 'deepseek-flash', version: '4' });
+  });
+
+  it.each([
+    Object.assign(new Error('Invalid model display ID'), { code: 47019, httpStatus: 400 }),
+    Object.assign(new Error('Unknown request field'), { code: 401, httpStatus: 401 }),
+    Object.assign(new Error('Unknown request field'), { code: 47019, httpStatus: 500 }),
+    Object.assign(new Error('catalog changed'), { code: 47041, httpStatus: 409 }),
+    new Error('network timeout'),
+  ])('retains the immutable pending receipt for every non-negotiation failure: %s', async failure => {
+    const { catalog, change, values } = fixture(); change({ modelId: 'deepseek-flash' });
+    const server = serverFixture(); server.support(true);
+    let sent: any;
+    const api = async (path: string, method?: string, body?: any) => {
+      if (method === 'POST') { sent = structuredClone(body); throw failure; }
+      return server.api(path, method, body);
+    };
+    await expect(catalog.publish(owner, 'pc', '1', api, () => true)).rejects.toBe(failure);
+    const state = [...values.values()][0] as Record<string, unknown>;
+    expect(state.pending).toEqual({ publicationId: sent.publicationId, expectedCatalogVersion: sent.expectedCatalogVersion, items: sent.items });
+    expect(state.modelDisplayId).toBe(true);
+    expect(state).not.toHaveProperty('modelDisplayIdRetryAt');
+  });
+
+  it('does not downgrade another target after a delayed rejection from the previous target', async () => {
+    let targetId = Target.First as string;
+    const { catalog, change, values } = fixture(() => targetId); change({ modelId: 'deepseek-flash' });
+    const server = serverFixture(); server.support(true);
+    const api = async (path: string, method?: string, body?: any) => {
+      if (method === 'POST') {
+        targetId = Target.Second;
+        throw Object.assign(new Error('Unknown request field'), { code: 47019, httpStatus: 400 });
+      }
+      return server.api(path, method, body);
+    };
+    await expect(catalog.publish(owner, 'pc', '1', api, () => true)).rejects.toThrow(RemoteInputReason.Account);
+    const state = [...values.values()][0] as Record<string, unknown>;
+    expect(state.modelDisplayId).toBe(true);
+    expect(state).not.toHaveProperty('modelDisplayIdRetryAt');
+    expect(values.size).toBe(1);
+  });
+
+  it('still invalidates versions for credential changes when display IDs are omitted', async () => {
+    const { catalog, change } = fixture(); change({ modelId: 'https://private.example/model' });
+    const server = serverFixture(); server.support(true);
+    await catalog.publish(owner, 'pc', '1', server.api, () => true);
+    const previous = server.publications[0].items[0];
+    change({ configuration: { apiKey: 'rotated-secret', baseURL: 'http://private.local/v1' } });
+    await catalog.publish(owner, 'pc', '1', server.api, () => true);
+    expect(server.publications[1].items[0]).toMatchObject({ modelRef: previous.modelRef, version: '2' });
+    expect(() => catalog.resolve(owner, 'pc', previous.modelRef, previous.version)).toThrow(RemoteInputReason.ModelChanged);
+    expect(JSON.stringify(server.publications)).not.toContain('rotated-secret');
+  });
 });

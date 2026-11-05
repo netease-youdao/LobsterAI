@@ -14,7 +14,7 @@ export function listRemoteInputModels(server: { token: string | null; baseURL: s
       const selection = buildProviderSelection({ apiKey: provider.apiKey, baseURL: provider.baseURL, modelId: model.id,
         apiType: provider.apiType, providerName: provider.providerName, authType: provider.authType,
         codingPlanEnabled: provider.codingPlanEnabled, supportsImage: model.supportsImage, modelName: model.name });
-      items.push({ identity: JSON.stringify([provider.providerName, model.id]), runtimeRef: selection.primaryModel,
+      items.push({ identity: JSON.stringify([provider.providerName, model.id]), runtimeRef: selection.primaryModel, modelId: model.id,
         source: 'custom', displayName: model.name || model.id, providerLabel: providerLabels.get(provider.providerName) || provider.providerName,
         available: true, image: model.supportsImage === true, toolCalling: true, thinking: { options: [] },
         configuration: JSON.parse(JSON.stringify({ provider, model })) });
@@ -25,7 +25,7 @@ export function listRemoteInputModels(server: { token: string | null; baseURL: s
     const permitted = Boolean(server.token) && model.accessible !== false;
     const available = permitted && gate.allowed;
     const thinking = available && supportsLobsterAIRequestOptionsV1(model.requestCapabilities) ? model.thinkingConfig : undefined;
-    items.push({ identity: JSON.stringify([OpenClawProviderId.LobsteraiServer, model.modelId]),
+    items.push({ identity: JSON.stringify([OpenClawProviderId.LobsteraiServer, model.modelId]), modelId: model.modelId,
       runtimeRef: `${OpenClawProviderId.LobsteraiServer}/${model.modelId}`, source: 'subscription',
       displayName: model.modelName || model.modelId, providerLabel: 'LobsterAI', available,
       unavailableReason: !permitted ? RemoteModelUnavailableReason.PermissionDenied

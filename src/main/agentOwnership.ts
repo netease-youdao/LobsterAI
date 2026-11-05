@@ -60,6 +60,12 @@ export class AgentOwnerStore {
       db.prepare(`INSERT OR IGNORE INTO agent_ownership
         SELECT id,CASE WHEN id='main' THEN 'default' ELSE ? END,NULL,NULL,1,created_at,updated_at,NULL FROM agents`)
         .run(migrated ? AgentOwnerKind.Quarantined : AgentOwnerKind.Anonymous);
+      // Availability facts must observe Agent summary edits even when no Agent directory is published.
+      db.exec(`CREATE TRIGGER IF NOT EXISTS agent_ownership_control_revision AFTER UPDATE OF version ON agent_ownership
+        WHEN NEW.version!=OLD.version BEGIN
+          INSERT INTO remote_control_revisions(session_id,revision) SELECT id,1 FROM cowork_sessions WHERE agent_id=NEW.agent_id
+          ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
+        END;`);
       db.exec(`UPDATE agent_ownership SET owner_kind='quarantined'
         WHERE (owner_kind='owned' AND (owner_user_id IS NULL OR TRIM(owner_user_id)='' OR owner_scope_key IS NULL OR TRIM(owner_scope_key)=''))
           OR (owner_kind!='owned' AND (owner_user_id IS NOT NULL OR owner_scope_key IS NOT NULL))
@@ -183,9 +189,9 @@ export class AgentOwnerStore {
     }
   }
 
-  touch(agentId: string): void {
+  touch(agentId: string, includeDeleted = false): void {
     this.transaction(() => {
-      this.db.prepare('UPDATE agent_ownership SET version=version+1,updated_at=? WHERE agent_id=? AND deleted_at IS NULL').run(Date.now(), agentId);
+      this.db.prepare('UPDATE agent_ownership SET version=version+1,updated_at=? WHERE agent_id=? AND (deleted_at IS NULL OR ?=1)').run(Date.now(), agentId, includeDeleted ? 1 : 0);
       this.db.prepare('INSERT OR IGNORE INTO agent_ownership_dirty VALUES(?)').run(agentId);
       this.db.prepare(`INSERT INTO remote_session_revisions(session_id,revision,dirty_at) SELECT id,1,? FROM cowork_sessions WHERE agent_id=?
       ON CONFLICT(session_id) DO UPDATE SET revision=revision+1`).run(Date.now(), agentId);

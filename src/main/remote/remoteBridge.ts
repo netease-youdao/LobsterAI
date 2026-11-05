@@ -7,7 +7,7 @@ import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import type { OwnershipTarget, OwnershipTaskSync } from '../../shared/ownership/types';
 import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReasonCode, type RemoteConnectionRemoveRequest, type RemoteConnectionResumeRequest, RemoteDeviceAdmissionState, type RemoteDeviceConnection, RemoteDeviceConnectionState } from '../../shared/remote/connections';
-import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
+import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteAgentIcon, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
 import type { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteFileCapability } from '../../shared/remote/files';
@@ -1242,6 +1242,8 @@ export class RemoteBridge {
     if (!this.capabilitiesKnown || !this.owner || !this.registration) return;
     if (!this.targetId) return;
     this.deps.store.setProjectionIdentity(this.remoteEnvironment(), this.owner, this.registration.deviceId);
+    this.agentCatalog?.configureIconKeys(this.owner, this.agentCapabilities.includes(RemoteCapability.SessionAgent)
+      && this.capabilitySnapshot?.capabilities?.includes(RemoteAgentIcon.Capability) === true);
     this.deps.store.setDeletionProjectionSupported(this.deletionSupported);
     this.deps.store.setReplyProjectionSupported(this.replySupported);
     this.deps.store.setQuestionProjectionSupported(this.questionsSupported);

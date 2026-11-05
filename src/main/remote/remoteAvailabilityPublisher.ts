@@ -703,7 +703,7 @@ export class RemoteAvailabilityPublisher {
       this.reconciliation.pruneForeignPending(this.deps.store, state.localId, snapshot.revision);
       const changed = snapshot.records.filter(record => state.records[recordKey(record)] !== payloadHash(record)
         // Message preview changes belong to the live lane; a scan alone must not invent a new control revision.
-        && (record.eventType !== 'session.upsert' || String(coreRevision) !== state.controlRevision));
+        && (record.eventType !== 'session.upsert' || snapshot.revision !== state.controlRevision));
       // Identical objects already have durable server receipts. Clear only the captured revisions,
       // including when this bounded page contains no new facts, so later dirty objects can progress.
       this.deps.store.db.transaction(() => {
