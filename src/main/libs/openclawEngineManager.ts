@@ -248,6 +248,7 @@ export const isOpenClawGatewayHeapOutOfMemory = (
 interface OpenClawEngineManagerEvents {
   status: (status: OpenClawEngineStatus) => void;
   configAutoRestored: (event: OpenClawConfigAutoRestoreEvent) => void;
+  [OpenClawEngineManagerEvent.GatewayLoadingConfig]: () => void;
 }
 
 type RuntimeMetadata = {
