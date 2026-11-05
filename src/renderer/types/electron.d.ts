@@ -1431,6 +1431,7 @@ interface IElectronAPI {
   };
   clipboard: {
     writeText: (text: string) => Promise<{ success: boolean; error?: string }>;
+    writeTextAndHtml: (content: { text: string; html: string }) => Promise<{ success: boolean; error?: string }>;
     writeImageFromFile: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     writeImageFromDataUrl: (dataUrl: string) => Promise<{ success: boolean; error?: string }>;
   };
