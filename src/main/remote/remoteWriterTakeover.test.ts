@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { activateLegacyTestTarget } from '../../../tests/helpers/remoteLegacyRegistration';
 import { RemoteDeletion } from '../../shared/remote/deletions';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { payloadHash, stableJson } from './canonical';
@@ -40,7 +41,7 @@ function fixture(filename?: string) {
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1', syncTarget: {} };
   bridge.generation = '1'; bridge.retentionSupported = true;
   bridge.capabilitySnapshot = { capabilities: ['control_facts_v1', 'live_projections_v3'] };
-  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  const target = activateLegacyTestTarget(store, bridge.targets, owner, 'desktop', bridge.deps.getApiBaseUrl());
   bridge.targetId = target.targetId; store.setProjectionIdentity(target.targetId, owner, 'desktop'); store.setEnabledOwner(owner);
   if (!store.sync('local')) store.transaction(() => { db.exec("INSERT INTO cowork_sessions VALUES('local','Task',1,1,'idle',NULL,NULL)"); store.assignNew('local', owner, 'local_create'); });
   store.bindRemote('local', store.sync('local')!.session_id, 'desktop'); store.setWake(() => {}); store.transaction(() => {});

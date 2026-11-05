@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { activateLegacyTestTarget } from '../../../tests/helpers/remoteLegacyRegistration';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
@@ -49,7 +50,7 @@ function syncing() {
   const value = fixture();
   const { bridge, store, request } = value;
   store.put(`settings:${owner.userId}:${owner.scopeKey}`, { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
-  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  const target = activateLegacyTestTarget(store, bridge.targets, owner, 'desktop', bridge.deps.getApiBaseUrl());
   bridge.targetId = target.targetId;
   store.setProjectionIdentity(target.targetId, owner, 'desktop'); store.setFileEnvironment(target.targetId);
   store.transaction(() => {

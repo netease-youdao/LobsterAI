@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { activateLegacyTestTarget } from '../../../tests/helpers/remoteLegacyRegistration';
 import { RemoteRunStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery, RemoteInputStatus } from '../../shared/remote/input';
@@ -94,7 +95,7 @@ describe('remote background polling', () => {
   it('keeps a deferred terminal reply deadline ahead of the real idle polling cycle', async () => {
     const { bridge, store, sync, count } = await fixture();
     store.setWake(() => {});
-    bridge.targetId = bridge.targets.activateLegacy({ owner: initialOwner, deviceId: 'pc', allowPartialLegacy: true }).targetId;
+    bridge.targetId = activateLegacyTestTarget(store, bridge.targets, initialOwner, 'pc', bridge.deps.getApiBaseUrl()).targetId;
     store.setProjectionIdentity(bridge.targetId, initialOwner, 'pc'); store.setFileEnvironment(bridge.targetId);
     startOwnedRun(store); store.updateRun('running', RemoteRunStatus.Succeeded);
     const now = Date.now();

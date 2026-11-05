@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { activateLegacyTestTarget } from '../../../tests/helpers/remoteLegacyRegistration';
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteInputReason } from '../../shared/remote/input';
@@ -42,7 +43,7 @@ function fixture() {
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
   bridge.generation = '1'; bridge.sameAccountAccess = true;
   store.put(`settings:${owner.userId}:${owner.scopeKey}`, { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
-  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  const target = activateLegacyTestTarget(store, bridge.targets, owner, 'desktop', bridge.deps.getApiBaseUrl());
   bridge.targetId = target.targetId;
   store.setProjectionIdentity(target.targetId, owner, 'desktop'); store.setFileEnvironment(target.targetId);
   store.setWake(() => {}); store.setEnabledOwner(owner);

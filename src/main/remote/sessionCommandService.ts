@@ -17,7 +17,7 @@ import { t } from '../i18n';
 import { type CoworkRuntime, CoworkRuntimeDiagnosticEvent, type PermissionRequest } from '../libs/agentEngine/types';
 import { type OwnershipOperationGate, ownershipOperationGate } from '../ownershipOperationGate';
 import { payloadHash, sameOwner } from './canonical';
-import { inputOperationKey, type InputPreparationService, type LocalPreparedInput } from './inputPreparationService';
+import { inputOperationKey, type InputPreparationService, type LocalPreparedInput, preparedThinkingLevel } from './inputPreparationService';
 import { RemoteAgentError, remoteAgentFailure } from './remoteAgentCatalog';
 import { RemoteApprovalError } from './remoteApproval';
 import type { InboxEntry, RemoteCommand } from './remoteBridge';
@@ -217,7 +217,7 @@ export class SessionCommandService {
       const presetId = parseModelPresetId(session.modelPresetId);
       const item = presetId ? this.input!.models.resolveRuntime(actor, deviceId, `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`).item : physical;
       const actualThinking = session.thinkingLevel || physical.thinking?.default || null;
-      const thinkingLevel = presetId ? actualThinking && item.thinking.options.includes(actualThinking) && physical.thinking.options.includes(actualThinking) ? actualThinking : null : session.thinkingLevel || null;
+      const thinkingLevel = presetId ? actualThinking && item.thinking.options.includes(actualThinking) && physical.thinking.options.includes(actualThinking) ? actualThinking : null : session.thinkingLevel && (item.thinking?.options?.includes(session.thinkingLevel) ?? true) ? session.thinkingLevel : null;
       const summary = { modelRef: item.modelRef, version: item.version, source: item.source, displayName: item.displayName,
         providerLabel: item.providerLabel, thinkingLevel };
       this.store.remote.setInputModel(sessionId, summary); return summary;
@@ -410,7 +410,7 @@ export class SessionCommandService {
       this.validateAgent(agentId, owner, explicit && !preparedInput ? payload.expectedAgentVersion : undefined, explicit);
       if (explicit) this.validateDirectory(workspace);
       const config = this.store.getConfig();
-      const session = this.store.createSession((payload.text.trim() || payload.attachments?.[0]?.fileName || t('coworkDefaultSessionTitle')).slice(0, 100), workspace, config.systemPrompt, 'local', [], agentId, preparedInput?.runtimeRef || '', { owner, ownershipSource: 'remote_command', ...(preparedInput ? { thinkingLevel: parseModelThinkingLevel(preparedInput.resolvedInput.options.thinkingLevel) || '' } : {}) });
+      const session = this.store.createSession((payload.text.trim() || payload.attachments?.[0]?.fileName || t('coworkDefaultSessionTitle')).slice(0, 100), workspace, config.systemPrompt, 'local', [], agentId, preparedInput?.runtimeRef || '', { owner, ownershipSource: 'remote_command', ...(preparedInput ? { thinkingLevel: parseModelThinkingLevel(preparedThinkingLevel(preparedInput)) || '' } : {}) });
       localId = session.id;
       this.store.remote.put(`agentExecution:${command.commandId}`, { agentId, version: explicit ? payload.expectedAgentVersion : null,
         workspaceId: payload.workspaceId || null, cwd: resolve(workspace) });
