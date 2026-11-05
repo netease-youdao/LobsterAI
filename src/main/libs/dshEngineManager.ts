@@ -399,6 +399,9 @@ export class DshEngineManager {
     }
 
     const port = await allocateLoopbackPort();
+    // A stop that landed during the awaits above (app quit, for one) has
+    // already run; a child spawned now would outlive the app untracked.
+    if (this.generation !== generation) return this.getState();
     const env = buildDshSpawnEnv({
       baseEnv: { ...process.env, ...managedEnv },
       dshHome,
@@ -561,6 +564,8 @@ export class DshEngineManager {
     }
   }
 
+  // Backstop for a plain app.quit() only: the app's own quit path ends in
+  // app.exit(), which never emits `will-quit`, so its cleanup calls stop().
   private installQuitHook(): void {
     if (this.quitHookInstalled) return;
     this.quitHookInstalled = true;

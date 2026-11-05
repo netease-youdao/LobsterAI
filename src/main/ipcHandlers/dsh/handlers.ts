@@ -17,6 +17,7 @@ import {
 import type { ProviderConfig } from '../../../shared/providers/types';
 import { DshManagedSettings, DshPlanProviderInput, renderDshManagedSettings } from '../../libs/dshConfigSync';
 import { getDshEngineManager } from '../../libs/dshEngineManager';
+import { reapOrphanedDshRuntimes } from '../../libs/dshOrphanReaper';
 import {
   clearWriterLock,
   DshSharedHomeDecision,
@@ -40,6 +41,24 @@ export interface DshHandlerDeps {
 
 let moduleDeps: DshHandlerDeps | null = null;
 let workbenchWindow: BrowserWindow | null = null;
+let orphanReap: Promise<number> | null = null;
+
+// Stops runtimes an earlier run left behind (see dshOrphanReaper). Concurrent
+// callers share one scan.
+function reclaimOrphanedDshRuntimes(): Promise<number> {
+  orphanReap ??= reapOrphanedDshRuntimes().finally(() => {
+    orphanReap = null;
+  });
+  return orphanReap;
+}
+
+// At launch, so a leftover stops holding its port and the dsh home even when
+// the workbench is never opened this run. Only users who turned dsh on can
+// have one, so everyone else skips the process scan.
+export function reclaimOrphanedDshRuntimesOnStartup(): void {
+  if (!moduleDeps || !isDshFeatureEnabled(moduleDeps.getStore())) return;
+  void reclaimOrphanedDshRuntimes();
+}
 
 // The canonical dsh home. Using it directly — rather than a private copy —
 // is what makes installed plugins, credentials, agent presets, settings, and
@@ -93,6 +112,11 @@ function computeManagedSettings(): DshManagedSettings | null {
 // runtime's launch token, so it stays in the main process.
 export async function ensureDshEngineReady(): Promise<string> {
   const manager = getDshEngineManager();
+
+  // A leftover runtime from an earlier run still writes the shared home, and
+  // its writer lock names a main process that is gone, so the check below
+  // would read the home as free. Stop it first.
+  await reclaimOrphanedDshRuntimes();
 
   // The workbench runs against the machine's dsh home so plugins, credentials,
   // settings, and history are the same ones a standalone dsh uses. dsh allows
