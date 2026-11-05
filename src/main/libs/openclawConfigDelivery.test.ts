@@ -24,6 +24,8 @@ function createClient(handlers: {
   set?: (params: unknown, callIndex: number) => unknown;
   /** The gateway's config before the first apply. */
   initialRaw?: string;
+  /** Like v2026.8.1 when raw-text redaction is unsafe: `raw: null`, redacted `parsed` only. */
+  withholdRaw?: boolean;
 }): { client: OpenClawConfigRpcClient; calls: RpcCall[] } {
   const calls: RpcCall[] = [];
   let setCalls = 0;
@@ -32,7 +34,10 @@ function createClient(handlers: {
     request: async <T,>(method: string, params?: unknown): Promise<T> => {
       calls.push({ method, params });
       if (method === OpenClawConfigRpcMethod.Get) {
-        return { hash: handlers.hash ? handlers.hash() : 'hash-1', valid: true, raw: appliedRaw ?? '{}', configRevisionHash: 'resolved', appliedConfigHash: 'resolved' } as T;
+        const content = handlers.withholdRaw
+          ? { raw: null, parsed: JSON.parse(appliedRaw ?? '{}') }
+          : { raw: appliedRaw ?? '{}' };
+        return { hash: handlers.hash ? handlers.hash() : 'hash-1', valid: true, ...content, configRevisionHash: 'resolved', appliedConfigHash: 'resolved' } as T;
       }
       if (method === OpenClawConfigRpcMethod.Apply) {
         setCalls += 1;
@@ -482,6 +487,20 @@ describe('size-drop waiver for sign-out', () => {
     expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
     expect(scheduleDeferredRestart).not.toHaveBeenCalled();
     expect(applyParams(calls)).toEqual({ raw: signedOutRaw, baseHash: 'hash-1', allowConfigSizeDrop: true });
+  });
+
+  test('claims the waiver when config.get withholds raw text and returns only parsed', async () => {
+    const { client, calls } = createClient({ initialRaw: signedInRaw, withholdRaw: true });
+    const scheduleDeferredRestart = vi.fn();
+    const result = await deliverOpenClawConfigToGateway(baseInput({
+      readConfigFile: () => signedOutRaw,
+      ensureRpcClient: async () => client,
+      scheduleDeferredRestart,
+    }));
+
+    expect(result.mode).toBe(OpenClawConfigDeliveryMode.Applied);
+    expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+    expect(applyParams(calls)).toMatchObject({ allowConfigSizeDrop: true });
   });
 
   test('ordinary writes and sign-in never claim the waiver', async () => {

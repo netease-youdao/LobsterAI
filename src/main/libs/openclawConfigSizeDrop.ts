@@ -55,25 +55,29 @@ export type OpenClawConfigSizeDropDecision = {
 };
 
 /**
- * Decide whether replacing the gateway's current config (`currentRaw`, as
- * config.get returns it) with `nextRaw` needs the size-drop waiver, and whether
- * LobsterAI may claim it. Unparseable input never claims it.
+ * Decide whether replacing the gateway's current config with `nextRaw` needs
+ * the size-drop waiver, and whether LobsterAI may claim it. `current` is
+ * config.get's `raw` text or, when the gateway withholds that (it returns
+ * `raw: null` whenever text redaction is unsafe, e.g. with `${ENV}` refs), its
+ * redacted `parsed` object. Unparseable input never claims the waiver.
  */
 export function resolveOpenClawConfigSizeDropAllowance(
-  currentRaw: unknown,
+  current: unknown,
   nextRaw: string,
 ): OpenClawConfigSizeDropDecision {
-  const current = typeof currentRaw === 'string' ? parseConfigRecord(currentRaw) : null;
+  const currentConfig = typeof current === 'string'
+    ? parseConfigRecord(current)
+    : isRecord(current) ? current : null;
   const next = parseConfigRecord(nextRaw);
-  if (!current || !next) return { allow: false, currentBytes: 0, nextBytes: 0 };
-  const currentBytes = prettyBytes(current);
+  if (!currentConfig || !next) return { allow: false, currentBytes: 0, nextBytes: 0 };
+  const currentBytes = prettyBytes(currentConfig);
   const nextBytes = prettyBytes(next);
   if (!dropsBelow(currentBytes, nextBytes, SIZE_DROP_ALLOWANCE_RATIO)) {
     return { allow: false, currentBytes, nextBytes };
   }
   // Everything outside `models` must pass OpenClaw's guard on its own.
   const restSurvives = !dropsBelow(
-    prettyBytes(withoutHostOwnedShrinkSection(current)),
+    prettyBytes(withoutHostOwnedShrinkSection(currentConfig)),
     prettyBytes(withoutHostOwnedShrinkSection(next)),
     OPENCLAW_SIZE_DROP_RATIO,
   );

@@ -65,6 +65,11 @@ describe('resolveOpenClawConfigSizeDropAllowance', () => {
     expect(resolveOpenClawConfigSizeDropAllowance(JSON.stringify(signedIn), toRaw(signedOut)).allow).toBe(true);
   });
 
+  test('measures the parsed object when the gateway withholds raw text', () => {
+    expect(resolveOpenClawConfigSizeDropAllowance(signedIn, toRaw(signedOut)).allow).toBe(true);
+    expect(resolveOpenClawConfigSizeDropAllowance(null, toRaw(signedOut)).allow).toBe(false);
+  });
+
   test('claims the waiver a little before the gateway guard trips', () => {
     const provider = signedIn.models.providers['lobsterai-server'];
     const withModels = (count: number) => toRaw({
