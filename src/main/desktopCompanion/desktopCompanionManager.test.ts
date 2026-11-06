@@ -16,6 +16,8 @@ import {
   DesktopCompanionIpc,
   DesktopCompanionMainPage,
   DesktopCompanionPanelPlacement,
+  DesktopCompanionSelectionCommandType,
+  DesktopCompanionSelectionMode,
   DesktopCompanionSize,
   DesktopCompanionSnoozeMode,
   DesktopCompanionStageCommandType,
@@ -32,7 +34,7 @@ import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectio
 import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../shared/desktopCompanion/selectionToolbar';
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { CompanionScreenshotController } from './companionScreenshot';
-import { CompanionSelectionController } from './companionSelection';
+import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { DesktopCompanionManager } from './desktopCompanionManager';
 import { FileDragEvent } from './fileDragMonitor';
 import type { CompanionLanguageClient } from './languageToolClient';
@@ -95,6 +97,7 @@ vi.mock('electron', async () => {
       getCursorScreenPoint: () => ({ x: 100, y: 100 }),
       getDisplayNearestPoint: () => ({ workArea }),
       getDisplayMatching: () => ({ workArea }),
+      screenToDipPoint: (point: unknown) => point,
     }),
     Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
     dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
@@ -121,6 +124,18 @@ class FakeMonitor extends EventEmitter {
   isUserBusy = () => false;
 }
 
+class FakeSelectionHook extends EventEmitter {
+  static FilterMode = { EXCLUDE_LIST: 2 };
+  static PositionLevel = { SEL_FULL: 3 };
+  static last: FakeSelectionHook | null = null;
+  constructor() { super(); FakeSelectionHook.last = this; }
+  start() { return true; }
+  stop() { return true; }
+  cleanup() {}
+  setGlobalFilterMode() { return true; }
+  getCurrentSelection() { return null; }
+}
+
 let manager: DesktopCompanionManager;
 let main: BrowserWindow;
 let values: Map<string, unknown>;
@@ -131,7 +146,8 @@ let fileDrag: FakeMonitor;
 let getTaskInfo: ReturnType<typeof vi.fn<(id: string) => CompanionTaskInfo | null>>;
 let reportAnalytics: ReturnType<typeof vi.fn>;
 
-function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running) {
+function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running,
+  loadSelectionHook: () => SelectionHookModule | null = () => null) {
   reportAnalytics = vi.fn();
   main = new BrowserWindow();
   openMain = vi.fn();
@@ -153,7 +169,7 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
     onPreferencesChanged: vi.fn(),
     openMain,
     openSettings,
-    services: { foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook: () => null, languageClient },
+    services: { foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook, languageClient },
   });
 }
 
@@ -193,6 +209,7 @@ beforeEach(() => {
   vi.mocked(globalShortcut.register).mockReturnValue(true);
   mocks.windows.length = 0;
   mocks.handlers.clear();
+  FakeSelectionHook.last = null;
   // Most lifecycle cases start with the orb explicitly disabled and open surfaces on demand.
   values = new Map<string, unknown>([
     [DesktopCompanionStoreKey.Greeted, true],
@@ -207,6 +224,61 @@ afterEach(() => {
 });
 
 describe('gateway readiness', () => {
+  test('keeps a sessionless answer open through a gateway restart and still honors disabling selection', () => {
+    vi.useFakeTimers();
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create(undefined, OpenClawEnginePhase.Running, () => FakeSelectionHook);
+    FakeSelectionHook.last!.emit('text-selection', {
+      text: 'Selected project update', programName: 'chrome.exe', posLevel: 0, mousePosEnd: { x: 500, y: 400 },
+    });
+    vi.advanceTimersByTime(200);
+    const selection = mocks.windows.at(-1);
+    invoke(DesktopCompanionIpc.SelectionCommand, {
+      type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Summarize,
+    }, selection.webContents);
+    expect(selection.isVisible()).toBe(true);
+    selection.webContents.send.mockClear();
+    foreground.stop.mockClear();
+
+    for (const phase of [OpenClawEnginePhase.Starting, OpenClawEnginePhase.Error, OpenClawEnginePhase.Running]) {
+      manager.setEnginePhase(phase);
+      expect(selection.isVisible()).toBe(true);
+      expect(manager.getState().capabilities.selection).toBe(CompanionCapability.Ready);
+      expect(selection.webContents.send).not.toHaveBeenCalledWith(DesktopCompanionIpc.Selection, null);
+    }
+    expect(foreground.stop).not.toHaveBeenCalled();
+    manager.setPreferences({ selectionToolbar: false });
+    expect(selection.isVisible()).toBe(false);
+    expect(manager.getState().capabilities.selection).toBe(CompanionCapability.Off);
+  });
+
+  test('allows standalone selection tools before the gateway is ready while task entry stays deferred', () => {
+    vi.useFakeTimers();
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create(undefined, OpenClawEnginePhase.Starting, () => FakeSelectionHook);
+    expect(manager.getState().capabilities.selection).toBe(CompanionCapability.Ready);
+    expect(foreground.start).toHaveBeenCalled();
+    FakeSelectionHook.last!.emit('text-selection', {
+      text: 'Selected text', programName: 'chrome.exe', posLevel: 0, mousePosEnd: { x: 500, y: 400 },
+    });
+    vi.advanceTimersByTime(200);
+    const selection = mocks.windows.at(-1);
+    expect(selection.isVisible()).toBe(true);
+    expect(selection.webContents.send).toHaveBeenCalledWith(DesktopCompanionIpc.Selection,
+      expect.objectContaining({ mode: DesktopCompanionSelectionMode.Toolbar, text: 'Selected text' }));
+    manager.togglePanel(AnalyticsSource.Shortcut);
+    expect(manager.getState().panelVisible).toBe(false);
+    foreground.emit('change', 'notepad.exe');
+    expect(selection.isVisible()).toBe(false);
+    FakeSelectionHook.last!.emit('text-selection', {
+      text: 'Another selection', programName: 'notepad.exe', posLevel: 0, mousePosEnd: { x: 500, y: 400 },
+    });
+    vi.advanceTimersByTime(200);
+    expect(selection.isVisible()).toBe(true);
+    manager.setPreferences({ enabled: false });
+    expect(selection.isVisible()).toBe(false);
+  });
+
   test.each(Object.values(OpenClawEnginePhase).filter(phase => phase !== OpenClawEnginePhase.Running))(
     'keeps the enabled companion hidden during %s until the gateway runs', phase => {
       values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });

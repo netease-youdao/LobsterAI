@@ -20,6 +20,7 @@ import {
 } from '../../shared/desktopCompanion/analytics';
 import { categorizeCompanionApp, CompanionAppCategory, isCompanionQuietCategory } from '../../shared/desktopCompanion/appCategories';
 import {
+  CompanionCapability,
   CompanionPermission as CompanionPermissionValue,
   type CompanionQuickAnswerRequest,
   type CompanionSurfaceSize,
@@ -289,7 +290,9 @@ export class DesktopCompanionManager {
     this.selection = new CompanionSelectionController({
       analytics: this.analytics,
       preferences: () => this.preferences,
-      isAvailable: () => this.isPresent() && !this.capturing,
+      // Selection tools use direct HTTP, not the agent gateway. A gateway restart
+      // must not hide their answer card and cancel an otherwise healthy request.
+      isAvailable: () => this.preferences.enabled && !this.snooze && !this.capturing,
       isCapturing: () => this.capturing,
       createWindow: (surface, focusable) => this.createWindow(surface, focusable),
       setPreferences: patch => { this.setPreferences(patch, AnalyticsSource.Selection); },
@@ -544,7 +547,8 @@ export class DesktopCompanionManager {
     const present = this.isPresent();
     if (present) this.showOrb();
     else this.hideOrb();
-    if (present) this.foreground.start();
+    this.selection.sync();
+    if (present || this.selection.capability === CompanionCapability.Ready) this.foreground.start();
     else this.foreground.stop();
     if (present && this.preferences.dragAssist && !this.snooze) this.fileDrag.start();
     else {
@@ -555,7 +559,6 @@ export class DesktopCompanionManager {
       if (this.stage.stage.kind === DesktopCompanionStageKind.Drop) this.stage.clear();
     }
     if (!present || this.snooze) { this.stage.clear(); this.results.hide(); }
-    this.selection.sync();
   }
 
   private scheduleSnoozeWake(): void {
