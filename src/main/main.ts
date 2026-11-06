@@ -8367,7 +8367,11 @@ if (!gotTheLock) {
       ) {
         return { success: false, error: t('authAccountChanged') };
       }
-      syncOpenClawConfigIfAuthQuotaGateChanged(startingQuotaGateState);
+      // No quota-gate config sync here even when the entitlement changed: the
+      // server model metadata was just cleared, so a sync now renders a config
+      // without the plan catalog or the model-compat plugin and restarts the
+      // gateway, and the renderer's post-login model load then restarts it
+      // again to restore them. That load syncs once and reads the new gate.
       // The initiating renderer applies the exchange result; other windows
       // must refresh their own auth stores without consuming the OAuth code.
       emitAuthSessionChanged({
