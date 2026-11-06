@@ -1400,6 +1400,19 @@ const v20260801StrongPatchValidators = {
       snippets: ['export function readVisibleTranscriptRetainedPrefixBytes('],
     },
   ],
+  'openclaw-session-window-preflight-compaction.patch': [
+    {
+      file: 'src/auto-reply/reply/memory-flush.ts',
+      snippets: [
+        'function resolveSelectedContextWindowTokens(',
+        'const selectedTokens = resolveSelectedContextWindowTokens(params);',
+      ],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-memory.ts',
+      snippets: ['contextWindow: entry.contextWindow,', 'contextWindow: entry?.contextWindow,'],
+    },
+  ],
 };
 
 v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [

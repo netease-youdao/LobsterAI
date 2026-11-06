@@ -1429,6 +1429,56 @@ turns' first requests should read most of the history from cache again
 the first patch when the pinned upstream includes #168157. Drop the second when
 upstream #159799 summarizes byte-bounded history itself.
 
+## Preflight compaction against the session window
+
+`openclaw-session-window-preflight-compaction.patch` makes preflight compaction
+honor the session's selected context-window option (`SessionEntry.contextWindow`).
+
+Background: 快速 (`yd-fast`) sessions select a 400k window, but the real model
+behind them (for example `deepseek-flash`) accepts 1M. On 2026-11-05 a user
+pasted a document of about 400k tokens with "reply only: 收到", then asked
+about the weather. The context indicator stayed at 100%, usage kept growing,
+and no compaction ran. Every request succeeded, so overflow recovery never
+started either.
+
+Cause: the embedded run caps its budget at the selected option
+(`resolveEmbeddedRuntimeModelPolicy` gives `contextTokenBudget=400000`), and
+the session row reports `contextTokens=400000`. Preflight compaction
+(`resolveMemoryFlushContextWindowTokens`) resolved only the provider and model,
+so it used the native 1M window and compacted at 980k instead of 380k. Embedded
+runs disable the session's own threshold compaction
+(`getCompactionSettings().enabled === false`), so preflight is the only
+automatic trigger. The `model_context_bytes` trigger from the byte-bounded
+history patch had the same mismatch: it watched 6.4 MB while the run hydrates
+at most 3.2 MB.
+
+Change:
+- Both preflight callers (`runSessionCompactionIfNeeded` and
+  `runMemoryFlushIfNeeded`) pass the entry's selection. The option is resolved
+  from the configured model's `contextWindows`, with the same rule as the run:
+  it never exceeds a known native window, and a model that declares no native
+  window uses the selection instead of the generic 200k default. An unknown
+  option keeps the native value, as do windows declared only by a plugin
+  catalog. Across all 37 server models and the `yd-fast`, `yd-ultra` and empty
+  selections, preflight and run budgets now match.
+- Preflight compaction uses the manual planner, which already falls back to the
+  smallest valid tail. A single oversized turn is therefore summarized as a
+  split-turn prefix instead of being skipped as too small.
+
+Verify with:
+
+```sh
+node scripts/run-vitest.mjs run src/auto-reply/reply/memory-flush.test.ts src/auto-reply/reply/agent-runner-memory.test.ts
+```
+
+An isolated gateway against a mock 1M-window model reproduced the report on
+the previous runtime: a ~410k-token paste kept the session at 439k/400k (110%)
+on every later turn. With this patch the next turn's preflight logs
+`[compaction-diag] ... trigger=budget ... outcome=compacted`, and the session
+drops to about 30k/400k. The first turn still ends above 100%, because nothing
+older exists to compact before a single oversized prompt is sent. Drop this
+patch when upstream preflight reads the session's context-window option.
+
 ## Clean-close seal for agent database integrity checks (upstream backport)
 
 `openclaw-agent-db-clean-close-seal.patch` backports the idea of upstream
