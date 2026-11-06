@@ -10,6 +10,7 @@ import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
+import { EmbeddingProvider } from '../../shared/cowork/embedding';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
@@ -38,6 +39,7 @@ const mockRuntimeState = vi.hoisted(() => ({
   bundledExtensionsDir: null as string | null,
   thirdPartyExtensionsDir: null as string | null,
   modelCompatPluginAvailable: true,
+  runtimeBundledExtensions: new Set<string>(['xai']),
   serverModels: [] as Array<{
     modelId: string;
     modelName?: string;
@@ -129,7 +131,7 @@ vi.mock('./openclawLocalExtensions', () => ({
     id !== 'qwen-portal-auth'
     && (id !== 'lobsterai-model-compat' || mockRuntimeState.modelCompatPluginAvailable)
   ),
-  hasRuntimeBundledOpenClawExtension: (id: string) => id === 'xai',
+  hasRuntimeBundledOpenClawExtension: (id: string) => mockRuntimeState.runtimeBundledExtensions.has(id),
   resolveOpenClawExtensionPluginId: (id: string) => {
     const manifestIds: Record<string, string> = {
       qqbot: 'openclaw-qqbot',
@@ -155,6 +157,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     mockRuntimeState.bundledExtensionsDir = null;
     mockRuntimeState.thirdPartyExtensionsDir = null;
     mockRuntimeState.modelCompatPluginAvailable = true;
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai']);
     mockRuntimeState.serverModels = [];
     mockRuntimeState.enabledProviders = [];
     mockRuntimeState.providerSourceEntries = [];
@@ -1433,6 +1436,80 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
     expect(config.memory.search.remote).toBeUndefined();
     expect(config.agents.defaults.memorySearch).toBeUndefined();
+  });
+
+  const embeddingCoworkConfig = (embeddingProvider: string, embeddingEnabled = true) => ({
+    workingDirectory: tmpDir,
+    systemPrompt: '',
+    executionMode: 'local',
+    agentEngine: 'openclaw',
+    memoryEnabled: true,
+    memoryImplicitUpdateEnabled: false,
+    memoryLlmJudgeEnabled: false,
+    memoryGuardLevel: 'balanced',
+    memoryUserMemoriesMaxItems: 100,
+    skipMissedJobs: false,
+    embeddingEnabled,
+    embeddingProvider,
+    embeddingModel: 'embed-model',
+    embeddingLocalModelPath: '',
+    embeddingVectorWeight: 0.7,
+    embeddingRemoteBaseUrl: 'http://127.0.0.1:11434/v1',
+    embeddingRemoteApiKey: '',
+  });
+
+  test.each([
+    [EmbeddingProvider.OpenAI, 'openai'],
+    [EmbeddingProvider.Gemini, 'google'],
+    [EmbeddingProvider.Voyage, 'voyage'],
+    [EmbeddingProvider.Mistral, 'mistral'],
+    [EmbeddingProvider.Ollama, 'ollama'],
+  ])('allows the bundled plugin that serves %s memory embeddings', async (provider, pluginId) => {
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai', pluginId]);
+    const sync = await createSync({ getCoworkConfig: () => embeddingCoworkConfig(provider) });
+
+    expect(sync.sync('memory-embedding-plugin').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.memory.search.provider).toBe(provider);
+    expect(config.plugins.allow).toContain(pluginId);
+    expect(config.plugins.entries[pluginId]).toEqual({ enabled: true });
+  });
+
+  test('serves the local embedding provider through the OpenAI plugin, as before', async () => {
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai', 'openai']);
+    const sync = await createSync({ getCoworkConfig: () => embeddingCoworkConfig(EmbeddingProvider.Local) });
+
+    expect(sync.sync('memory-embedding-local').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.memory.search.provider).toBe(EmbeddingProvider.OpenAI);
+    expect(config.plugins.allow).toContain('openai');
+  });
+
+  test('does not allow an embedding plugin the runtime lacks', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sync = await createSync({ getCoworkConfig: () => embeddingCoworkConfig(EmbeddingProvider.Voyage) });
+
+    expect(sync.sync('memory-embedding-missing-plugin').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.allow).not.toContain('voyage');
+    expect(config.plugins.entries.voyage).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('needs bundled plugin voyage'));
+  });
+
+  test('leaves embedding plugins out while embeddings are disabled', async () => {
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai', 'openai']);
+    const sync = await createSync({
+      getCoworkConfig: () => embeddingCoworkConfig(EmbeddingProvider.OpenAI, false),
+    });
+
+    expect(sync.sync('memory-embedding-disabled').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.allow).not.toContain('openai');
+    expect(config.plugins.entries.openai).toBeUndefined();
   });
 
   test('configures OpenClaw chat image attachment limit to 30MB', async () => {

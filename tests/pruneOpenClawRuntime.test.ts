@@ -5,6 +5,9 @@ import path from 'node:path';
 
 import { afterEach, expect, test } from 'vitest';
 
+import { OpenClawEmbeddingPluginId } from '../src/main/libs/openclawEmbeddingPlugins';
+import { EmbeddingProvider } from '../src/shared/cowork/embedding';
+
 const require = createRequire(import.meta.url);
 const {
   BUNDLED_SKILLS_TO_KEEP,
@@ -48,6 +51,14 @@ test('pruneOpenClawRuntime keeps required bundled extensions', () => {
   expect(shouldKeepBundledExtension('browser')).toBe(true);
   expect(shouldKeepBundledExtension('feishu')).toBe(true);
   expect(shouldKeepBundledExtension('xiaomi')).toBe(true);
+});
+
+test('pruneOpenClawRuntime keeps the runtime plugins behind memory embedding providers', () => {
+  // Voyage and Mistral are separate npm plugins in OpenClaw v2026.8.1, not runtime extensions.
+  for (const provider of [EmbeddingProvider.OpenAI, EmbeddingProvider.Gemini, EmbeddingProvider.Ollama] as const) {
+    const pluginId = OpenClawEmbeddingPluginId[provider];
+    expect(shouldKeepBundledExtension(pluginId), pluginId).toBe(true);
+  }
 });
 
 test('pruneOpenClawRuntime removes explicitly unwanted bundled extensions', () => {

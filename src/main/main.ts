@@ -116,6 +116,7 @@ import {
   CoworkIpcChannel,
   CoworkOnboardingMessageKind,
 } from '../shared/cowork/constants';
+import { isEmbeddingProvider } from '../shared/cowork/embedding';
 import {
   buildCoworkImageAttachmentPreviews,
   type CoworkImageAttachmentPreview,
@@ -12414,15 +12415,6 @@ if (!gotTheLock) {
     }
   });
 
-  const VALID_EMBEDDING_PROVIDERS = [
-    'local',
-    'openai',
-    'gemini',
-    'voyage',
-    'mistral',
-    'ollama',
-  ] as const;
-
   function normalizeEmbeddingConfig(config: {
     embeddingEnabled?: boolean;
     embeddingProvider?: string;
@@ -12435,11 +12427,7 @@ if (!gotTheLock) {
     return {
       embeddingEnabled:
         typeof config.embeddingEnabled === 'boolean' ? config.embeddingEnabled : undefined,
-      embeddingProvider:
-        typeof config.embeddingProvider === 'string' &&
-        (VALID_EMBEDDING_PROVIDERS as readonly string[]).includes(config.embeddingProvider)
-          ? config.embeddingProvider
-          : undefined,
+      embeddingProvider: isEmbeddingProvider(config.embeddingProvider) ? config.embeddingProvider : undefined,
       embeddingModel:
         typeof config.embeddingModel === 'string' ? config.embeddingModel.trim() : undefined,
       embeddingLocalModelPath:

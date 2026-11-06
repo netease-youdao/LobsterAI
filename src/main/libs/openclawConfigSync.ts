@@ -90,6 +90,7 @@ import {
   readOpenClawConfigRaw,
   resolveOpenClawOwnedSections,
 } from './openclawConfigTarget';
+import { OpenClawEmbeddingPluginId, resolveOpenClawEmbeddingProvider } from './openclawEmbeddingPlugins';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { escapeOpenClawEnvTemplate, escapeOpenClawEnvTemplateRecord } from './openclawEnvTemplate';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
@@ -2564,6 +2565,25 @@ export class OpenClawConfigSync {
     // OAuth refresh hook for credentials in the auth-profiles store. Declare
     // it only when the runtime actually bundles it (older runtimes pruned it).
     const hasXaiPlugin = hasRuntimeBundledOpenClawExtension('xai');
+    // The selected embedding provider exists only while its bundled plugin is
+    // allowed; without it OpenClaw silently falls back to keyword search.
+    const memoryEmbeddingProvider = coworkConfig.embeddingEnabled
+      ? resolveOpenClawEmbeddingProvider(coworkConfig.embeddingProvider)
+      : null;
+    const memoryEmbeddingPluginId = memoryEmbeddingProvider
+      ? OpenClawEmbeddingPluginId[memoryEmbeddingProvider]
+      : null;
+    // Core providers ship in dist/extensions; others arrive as preinstalled
+    // official npm plugins, which are already allowed below.
+    const hasMemoryEmbeddingPlugin = memoryEmbeddingPluginId !== null
+      && (hasRuntimeBundledOpenClawExtension(memoryEmbeddingPluginId)
+        || hasPreinstalledPlugin(memoryEmbeddingPluginId));
+    if (memoryEmbeddingPluginId && !hasMemoryEmbeddingPlugin) {
+      console.warn(
+        `[OpenClawConfigSync] embedding provider ${memoryEmbeddingProvider} needs bundled plugin `
+        + `${memoryEmbeddingPluginId}, which this runtime lacks; memory search will use keyword results only`,
+      );
+    }
     const qwenPortalAuthPluginId = resolveOpenClawExtensionPluginId('qwen-portal-auth');
 
     // Detect if any provider uses Qwen/Aliyun DashScope URLs — OpenClaw auto-injects
@@ -2665,11 +2685,7 @@ export class OpenClawConfigSync {
       memory: {
         search: {
           enabled: true,
-          provider: coworkConfig.embeddingEnabled
-            ? (['openai', 'gemini', 'voyage', 'mistral', 'ollama'].includes(coworkConfig.embeddingProvider)
-              ? coworkConfig.embeddingProvider
-              : 'openai')
-            : 'none',
+          provider: memoryEmbeddingProvider ?? 'none',
           ...(coworkConfig.embeddingEnabled && coworkConfig.embeddingModel ? { model: coworkConfig.embeddingModel } : {}),
           ...(coworkConfig.embeddingEnabled ? {
             remote: {
@@ -2852,6 +2868,9 @@ export class OpenClawConfigSync {
           // exists, otherwise it becomes a stale entry on every startup.
           ...(hasQwenProvider && qwenPortalAuthPluginId ? { [qwenPortalAuthPluginId]: { enabled: true } } : {}),
           ...(hasXaiPlugin ? { xai: { enabled: true } } : {}),
+          ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId
+            ? { [memoryEmbeddingPluginId]: { enabled: true } }
+            : {}),
           // User-installed plugins: merge enabled state and config from user_plugins table
           ...Object.fromEntries(
             userPlugins.map(p => [p.pluginId, {
@@ -2879,6 +2898,7 @@ export class OpenClawConfigSync {
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
+          ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId ? [memoryEmbeddingPluginId] : []),
           ...(hasModelRoutingPlugin ? ['lobster-model-routing'] : []),
           ...(hasModelCompatConfig
             ? [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]
