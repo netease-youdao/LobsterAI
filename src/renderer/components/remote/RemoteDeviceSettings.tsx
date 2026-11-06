@@ -16,6 +16,7 @@ import type { RootState } from '../../store';
 import Modal from '../common/Modal';
 import RemoteControlIcon from '../icons/RemoteControlIcon';
 import { isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteTaskContentSummary } from '../settings/remoteControlState';
+import { RemoteAgentSettingsAccess } from './RemoteAgentSettingsAccess';
 import { RemoteDeviceConnectionList, RemoteDeviceConnectionSummary } from './RemoteDeviceConnectionList';
 
 interface RemoteDeviceSettingsProps {
@@ -317,6 +318,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         </details>)}
     </section>
     {showConnections && <RemoteDeviceConnectionList snapshot={management} sectionRef={connectionsSection} />}
+    <RemoteAgentSettingsAccess identity={identity} />
     <Modal isOpen={renameOpen} onClose={closeRename} onEscape={closeRename}
       overlayClassName="fixed inset-0 z-[60] modal-backdrop flex items-center justify-center p-4"
       className="w-full max-w-sm rounded-xl border border-border bg-background p-5 shadow-modal">

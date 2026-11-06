@@ -7,6 +7,7 @@ import type { ExpertCatalog, PresetAgent } from '../shared/agent/presets';
 import type { RemoteOwner } from '../shared/remote/constants';
 import { AgentAccessError, sameAgentOwner } from './agentOwnership';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from './coworkStore';
+import { assertAgentSettingsLocalWriteAllowed } from './libs/agentSettingsConversation/runtime';
 import { presetToCreateRequest } from './presetAgents';
 
 /** Renderer-facing CRUD; internal runtime consumers continue to use raw CoworkStore reads. */
@@ -59,6 +60,7 @@ export class AgentManager {
   }
 
   updateAgent(agentId: string, updates: UpdateAgentRequest): Agent | null {
+    assertAgentSettingsLocalWriteAllowed(agentId);
     const owner = this.captureOwner();
     this.store.assertAgentAccess(agentId, owner);
     this.assertSubagentAccess(updates.subagentAllowAgentIds, owner);
@@ -73,6 +75,7 @@ export class AgentManager {
   }
 
   deleteAgent(agentId: string): boolean {
+    assertAgentSettingsLocalWriteAllowed(agentId);
     return this.store.deleteAgent(agentId, this.getOwner());
   }
 

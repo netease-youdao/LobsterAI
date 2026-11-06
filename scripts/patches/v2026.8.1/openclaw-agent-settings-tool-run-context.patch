@@ -1,0 +1,55 @@
+--- a/src/plugins/tool-types.ts
++++ b/src/plugins/tool-types.ts
+@@ -31,6 +31,8 @@
+   agentDir?: string;
+   agentId?: string;
+   sessionKey?: string;
++  /** Trusted current runtime run; never supplied by tool arguments. */
++  runId?: string;
+   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
+   sessionId?: string;
+   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
+--- a/src/agents/openclaw-tools.plugin-context.ts
++++ b/src/agents/openclaw-tools.plugin-context.ts
+@@ -102,6 +102,7 @@
+       agentDir: options?.agentDir,
+       agentId: sessionAgentId,
+       sessionKey: options?.agentSessionKey,
++      runId: options?.runId,
+       sessionId: options?.sessionId,
+       toolBindings: options?.toolBindings,
+       activeProjectKeys: options?.activeProjectKeys,
+--- a/src/plugins/tool-descriptor-cache.ts
++++ b/src/plugins/tool-descriptor-cache.ts
+@@ -138,6 +138,9 @@
+     rootDir: params.rootDir ?? null,
+     contractToolNames: [...params.contractToolNames].toSorted(),
+     clientCaps: [...(params.clientCaps ?? [])].toSorted(),
++    ...(params.pluginId === "lobster-agent-settings"
++      ? { runContext: [params.ctx.sessionKey ?? null, params.ctx.runId ?? null] }
++      : {}),
+     context: buildDescriptorContextCacheKey({
+       ctx: params.ctx,
+       currentRuntimeConfig: params.currentRuntimeConfig,
+--- /dev/null
++++ b/src/plugins/tool-descriptor-cache.agent-settings.test.ts
+@@ -0,0 +1,19 @@
++import { expect, test } from "vitest";
++import { buildPluginToolDescriptorCacheKey } from "./tool-descriptor-cache.js";
++
++const base = { source: "/settings/index.js", contractToolNames: ["lobsterai_agent_settings"],
++  ctx: { agentId: "main", sessionKey: "agent:main:lobsterai:session", runId: "remote-run" } };
++
++test("settings tool descriptor cache cannot cross session or run visibility", () => {
++  const key = buildPluginToolDescriptorCacheKey({ ...base, pluginId: "lobster-agent-settings" });
++  for (const ctx of [{ ...base.ctx, runId: "local-run" }, { ...base.ctx, runId: undefined },
++    { ...base.ctx, sessionKey: "agent:main:lobsterai:another" }]) {
++    expect(buildPluginToolDescriptorCacheKey({ ...base, pluginId: "lobster-agent-settings", ctx })).not.toBe(key);
++  }
++});
++
++test("unrelated plugin descriptor cache retains its existing reuse", () => {
++  const key = buildPluginToolDescriptorCacheKey({ ...base, pluginId: "unrelated-plugin" });
++  expect(buildPluginToolDescriptorCacheKey({ ...base, pluginId: "unrelated-plugin",
++    ctx: { ...base.ctx, sessionKey: "different-session", runId: "different-run" } })).toBe(key);
++});

@@ -11,16 +11,21 @@
  *   const label = t('trayShowWindow'); // "Open LobsterAI"
  *   const msg = t('imMissingCredentials', { fields: 'appId, appSecret' });
  */
-
 import { desktopCompanionTranslations } from '../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../shared/imageEditing/copy';
 import { mediaTranslations } from '../shared/media/copy';
+import { remoteAgentSettingsTranslations } from '../shared/remote/agentSettingsCopy';
 import { remoteAnnotationTranslations } from '../shared/remote/annotationCopy';
 
 export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    agentSettingsApprovalTitle: '确认修改助手设置',
+    agentSettingsApprovalDescription: '{section}将发生以下变更（− 删除，+ 新增）：\n{preview}\n仅允许本次修改。',
+    agentSettingsSection_identity: '助手身份',
+    agentSettingsSection_memory: '助手记忆',
+    agentSettingsSection_userProfile: '关于你',
     quarantineRecoveryTitle: '任务安全恢复',
     quarantineRecoveryDescription: '归属无法确认的任务保持隔离，不会自动重新执行。可查看日志，并停止本次应用运行中已确认属于当前账号的隔离任务。',
     quarantineRecoveryCount: '当前可安全提交停止请求的任务：{count}。此处不显示隔离会话的内容。',
@@ -70,6 +75,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...mediaTranslations.zh,
     ...imageEditingTranslations.zh,
     ...remoteAnnotationTranslations.zh,
+    ...remoteAgentSettingsTranslations.zh,
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
     browserPasskeyUnnamedAccount: '已保存的账号',
@@ -475,6 +481,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    agentSettingsApprovalTitle: 'Confirm agent settings change',
+    agentSettingsApprovalDescription: 'Changes to {section} (− removed, + added):\n{preview}\nAllow this change only.',
+    agentSettingsSection_identity: 'Assistant identity',
+    agentSettingsSection_memory: 'Assistant memory',
+    agentSettingsSection_userProfile: 'About you',
     quarantineRecoveryTitle: 'Task safety recovery',
     quarantineRecoveryDescription: 'Tasks with unverified ownership remain isolated and are not automatically rerun. View logs or stop isolated tasks witnessed for this account during this app process.',
     quarantineRecoveryCount: 'Tasks eligible for a safe stop request: {count}. Isolated conversation contents are not shown.',
@@ -524,6 +535,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...mediaTranslations.en,
     ...imageEditingTranslations.en,
     ...remoteAnnotationTranslations.en,
+    ...remoteAgentSettingsTranslations.en,
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
     openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
     browserPasskeyChooseAccountTitle: 'Use a passkey',

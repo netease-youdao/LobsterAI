@@ -36,6 +36,7 @@ const mockRuntimeState = vi.hoisted(() => ({
   proxyPort: null as number | null,
   thirdPartyExtensionsDir: null as string | null,
   modelCompatPluginAvailable: true,
+  agentSettingsPluginAvailable: false,
   serverModels: [] as Array<{
     modelId: string;
     modelName?: string;
@@ -126,6 +127,7 @@ vi.mock('./openclawLocalExtensions', () => ({
   hasBundledOpenClawExtension: (id: string) => (
     id !== 'qwen-portal-auth'
     && (id !== 'lobsterai-model-compat' || mockRuntimeState.modelCompatPluginAvailable)
+    && (id !== 'lobster-agent-settings' || mockRuntimeState.agentSettingsPluginAvailable)
   ),
   hasRuntimeBundledOpenClawExtension: (id: string) => id === 'xai',
   resolveOpenClawExtensionPluginId: (id: string) => {
@@ -152,6 +154,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     mockRuntimeState.proxyPort = null;
     mockRuntimeState.thirdPartyExtensionsDir = null;
     mockRuntimeState.modelCompatPluginAvailable = true;
+    mockRuntimeState.agentSettingsPluginAvailable = false;
     mockRuntimeState.serverModels = [];
     mockRuntimeState.enabledProviders = [];
     mockRuntimeState.providerSourceEntries = [];
@@ -318,6 +321,20 @@ describe('OpenClawConfigSync runtime config output', () => {
     mockRuntimeState.proxyPort = null;
     expect(sync.sync('model-routing-proxy-unavailable')).toMatchObject({ ok: true });
     expect(read().plugins.entries[manifest.id]).toEqual({ enabled: false });
+  });
+
+  test('admits the settings plugin to the strict allowlist with conversation hooks and current callback only', async () => {
+    mockRuntimeState.agentSettingsPluginAvailable = true;
+    let callback: string | null = 'http://127.0.0.1:4121/agent-settings/tool';
+    const sync = await createSync({ getAgentSettingsCallbackUrl: () => callback });
+    expect(sync.sync('settings-bootstrap')).toMatchObject({ ok: true });
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(read().plugins.allow).toContain('lobster-agent-settings');
+    expect(read().plugins.entries['lobster-agent-settings']).toEqual({ enabled: true,
+      hooks: { allowConversationAccess: true }, config: { callbackUrl: callback, secret: '${LOBSTER_MCP_BRIDGE_SECRET}' } });
+    callback = null;
+    expect(sync.sync('settings-callback-unavailable')).toMatchObject({ ok: true });
+    expect(read().plugins.entries['lobster-agent-settings']).toEqual({ enabled: false });
   });
 
   test('enables channel scheduling without promoting IM senders to global owners', async () => {

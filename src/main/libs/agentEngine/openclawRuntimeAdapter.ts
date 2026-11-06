@@ -25,6 +25,7 @@ import {
   type BrowserControlGatewayRequest,
   OpenClawBrowserGatewayMethod,
 } from '../../../shared/browserWebAccess/constants';
+import { agentSettingsToolCallIds, isAgentSettingsPrivateTool, sanitizeAgentSettingsHistory, sanitizeAgentSettingsToolEvent } from '../../../shared/cowork/agentSettingsPrivacy';
 import { type ApprovalDecisionOptions, type ApprovalDecisionOutcome, type ApprovalReconcileOptions, type ApprovalState, type DualApprovalConfiguration, OPENCLAW_DESKTOP_GATEWAY_CAPS } from '../../../shared/cowork/approval';
 import { stripAssistantImageDiagnostic } from '../../../shared/cowork/assistantImageDiagnostic';
 import {
@@ -104,6 +105,7 @@ import { payloadHash } from '../../remote/canonical';
 import { type QuestionRegistration, RemoteQuestionError, RemoteQuestionService } from '../../remote/remoteQuestionService';
 import type { SubagentMessageStore } from '../../subagentMessageStore';
 import type { SubagentRunStore } from '../../subagentRunStore';
+import { AgentSettingsRuntimeBridge } from '../agentSettingsConversation/runtime';
 import { getServerModelMetadata } from '../claudeSettings';
 import { getServerApiBaseUrl } from '../endpoints';
 import { createCoworkLlmTrace, createLlmTraceparent } from '../llmTrace';
@@ -539,6 +541,8 @@ type OpenClawRuntimeAdapterOptions = {
   ensureGatewayStarted?: (reason: string) => Promise<OpenClawEngineStatus>;
   beforePreparationDispatch?: (sessionId: string, runId?: string) => void;
   beforeExecutionDispatch?: (sessionId: string, runId?: string) => void;
+  /** Host dispatch context only; never a model/tool/renderer argument. */
+  getRemoteCommandId?: () => string | undefined;
   prepareDeliverableSync?: (sessionId: string, cwd: string) => Promise<void>;
   normalizeModelRef?: (modelRef: string) => string;
   onChannelPromptSubmit?: (event: {
@@ -815,6 +819,7 @@ type ActiveTurn = {
   toolResultTextByToolCallId: Map<string, string>;
   /** Tool calls shown from `input_delta` events whose `start` event has not arrived yet. */
   generatingToolCallIds?: Set<string>;
+  settingsPrivateToolCallIds?: Set<string>;
   /**
    * Reason text of a critical tool-loop veto seen in this turn. The runtime
    * ends such runs with its generic incomplete-turn copy, so this context is
@@ -5472,6 +5477,17 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     return goal;
   }
 
+  private settingsRuntimeBridge: AgentSettingsRuntimeBridge | null = null;
+  getAgentSettingsRuntime(): AgentSettingsRuntimeBridge {
+    return this.settingsRuntimeBridge ??= new AgentSettingsRuntimeBridge({
+      store: this.store, gateway: () => this.gatewayClient, owner: () => this.store.remoteCreationOwner(), epoch: () => this.accountRecoveryEpoch,
+      resolveSession: key => this.resolveSessionIdBySessionKey(key),
+      currentRun: (id, runId) => this.activeTurns.get(id)?.knownRunIds.has(runId) === true,
+      otherRuns: (agentId, allowedId) => [...this.activeTurns.keys(), ...this.yieldedSessions.keys()].some(id => id !== allowedId && this.store.getSession(id, 0)?.agentId === agentId),
+      approval: id => this.approvalController.getPermissionState(id),
+    });
+  }
+
   getRecoveryGatewayBootId(): string { return this.gatewayClient ? this.recoveryGatewayBootId : ''; }
 
   getRecoveryGatewayProcessPid(): number | undefined { return this.gatewayClient ? this.recoveryGatewayProcessPid ?? undefined : undefined; }
@@ -6480,6 +6496,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const chatSendStartMs = Date.now();
       firstResponseTiming.chatSendStartedAtMs = chatSendStartMs;
       if (runCwd) await prepareOpenClawDeliverableSync(this.options.prepareDeliverableSync, sessionId, runCwd);
+      this.assertAccountOperation(accountEpoch);
+      assertApprovalContinuationAllowed();
+      await this.getAgentSettingsRuntime().bindRemoteRun(sessionId, sessionKey, runId, this.options.getRemoteCommandId?.());
       this.assertAccountOperation(accountEpoch);
       assertApprovalContinuationAllowed();
       this.options.beforeExecutionDispatch?.(sessionId, executionRunId);
@@ -7584,6 +7603,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     turn: ActiveTurn,
     historyMessages: unknown[],
   ): void {
+    const privateIds = agentSettingsToolCallIds(this.store.getSession(sessionId)?.messages ?? []);
+    for (const id of turn.settingsPrivateToolCallIds ?? []) privateIds.add(id);
+    historyMessages = sanitizeAgentSettingsHistory(historyMessages, privateIds);
     this.syncBackfillableToolsFromHistory(sessionId, turn, historyMessages);
 
     for (const msg of historyMessages) {
@@ -9606,8 +9628,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.turnHistorySync.scheduleThinking(sessionId, toolCallId);
   }
 
-  private handleAgentToolEvent(sessionId: string, turn: ActiveTurn, data: unknown, eventRunId?: string): void {
-    if (!isRecord(data)) return;
+  private handleAgentToolEvent(sessionId: string, turn: ActiveTurn, payload: unknown, eventRunId?: string): void {
+    if (!isRecord(payload)) return;
+    let data = payload;
+
+    const privacyCallId = typeof data.toolCallId === 'string' ? data.toolCallId.trim() : '';
+    if (isAgentSettingsPrivateTool(data.name) && privacyCallId) (turn.settingsPrivateToolCallIds ??= new Set()).add(privacyCallId);
+    if (isAgentSettingsPrivateTool(data.name) || turn.settingsPrivateToolCallIds?.has(privacyCallId)) data = sanitizeAgentSettingsToolEvent(data);
 
     const rawPhase = typeof data.phase === 'string' ? data.phase.trim() : '';
     const phase = rawPhase === 'end' ? 'result' : rawPhase;

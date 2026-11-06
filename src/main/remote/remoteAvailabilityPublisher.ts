@@ -26,9 +26,10 @@ import { replyModelPresetNames } from './remoteReplyModel';
 import type { CoreRemoteBinding, RemoteStore } from './remoteStore';
 import { remoteDiagnosticLog, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
+import { hasTaskCreditsSnapshot } from './remoteTaskCredits';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
-export interface AvailabilityContext { environment?: string; targetId?: string; routeEpoch?: number; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; controlDeletionSupported?: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
+export interface AvailabilityContext { environment?: string; targetId?: string; routeEpoch?: number; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; controlDeletionSupported?: boolean; taskCreditsSupported?: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
 export const HistoryOwnership = { Owned: 'owned', Unowned: 'unowned', Unavailable: 'unavailable' } as const;
 export type HistoryOwnershipResult = { state: typeof HistoryOwnership.Owned | typeof HistoryOwnership.Unowned }
   | { state: typeof HistoryOwnership.Unavailable; dependency: 'control_ledger' | 'context'; error: unknown };
@@ -63,6 +64,7 @@ export class RemoteAvailabilityPublisher {
   private checkpointDeadline = 0;
   private readonly controlDeadlines = new Map<string, { until: number }>();
   private readonly pendingCursors = new Map<string, string>();
+  private readonly taskCreditsCursors = new Map<string, string>();
   private checkpointRevision: { localId: string; revision: string } | null = null;
   private readonly historyRetry = new Map<string, number>();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -104,7 +106,7 @@ export class RemoteAvailabilityPublisher {
     this.timer = null; this.encoder.cancel();
     this.controlWork = null; this.liveWork = null; this.historyWork = null;
     this.checkpointDeadline = 0; this.checkpointRevision = null; this.controlDeadlines.clear();
-    this.contentRepresentations.clear(); this.historyRetry.clear(); this.pendingCursors.clear(); this.liveScan.clear();
+    this.contentRepresentations.clear(); this.historyRetry.clear(); this.pendingCursors.clear(); this.taskCreditsCursors.clear(); this.liveScan.clear();
     this.scanOffsets.clear(); this.liveRecovery.reset(); this.failures.clear();
     this.wake();
   }
@@ -242,7 +244,8 @@ export class RemoteAvailabilityPublisher {
     let next: AvailabilityContext | null;
     try { next = this.deps.context(); } catch { return false; }
     return next?.routeEpoch === context.routeEpoch && next?.scope === context.scope && next.deviceId === context.deviceId
-      && next.environment === context.environment && next.targetId === context.targetId && sameOwner(next.owner, context.owner) && next.generation === context.generation;
+      && next.environment === context.environment && next.targetId === context.targetId && sameOwner(next.owner, context.owner) && next.generation === context.generation
+      && next.taskCreditsSupported === context.taskCreditsSupported;
   }
   private capture(context: AvailabilityContext): CapturedContext {
     return (context as CapturedContext)[publisherEpoch] === undefined ? { ...context, owner: { ...context.owner }, [publisherEpoch]: this.timerEpoch } : context;
@@ -450,6 +453,23 @@ export class RemoteAvailabilityPublisher {
       const deletionContext = this.deletionContext(context, row, state);
       rememberRemoteDeletionAdoption(this.deps.store, row.local_id, deletionContext, deletionContext.controlBinding!);
     }
+    if (state.phase === 'active' && context.taskCreditsSupported === false) {
+      const pending = this.ledger.pending(context.scope, 'control', row.local_id)
+        .find(request => request.pathname === '/control/facts/batches' && hasTaskCreditsSnapshot(request.body));
+      if (pending && state.taskCreditsRecoveryBatchId !== pending.key) {
+        // A new server may hide the feature while still accepting sealed requests.
+        // Drain that receipt/replay path first. Only a definitive schema/capability
+        // rejection starts checkpoint recovery; network uncertainty retains the request.
+        try { await this.facts(context, state); return; }
+        catch (error) {
+          this.assertCurrent(context);
+          if (![47019, 47017].includes((error as { code?: number }).code || 0)) throw error;
+        }
+        state.taskCreditsRecoveryBatchId = pending.key;
+        state.phase = 'activating'; state.operationId = randomUUID();
+        this.ledger.saveSession(state);
+      }
+    }
     if (state.phase === 'activating') {
       if (this.deps.store.get(`${AvailabilityDeletion.Prefix}${row.local_id}`) && !this.ledger.request(`${state.operationId}:activation`))
         throw new Error('REMOTE_DELETION_BINDING_UNRESOLVED');
@@ -480,6 +500,7 @@ export class RemoteAvailabilityPublisher {
       mirrorAvailabilityDeletionIdentity(this.deps.store, context, state);
     rememberAvailabilityDeletionBinding(this.deps.store, context, state);
     if (state.phase === 'bootstrap') {
+      if (await this.replaceTaskCreditsBootstrap(context, state)) return;
       try { await this.bootstrap(context, state); }
       catch (error) {
         this.assertCurrent(context);
@@ -518,6 +539,37 @@ export class RemoteAvailabilityPublisher {
     rememberAvailabilityDeletionBinding(this.deps.store, context, state);
     await this.facts(context, state);
     await this.repairDeletionIdentity(context, state);
+  }
+  /** Fence an old-format bootstrap before rebuilding it; never rewrite an operation ID. */
+  private async replaceTaskCreditsBootstrap(context: AvailabilityContext, state: AvailabilitySession): Promise<boolean> {
+    if (context.taskCreditsSupported !== false) return false;
+    const checkpoint = this.ledger.request(`${state.operationId}:checkpoint`);
+    const containsUsage = hasTaskCreditsSnapshot(checkpoint?.body) || this.ledger.db.prepare(`SELECT 1 FROM availability_requests
+      WHERE scope=? AND local_id=? AND key LIKE ? AND (instr(body,'"taskUsage"')>0 OR instr(body,'"turnUsage"')>0) LIMIT 1`)
+      .get(context.scope, state.localId, `${state.operationId}:part:%`);
+    if (!containsUsage) return false;
+    const begin = this.ledger.request(`${state.operationId}:begin`);
+    // A crash between sealing and constructing begin is safe to resume once; begin
+    // itself carries no usage, and a subsequent attempt has its cancellation identity.
+    if (!begin) return false;
+    const { mode: _mode, connectionGeneration: _generation, ...business } = begin.body;
+    const abort = this.save(context, state, `${state.operationId}:abort`, 'control', `/control/bootstrap/${state.operationId}/abort`,
+      { controlEpoch: state.controlEpoch, beginRequestHash: payloadHash(business) }, 1, null);
+    const receipt = await this.send(context, abort);
+    this.assertCurrent(context);
+    if (receipt.operationId !== state.operationId || receipt.sessionId !== state.sessionId
+      || receipt.writerGeneration !== state.writerGeneration) throw new Error('REMOTE_BOOTSTRAP_ABORT_RECEIPT_INVALID');
+    if (receipt.state === 'committed') {
+      this.ledger.db.prepare('INSERT OR IGNORE INTO availability_bootstrap_rechecks VALUES(?)').run(state.operationId);
+      await this.bootstrap(context, state);
+      return true;
+    }
+    if (!['aborted', 'expired', 'superseded'].includes(receipt.state)) throw new Error('REMOTE_BOOTSTRAP_ABORT_UNRESOLVED');
+    this.ledger.db.transaction(() => {
+      this.ledger.archiveBootstrap(context.scope, state.localId, state.operationId, receipt);
+      state.phase = 'activating'; state.operationId = randomUUID(); this.ledger.saveSession(state);
+    })();
+    return true;
   }
   private async repairDeletionIdentity(context: AvailabilityContext, state: AvailabilitySession): Promise<void> {
     if (!context.controlDeletionSupported || state.phase !== 'active'
@@ -572,7 +624,21 @@ export class RemoteAvailabilityPublisher {
     const checkpointKey = `${state.operationId}:checkpoint`;
     let saved = this.ledger.request(checkpointKey);
     if (!saved) {
-      const snapshot = options?.snapshot || availabilityControlSnapshot(this.deps.store, state.localId, state.pendingRunIds, false, { approvalIds: state.pendingApprovalIds, questionIds: state.pendingQuestionIds }, { paged: context.checkpointPagesSupported });
+      const recovery = state.taskCreditsRecoveryBatchId ? this.ledger.request(state.taskCreditsRecoveryBatchId) : null;
+      if (state.taskCreditsRecoveryBatchId && (!recovery || recovery.pathname !== '/control/facts/batches'
+        || recovery.scope !== context.scope || recovery.localId !== state.localId
+        || recovery.body.controlEpoch !== state.controlEpoch || recovery.body.writerGeneration !== state.writerGeneration))
+        throw new Error('REMOTE_CREDITS_RECOVERY_EVIDENCE_MISSING');
+      const events = recovery ? recovery.body.facts.map((fact: any) => ({ ...fact, sourceSeq: fact.factSeq })) : [];
+      const required = recoveryRequired(events);
+      const snapshot = options?.snapshot || availabilityControlSnapshot(this.deps.store, state.localId,
+        [...new Set([...state.pendingRunIds, ...required.runIds])], false,
+        { approvalIds: [...new Set([...(state.pendingApprovalIds || []), ...required.approvalIds])],
+          questionIds: [...new Set([...(state.pendingQuestionIds || []), ...required.questionIds])], deletedMessageIds: required.deletedMessageIds },
+        { paged: context.checkpointPagesSupported });
+      const through = [snapshot.revision, state.factSeq, recovery?.body.lastFactSeq || '0']
+        .map(value => BigInt(value)).reduce((left, right) => left > right ? left : right).toString();
+      if (recovery) recoverySourceManifest(events, snapshot, through);
       const parts: Array<{ records: typeof snapshot.records; payloadHash: string }> = [];
       for (const record of snapshot.records) {
         let part = parts.at(-1);
@@ -599,7 +665,7 @@ export class RemoteAvailabilityPublisher {
         if (paged) for (let partNo = 0; partNo < parts.length; partNo++) this.save(context, state, `${state.operationId}:part:${partNo}`, 'control', `/control/bootstrap/${state.operationId}/parts/${partNo}`,
           { controlEpoch: state.controlEpoch, ...parts[partNo] }, 1, null, 1, 'PUT');
         return this.save(context, state, checkpointKey, 'control', '', { revision: snapshot.revision,
-        throughFactSeq: String(BigInt(snapshot.revision) > BigInt(state.factSeq) ? BigInt(snapshot.revision) : BigInt(state.factSeq)), extra: options?.extra || {},
+        throughFactSeq: through, extra: options?.extra || {},
         recordHashes: Object.fromEntries(snapshot.records.map(record => [recordKey(record), payloadHash(record)])),
         ...(paged ? { partCount: parts.length, pagedManifest } : { parts }),
         manifestHash: payloadHash(pagedManifest || descriptors), kindCounts }, 1, null);
@@ -761,6 +827,7 @@ export class RemoteAvailabilityPublisher {
         if (request!.body.controlReconciliation && this.reconciliation.advance(this.deps.store, state, request!.body.controlReconciliation as ControlReconciliationPage))
           state.controlRevision = request!.body.controlReconciliation.revision;
       }
+      if (state.taskCreditsRecoveryBatchId === request!.key) delete state.taskCreditsRecoveryBatchId;
       this.ledger.saveSession(state); this.ledger.complete(request!.key);
       this.ledger.recordProgress(context.scope, state.localId, 'control');
     })());
@@ -994,6 +1061,30 @@ export class RemoteAvailabilityPublisher {
     history.completeOperation(operation.context,operation.id,result,{ historyGeneration: result.historyGeneration,resolvedSourceSeq: result.resolvedSourceSeq });
     this.ledger.recordProgress(context.scope, operation.context.localId, 'history');
   }
+  /** Scan index headers, never all history or metadata, to backfill usage outside the live tail. */
+  private taskCreditsCandidates(context: AvailabilityContext, localId: string): RecoveryCandidate[] {
+    if (!this.deps.store.taskCreditsBackfillEnabled(localId)) return [];
+    const key = `${context.scope}:${localId}`;
+    const db = this.deps.store.db;
+    return db.transaction(() => {
+      // The existing session index also orders rowids. Starting from core messages
+      // discovers pre-upgrade history that has no remote_live_revisions row yet.
+      const rows = db.prepare(`SELECT m.row_id,m.id AS object_id,m.type,m.sequence,r.revision,r.deleted FROM
+        (SELECT rowid AS row_id,id,type,sequence FROM cowork_messages WHERE session_id=? AND rowid>? ORDER BY rowid LIMIT 64) m
+        LEFT JOIN remote_live_revisions r ON r.session_id=? AND r.object_id=m.id ORDER BY m.row_id`)
+        .all(localId, this.taskCreditsCursors.get(key) || '0', localId) as Array<{ row_id: number; object_id: string; revision: number | null; deleted: number | null; type: string; sequence: number | null }>;
+      if (this.taskCreditsCursors.size >= 1024 && !this.taskCreditsCursors.has(key)) this.taskCreditsCursors.delete(this.taskCreditsCursors.keys().next().value!);
+      this.taskCreditsCursors.set(key, rows.length === 64 ? String(rows.at(-1)!.row_id) : '0');
+      const candidates: RecoveryCandidate[] = [];
+      for (const row of rows) {
+        if (row.type !== 'user' || row.deleted) continue;
+        if (row.revision === null) db.prepare('INSERT OR IGNORE INTO remote_live_revisions VALUES(?,?,1,0)').run(localId, row.object_id);
+        candidates.push({ object_id: row.object_id, revision: row.revision ?? 1, kind: 'message', position: row.sequence || 0 });
+      }
+      return candidates;
+    })();
+  }
+
   private async live(context: AvailabilityContext): Promise<void> {
     context = this.capture(context);
     if (!this.current(context)) return;
@@ -1044,7 +1135,8 @@ export class RemoteAvailabilityPublisher {
         const faults = recoveryFirst ? this.liveRecovery.candidates(this.deps.store.db, context.scope, row.local_id) : [];
         const annotations = recoveryFirst && context.publicationResolutionSupported === true
           ? annotationRepairCandidates(this.deps.store.db, this.ledger, context.scope, row.local_id, state.writerGeneration) : [];
-        const recovery = annotationFirst ? [...annotations, ...faults] : [...faults, ...annotations];
+        const credits = recoveryFirst ? this.taskCreditsCandidates(context, row.local_id) : [];
+        const recovery = annotationFirst ? [...credits, ...annotations, ...faults] : [...faults, ...annotations, ...credits];
         // Give current work and old faults a turn each; neither an archived fault nor a busy tail can starve the other.
         const merged: RecoveryCandidate[] = [];
         for (let index = 0; index < Math.max(recent.length, recovery.length); index++) {
@@ -1090,7 +1182,9 @@ export class RemoteAvailabilityPublisher {
           if (!this.eligible(key) || !this.eligible(request.key)) continue;
           sent++;
           try {
-            await this.publishLive(context, request);
+            if (context.taskCreditsSupported === false && context.publicationResolutionSupported && hasTaskCreditsSnapshot(request.body))
+              await this.resolveLive(context, state, request.key);
+            else await this.publishLive(context, request);
             if (current()) { this.failures.delete(key); this.failures.delete(request.key); }
           } catch (error) { if (current()) this.fail(key, error, context, row.local_id); }
         }
@@ -1141,7 +1235,7 @@ export class RemoteAvailabilityPublisher {
             encoding = true; encoded++;
             const projection = await this.encoder.project(this.deps.store.db, { database: this.deps.store.db.name, modelPresetNames: replyModelPresetNames(), annotationLanguage: getLanguage(),
               localId: row.local_id, sessionId: row.session_id, deviceId: context.deviceId, owner: context.owner,
-              environment: context.environment, objectId: candidate.object_id, objectKind: candidate.kind, revision: String(candidate.revision) });
+              environment: context.environment, taskCreditsSupported: context.taskCreditsSupported, objectId: candidate.object_id, objectKind: candidate.kind, revision: String(candidate.revision) });
             encoding = false;
             if (!current()) return;
             if (projection?.encodingStats) remoteDiagnosticLog('remote.record.probe', { localSessionId: row.local_id,

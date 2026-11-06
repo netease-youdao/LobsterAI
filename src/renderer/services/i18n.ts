@@ -1,6 +1,7 @@
 import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { remoteAgentSettingsTranslations } from '../../shared/remote/agentSettingsCopy';
 import { remoteAnnotationTranslations } from '../../shared/remote/annotationCopy';
 import { configService } from './config';
 
@@ -286,6 +287,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...mediaTranslations.zh,
     ...imageEditingTranslations.zh,
     ...remoteAnnotationTranslations.zh,
+    ...remoteAgentSettingsTranslations.zh,
     officeSaved: '已自动保存',
     officePending: '等待保存…',
     officeSaving: '正在保存…',
@@ -5236,6 +5238,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...mediaTranslations.en,
     ...imageEditingTranslations.en,
     ...remoteAnnotationTranslations.en,
+    ...remoteAgentSettingsTranslations.en,
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',
     officeSaving: 'Saving…',

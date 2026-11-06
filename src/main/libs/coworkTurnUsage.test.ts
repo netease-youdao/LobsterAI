@@ -478,7 +478,7 @@ describe('CoworkTurnUsageService', () => {
     expect(harness.events).toEqual([]);
   });
 
-  test('does not retry or persist when access changes during the retry delay', async () => {
+  test('persists pending before access changes and never writes a result after access is revoked', async () => {
     let allowed = true;
     const harness = createHarness({ captureSessionAccess: () => () => allowed });
     harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(2) }));
@@ -487,7 +487,8 @@ describe('CoworkTurnUsageService', () => {
     await harness.service.settleLatestTurn(SESSION_ID);
 
     expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
-    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.updateMessage).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage.mock.calls[0][2].metadata.turnUsage.status).toBe(CoworkTurnUsageStatus.Pending);
     expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
   });
 
@@ -506,7 +507,8 @@ describe('CoworkTurnUsageService', () => {
 
     expect(new URL(harness.fetchWithAuth.mock.calls[0][0]).searchParams.get('mediaTaskIds')).toBe('123');
     expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
-    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.updateMessage).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage.mock.calls[0][2].metadata.turnUsage.status).toBe(CoworkTurnUsageStatus.Pending);
     expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
     harness.service.recordMediaTask(SESSION_ID, MESSAGE_ID, '456');
     expect(harness.message.metadata?.turnMediaTaskIds).toEqual(['123']);

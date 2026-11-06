@@ -1,0 +1,22 @@
+--- a/extensions/memory-core/index.ts
++++ b/extensions/memory-core/index.ts
+@@ -27,6 +27,7 @@
+ import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
+ import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
+ import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
++import { withMemoryWorkspaceLock } from "./src/memory-workspace-lock.js";
+ 
+ type MemoryToolsModule = typeof import("./src/tools.js");
+ type StandingIntentToolModule = typeof import("./src/standing-intents-tool.js");
+@@ -244,6 +245,11 @@
+       api.runtime.state.openKeyedStore<T>(options);
+     const host = { acquireLocalService, openKeyedStore } satisfies MemoryCoreRuntimeHost;
+     configureMemoryCoreDreamingState(openKeyedStore);
++    // LobsterAI shares the exact automatic-memory lock; no model-callable path.
++    Object.defineProperty(globalThis, Symbol.for("lobsterai.memoryWorkspaceLock.v1"), {
++      configurable: true,
++      value: withMemoryWorkspaceLock,
++    });
+     const memoryRuntime = createLazyMemoryRuntime(host);
+     registerShortTermPromotionDreaming(api);
+     registerSessionBackfillGatewayMethods(api);

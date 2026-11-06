@@ -6,6 +6,7 @@ import { AgentOwnerKind } from '../../shared/agent/constants';
 import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import type { OwnershipTarget, OwnershipTaskSync } from '../../shared/ownership/types';
+import { RemoteAgentSettings } from '../../shared/remote/agentSettings';
 import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReasonCode, type RemoteConnectionRemoveRequest, type RemoteConnectionResumeRequest, RemoteDeviceAdmissionState, type RemoteDeviceConnection, RemoteDeviceConnectionState } from '../../shared/remote/connections';
 import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteAgentIcon, RemoteCapability, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
 import { RemoteDeletion } from '../../shared/remote/deletions';
@@ -16,6 +17,7 @@ import { type QuestionDecisionOutcome, RemoteQuestion } from '../../shared/remot
 import { REMOTE_REPLY_PROJECTION_VERSION, REMOTE_REPLY_SYNC_DELAY_MS,RemoteReplyCapability } from '../../shared/remote/reply';
 import { RemoteImportValidation, RemoteRetention, type RetentionImport, type RetentionState } from '../../shared/remote/retention';
 import { parseRemoteSyncTarget, RemoteSyncTarget, remoteSyncTargetHeaders, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
+import { RemoteTaskCredits } from '../../shared/remote/taskCredits';
 import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
 import type { AgentOwnerStore } from '../agentOwnership';
 import { OwnershipAssociationStore, type OwnershipClaimBlocks } from '../ownershipAssociationStore';
@@ -23,6 +25,8 @@ import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import { type InputPreparationService,RemoteAttachmentError } from './inputPreparationService';
 import type { RemoteIdentity } from './installationIdentity';
 import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
+import type { RemoteAgentSettingsConnection } from './remoteAgentSettingsAccess';
+import { type RemoteAgentSettingsDependencies,RemoteAgentSettingsProtocol } from './remoteAgentSettingsProtocol';
 import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
 import { RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { RemoteConnectionClient } from './remoteConnectionClient';
@@ -81,6 +85,7 @@ interface SettingsChanges { reregister?: boolean; retrySessionId?: string; enabl
 interface PendingConfiguration { route: string; changes: SettingsChanges[] }
 interface SavedImport extends RetentionImport { uploadCursor?: number; confirmedPartCount?: number; expiresAt?: string; absoluteExpiresAt?: string; reason?: string; projectionVersion?: number; replyProjection?: boolean; importId: string; sessionId: string; baseSourceSeq: string; snapshotEpoch: number; expectedSourceSeq: string; expectedServerSeq: string; beginConfirmed?: boolean; beginAttempted?: boolean; fileSet?: string; manifest: any; parts: Array<ImportPartIndex & { payload?: { records: ProjectionRecord[] } }>; stateVersion?: string }
 export interface BridgeDependencies {
+  agentSettings?: RemoteAgentSettingsDependencies;
   registrationIdentities?: RegistrationIdentities;
   createSocket?(url: string): RemoteSocket;
   deletion?: Pick<SessionDeletionDependencies, 'service' | 'runtime' | 'reconcileStop'>;
@@ -126,6 +131,8 @@ const ACTIVE_POLL_MS = 5000;
 const CATALOG_RECHECK_MS = 300000;
 const InputResultConflict = { Model: 47042, State: 47043 } as const;
 export class RemoteBridge {
+  private readonly agentSettings: RemoteAgentSettingsProtocol | null;
+  private agentSettingsCapability = false;
   private readonly availability: RemoteAvailabilityPublisher;
   private readonly deletions: RemoteSessionDeletionClient | null;
   private deletionSupported = false;
@@ -245,6 +252,7 @@ export class RemoteBridge {
   private fileCapabilities: string[] = [];
   private projectionVersion = 1;
   private replySupported = false;
+  private taskCreditsSupported = false;
   private questionsSupported = false;
   private retentionSupported = false;
   private receiptsSupported = false;
@@ -266,6 +274,8 @@ export class RemoteBridge {
     deps.agentOwnership?.publicationOrigins?.setCurrentTargetProvider(publicationTarget);
     this.accountRoute = deps.getApiBaseUrl();
     this.accountRouteEpoch = deps.getRouteEpoch?.() ?? 0;
+    this.agentSettings = deps.agentSettings ? new RemoteAgentSettingsProtocol({ ...deps.agentSettings,
+      connection: () => this.agentSettingsConnection(), request: (path, method, body) => this.api(path, method, body) }) : null;
     this.displaySnapshot = new RemoteDisplaySnapshot({
       retainUntilInvalidated: value => this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled
         && value.status === RemoteDisplayHealthStatus.Known && value.settings?.enabled === false
@@ -310,7 +320,7 @@ export class RemoteBridge {
         && !this.syncPaused() && !deps.store.needsSecurityRecovery() ? {
         environment: this.remoteEnvironment(), targetId: this.targetId, scope: `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}`,
         owner: this.owner, deviceId: this.registration.deviceId, generation: this.generation || '', routeEpoch: this.accountGeneration,
-        controlDeletionSupported: this.controlDeletionSupported,
+        controlDeletionSupported: this.controlDeletionSupported, taskCreditsSupported: this.taskCreditsSupported,
         historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
         checkpointPagesSupported: this.capabilitySnapshot?.capabilities?.includes('control_checkpoint_pages_v1') === true,
         publicationResolutionSupported: this.capabilitySnapshot?.capabilities?.includes('live_publication_resolution_v1') === true,
@@ -628,6 +638,7 @@ export class RemoteBridge {
       if (!name || name.length > 100 || /[\u0000-\u001f\u007f-\u009f]/u.test(changes.name)) throw new Error('Invalid device name');
       settings.name = name;
     }
+    if (changes.enabled === false && settings.enabled) this.agentSettings?.fence();
     if (changes.enabled !== undefined) settings.enabled = changes.enabled;
     if (changes.workspace && !settings.workspaces.some(w => w.path === changes.workspace!.path)) settings.workspaces.push({ workspaceId: randomUUID(), ...changes.workspace, available: true });
     // Keep IDs as tombstones: accepted commands must never be redirected to a different path.
@@ -692,6 +703,8 @@ export class RemoteBridge {
       const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
       if (route === this.accountRoute && routeEpoch === this.accountRouteEpoch && ((current === null && this.owner === null) || sameOwner(current, this.owner))) return;
       const previous = this.owner;
+      if (previous || this.accountGeneration > 0) this.agentSettings?.fence();
+      this.agentSettings?.configure(false); this.agentSettingsCapability = false;
       this.accountRouteEpoch = routeEpoch;
       this.availability.invalidateContext();
       this.accountGeneration++; this.commandTaskRetryAt.clear(); this.reconcileRetryAt = 0; this.runEvidenceScans.clear(); this.unresolvedCursor = null; this.receiptCursor = undefined; this.activityCursor = undefined; this.activityOffset = 0; this.importSnapshots.cancel(); this.verifiedImports.clear(); this.sessionChecks.clear(); this.taskMemoryBlocks.clear();
@@ -714,7 +727,7 @@ export class RemoteBridge {
       this.deps.store.setEnabledOwner(null); this.disconnect();
       this.declaredDualApproval = false; this.deps.store.setApprovalProjectionSupported(false);
       this.deletionSupported = false; this.controlDeletionSupported = false; this.deletionAvailable = false; this.deps.store.setDeletionProjectionSupported(false);
-      this.fileCapabilities = []; this.declaredQuestions = false; this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false); this.replySupported = false; this.replies.clear(); this.projectionVersion = 1; this.files?.configure(false);
+      this.fileCapabilities = []; this.declaredQuestions = false; this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false); this.replySupported = false; this.taskCreditsSupported = false; this.replies.clear(); this.projectionVersion = 1; this.files?.configure(false);
       this.retentionSupported = false; this.receiptsSupported = false; this.capabilitiesKnown = false; this.fenceCheckedAt = 0; this.retentionVerifiedAt.clear();
       this.deps.configureDualApproval?.({ enabled: false, projectionSupported: false });
       this.deps.onAccountChange(previous, current); this.changed();
@@ -732,6 +745,7 @@ export class RemoteBridge {
     const wasRemoved = this.connectionRemoved;
     if (wasRemoved && value.connectionState === RemoteDeviceConnectionState.Allowed
       && BigInt(value.connectionVersion) <= BigInt(this.connectionVersion)) return;
+    if (!wasRemoved && value.connectionState === RemoteDeviceConnectionState.Removed) this.agentSettings?.fence();
     this.connectionVersion = value.connectionVersion;
     this.connectionRemoved = value.connectionState === RemoteDeviceConnectionState.Removed;
     this.deps.store.put(this.connectionStateKey(), { state: value.connectionState, version: value.connectionVersion });
@@ -744,6 +758,22 @@ export class RemoteBridge {
       }
     }
     this.changed();
+  }
+  agentSettingsProtocol(): RemoteAgentSettingsProtocol | null { return this.agentSettings; }
+  private syncAgentSettingsCapability(): void {
+    const available = this.agentSettings?.available() === true;
+    if (available === this.agentSettingsCapability) return;
+    this.agentSettingsCapability = available;
+    if (this.registration) this.queueControl(this.settings());
+  }
+  private agentSettingsConnection(): RemoteAgentSettingsConnection | null {
+    const target = this.registration?.syncTarget;
+    if (!this.owner || !this.registration || !target || !sameOwner(this.owner, this.deps.getOwner())
+      || this.accountRoute !== this.deps.getApiBaseUrl() || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return null;
+    return { owner: { ...this.owner }, dataSpaceId: target.dataSpaceId, dataGeneration: target.dataGeneration,
+      deviceId: this.registration.deviceId, route: this.accountRoute, connectionGeneration: this.generation,
+      active: !!this.generation && this.settings().enabled && !this.stopped && !this.shuttingDown && !this.syncPaused()
+        && !this.deps.store.needsSecurityRecovery() };
   }
   queryConnections() { return this.connections.query(); }
   removeConnection(input: RemoteConnectionRemoveRequest) { return this.connections.remove(input); }
@@ -827,6 +857,9 @@ export class RemoteBridge {
       this.ensureAccount(); owner = this.owner; accountGeneration = this.accountGeneration;
       retryGeneration = this.retryGeneration;
       this.startDeletionSync();
+      await this.agentSettings?.refreshAvailability();
+      this.syncAgentSettingsCapability();
+      this.agentSettings?.tick();
       if (this.deps.security) await this.deps.security.available();
       if (!owner || this.suspended && !this.connectionRemoved) { this.backoff = 5000; return; }
       if (Date.now() < this.retryAfter) { if (this.syncPaused()) await this.reconcilePaused(); this.backoff = this.retryAfter - Date.now(); return; }
@@ -886,6 +919,7 @@ export class RemoteBridge {
       }
       this.startInputRecovery();
       this.startOptionalPublications(owner, accountGeneration);
+      this.agentSettings?.tick();
       this.startDeletionSync();
       remotePerformance.sync(RemotePerformanceStage.BridgeDispatch, () => { this.startHistorySync(); this.syncFiles(); });
       if (this.generation && this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input) {
@@ -1131,6 +1165,7 @@ export class RemoteBridge {
       }
       if (current() && error instanceof RemoteApiError
         && (error.code === CONNECTION_REMOVED_CODE || error.data?.reason === RemoteConnectionReasonCode.Removed)) {
+        if (!this.connectionRemoved) this.agentSettings?.fence();
         this.connectionRemoved = true; this.connectionReason = RemoteConnectionReason.Removed;
         const rejectedVersion = error.data?.connectionVersion;
         if (typeof rejectedVersion === 'string' && /^[1-9]\d*$/u.test(rejectedVersion) && BigInt(rejectedVersion) > BigInt(this.connectionVersion)) this.connectionVersion = rejectedVersion;
@@ -1147,7 +1182,7 @@ export class RemoteBridge {
   }
   private advertisedCapabilities(createSessionAvailable = true): string[] {
     const supported = this.declaredAgentCapabilities.includes(RemoteCapability.AgentSelection) || createSessionAvailable && this.settings().createSessionAvailable !== false ? capabilities : capabilities.filter(value => value !== RemoteCapability.CreateSession);
-    return [...(this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported), ...this.declaredAgentCapabilities, ...this.inputCapabilities, ...this.fileCapabilities, ...(this.replySupported ? [RemoteReplyCapability] : []), ...(this.declaredQuestions ? [RemoteQuestion.Capability] : []), ...(this.retentionSupported ? [RemoteRetention.Capability] : []), ...(this.receiptsSupported ? [RemoteRetention.Receipts] : []), ...(this.declaredDualApproval ? [RemoteCapability.DualApproval] : []), ...(this.connectionManagementKnown ? [REMOTE_CONNECTION_MANAGEMENT_CAPABILITY] : []), ...(this.deletionSupported ? [RemoteDeletion.Capability] : []), ...(this.controlDeletionSupported ? [RemoteDeletion.ControlCapability] : [])];
+    return [...(this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported), ...this.declaredAgentCapabilities, ...this.inputCapabilities, ...this.fileCapabilities, ...(this.replySupported ? [RemoteReplyCapability] : []), ...(this.taskCreditsSupported ? [RemoteTaskCredits.Capability] : []), ...(this.declaredQuestions ? [RemoteQuestion.Capability] : []), ...(this.retentionSupported ? [RemoteRetention.Capability] : []), ...(this.receiptsSupported ? [RemoteRetention.Receipts] : []), ...(this.declaredDualApproval ? [RemoteCapability.DualApproval] : []), ...(this.connectionManagementKnown ? [REMOTE_CONNECTION_MANAGEMENT_CAPABILITY] : []), ...(this.deletionSupported ? [RemoteDeletion.Capability] : []), ...(this.controlDeletionSupported ? [RemoteDeletion.ControlCapability] : []), ...(this.agentSettingsCapability ? [RemoteAgentSettings.Capability] : [])];
   }
   private async ensureRegistration(): Promise<void> {
     if (this.registrationPending) return this.registrationPending;
@@ -1156,6 +1191,7 @@ export class RemoteBridge {
     try { await pending; } finally { if (this.registrationPending === pending) this.registrationPending = null; }
   }
   private async refreshCapabilities(confirmedSnapshot?: any): Promise<void> {
+    await this.agentSettings?.refreshAvailability();
     const environment = this.remoteEnvironment();
     const support = confirmedSnapshot ?? await this.api('/capabilities', 'GET', undefined, false);
     if (environment !== this.remoteEnvironment()) throw new Error('Remote service environment changed');
@@ -1167,7 +1203,7 @@ export class RemoteBridge {
       if (!this.controls().some(intent => !intent.enabled)) throw new RemoteApiError(47000, 'Server upgrade required for same-account remote access');
     }
     const previouslyKnown = this.capabilitiesKnown;
-    const previous = stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported]);
+    const previous = stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported]);
     const previousProjectionVersion = this.projectionVersion;
     const supported = Array.isArray(support.capabilities) ? support.capabilities : [];
     const target = parseRemoteSyncTarget(support.syncTarget);
@@ -1178,6 +1214,8 @@ export class RemoteBridge {
     }
     this.discoveredTarget = target;
     this.capabilitySnapshot = support;
+    this.agentSettings?.configure(supported.includes(RemoteAgentSettings.Capability));
+    this.syncAgentSettingsCapability();
     this.deletionSupported = !!this.deletions && supported.includes(RemoteDeletion.Capability);
     this.controlDeletionSupported = this.deletionSupported && supported.includes(RemoteDeletion.ControlCapability);
     this.deletionAvailable = this.deletionSupported && support.sessionDeletion?.available === true;
@@ -1190,6 +1228,7 @@ export class RemoteBridge {
     this.fileCapabilities = this.files && support.projectionVersions?.includes(3) ? Object.values(RemoteFileCapability).filter(value => supported.includes(value)) : [];
     const fileSupported = this.fileCapabilities.length === Object.values(RemoteFileCapability).length;
     this.replySupported = support.projectionVersions?.includes(REMOTE_REPLY_PROJECTION_VERSION) === true && supported.includes(RemoteReplyCapability);
+    this.taskCreditsSupported = this.replySupported && support.projectionVersions?.includes(RemoteTaskCredits.ReaderProjectionVersion) === true && supported.includes(RemoteTaskCredits.Capability);
     this.questionsSupported = this.deps.supportsQuestions?.() === true && support.projectionVersions?.includes(RemoteQuestion.ProjectionVersion) === true && supported.includes(RemoteQuestion.Capability);
     const questionKey = this.targetKey('questionCapability');
     // Admission may close, but original accepted commands still require the protocol declaration.
@@ -1199,7 +1238,7 @@ export class RemoteBridge {
       && support.syncRetention.eventIdAlgorithm === RemoteRetention.EventIdAlgorithm;
     this.receiptsSupported = supported.includes(RemoteRetention.Receipts);
     this.capabilitiesKnown = true;
-    this.projectionVersion = this.questionsSupported ? RemoteQuestion.ProjectionVersion : this.replySupported ? REMOTE_REPLY_PROJECTION_VERSION : fileSupported ? 3 : this.inputCapabilities.includes(RemoteInputCapability.Schema) ? 2 : 1;
+    this.projectionVersion = this.taskCreditsSupported ? RemoteTaskCredits.ReaderProjectionVersion : this.questionsSupported ? RemoteQuestion.ProjectionVersion : this.replySupported ? REMOTE_REPLY_PROJECTION_VERSION : fileSupported ? 3 : this.inputCapabilities.includes(RemoteInputCapability.Schema) ? 2 : 1;
     this.files?.configure(fileSupported);
     if (this.socket && previousProjectionVersion !== this.projectionVersion) this.disconnect();
 
@@ -1228,7 +1267,7 @@ export class RemoteBridge {
     if (this.declaredDualApproval) this.deps.store.put(dualKey, true);
     this.deps.store.setApprovalProjectionSupported(this.declaredDualApproval);
     this.deps.configureDualApproval?.({ enabled: dualEnabled, projectionSupported: this.declaredDualApproval });
-    if (!previouslyKnown || previousProjectionVersion !== this.projectionVersion || previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported])) {
+    if (!previouslyKnown || previousProjectionVersion !== this.projectionVersion || previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported])) {
       captureRemoteTelemetry({ remoteOwnerId: this.owner?.userId, ownerScopeId: this.owner?.scopeKey }).emit(RemoteBridgeTelemetry.Capability, {
         domain: 'control', fromState: previouslyKnown ? 'ready' : 'unknown', toState: 'ready', reason: 'STATE_CHANGED', projectionVersion: this.projectionVersion,
       });
@@ -1236,7 +1275,7 @@ export class RemoteBridge {
     this.lastCapabilityCheck = Date.now();
     if (this.registration && this.settings().enabled) this.ownershipClaimBlocks();
     if (this.registration) this.applyProjectionCapabilities();
-    if (this.registration && previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported])) this.queueControl(this.settings());
+    if (this.registration && previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported])) this.queueControl(this.settings());
   }
   private applyProjectionCapabilities(): void {
     if (!this.capabilitiesKnown || !this.owner || !this.registration) return;
@@ -1246,6 +1285,7 @@ export class RemoteBridge {
       && this.capabilitySnapshot?.capabilities?.includes(RemoteAgentIcon.Capability) === true);
     this.deps.store.setDeletionProjectionSupported(this.deletionSupported);
     this.deps.store.setReplyProjectionSupported(this.replySupported);
+    this.deps.store.setTaskCreditsProjectionSupported(this.taskCreditsSupported);
     this.deps.store.setQuestionProjectionSupported(this.questionsSupported);
     const fileSupported = this.fileCapabilities.length === Object.values(RemoteFileCapability).length;
     this.deps.store.setFileProjectionSupported(fileSupported);
@@ -1475,8 +1515,11 @@ export class RemoteBridge {
         if (frame.type === 'hello') {
           if (frame.protocolVersion !== REMOTE_PROTOCOL_VERSION || !/^[1-9]\d*$/u.test(String(frame.connectionGeneration))) throw new Error('Invalid remote handshake');
           if (this.projectionVersion > 1 && frame.projectionVersion !== this.projectionVersion) {
-            const negotiated = [1, 2, 3, REMOTE_REPLY_PROJECTION_VERSION, RemoteQuestion.ProjectionVersion].includes(frame.projectionVersion) ? frame.projectionVersion : 1;
+            const negotiated = [1, 2, 3, REMOTE_REPLY_PROJECTION_VERSION, RemoteQuestion.ProjectionVersion, RemoteTaskCredits.ReaderProjectionVersion].includes(frame.projectionVersion) ? frame.projectionVersion : 1;
             this.projectionVersion = Math.min(this.projectionVersion, negotiated);
+            if (this.projectionVersion < RemoteTaskCredits.ReaderProjectionVersion) {
+              this.taskCreditsSupported = false; this.deps.store.setTaskCreditsProjectionSupported(false);
+            }
             if (this.projectionVersion < RemoteQuestion.ProjectionVersion) {
               this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false);
             }

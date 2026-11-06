@@ -30,6 +30,8 @@ export interface ApprovalRegistration {
   createdAtMs: number | null;
   expiresAtMs: number | null;
   description: ApprovalDescription;
+  /** Host-validated settings proposal digest; never accepted from model arguments. */
+  boundOperationDigest?: string;
 }
 interface Submission {
   id: string; source: ApprovalDecisionOptions['source']; decision: ApprovalDecision; contentHash: string;
@@ -203,7 +205,7 @@ export class ApprovalDecisionService {
     const binding = this.options.getBinding(registration.pending.sessionId);
     if (!binding) return null;
     const old = this.read(registration.pending.requestId);
-    const operationDigest = digest({ binding, kind: registration.pending.kind, requestId: registration.pending.requestId,
+    const operationDigest = registration.boundOperationDigest ?? digest({ binding, kind: registration.pending.kind, requestId: registration.pending.requestId,
       raw: registration.rawRequest, createdAt: registration.createdAtMs, expiresAt: registration.expiresAtMs,
       adapter: APPROVAL_ADAPTER_VERSION, description: registration.description });
     if (old) {

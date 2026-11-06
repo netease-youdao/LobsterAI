@@ -133,6 +133,7 @@ import type { OwnershipCommitRequest, OwnershipTarget } from '../shared/ownershi
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
+import { type RemoteAgentSettingsAuthorization, RemoteAgentSettingsIpc, type RemoteAgentSettingsRevoke } from '../shared/remote/agentSettings';
 import type { RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest } from '../shared/remote/connections';
 import { type RemoteConfigureRequest, RemoteIpc, type RemoteSettingsState } from '../shared/remote/constants';
 import { RemoteTelemetryIpc } from '../shared/remote/telemetry';
@@ -188,6 +189,9 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
   remote: {
+    agentSettingsState: () => ipcRenderer.invoke(RemoteAgentSettingsIpc.State),
+    authorizeAgentSettings: (input: RemoteAgentSettingsAuthorization) => ipcRenderer.invoke(RemoteAgentSettingsIpc.Authorize, input),
+    revokeAgentSettings: (input: RemoteAgentSettingsRevoke) => ipcRenderer.invoke(RemoteAgentSettingsIpc.Revoke, input),
     telemetry: (input: RemoteTelemetryUiInput) => ipcRenderer.send(RemoteTelemetryIpc.Ui, input),
     state: () => ipcRenderer.invoke(RemoteIpc.State),
     queryConnections: (input: RemoteConnectionsRequest) => ipcRenderer.invoke(RemoteIpc.Connections, input),

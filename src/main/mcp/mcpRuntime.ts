@@ -13,6 +13,7 @@ import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import {
+  type AgentSettingsToolHandler,
   type AskUserOptions,
   type AskUserRequest,
   type AskUserResponse,
@@ -132,6 +133,7 @@ export class McpRuntime {
     | ((request: BrowserToolRequest) => Promise<BrowserToolResponse>)
     | null = null;
   private decisionToolHandler: DecisionToolHandler | null = null;
+  private agentSettingsToolHandler: AgentSettingsToolHandler | null = null;
   private readonly editorToolHandlers = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
   constructor(private readonly deps: McpRuntimeDeps) {
@@ -180,6 +182,12 @@ export class McpRuntime {
     this.browserToolHandler = handler;
     this.bridgeServer?.onBrowserTool(handler);
   }
+
+  setAgentSettingsToolHandler(handler: AgentSettingsToolHandler): void {
+    this.agentSettingsToolHandler = handler;
+    this.bridgeServer?.onAgentSettingsTool(handler);
+  }
+  getAgentSettingsCallbackUrl(): string | null { return this.bridgeServer?.agentSettingsCallbackUrl ?? null; }
 
   setDecisionToolHandler(handler: DecisionToolHandler): void {
     this.decisionToolHandler = handler;
@@ -337,6 +345,7 @@ export class McpRuntime {
       return await this.mediaGenerationHandler(request);
     });
 
+    if (this.agentSettingsToolHandler) this.bridgeServer.onAgentSettingsTool(this.agentSettingsToolHandler);
     this.bridgeServer.onDecisionTool(async (request, signal) => {
       if (!this.decisionToolHandler) {
         return {

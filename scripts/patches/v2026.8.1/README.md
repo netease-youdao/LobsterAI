@@ -922,3 +922,25 @@ history stays a cache miss once and later turns append to it normally.
 Removal: v2026.10.10-beta.3 and later main contain #169063; stable v2026.10.6
 does not. Remove this patch when the pinned upstream contains it, and rerun the
 follow-up cache check above.
+
+
+## Agent Settings tool visibility by trusted run
+
+`openclaw-agent-settings-tool-run-context.patch` forwards the existing runtime
+`options.runId` to plugin tool factories and declares the optional SDK context
+field. The Lobster Agent Settings plugin exposes its tool only after the desktop
+pre-registers that exact Agent/session/run through its administrator RPC. Local
+runs and old runtimes missing this context keep their existing tools.
+
+Only this plugin's tool descriptor cache gains session/run identity; other
+plugins retain their existing cache reuse. This prevents a cached remote tool
+descriptor from appearing in a later local run on the same Agent. Rebuild the
+pinned runtime with both this patch and the memory-lock patch; an old runtime
+without runId fails closed by hiding the settings tool.
+
+Verify `src/plugins/tool-descriptor-cache.agent-settings.test.ts`, desktop plugin
+coordinator/registration tests, and an isolated gateway: pre-register a remote
+run, resolve/cache its tool list, then resolve a local run and finish the remote
+run. The local list and ended-run factory must not expose the settings tool.
+Remove this patch when upstream forwards the trusted run identity and provides
+equivalent descriptor cache isolation for run-dependent tool visibility.

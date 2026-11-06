@@ -117,6 +117,12 @@ export type DecisionToolResponse = {
   details?: Record<string, unknown>;
 };
 
+export interface AgentSettingsToolRequest {
+  args: Record<string, unknown>;
+  context: { agentId: string; sessionKey: string; runId: string; toolCallId: string };
+}
+export type AgentSettingsToolHandler = (request: AgentSettingsToolRequest, signal: AbortSignal) => Promise<DecisionToolResponse>;
+
 export type DecisionToolHandler = (
   request: DecisionToolRequest,
   signal: AbortSignal,
@@ -144,6 +150,7 @@ export class McpBridgeServer {
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
+  private onAgentSettingsToolCallback: AgentSettingsToolHandler | null = null;
   /** Editor tool handlers by route, served at `/<route>/tool`. */
   private readonly editorTools = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
@@ -172,6 +179,11 @@ export class McpBridgeServer {
   get decisionCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/decision/tool` : null;
   }
+
+  get agentSettingsCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/agent-settings/tool` : null;
+  }
+  onAgentSettingsTool(handler: AgentSettingsToolHandler): void { this.onAgentSettingsToolCallback = handler; }
 
   editorCallbackUrl(route: string): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/${route}/tool` : null;
@@ -388,6 +400,11 @@ export class McpBridgeServer {
       return;
     }
 
+    if (req.url === '/agent-settings/tool') {
+      await this.handleAgentSettingsTool(req, res);
+      return;
+    }
+
     if (req.url?.startsWith('/decision/tool')) {
       await this.handleDecisionTool(req, res);
       return;
@@ -563,6 +580,32 @@ export class McpBridgeServer {
           isError: true,
         }));
       }
+    }
+  }
+
+  private async handleAgentSettingsTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const controller = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+    const reply = (status: number, value: DecisionToolResponse): void => {
+      if (res.writableEnded || res.destroyed) return;
+      res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(value));
+    };
+    try {
+      const chunks: Buffer[] = []; let bytes = 0;
+      for await (const chunk of req) {
+        bytes += chunk.length;
+        if (bytes > 512 * 1024) throw new Error('SETTINGS_CONTENT_TOO_LARGE');
+        chunks.push(Buffer.from(chunk));
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as AgentSettingsToolRequest;
+      if (!body || Object.keys(body).some(key => !['args', 'context'].includes(key)) || !body.args || typeof body.args !== 'object' || Array.isArray(body.args)
+        || !body.context || Object.keys(body.context).sort().join(',') !== 'agentId,runId,sessionKey,toolCallId'
+        || Object.values(body.context).some(value => typeof value !== 'string' || !value || value.length > 256)) throw new Error('CONVERSATION_SOURCE_INVALID');
+      if (!this.onAgentSettingsToolCallback) throw new Error('SETTINGS_UNAVAILABLE');
+      reply(200, await this.onAgentSettingsToolCallback(body, controller.signal));
+    } catch {
+      reply(400, { content: [{ type: 'text', text: 'SETTINGS_UNAVAILABLE' }], isError: true });
     }
   }
 

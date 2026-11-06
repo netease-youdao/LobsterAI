@@ -20,6 +20,28 @@ export function initializeAvailabilitySource(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_remote_live_deleted ON remote_live_revisions(session_id,object_id) WHERE deleted=1;`);
   for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
     const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
+    const refs = operation === 'UPDATE' ? ['OLD', 'NEW'] : [ref];
+    const attributionSessions = refs.map(value => `SELECT substr(${value}.key,19) AS session_id WHERE ${value}.key GLOB 'syncTargetHistory:*'
+      UNION SELECT session_id FROM local_execution_origin WHERE ${value}.key GLOB 'runPublished:*' AND run_id=substr(${value}.key,14)
+      UNION SELECT COALESCE(json_extract(${value}.value,'$.localSessionId'),
+        (SELECT local_id FROM remote_sync WHERE session_id=json_extract(${value}.value,'$.remoteSessionId') LIMIT 1))
+        WHERE ${value}.key GLOB 'inbox:*' AND json_valid(${value}.value)`).join(' UNION ');
+    replaceCoreTrigger(db, `CREATE TRIGGER remote_usage_state_${operation.toLowerCase()} AFTER ${operation} ON remote_state
+      WHEN (${refs.map(value => `${value}.key GLOB 'syncTargetHistory:*' OR ${value}.key GLOB 'runPublished:*' OR ${value}.key GLOB 'inbox:*'`).join(' OR ')})
+      ${operation === 'UPDATE' ? 'AND (OLD.key IS NOT NEW.key OR OLD.value IS NOT NEW.value)' : ''} BEGIN
+      UPDATE remote_session_revisions SET revision=revision+1 WHERE session_id IN (${attributionSessions});
+      UPDATE remote_control_revisions SET revision=revision+1 WHERE session_id IN (${attributionSessions});
+      UPDATE remote_live_revisions SET revision=revision+1 WHERE session_id IN (${attributionSessions}) AND deleted=0;
+    END;`);
+
+    replaceCoreTrigger(db, `CREATE TRIGGER remote_usage_origin_${operation.toLowerCase()} AFTER ${operation} ON local_execution_origin
+      ${operation === 'UPDATE' ? 'WHEN OLD.session_id IS NOT NEW.session_id OR OLD.run_id IS NOT NEW.run_id OR OLD.owner_hash IS NOT NEW.owner_hash' : ''} BEGIN
+      UPDATE remote_session_revisions SET revision=revision+1 WHERE session_id IN (${refs.map(value => `${value}.session_id`).join(',')});
+      UPDATE remote_control_revisions SET revision=revision+1 WHERE session_id IN (${refs.map(value => `${value}.session_id`).join(',')});
+      UPDATE remote_live_revisions SET revision=revision+1 WHERE session_id IN (${refs.map(value => `${value}.session_id`).join(',')}) AND deleted=0;
+    END;`);
+    replaceCoreTrigger(db, `CREATE TRIGGER remote_usage_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages WHEN ${ref}.type='user' BEGIN
+      INSERT INTO remote_control_revisions VALUES(${ref}.session_id,1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1; END;`);
     const toolId = `COALESCE(CASE WHEN json_valid(${ref}.metadata) THEN COALESCE(json_extract(${ref}.metadata,'$.toolUseId'),json_extract(${ref}.metadata,'$.toolCallId')) END,${ref}.id)`;
     // Replace pre-upgrade triggers before any desktop write; they wrote an optional join cache.
     replaceCoreTrigger(db, `CREATE TRIGGER remote_live_tool_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages WHEN ${ref}.type IN ('tool_use','tool_result') BEGIN
@@ -133,6 +155,7 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
       sessionId: binding.session_id, title: String(session.title || '').slice(0, 128).replace(/[\uD800-\uDBFF]$/u, ''), origin: store.get(`origin:${localId}`) || 'desktop',
       workspaceId: store.get(`workspace:${localId}`), preview: redactReplyText(recent?.content || '').slice(0, 512), createdAt: new Date(session.created_at).toISOString(),
       updatedAt: new Date(session.updated_at).toISOString(), localStatus: session.status, controlVersion, run,
+      ...(store.currentTaskUsage(localId) ? { taskUsage: store.currentTaskUsage(localId) } : {}),
       agent: store.currentAgentSummary(localId), deletionGuard: store.deletionGuard(localId), inputVersion, inputModel: store.get(`inputModel:${localId}`),
     };
     const records: ProjectionRecord[] = [{ eventType: 'session.upsert', payload: { session: summary } }];

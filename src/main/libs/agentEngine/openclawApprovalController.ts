@@ -1,6 +1,7 @@
 import type { ApprovalDecisionOptions, ApprovalDecisionOutcome, ApprovalReconcileOptions, ApprovalState, DualApprovalConfiguration } from '../../../shared/cowork/approval';
 import { t } from '../../i18n';
 import { stableJson } from '../../remote/canonical';
+import { trustedSettingsApproval } from '../agentSettingsConversation/approval';
 import { withApprovalContinuationGuard } from './approvalContinuationContext';
 import { type ApprovalBinding, ApprovalDecisionService, type ApprovalGateway, type ApprovalGatewayContract, type ApprovalPersistence } from './approvalDecisionService';
 import { describeExecApproval, describePluginApproval } from './openclawApprovalAdapters';
@@ -96,8 +97,10 @@ export class OpenClawApprovalController {
     const sessionId = this.options.resolveSessionId(sessionKey);
     if (!sessionId || this.suppressed(sessionId, sessionKey)) return;
     const permission = buildPluginApprovalPermissionRequest(requestId, request, allowedDecisions);
+    const trusted = trustedSettingsApproval(request);
     const state = this.decisions.register({ pending: { requestId, sessionId, kind: 'plugin', allowedDecisions },
-      rawRequest: request, permission, createdAtMs, expiresAtMs, description: describePluginApproval(request) });
+      rawRequest: request, permission, createdAtMs, expiresAtMs, description: describePluginApproval(request),
+      ...(trusted ? { boundOperationDigest: trusted.digest } : {}) });
     if (state?.status === 'pending') this.options.emitPermissionRequest(sessionId, { ...permission, approval: state });
   }
 

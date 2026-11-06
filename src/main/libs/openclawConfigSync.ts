@@ -1952,6 +1952,7 @@ type OpenClawConfigSyncDeps = {
   getAskUserCallbackUrl?: () => string | null;
   getMediaCallbackUrl?: () => string | null;
   getDecisionCallbackUrl?: () => string | null;
+  getAgentSettingsCallbackUrl?: () => string | null;
   /** The experimental decision model is switched on and has a usable key. */
   isDecisionModelActive?: () => boolean;
   getBrowserCallbackUrl?: () => string | null;
@@ -1993,6 +1994,7 @@ export class OpenClawConfigSync {
   private readonly getAskUserCallbackUrl?: () => string | null;
   private readonly getMediaCallbackUrl?: () => string | null;
   private readonly getDecisionCallbackUrl?: () => string | null;
+  private readonly getAgentSettingsCallbackUrl?: () => string | null;
   private readonly isDecisionModelActive?: () => boolean;
   private readonly getBrowserCallbackUrl?: () => string | null;
   private readonly getLobsterBrowserMcpCommand?: () => string | null;
@@ -2031,6 +2033,7 @@ export class OpenClawConfigSync {
     this.getAskUserCallbackUrl = deps.getAskUserCallbackUrl;
     this.getMediaCallbackUrl = deps.getMediaCallbackUrl;
     this.getDecisionCallbackUrl = deps.getDecisionCallbackUrl;
+    this.getAgentSettingsCallbackUrl = deps.getAgentSettingsCallbackUrl;
     this.isDecisionModelActive = deps.isDecisionModelActive;
     this.getBrowserCallbackUrl = deps.getBrowserCallbackUrl;
     this.getLobsterBrowserMcpCommand = deps.getLobsterBrowserMcpCommand;
@@ -2472,6 +2475,7 @@ export class OpenClawConfigSync {
     const hasMediaGenPlugin = isBundledPluginAvailable('lobster-media-generation');
     const hasModelRoutingPlugin = isBundledPluginAvailable('lobster-model-routing');
     const hasDecisionPlugin = isBundledPluginAvailable(DECISION_MODEL_PLUGIN_ID);
+    const hasAgentSettingsPlugin = isBundledPluginAvailable('lobster-agent-settings');
     // Runtime-bundled xai extension (dist/extensions/xai): provides the Grok
     // model compat hooks (e.g. only grok-4.3 accepts reasoningEffort) plus the
     // OAuth refresh hook for credentials in the auth-profiles store. Declare
@@ -2743,6 +2747,7 @@ export class OpenClawConfigSync {
           } : {}),
           // Experimental; enabled below only once the user turns it on.
           ...(hasDecisionPlugin ? { [DECISION_MODEL_PLUGIN_ID]: { enabled: false } } : {}),
+          ...(hasAgentSettingsPlugin ? { 'lobster-agent-settings': { enabled: false } } : {}),
           ...(hasModelCompatConfig
             ? {
                 [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]: {
@@ -2791,6 +2796,7 @@ export class OpenClawConfigSync {
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
           ...(hasModelRoutingPlugin ? ['lobster-model-routing'] : []),
+          ...(hasAgentSettingsPlugin ? ['lobster-agent-settings'] : []),
           ...(hasModelCompatConfig
             ? [OPENCLAW_MODEL_COMPAT_PLUGIN_ID]
             : []),
@@ -2914,6 +2920,15 @@ export class OpenClawConfigSync {
           requestTimeoutMs: 45000,
         },
       };
+    }
+
+    const settingsCallbackUrl = this.getAgentSettingsCallbackUrl?.();
+    if (hasAgentSettingsPlugin && settingsCallbackUrl && managedConfig.plugins) {
+      const plugins = managedConfig.plugins as Record<string, unknown>;
+      const entries = plugins.entries as Record<string, Record<string, unknown>>;
+      entries['lobster-agent-settings'] = { enabled: true, hooks: { allowConversationAccess: true }, config: {
+        callbackUrl: settingsCallbackUrl, secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
+      } };
     }
 
     // Sync Dreaming config into memory-core plugin
@@ -4237,7 +4252,7 @@ export class OpenClawConfigSync {
         // Sync IDENTITY.md — agent's identity description
         const identityPath = path.join(agentWorkspace, 'IDENTITY.md');
         const identityContent = (agent.identity || '').trim();
-        this.syncFileIfChanged(identityPath, identityContent ? `${identityContent}\n` : '');
+        this.syncFileIfChanged(identityPath, identityContent ? `${identityContent}\n` : '', true);
 
         // Sync AGENTS.md for this agent (reuse same logic as main agent)
         this.syncAgentsMd(agentWorkspace, {
@@ -4264,14 +4279,14 @@ export class OpenClawConfigSync {
   }
 
   /** Write a file only if its content has changed. */
-  private syncFileIfChanged(filePath: string, content: string): void {
+  private syncFileIfChanged(filePath: string, content: string, clearExisting = false): void {
     try {
       const existing = fs.readFileSync(filePath, 'utf8');
       if (existing === content) return;
     } catch {
       // File doesn't exist yet
     }
-    if (content) {
+    if (content || clearExisting) {
       this.atomicWriteFile(filePath, content);
     } else {
       // Empty content — create empty file if it doesn't exist

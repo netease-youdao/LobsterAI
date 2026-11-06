@@ -1,0 +1,17 @@
+{
+  "id": "lobster-agent-settings",
+  "name": "Lobster Agent Settings",
+  "description": "Controlled per-agent settings and workspace writer coordination.",
+  "contracts": {
+    "tools": ["lobsterai_agent_settings"],
+    "trustedToolPolicies": ["agent-settings-writers"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "callbackUrl": { "type": "string" },
+      "secret": { "type": "string" }
+    }
+  }
+}

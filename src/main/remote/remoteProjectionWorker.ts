@@ -17,7 +17,7 @@ export interface ProjectionWork {
   database: string; target: string; sessionId: string; owner: RemoteOwner; deviceId: string; environment: string | null;
   questionEvidenceDigest?: string;
   modelPresetNames?: ReplyModelPresetNames;
-  deletions?: boolean; agent: RemoteAgentSummary | null; approval: boolean; questions: boolean; input: boolean; files: boolean; reply: boolean;
+  deletions?: boolean; taskCredits?: boolean; taskCreditsSourceVersion?: string; agent: RemoteAgentSummary | null; approval: boolean; questions: boolean; input: boolean; files: boolean; reply: boolean;
 }
 /** Runs only in a worker: consistent source read, bounded disk materialization, then projection. */
 function materialize(work: ProjectionWork): { revision: number; sourceSeq: number; targetSourceSeq: number; digest: string } {
@@ -62,6 +62,7 @@ function materialize(work: ProjectionWork): { revision: number; sourceSeq: numbe
         copy('cowork_messages', 'SELECT * FROM cowork_messages WHERE session_id=? ORDER BY sequence,created_at,id', [work.sessionId]);
         copy('cowork_session_ownership', 'SELECT * FROM cowork_session_ownership WHERE session_id=?', [work.sessionId]);
         copy('remote_sync', 'SELECT * FROM remote_sync WHERE local_id=?', [work.sessionId]);
+        copy('remote_session_revisions', 'SELECT * FROM remote_session_revisions WHERE session_id=?', [work.sessionId]);
         copy('remote_object_state', 'SELECT * FROM remote_object_state WHERE session_id=?', [work.sessionId]);
         for (const table of ['remote_projection', 'remote_outbox', 'remote_reply_contents', 'remote_reply_chunks']) copy(table, `SELECT * FROM ${table} WHERE session_id=?`, [work.sessionId]);
         copy('remote_state', 'SELECT * FROM remote_state WHERE key LIKE ? OR key LIKE ?', [`%:${work.sessionId}`, `%:${work.sessionId}:%`]);
@@ -70,6 +71,7 @@ function materialize(work: ProjectionWork): { revision: number; sourceSeq: numbe
         } else if (source.prepare("SELECT 1 FROM remote_state WHERE key LIKE 'questionDecision:%' AND NOT json_valid(value) LIMIT 1").get()) throw new Error('REMOTE_QUESTION_EVIDENCE_UNAVAILABLE');
         copy('remote_state', `SELECT * FROM remote_state WHERE key>='questionDecision:' AND key<'questionDecision;' AND ${questionSessionSql}=?`, [work.sessionId]);
         const runIds = new Set<string>();
+        const commandIds = new Set<string>();
         const messageIds: string[] = [];
         for (const row of target.prepare("SELECT value FROM remote_state WHERE key LIKE 'run:%' OR key LIKE 'runHistory:%' OR key LIKE 'questionDecision:%'").iterate() as Iterable<{ value: string }>) {
           const fact = JSON.parse(row.value), runId = fact.state?.runId || fact.runId;
@@ -77,9 +79,13 @@ function materialize(work: ProjectionWork): { revision: number; sourceSeq: numbe
         }
         for (const message of target.prepare('SELECT id,metadata FROM cowork_messages').iterate() as Iterable<{ id: string; metadata: string }>) {
           messageIds.push(message.id);
-          try { const metadata = JSON.parse(message.metadata || '{}'); if (typeof metadata.remoteRunId === 'string') runIds.add(metadata.remoteRunId); } catch { /* Same legacy metadata policy as the projector. */ }
+          try { const metadata = JSON.parse(message.metadata || '{}'); if (typeof metadata.remoteRunId === 'string') runIds.add(metadata.remoteRunId); if (typeof metadata.remoteCommandId === 'string') commandIds.add(metadata.remoteCommandId); } catch { /* Same legacy metadata policy as the projector. */ }
         }
         for (const id of runIds) copy('remote_state', 'SELECT * FROM remote_state WHERE key IN (?,?,?)', [`inputRun:${id}`, `desktopInputRun:${id}`, `runPublished:${id}`]);
+        const historyRow = target.prepare('SELECT value FROM remote_state WHERE key=?').get(`syncTargetHistory:${work.sessionId}`) as { value: string } | undefined;
+        const historyTarget = historyRow ? JSON.parse(historyRow.value)?.targetId : null;
+        for (const id of commandIds) copy('remote_state', 'SELECT * FROM remote_state WHERE key IN (?,?)', [`inbox:${id}`, `inbox:${historyTarget}:${id}`]);
+        for (const id of runIds) copy('local_execution_origin', 'SELECT * FROM local_execution_origin WHERE session_id=? AND run_id=?', [work.sessionId, id]);
         for (const id of messageIds) copy('remote_state', 'SELECT * FROM remote_state WHERE key LIKE ?', [`desktopAsset:${id}:%`]);
         copy('remote_state', "SELECT * FROM remote_state WHERE key LIKE 'fileOutput:%' AND json_valid(value) AND json_extract(value,'$.localSessionId')=?", [work.sessionId]);
         const artifacts = source.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='library_local_artifacts'").get();
@@ -94,7 +100,7 @@ function materialize(work: ProjectionWork): { revision: number; sourceSeq: numbe
     target.exec('CREATE TABLE projection_original_state AS SELECT * FROM remote_state');
     if (work.annotationLanguage) setLanguage(work.annotationLanguage);
     const store = new RemoteStore(target, { deferredProjection: true, restoreRuns: false });
-    store.configureDetachedProjection(work);
+    store.configureDetachedProjection({ ...work, taskCreditsSourceVersion: String(Math.max(1, revision)) });
     for (const row of target.prepare("SELECT object_key,revision,record_json FROM remote_object_state WHERE session_id=? AND object_key NOT LIKE 'question:%'").all(work.sessionId) as Iterable<{ object_key: string; revision: number; record_json: string }>) {
       target.prepare('INSERT OR IGNORE INTO remote_projection VALUES (?,?,?,?,?)').run(work.sessionId, row.object_key, 'rebuild', row.revision, row.record_json);
     }

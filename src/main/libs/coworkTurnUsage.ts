@@ -181,11 +181,9 @@ export class CoworkTurnUsageService {
       ?? previous?.observedCompletedRequests;
     if (!isCurrent()) return null;
     if (mode.afterTurn && !previous) {
-      this.deps.emitTurnUsage({
-        sessionId,
-        messageId,
-        turnUsage: this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Pending, observedCompletedRequests),
-      });
+      const pending = this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Pending, observedCompletedRequests);
+      this.persist(sessionId, messageId, pending);
+      this.deps.emitTurnUsage({ sessionId, messageId, turnUsage: pending });
     }
 
     const mediaTaskIds = message.metadata?.turnMediaTaskIds ?? [];

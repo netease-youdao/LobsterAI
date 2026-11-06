@@ -72,6 +72,180 @@ function fixture() {
   return { db, store, owner, context: context!, setContext: (value: AvailabilityContext | null) => { context = value; }, request, publisher, controls, live };
 }
 
+describe('task credits capability downgrade', () => {
+  it('backfills user usage outside the newest 64 messages and removes it after capability downgrade', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true;
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,0)').run('a-old-user', 'local', 'user', 'Old input', JSON.stringify({
+        turnUsage: { traceId: 'a'.repeat(32), status: 'settled', billingScope: 'personal', requestCount: 1, failedRequestCount: 0,
+          creditsUsed: 4.84, displayCreditsUsed: 4.84, updatedAt: 3 },
+      }));
+      for (let index = 0; index < 80; index++) f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(`z-tail-${String(index).padStart(3, '0')}`, 'local', 'assistant', `Reply ${index}`, '{}', index + 10, index + 10);
+    });
+    // Pre-upgrade historical messages may not have a live source index row yet.
+    f.db.prepare("DELETE FROM remote_live_revisions WHERE object_id='a-old-user'").run();
+    f.store.setTaskCreditsProjectionSupported(true); await f.controls();
+    await f.live();
+    const first = f.request.mock.calls.find(call => call[0] === '/sync/live-projections' && call[2].objectId === 'a-old-user')?.[2];
+    expect(first?.payload.turnUsage.displayCreditsUsed).toBe('4.84');
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockClear();
+    for (let pass = 0; pass < 8; pass++) { (f.publisher as any).liveScan.clear(); await f.live(); }
+    const replacement = f.request.mock.calls.find(call => call[0] === '/sync/live-projections' && call[2].objectId === 'a-old-user')?.[2];
+    expect(replacement).toBeDefined();
+    expect(replacement.payload).not.toHaveProperty('turnUsage');
+    expect(BigInt(replacement.sourceObjectRevision)).toBeGreaterThan(BigInt(first.sourceObjectRevision));
+  });
+
+  it('bounds sparse history backfill to 64 index headers per page and checks the active owner', () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.store.setTaskCreditsProjectionSupported(true);
+    f.store.transaction(() => {
+      for (let index = 0; index < 130; index++) f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(`a-${String(index).padStart(3, '0')}`, 'local', 'assistant', 'Text', '{}', index + 10, index + 10);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('z-history-user','local','user','Old input','{}',1,0)").run();
+    });
+    const candidates = () => (f.publisher as any).taskCreditsCandidates(f.context, 'local');
+    expect(candidates()).toEqual([]); expect(candidates()).toEqual([]);
+    expect(candidates()).toEqual([expect.objectContaining({ object_id: 'z-history-user', kind: 'message' })]);
+    f.store.setEnabledOwner({ userId: 'other', scopeKey: 'personal' });
+    expect(candidates()).toEqual([]);
+  });
+
+  it('covers immutable unknown facts with a compatible checkpoint before replaying their original bytes', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Changed task' WHERE id='local'").run());
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('receipt lost');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.pending(f.context.scope, 'control', 'local').find(item => item.pathname === '/control/facts/batches')!;
+    expect(original.body.facts.some((fact: any) => fact.payload.session?.taskUsage)).toBe(true);
+    const originalBytes = JSON.stringify(original.body);
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    let baseline = 0n;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/commit')) {
+        const result = await ordinary(...args); baseline = BigInt(result.throughFactSeq); return result;
+      }
+      if (/\/parts\/\d+$/u.test(args[0])) {
+        expect(args[2].records.every((record: any) => !record.payload.session?.taskUsage)).toBe(true);
+      }
+      if (args[0] === '/control/facts/batches') {
+        if (baseline === 0n) throw Object.assign(new Error('Unknown taskUsage field'), { code: 47019, httpStatus: 400 });
+        expect(baseline).toBeGreaterThanOrEqual(BigInt(args[2].lastFactSeq));
+        expect(args[2].batchId).toBe(original.body.batchId);
+        const { connectionGeneration: _generation, ...body } = args[2];
+        const { coreRevision: _revision, ackCoreRevision: _ack, knownCheckpointId: _checkpoint, controlReconciliation: _reconciliation, ...saved } = original.body;
+        expect(body).toEqual(saved);
+        return { state: 'covered_by_checkpoint', lastFactSeq: baseline.toString() };
+      }
+      return ordinary(...args);
+    });
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(JSON.stringify(f.publisher.ledger.request(original.key)?.body)).toBe(originalBytes);
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.taskCreditsRecoveryBatchId).toBe(original.key);
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.request(original.key)).toBeNull();
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.taskCreditsRecoveryBatchId).toBeUndefined();
+    expect(f.publisher.controlReady('local')).toBe(true);
+  });
+
+  it('keeps an unknown fact operation unchanged when its receipt cannot be queried', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Next task' WHERE id='local'").run());
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('unknown write result');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.pending(f.context.scope, 'control', 'local').find(item => item.pathname === '/control/facts/batches')!;
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockClear(); f.request.mockRejectedValue(new Error('receipt service unavailable'));
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.request(original.key)).toEqual(original);
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.taskCreditsRecoveryBatchId).toBeUndefined();
+    expect(f.request.mock.calls.every(call => call[1] === 'GET')).toBe(true);
+  });
+
+  it('drains compatible sealed facts without a replacement checkpoint when only advertisement is disabled', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Updated task' WHERE id='local'").run());
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('unknown write result');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.pending(f.context.scope, 'control', 'local').find(item => item.pathname === '/control/facts/batches')!;
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockClear(); f.request.mockImplementation(ordinary);
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.request(original.key)).toBeNull();
+    expect(f.request.mock.calls.some(call => call[0] === '/control/bootstrap' || call[0] === '/control/bootstrap/paged')).toBe(false);
+    expect(f.publisher.controlReady('local')).toBe(true);
+  });
+
+  it('aborts an incompatible sealed bootstrap and rebuilds under a different operation ID', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (/\/parts\/\d+$/u.test(args[0])) throw new Error('part delivery unknown');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.session(f.context.scope, 'local')!;
+    expect(original.phase).toBe('bootstrap');
+    expect(f.publisher.ledger.request(`${original.operationId}:checkpoint`)).not.toBeNull();
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/abort')) return { state: 'aborted', operationId: original.operationId,
+        sessionId: original.sessionId, writerGeneration: original.writerGeneration, requestHash: args[2].beginRequestHash };
+      if (/\/parts\/\d+$/u.test(args[0])) expect(args[2].records.every((record: any) => !record.payload.session?.taskUsage)).toBe(true);
+      return ordinary(...args);
+    });
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.operationReceipt(original.operationId)?.state).toBe('aborted');
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.operationId).not.toBe(original.operationId);
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+  });
+
+  it.each(['sealed_unpublished', 'original_terminal'])('resolves a sealed live usage publication as %s without rewriting it', async resultState => {
+    const f = fixture(); f.context.taskCreditsSupported = false; f.context.publicationResolutionSupported = true;
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const publicationId = 'usage-publication';
+    const original = f.publisher.ledger.saveRequest({ key: publicationId, scope: f.context.scope, localId: 'local', lane: 'live',
+      body: { objectKind: 'message', objectId: 'message', publicationId, sessionId: state.sessionId, deviceId: 'desktop',
+        writerGeneration: state.writerGeneration, sourceObjectRevision: '1', payload: { turnUsage: { displayCreditsUsed: '4.84' } } },
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: null, lookupVersion: 3, createdAt: 1, attempted: true });
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/resolve')) {
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: resultState, publicationId, sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          ...(resultState === 'sealed_unpublished'
+            ? { sealId: 'seal', resolutionRequestHash: payloadHash({ ...business, publicationId }) }
+            : { originalRequestHash: 'a'.repeat(64), receipt: { publicationId, state: 'accepted' } }) };
+      }
+      return ordinary(...args);
+    });
+    await f.live();
+    expect(f.publisher.ledger.request(publicationId)?.body).toEqual(original.body);
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(false);
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].publicationId === publicationId)).toBe(false);
+    expect(f.publisher.ledger.db.prepare('SELECT resolution_receipt FROM availability_requests WHERE key=?').get(publicationId))
+      .toMatchObject({ resolution_receipt: expect.stringContaining(resultState) });
+  });
+});
+
 describe('publisher transient lanes reach device UI', () => {
   function display(f: ReturnType<typeof fixture>): any {
     const bridge: any = new RemoteBridge({ store: f.store, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'db' },

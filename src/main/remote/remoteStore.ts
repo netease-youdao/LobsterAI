@@ -37,6 +37,7 @@ import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSe
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
 import { remoteDiagnosticLog, remoteLogMessage, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { activeRemoteSyncTargetContext } from './remoteSyncTargetStore';
+import { hasTaskUsageRunOrigin, isInheritedTaskUsage, readTaskUsageState, remoteTaskUsage, remoteTurnUsage, taskUsageVisible } from './remoteTaskCredits';
 import { RemoteTaskDataError } from './remoteTaskSyncState';
 
 export interface ProjectionRecord { eventType: string; payload: Record<string, any> }
@@ -184,6 +185,8 @@ export class RemoteStore {
   private modelPresetNames?: ReplyModelPresetNames;
   private fileProjectionSupported = false;
   private replyProjectionSupported = false;
+  private taskCreditsProjectionSupported = false;
+  private taskCreditsSourceVersion: string | undefined;
   private projectionIdentity: { key: string; environment: string; owner: RemoteOwner; deviceId: string } | null = null;
   private fileEnvironment: string | null = null;
   private fileTerminalBoundary: ((sessionId: string, runId: string) => void) | null = null;
@@ -430,6 +433,8 @@ export class RemoteStore {
   }
   configureDetachedProjection(work: ProjectionWork): void {
     this.modelPresetNames = work.modelPresetNames;
+    this.taskCreditsProjectionSupported = work.taskCredits === true;
+    this.taskCreditsSourceVersion = work.taskCreditsSourceVersion;
     this.enabledOwner = work.owner; this.approvalProjectionSupported = work.approval; this.questionProjectionSupported = work.questions; this.inputProjectionSupported = work.input;
     this.fileProjectionSupported = work.files; this.replyProjectionSupported = work.reply; this.fileEnvironment = work.environment; this.deletionProjectionSupported = work.deletions === true;
   }
@@ -498,7 +503,7 @@ export class RemoteStore {
         const work: ProjectionWork = { annotationLanguage: getLanguage(), modelPresetNames: replyModelPresetNames(), questionEvidenceDigest: remoteQuestionEvidenceDigest(this.db), database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
           deviceId: this.projectionIdentity?.deviceId || sync.device_id, environment: this.fileEnvironment || this.projectionIdentity?.environment || null,
           agent: this.agentSummary?.(id, this.enabledOwner) || null, approval: this.approvalProjectionSupported, questions: this.questionProjectionSupported,
-          input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, deletions: this.deletionProjectionSupported };
+          input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, taskCredits: this.taskCreditsProjectionSupported, deletions: this.deletionProjectionSupported };
         this.projectionTargetContexts.set(work, stableJson(activeRemoteSyncTargetContext(this, work.owner)));
         this.projectionFaultEpochs.set(work, projectionFault(this.db, id)?.epoch ?? null);
         // Rotate after service: a continuously dirty old task must not monopolize
@@ -525,6 +530,7 @@ export class RemoteStore {
       && (!work.annotationLanguage || work.annotationLanguage === getLanguage())
       && (!work.modelPresetNames || stableJson(work.modelPresetNames) === stableJson(replyModelPresetNames()))
       && work.approval === this.approvalProjectionSupported && work.questions === this.questionProjectionSupported && work.input === this.inputProjectionSupported
+      && (work.taskCredits === true) === this.taskCreditsProjectionSupported
       && work.files === this.fileProjectionSupported && work.reply === this.replyProjectionSupported && (work.deletions === true) === this.deletionProjectionSupported
       && work.deviceId === (this.projectionIdentity?.deviceId || this.sync(work.sessionId)?.device_id)
       && work.environment === (this.fileEnvironment || this.projectionIdentity?.environment || null);
@@ -574,6 +580,7 @@ export class RemoteStore {
       AND local_id IN (SELECT session_id FROM cowork_session_ownership WHERE owner_user_id=? AND owner_scope_key=?)`).run(environment, deviceId, owner.userId, owner.scopeKey);
     this.replyProjectionSupported = this.get<boolean>(key) ?? this.get<boolean>('replyProjectionMode') ?? false;
     this.questionProjectionSupported = this.get<boolean>(`questionProjectionMode:${key}`) ?? false;
+    this.taskCreditsProjectionSupported = this.get<boolean>(`taskCreditsProjectionMode:${key}`) ?? false;
   }
   private projectionSessions(): Array<{ session_id: string }> {
     const owner = this.projectionIdentity?.owner || this.enabledOwner;
@@ -601,6 +608,31 @@ export class RemoteStore {
         this.markFilesDirty(session_id);
       }
     });
+  }
+  setTaskCreditsProjectionSupported(supported: boolean): void {
+    const key = `taskCreditsProjectionMode:${this.projectionIdentity?.key || 'default'}`;
+    if (supported) this.put(`taskCreditsProjectionSeen:${this.projectionIdentity?.key || 'default'}`, true);
+    if (supported === this.taskCreditsProjectionSupported) { this.put(key, supported); return; }
+    this.taskCreditsProjectionSupported = supported;
+    this.transaction(() => {
+      this.put(key, supported);
+      for (const { session_id } of this.projectionSessions()) {
+        this.markProjectionDirty(session_id);
+        touchAvailabilityControl(this.db, session_id);
+        this.db.prepare('UPDATE remote_live_revisions SET revision=revision+1 WHERE session_id=? AND deleted=0').run(session_id);
+        this.requireSnapshot(session_id, 'projection_changed');
+      }
+    });
+  }
+  taskCreditsBackfillEnabled(sessionId: string): boolean {
+    const owner = this.projectionIdentity?.owner || this.enabledOwner;
+    return Boolean(owner && sameOwner(this.owner(sessionId), owner) && (this.taskCreditsProjectionSupported
+      || this.get<boolean>(`taskCreditsProjectionSeen:${this.projectionIdentity?.key || 'default'}`) === true));
+  }
+  currentTaskUsage(sessionId: string) {
+    const owner = this.projectionIdentity?.owner || this.enabledOwner;
+    return this.taskCreditsProjectionSupported && owner && sameOwner(this.owner(sessionId), owner)
+      ? remoteTaskUsage(this.db, sessionId, this.taskCreditsSourceVersion) : undefined;
   }
   private replyContent(sessionId: string, messageId: string, blockId: string, format: RemoteReplyFormat, text: string): RemoteReplyContentRef {
     const contentId = createHash('sha256').update(`${messageId}:${blockId}`).digest('hex');
@@ -839,11 +871,11 @@ export class RemoteStore {
     if (!row) return null;
     try { return JSON.parse(row.value) as T; }
     catch (error) {
-      if (!/^(?:replyProjectionMode$|projectionMode:|questionProjectionMode:|syncFailure:|agentCatalogFailure:|lastSuccessfulSync:)/u.test(key)) throw error;
+      if (!/^(?:replyProjectionMode$|projectionMode:|questionProjectionMode:|taskCreditsProjectionMode:|taskCreditsProjectionSeen:|syncFailure:|agentCatalogFailure:|lastSuccessfulSync:)/u.test(key)) throw error;
       // Only reconstructible/display-only keys have a fallback; run/approval/inbox/ownership facts never do.
       this.db.prepare('INSERT OR IGNORE INTO remote_corrupt_state VALUES (?,?,?)').run(key, row.value, Date.now());
       this.db.prepare('DELETE FROM remote_state WHERE key=?').run(key);
-      if (key === 'replyProjectionMode' || key.startsWith('projectionMode:') || key.startsWith('questionProjectionMode:')) {
+      if (key === 'replyProjectionMode' || key.startsWith('projectionMode:') || key.startsWith('questionProjectionMode:') || key.startsWith('taskCreditsProjectionMode:')) {
         // Only live tasks can be invalidated by projection capability changes. Deletion
         // intents retain their original protocol bytes and have an independent recovery path.
         this.db.prepare('UPDATE remote_sync SET needs_snapshot=1 WHERE local_id IN (SELECT id FROM cowork_sessions)').run();
@@ -1560,6 +1592,7 @@ export class RemoteStore {
       workspaceId: this.get(`workspace:${sessionId}`), preview: summaryOnly ? JSON.parse(previous!.record_json).payload.session.preview : preview(publicText(latestText)), createdAt: iso(s.created_at), updatedAt: iso(s.updated_at),
       ...(this.deletionProjectionSupported ? { deletionGuard: this.deletionGuard(sessionId) } : {}),
       localStatus: s.status, controlVersion: this.controlVersion(sessionId), run,
+      ...(this.currentTaskUsage(sessionId) ? { taskUsage: this.currentTaskUsage(sessionId) } : {}),
       ...(this.inputProjectionSupported ? { inputVersion: this.inputVersion(sessionId), inputModel: this.get(`inputModel:${sessionId}`) } : {}),
       ...(this.agentSummary && this.owner(sessionId) ? { agent: this.agentSummary(sessionId, this.owner(sessionId)!) } : {}),
     } } });
@@ -1639,7 +1672,14 @@ export class RemoteStore {
       });
       blocks.push(...remoteArtifacts.flatMap(value => value.block ? [value.block] : []));
       if (this.replyProjectionSupported) for (const [index, block] of blocks.entries()) if (typeof block.text === 'string' && !block.blockId) block.blockId = replyBlockId(m.id, `text:${index}`);
-      const message: any = { messageId: m.id, ordinal: String(Math.max(1, m.sequence || 1)), revision: '0',
+      let turnUsage;
+      if (this.taskCreditsProjectionSupported && m.type === 'user' && !foreignHistory && !isInheritedTaskUsage(m.created_at, s.forked_at)) {
+        try {
+          if (taskUsageVisible(metadata, targetHistory, key => readTaskUsageState(this.db, key),
+            id => hasTaskUsageRunOrigin(this.db, sessionId, id))) turnUsage = remoteTurnUsage(metadata);
+        } catch { /* Corrupt optional attribution cannot expose a usage snapshot. */ }
+      }
+      const message: any = { ...(turnUsage ? { turnUsage } : {}), messageId: m.id, ordinal: String(Math.max(1, m.sequence || 1)), revision: '0',
         runId: foreignHistory ? null : metadata.remoteRunId || null, commandId: foreignHistory ? null : metadata.remoteCommandId || null,
         role: isTool ? 'tool' : this.replyProjectionSupported && m.type === 'system' ? 'notice' : m.type, status: metadata.isStreaming ? 'streaming' : 'complete', createdAt: iso(m.created_at),
         ...(this.replyProjectionSupported ? { projectionVersion: RemoteReply.ProjectionVersion, displayOrdinal: String(displayIndex + 1) } : {}),

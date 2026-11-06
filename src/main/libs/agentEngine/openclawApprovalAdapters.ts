@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { trustedSettingsApproval } from '../agentSettingsConversation/approval';
 import type { ExecApprovalRequest, PluginApprovalRequest } from './openclawApprovalBridge';
 
 export const APPROVAL_ADAPTER_VERSION = '2026.8.1/1';
@@ -49,6 +50,8 @@ export function describeExecApproval(request: ExecApprovalRequest, workspace: { 
  * arbitrary plugin supplied remoteSafe/publicSummary fields are deliberately not accepted.
  */
 export function describePluginApproval(request: PluginApprovalRequest): ApprovalDescription {
+  const settings = trustedSettingsApproval(request);
+  if (settings) return { title: settings.title, summary: settings.summary, remoteSafe: settings.remoteSafe };
   if (request.pluginId !== 'codex' || request.toolName !== 'codex_network_approval'
     || request.title !== 'Codex app-server network approval' || request.detail || request.scope
     || typeof request.description !== 'string' || !request.allowedDecisions?.includes('allow-once')

@@ -9,8 +9,9 @@ import { type ArtifactProjectionJob, projectRemoteArtifacts, type RemoteArtifact
 import { liveMetadataToolId, normalizeLiveMetadata, RemoteLiveEncodingError, RemoteLiveEncodingLimits, RemoteLiveMetadataMode } from './remoteLiveMetadata';
 import { replyInputModel, replyModelLabel, type ReplyModelPresetNames } from './remoteReplyModel';
 import { redactReplyText, replyToolState } from './remoteReplyProjection';
+import { hasTaskUsageRunOrigin, isInheritedTaskUsage, readTaskUsageState, taskUsageForkAt, taskUsageVisible } from './remoteTaskCredits';
 
-export interface LiveProjectionInput { annotationLanguage?: LanguageType; database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames }
+export interface LiveProjectionInput { annotationLanguage?: LanguageType; database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames; taskCreditsSupported?: boolean }
 export interface LiveToolSource { messageId: string; toolId: string; sourceRevision: string }
 /** Local diagnostics; tool values sum only the source rows actually read by this job. */
 export interface LiveEncodingStats { rawMetadataBytes: number; normalizedMetadataBytes: number }
@@ -33,7 +34,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
     if (!row || !['user', 'assistant', 'system', 'tool_use', 'tool_result'].includes(row.type)) return null;
     // Missing source bytes cannot be reported as a truthful canonical public-content size.
     if (row.content_bytes > RemoteLiveEncodingLimits.ContentBytes) throw new Error(RemoteLiveEncodingError.ContentSizeUnknown);
-    const normalized = normalizeLiveMetadata(row.metadata, row.metadata_bytes, RemoteLiveMetadataMode.Message, row, input.annotationLanguage);
+    const normalized = normalizeLiveMetadata(row.metadata, row.metadata_bytes, RemoteLiveMetadataMode.Message, row, input.annotationLanguage, input.taskCreditsSupported);
     const metadata = normalized.metadata;
     if (!normalized.isPublic(row)) return null;
     const toolSource = row.type === 'tool_use' || row.type === 'tool_result'
@@ -68,6 +69,11 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
     blocks.push(...liveArtifactBlocks(db, input, row.id));
     const originalBytes = Buffer.byteLength(stableJson(blocks));
     const omitted = normalized.publicFieldsOmitted || originalBytes > RemoteLiveEncodingLimits.InlineBytes;
+    let usageVisible = false;
+    if (input.taskCreditsSupported && row.type === 'user' && metadata.turnUsage && !isInheritedTaskUsage(row.created_at, taskUsageForkAt(db, input.localId))) {
+      try { usageVisible = taskUsageVisible(metadata, readTaskUsageState(db, `syncTargetHistory:${input.localId}`),
+        key => readTaskUsageState(db, key), id => hasTaskUsageRunOrigin(db, input.localId, id)); } catch { /* Invalid optional attribution cannot expose a usage snapshot. */ }
+    }
     const payload: Record<string, any> = {
       messageId: row.id, ordinal: String(Math.max(1, row.sequence || 1)), runId,
       commandId: runId ? metadata.remoteCommandId || null : null,
@@ -77,6 +83,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       preview: Buffer.from(content).subarray(0, 1000).toString('utf8').replace(/\uFFFD$/u, ''),
       originalContentBytes: String(originalBytes),
       blocks: omitted ? [] : blocks,
+      ...(usageVisible ? { turnUsage: metadata.turnUsage } : {}),
       ...(model ? { inputModel: replyInputModel(row.type, metadata, model, input.modelPresetNames, prepared?.modelPresetId) } : {}),
       ...(omitted ? { contentUnavailableReason: 'CONTENT_LIMIT_EXCEEDED' } : {}),
     };

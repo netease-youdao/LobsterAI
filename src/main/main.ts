@@ -334,6 +334,9 @@ import {
   OpenClawRuntimeAdapter,
 } from './libs/agentEngine';
 import { CoworkRuntimeLifecycleEvent } from './libs/agentEngine/types';
+import { createAgentSettingsService } from './libs/agentSettings/factory';
+import { AgentSettingsConversationHost } from './libs/agentSettingsConversation/host';
+import { assertAgentSettingsLocalWriteAllowed } from './libs/agentSettingsConversation/runtime';
 import {
   APP_QUIT_CONFIRMATION_STORE_KEY,
   appQuitConfirmationGate,
@@ -691,6 +694,7 @@ import { assertDesktopInputDispatchCurrent, captureDesktopInput, desktopInputCap
 import { InputPreparationService } from './remote/inputPreparationService';
 import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installationIdentity';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
+import { registerRemoteAgentSettingsIpc } from './remote/remoteAgentSettingsIpc';
 import { RemoteBridge } from './remote/remoteBridge';
 import { withRemoteConnectionAccount } from './remote/remoteConnectionIpc';
 import { RemoteImageDecoder } from './remote/remoteImageDecoder';
@@ -2252,6 +2256,7 @@ process.on('exit', code => {
 let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let openClawRuntimeAdapter: OpenClawRuntimeAdapter | null = null;
+let remoteAgentSettingsAvailable = (): boolean => false;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let agentBrowserHost: AgentBrowserHost | null = null;
 let browserCredentialService: BrowserCredentialService | null = null;
@@ -2952,6 +2957,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       getAskUserCallbackUrl: () => getMcpRuntime().getAskUserCallbackUrl(),
       getMediaCallbackUrl: () => getMcpRuntime().getMediaCallbackUrl(),
       getDecisionCallbackUrl: () => getMcpRuntime().getDecisionCallbackUrl(),
+      getAgentSettingsCallbackUrl: () => getMcpRuntime().getAgentSettingsCallbackUrl(),
       isDecisionModelActive: () => isDecisionModelFeatureActive(getStore()),
       getBrowserCallbackUrl: () => getMcpRuntime().getBrowserCallbackUrl(),
       getLobsterBrowserMcpCommand: () => {
@@ -4431,6 +4437,7 @@ const getCoworkEngineRouter = () => {
         getCoworkStore(),
         getOpenClawEngineManager(),
         {
+          getRemoteCommandId: () => remoteAgentSettingsAvailable() ? currentRemoteExecution()?.commandId : undefined,
           beforePreparationDispatch: (sessionId, runId) => { assertRemoteExecutionPermit(); if (runId) getCoworkStore().remote.markExecutionDispatch(sessionId, runId); },
           beforeExecutionDispatch: (sessionId, runId) => { assertRemoteExecutionPermit(); if (runId) getCoworkStore().remote.markExecutionDispatch(sessionId, runId); markRemoteExecutionDispatched(); },
           prepareDeliverableSync: async (sessionId, cwd) => { await prepareRemoteFileRun?.(sessionId, cwd); },
@@ -6015,6 +6022,7 @@ if (!gotTheLock) {
   // ── Auth IPC handlers ──
 
   let remoteBridge: RemoteBridge | null = null;
+  remoteAgentSettingsAvailable = () => remoteBridge?.agentSettingsProtocol()?.available() === true;
   let remoteTelemetryRuntime: ReturnType<typeof initializeRemoteTelemetry> | null = null;
   prepareRemoteFileRun = async (sessionId, cwd) => {
     await remoteBridge?.prepareFileRun(sessionId, [cwd, app.getPath('desktop')]);
@@ -6461,6 +6469,26 @@ if (!gotTheLock) {
     const models = new RemoteModelCatalog(getCoworkStore().remote, () => listRemoteInputModels({
       token: getAuthTokens()?.accessToken || null, baseURL: getServerApiBaseUrl(),
     }), () => remoteBridge?.getSyncTargetId() ?? null);
+    getCoworkEngineRouter();
+    const settingsRuntime = openClawRuntimeAdapter!.getAgentSettingsRuntime();
+    let settingsHost: AgentSettingsConversationHost | null = null;
+    const agentSettings = createAgentSettingsService({
+      stateDir: getOpenClawEngineManager().getStateDir(), journalDir: path.join(app.getPath('userData'), 'agent-settings'),
+      store: getCoworkStore(), agents: getAgentManager(), models, runtime: settingsRuntime, protection: safeStorage,
+      access: () => remoteBridge?.agentSettingsProtocol() ?? null, getDefaultModel: resolveDefaultAgentModelRef,
+      authorizeConversation: (context, proposal, digest) => {
+        if (!settingsHost) throw new Error('CONVERSATION_CHANGE_UNAVAILABLE');
+        return settingsHost.authorize(context, proposal, digest);
+      },
+      syncAndConfirmConfig: async () => {
+        const result = await syncOpenClawConfig({ reason: 'remote-agent-settings', restartGatewayIfRunning: false });
+        if (!result.success || result.status?.configApplyPending || openClawConfigRecovery.pending
+          || getOpenClawEngineManager().getStatus().phase !== OpenClawEnginePhase.Running) throw new Error('SETTINGS_OPERATION_PENDING');
+      },
+    });
+    settingsHost = new AgentSettingsConversationHost({ service: agentSettings.service,
+      protocol: () => remoteBridge?.agentSettingsProtocol() ?? null, runtime: () => settingsRuntime });
+    getMcpRuntime().setAgentSettingsToolHandler(settingsHost.handle);
     const imageDecoder = new RemoteImageDecoder();
     const preparations = new InputPreparationService({
       store: getCoworkStore(), models, cacheRoot: path.join(app.getPath('userData'), 'remote-inputs'),
@@ -6474,6 +6502,7 @@ if (!gotTheLock) {
       getTargetId: () => remoteBridge?.getSyncTargetId() ?? null });
     remoteBridge = new RemoteBridge({
       security,
+      agentSettings: { ...agentSettings, conversationReady: agentSettings.available },
       createSocket: url => remoteNetworkTransport.socket(url),
       deletion: { service: getSessionDeletionService(), runtime: getCoworkEngineRouter(), reconcileStop: id => remoteSessionCommands!.reconcileSession(id) },
       input: { models, preparations, refreshSessionModel: sessionId => { remoteSessionCommands!.recordCurrentInputModel(sessionId); } },
@@ -6604,6 +6633,7 @@ if (!gotTheLock) {
       owner, workspaces: [], accessRequests: [], initializationFailure: failure,
       ...(failure ? { deviceConnectionManagementSupported: false, error: t(failureMessages[failure]) } : {}) };
   };
+  registerRemoteAgentSettingsIpc({ getWindow: () => mainWindow, getProtocol: () => initializeRemoteBridge().agentSettingsProtocol() });
   ipcMain.handle(RemoteIpc.State, () => remoteSettingsController?.state() ?? readRemoteState());
   ipcMain.on(RemoteTelemetryIpc.Ui, (event, input: unknown) => {
     if (event.sender !== mainWindow?.webContents || !validRemoteTelemetryUi(input)
@@ -13074,6 +13104,7 @@ if (!gotTheLock) {
 
         // Lazy migration: SQLite → MEMORY.md (one-time, cached in memory)
         if (!memoryMigrationDone) {
+          assertAgentSettingsLocalWriteAllowed(AgentId.Main);
           migrateSqliteToMemoryMd(filePath, {
             isMigrationDone: () =>
               getStore().get<string>('openclawMemory.migration.v1.completed') === '1',
@@ -13113,6 +13144,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
+        assertAgentSettingsLocalWriteAllowed(AgentId.Main);
         const filePath = resolveMemoryFilePath(
           getMainAgentWorkspacePath(getOpenClawEngineManager().getStateDir()),
         );
@@ -13139,6 +13171,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
+        assertAgentSettingsLocalWriteAllowed(AgentId.Main);
         const filePath = resolveMemoryFilePath(
           getMainAgentWorkspacePath(getOpenClawEngineManager().getStateDir()),
         );
@@ -13167,6 +13200,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
+        assertAgentSettingsLocalWriteAllowed(AgentId.Main);
         const filePath = resolveMemoryFilePath(
           getMainAgentWorkspacePath(getOpenClawEngineManager().getStateDir()),
         );
@@ -13195,6 +13229,7 @@ if (!gotTheLock) {
   });
   ipcMain.handle(CoworkIpcChannel.MemoryWriteRaw, async (_event, input: { content: string }) => {
     try {
+      assertAgentSettingsLocalWriteAllowed(AgentId.Main);
       if (typeof input?.content !== 'string') {
         return { success: false, error: 'Memory content is required' };
       }
@@ -13302,6 +13337,7 @@ if (!gotTheLock) {
     options?: { agentId?: string },
   ) => {
     try {
+      assertAgentSettingsLocalWriteAllowed(options?.agentId?.trim() || AgentId.Main);
       const workspace = resolveExistingAgentWorkspacePath(options?.agentId);
       writeBootstrapFile(workspace, filename, content);
       syncOpenClawConfig({ reason: 'bootstrap-updated' }).catch(err => {

@@ -1,3 +1,4 @@
+import type { RemoteAgentSettingsApi } from './agentSettings';
 import type { RemoteConnectionOperation, RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest, RemoteConnectionsSnapshot } from './connections';
 import type { RemoteTelemetryUiInput } from './telemetryUi';
 
@@ -92,7 +93,7 @@ export interface RemoteSettingsState {
   accessRequests: Array<{ requestId: string; mobileDevice: { deviceId: string; name: string; platform: string }; permissions: string[]; expiresAt?: string }>;
 }
 export interface RemoteConfigureRequest { expectedAccountEpoch?: string; reregister?: boolean; keepAwakeEnabled?: boolean; retry?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
-export interface RemoteSettingsApi {
+export interface RemoteSettingsApi extends RemoteAgentSettingsApi {
   telemetry?(input: RemoteTelemetryUiInput): void;
   onChanged(listener: (state: RemoteSettingsState) => void): () => void;
   state(): Promise<RemoteSettingsState>;

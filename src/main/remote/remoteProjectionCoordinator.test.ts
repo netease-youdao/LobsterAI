@@ -12,6 +12,7 @@ import { RemoteImportSnapshots } from './remoteImportSnapshots';
 import { isTransientProjectionFailure, RemoteProjectionFailure } from './remoteProjectionCoordinator';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncTargetStore } from './remoteSyncTargetStore';
+import { remoteTaskUsage } from './remoteTaskCredits';
 import { RemoteTaskSyncState } from './remoteTaskSyncState';
 
 const workerDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-projection-test-worker-'));
@@ -56,6 +57,22 @@ describe('desktop core and remote projection isolation', () => {
     for (const reason of ['REMOTE_PROJECTION_BUDGET', 'REMOTE_PROJECTION_PUBLICATION_INVALID', 'REMOTE_PROJECTION_FAILED', 'other']) {
       expect(isTransientProjectionFailure(reason)).toBe(false);
     }
+  });
+  it('keeps task usage identical to the captured main snapshot in a disk worker with a legacy command', async () => {
+    const f = fixture();
+    f.store.setReplyProjectionSupported(true);
+    f.store.setTaskCreditsProjectionSupported(true);
+    f.store.put('syncTargetHistory:task', { targetId: 'current', runIds: [] });
+    f.store.put('inbox:current:legacy', { targetId: 'current', localSessionId: 'task' });
+    f.store.transaction(() => f.db.prepare("INSERT INTO cowork_messages VALUES('user','task','user','Question',?,2,2)").run(JSON.stringify({
+      remoteCommandId: 'legacy', turnUsage: { traceId: 'a'.repeat(32), status: 'settled', billingScope: 'personal',
+        displayCreditsUsed: 4.84, requestCount: 1, failedRequestCount: 0, updatedAt: 1793854800000 },
+    })));
+    const captured = remoteTaskUsage(f.db, 'task');
+    await f.store.flushProjections();
+    const records = f.store.snapshot('task').records;
+    expect(records.find(row => row.eventType === 'session.upsert')!.payload.session.taskUsage).toEqual(captured);
+    expect(records.find(row => row.payload.message?.messageId === 'user')!.payload.message.turnUsage.displayCreditsUsed).toBe('4.84');
   });
   it('commits local messages before any worker projection and publishes off-thread', async () => {
     const f = fixture();

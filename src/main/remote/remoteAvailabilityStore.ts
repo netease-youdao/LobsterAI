@@ -14,6 +14,8 @@ export interface AvailabilitySession {
   phase: 'activating' | 'bootstrap' | 'active'; operationId: string; pendingCommandIds: string[]; pendingRunIds: string[];
   pendingApprovalIds?: string[]; pendingQuestionIds?: string[]; streamEpoch?: string; historyGeneration?: string; historyResolvedSourceSeq?: string;
   requiredRunIds?: string[];
+  /** Original immutable fact batch awaiting coverage by a compatible checkpoint. */
+  taskCreditsRecoveryBatchId?: string;
   controlRevision: string; factSeq: string; records: Record<string, string>;
 }
 export interface AvailabilityRequest {
@@ -161,6 +163,7 @@ export class RemoteAvailabilityStore {
     const value = decode(row.body);
     if (value.scope !== scope || value.localId !== localId || !identifier(value.sessionId) || !identifier(value.writerGeneration)
       || !identifier(value.operationId) || !identifier(value.controlEpoch) || !['activating','bootstrap','active'].includes(value.phase)
+      || value.taskCreditsRecoveryBatchId !== undefined && !identifier(value.taskCreditsRecoveryBatchId)
       || !/^\d{1,19}$/u.test(value.controlRevision) || !/^\d{1,19}$/u.test(value.factSeq) || !record(value.records)
       || !Array.isArray(value.pendingCommandIds) || !Array.isArray(value.pendingRunIds)
       || !value.pendingCommandIds.every(identifier) || !value.pendingRunIds.every(identifier)) throw new AvailabilityRecordError();

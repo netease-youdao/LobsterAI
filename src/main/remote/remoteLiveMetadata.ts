@@ -4,6 +4,7 @@ import type { LanguageType } from '../i18n';
 import { stableJson } from './canonical';
 import { buildRemoteAnnotationText } from './remoteAnnotationText';
 import { isPublicReplyMessage, redactReplyText, replyBlocks, replyDisplay } from './remoteReplyProjection';
+import { remoteTurnUsage } from './remoteTaskCredits';
 
 /** Local encoder policy only; this does not change the public projection protocol. */
 export const RemoteLiveEncoderVersion = 2;
@@ -66,7 +67,7 @@ function displaySource(value: unknown): Record<string, unknown> {
 /** Raw JSON is read only by the isolated worker; methods retain at most one bounded source object until encoding finishes. */
 export function normalizeLiveMetadata(raw: string | null, rawBytes: number | null,
   mode: typeof RemoteLiveMetadataMode[keyof typeof RemoteLiveMetadataMode] = RemoteLiveMetadataMode.Message,
-  message?: Pick<Message, 'type' | 'content'>, annotationLanguage?: LanguageType): NormalizedLiveMetadata {
+  message?: Pick<Message, 'type' | 'content'>, annotationLanguage?: LanguageType, taskCreditsSupported = false): NormalizedLiveMetadata {
   const bytes = rawBytes ?? 0;
   if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > RemoteLiveEncodingLimits.RawMetadataBytes)
     fail(RemoteLiveEncodingError.RawMetadataBudget);
@@ -76,6 +77,10 @@ export function normalizeLiveMetadata(raw: string | null, rawBytes: number | nul
   try { source = JSON.parse(raw || '{}'); } catch { return fail(RemoteLiveEncodingError.MetadataInvalid); }
   if (!record(source)) return fail(RemoteLiveEncodingError.MetadataInvalid);
   const metadata: Record<string, any> = {};
+  if (taskCreditsSupported && mode === RemoteLiveMetadataMode.Message && message?.type === 'user') {
+    const usage = remoteTurnUsage(source);
+    if (usage) metadata.turnUsage = usage;
+  }
   for (const key of identities) {
     const value = source[key];
     if (value != null && value !== '' && (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/u.test(value)))
