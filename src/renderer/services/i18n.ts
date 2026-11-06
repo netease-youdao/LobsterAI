@@ -759,7 +759,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     sidebarTaskOpenFailed: '打开任务失败，请重试',
     sidebarCarouselPrevious: '上一项',
     sidebarCarouselNext: '下一项',
-    sidebarLoginFreeToken: '免费领token',
+    sidebarLoginPromoBadge: '新用户专享',
+    sidebarLoginPromoFreeCredits: '登录免费领300积分',
+    sidebarLoginPromoPennyOffer: '¥0.01解锁1000积分',
     sidebarLoginNow: '立即登录',
     dailyCheckInRewardPerDay: '每日可领 {credits} 积分',
     dailyCheckInProgress: '本期已领 {claimed}/{total} · 累计 {credits} 积分',
@@ -1006,6 +1008,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkPastedTextTitle: '粘贴的文本',
     coworkPastedTextMeta: '{lines} 行 · {chars} 字符',
     coworkPastedTextLines: '{count} 行',
+    coworkPastedTextChars: '{chars} 字符',
     coworkPastedTextOpen: '查看粘贴的文本',
     coworkPastedTextInsertAsText: '插入为正文',
     coworkPastedTextBadge: '粘贴',
@@ -2640,6 +2643,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkContextCompactionCompleted: '上下文压缩已完成',
     coworkContextCompactionRetrying: '上下文压缩已完成，正在继续任务',
     coworkContextCompactionFailed: '上下文压缩未完成',
+    coworkModelReconnectRetrying: '连接中断，正在重新连接 {attempt}/{max}',
+    coworkModelReconnectRecovered: '连接中断，已自动重连',
+    coworkModelReconnectFailed: '连接反复中断，自动重连 {attempt} 次未成功',
+    coworkModelReconnectStopped: '已停止重新连接',
+    coworkModelReconnectContinueAction: '继续',
+    coworkModelReconnectContinuePrompt: '继续',
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
@@ -2675,6 +2684,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     lowCreditOfferTaskFirstTitle: '积分已用尽，{discount}折升级订阅套餐',
     lowCreditOfferTaskReturningTitle: '积分已用尽，限时购买{discount}折',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制，请缩短对话内容后重试。',
+    coworkErrorContextRecoveryFailed: '上下文超出模型限制，自动压缩未能恢复本轮，会话记录已保留。请缩短本次输入，或在新会话中分批发送。',
     coworkErrorMessageTooLarge:
       '本次消息过大，请减少附件、压缩图片或拆分提交。（单次整体需小于 30MB）',
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。请尝试将 PDF 转换为文本格式后重新发送。',
@@ -5497,7 +5507,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     sidebarTaskOpenFailed: 'Failed to open the task. Please try again.',
     sidebarCarouselPrevious: 'Previous item',
     sidebarCarouselNext: 'Next item',
-    sidebarLoginFreeToken: 'Free tokens',
+    sidebarLoginPromoBadge: 'New users',
+    sidebarLoginPromoFreeCredits: 'Log in for 300 credits',
+    sidebarLoginPromoPennyOffer: '¥0.01 for 1,000 credits',
     sidebarLoginNow: 'Log in now',
     dailyCheckInRewardPerDay: 'Claim {credits} credits daily',
     dailyCheckInProgress: '{claimed}/{total} claimed · {credits} credits in total',
@@ -5746,6 +5758,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkPastedTextTitle: 'Pasted text',
     coworkPastedTextMeta: '{lines} lines · {chars} characters',
     coworkPastedTextLines: '{count} lines',
+    coworkPastedTextChars: '{chars} characters',
     coworkPastedTextOpen: 'View pasted text',
     coworkPastedTextInsertAsText: 'Insert as text',
     coworkPastedTextBadge: 'Pasted',
@@ -7471,6 +7484,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkContextCompactionCompleted: 'Context compaction completed',
     coworkContextCompactionRetrying: 'Context compaction completed, continuing task',
     coworkContextCompactionFailed: 'Context compaction did not complete',
+    coworkModelReconnectRetrying: 'Connection dropped, reconnecting {attempt}/{max}',
+    coworkModelReconnectRecovered: 'Connection dropped, reconnected automatically',
+    coworkModelReconnectFailed: 'Connection kept dropping, {attempt} reconnects did not get through',
+    coworkModelReconnectStopped: 'Reconnect stopped',
+    coworkModelReconnectContinueAction: 'Continue',
+    coworkModelReconnectContinuePrompt: 'Continue',
 
     // Cowork error messages
     coworkErrorAuthInvalid:
@@ -7512,6 +7531,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     lowCreditOfferTaskReturningTitle: 'Credits used up. Limited {discount}0% price',
     coworkErrorInputTooLong:
       'Input too long, exceeding model context limit. Please shorten the conversation and try again.',
+    coworkErrorContextRecoveryFailed: 'The context exceeds the model limit and automatic compaction could not recover this turn. Your conversation history has been kept. Shorten this input, or split it across a new conversation.',
     coworkErrorMessageTooLarge:
       'This message is too large. Reduce attachments, compress images, or split it up. (Keep each message under about 30 MB.)',
     coworkErrorCouldNotProcessPdf:

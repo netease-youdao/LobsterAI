@@ -35,9 +35,13 @@ import type { MediaModel } from '../../types/mediaGeneration';
 import { PROMPT_MENU_ROW_CLASS, PROMPT_SUBMENU_POSITION_CLASS, type PromptMenuItemControl } from '../common/promptSubmenu';
 import MagicIcon from '../icons/MagicIcon';
 import mediaGenAnimation from '../icons/MediaGenIcon.json';
-import { resolveMediaModelListMinHeight } from './mediaModelListLayout';
+import {
+  resolveMediaModelListFloorHeight,
+  resolveMediaModelListMinHeight,
+  resolveMediaPanelMaxHeight,
+} from './mediaModelListLayout';
 import { resolveMediaTypeChoice } from './mediaTypeChoice';
-import { resolvePopoverPlacement } from './popoverPlacement';
+import { resolvePopoverClipBounds, resolvePopoverPlacement } from './popoverPlacement';
 
 export { type MediaSelectionScope, toggleMediaModelSelection } from '../../services/mediaPreferences';
 
@@ -649,6 +653,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
     alignEnd: false,
     width: desiredPanelWidth,
   }));
+  const [panelMaxHeight, setPanelMaxHeight] = useState<number>();
 
   const cachedMediaModels = useSelector((state: RootState) => state.cowork.mediaModels);
   const mediaModelsOwnerAccountKey = useSelector(
@@ -757,6 +762,28 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
     window.addEventListener('resize', updatePlacement);
     return () => window.removeEventListener('resize', updatePlacement);
   }, [inMenu, isOpen, desiredPanelWidth]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    // Both the toolbar panel and the add-menu submenu grow upward from a fixed
+    // bottom edge; keep their tab bar inside the clipping ancestor above.
+    const updateMaxHeight = (event?: Event) => {
+      const dropdown = dropdownRef.current;
+      if (!dropdown) return;
+      // Scrolling the model list itself does not move the panel.
+      if (event?.target instanceof Node && dropdown.contains(event.target)) return;
+      const { vertical } = resolvePopoverClipBounds(dropdown);
+      const next = resolveMediaPanelMaxHeight(dropdown.getBoundingClientRect().bottom, vertical.top);
+      setPanelMaxHeight(current => (current === next ? current : next));
+    };
+    updateMaxHeight();
+    window.addEventListener('resize', updateMaxHeight);
+    window.addEventListener('scroll', updateMaxHeight, true);
+    return () => {
+      window.removeEventListener('resize', updateMaxHeight);
+      window.removeEventListener('scroll', updateMaxHeight, true);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -1155,7 +1182,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
     return (
       <>
         {/* Tabs */}
-        <div className="border-b border-border/60 p-2">
+        <div className="shrink-0 border-b border-border/60 p-2">
           <div className="flex rounded-lg bg-surface-raised p-0.5" role="tablist">
             <button
               type="button"
@@ -1186,11 +1213,11 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
           </div>
         </div>
 
-        {preferenceError && <div role="alert" className="px-3 pt-2 text-xs text-red-500">
+        {preferenceError && <div role="alert" className="shrink-0 px-3 pt-2 text-xs text-red-500">
           {i18nService.t('mediaPreferencesUnavailable')}
         </div>}
         {/* System default leads the choices; "no generation" closes them, outside the scrolling list. */}
-        <div className="px-1.5 pb-1 pt-1.5">
+        <div className="shrink-0 px-1.5 pb-1 pt-1.5">
           {renderChoiceRow({
             icon: <SparklesIcon />,
             label: i18nService.t('mediaSystemDefault'),
@@ -1199,11 +1226,12 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
             trailing: activeDefaultModelName,
           })}
         </div>
-        <div className="mx-3 border-t border-border/60" />
-        {/* Model List: max-h-80 fits eight rows, so a typical list needs no scrollbar. */}
+        <div className="mx-3 shrink-0 border-t border-border/60" />
+        {/* Model List: max-h-80 fits eight rows, so a typical list needs no scrollbar.
+            When the room above the panel is shorter, only this list shrinks and scrolls. */}
         <div
           className="flex max-h-80 flex-col overflow-y-auto px-1.5 py-1"
-          style={{ minHeight: modelListMinHeight }}
+          style={{ height: modelListMinHeight, minHeight: resolveMediaModelListFloorHeight(modelListMinHeight) }}
         >
           {isLoading ? (
             <div className="my-auto px-2 py-3 text-center text-xs text-secondary">
@@ -1259,8 +1287,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
             })
           )}
         </div>
-        <div className="mx-3 border-t border-border/60" />
-        <div className="px-1.5 pb-1.5 pt-1">
+        <div className="mx-3 shrink-0 border-t border-border/60" />
+        <div className="shrink-0 px-1.5 pb-1.5 pt-1">
           {renderChoiceRow({
             icon: <NoSymbolIcon />,
             label: i18nService.t(activeTab === 'image' ? 'mediaDisableImage' : 'mediaDisableVideo'),
@@ -1296,8 +1324,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
         {isOpen && (
           <div
             ref={dropdownRef}
-            style={{ width: desiredPanelWidth }}
-            className={`${PROMPT_SUBMENU_POSITION_CLASS[menuItem.side]} z-[60] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover`}
+            style={{ width: desiredPanelWidth, maxHeight: panelMaxHeight }}
+            className={`${PROMPT_SUBMENU_POSITION_CLASS[menuItem.side]} z-[60] flex max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-popover`}
             role="menu"
           >
             {renderDropdownContent()}
@@ -1333,8 +1361,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
       {isOpen && (
         <div
           ref={dropdownRef}
-          style={{ width: panelPlacement.width }}
-          className={`absolute bottom-full ${panelPlacement.alignEnd ? 'right-0 origin-bottom-right' : 'left-0 origin-bottom-left'} z-50 mb-2 animate-scale-in rounded-xl border border-border bg-surface shadow-popover overflow-hidden`}
+          style={{ width: panelPlacement.width, maxHeight: panelMaxHeight }}
+          className={`absolute bottom-full ${panelPlacement.alignEnd ? 'right-0 origin-bottom-right' : 'left-0 origin-bottom-left'} z-50 mb-2 flex animate-scale-in flex-col rounded-xl border border-border bg-surface shadow-popover overflow-hidden`}
         >
           {renderDropdownContent()}
         </div>

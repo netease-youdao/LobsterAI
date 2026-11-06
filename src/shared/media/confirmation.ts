@@ -1,6 +1,9 @@
+export const MediaConfirmationKind = { Image: 'image_generation', Video: 'video_generation' } as const;
+export type MediaConfirmationKind = (typeof MediaConfirmationKind)[keyof typeof MediaConfirmationKind];
+
 /** Local confirmation protocol. Analytics reuse existing Hive columns. */
 export const MediaConfirmationPolicy = {
-  Kind: 'video_generation',
+  Kind: MediaConfirmationKind.Video,
   /** A quote older than this is re-read from the model catalogue when the user confirms. */
   QuoteFreshMs: 120_000,
   RetentionMs: 30 * 60_000,
@@ -54,14 +57,21 @@ export type MediaConfirmationOutcome =
 
 export const ConfirmationBehavior = { Allow: 'allow', Deny: 'deny' } as const;
 
+/** How far an approval reaches: this attempt, or the rest of the turn at the same model and quote. */
+export const MediaConfirmationGrant = { Once: 'once', Turn: 'turn' } as const;
+export type MediaConfirmationGrant =
+  (typeof MediaConfirmationGrant)[keyof typeof MediaConfirmationGrant];
+
 export interface MediaConfirmationState {
-  kind: typeof MediaConfirmationPolicy.Kind;
+  kind: MediaConfirmationKind;
   revision: number;
   sequence: number;
   status: MediaConfirmationStatus;
   retainedUntil: number;
   /** Set when confirming found a new price; the user must answer again. */
   repriced?: { previousCredits?: number };
+  /** The card may offer approving the rest of this turn at the displayed quote. */
+  turnGrant?: boolean;
 }
 
 export interface MediaConfirmationResponse {
@@ -69,6 +79,10 @@ export interface MediaConfirmationResponse {
   answers?: Record<string, string>;
   skippedQuestionIds?: string[];
   reason?: MediaConfirmationReason;
+  /** Omitted means `Once`. */
+  grant?: MediaConfirmationGrant;
+  /** Set on a turn approval: the quote the user agreed to. */
+  quote?: string;
 }
 
 export interface MediaConfirmationCommand {
@@ -88,14 +102,15 @@ export interface MediaConfirmationEvent {
 export const readMediaConfirmationState = (value: unknown): MediaConfirmationState | undefined => {
   if (!value || typeof value !== 'object') return undefined;
   const item = value as MediaConfirmationState;
-  return item.kind === MediaConfirmationPolicy.Kind &&
+  return Object.values(MediaConfirmationKind).includes(item.kind) &&
     Number.isInteger(item.revision) &&
     item.revision >= 0 &&
     Number.isInteger(item.sequence) &&
     item.sequence >= 0 &&
     Object.values(MediaConfirmationStatus).includes(item.status) &&
     Number.isFinite(item.retainedUntil) &&
-    (item.repriced === undefined || (typeof item.repriced === 'object' && item.repriced !== null))
+    (item.repriced === undefined || (typeof item.repriced === 'object' && item.repriced !== null)) &&
+    (item.turnGrant === undefined || typeof item.turnGrant === 'boolean')
     ? item
     : undefined;
 };

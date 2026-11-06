@@ -1219,6 +1219,7 @@ export const LogReporterActionPrefix = {
 | `orb` / `shortcut` / `tray` / `context_menu` / `hint` / `file_drop` / `selection` / `system` | `open` | 快捷输入面板从关闭变为打开请求，`surface=panel`、`enabled`；重复打开、尺寸更新不重复计数。`enabled=false` 时仍可用快捷键打开面板 |
 | `context_menu` / `panel` / `selection` / `language_tools` / `result` | `open_main` | 跳转主窗口，`hasSession` 表示是否指定任务；不上传会话 ID |
 | `panel` | `open_skills` / `open_kits` / `login_shown` | 管理技能、管理专家入口 / 登录提示由隐藏变为显示 |
+| `selection` / `language_tools` | `login_shown` / `login_click` / `login_success` | 划词回答卡、翻译/朗读卡的登录提示显示 / 点击「登录」/ 该次点击后 30 分钟内登录成功。`tool` 为被拦下的功能（翻译卡内追问记为 `ask`）；同一提示的三个事件共用随机 `journeyId`；成功携带 `durationMs`（点击到登录成功，单位毫秒） |
 | `context_menu` / `selection` | `open_settings` | 打开悬浮球设置 |
 | `context_menu` / `selection` | `pause` | 暂时隐藏悬浮球或暂停划词；悬浮球携带 `snoozeMode` |
 | `settings` | `permission` | 主动请求辅助功能权限；不代表授权成功 |
@@ -1232,6 +1233,7 @@ export const LogReporterActionPrefix = {
 
 - 用途：分析入口使用、划词工具使用、通知到主窗口的转化，以及登录和权限触达。
 - `open + surface=panel` 表示接受打开请求，并携带本次打开的随机分析 `journeyId`；`stage=shown` 表示调用了原生窗口显示方法。二者不能合并解释为内容已完成渲染。
+- 划词登录口径：`login_shown` 每个请求的每种被拦功能只计一次；`login_success` 由主进程在登录换取凭证成功后上报，归因给 30 分钟内最近一次 `login_click`，即使用户最终在主窗口完成登录也计入。超过 30 分钟或没有点击的登录不上报。漏斗为 `login_shown → login_click → login_success`，按 `journeyId` 连接。
 
 #### 2.4.47 `lobsterai_desktop_companion_task`
 

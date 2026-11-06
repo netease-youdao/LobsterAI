@@ -1,5 +1,6 @@
 import { CoworkSystemMessageKind } from '../../common/coworkSystemMessages';
 import type { CoworkModelChange } from '../../shared/cowork/modelChange';
+import { type ModelPresetId, parseModelPresetModelId } from '../../shared/modelPresets/constants';
 import { ProviderRegistry } from '../../shared/providers/constants';
 import type { CoworkSession, CoworkStore } from '../coworkStore';
 import { resolveRawApiConfig } from './claudeSettings';
@@ -11,6 +12,11 @@ function effectiveModelRef(store: CoworkStore, session: CoworkSession): string {
   if (!config?.model) return '';
   const providerId = ProviderRegistry.getOpenClawProviderId(providerMetadata?.providerName ?? '');
   return providerId ? `${providerId}/${config.model}` : config.model;
+}
+
+/** An agent default such as `lobsterai-server/yd-fast` is the preset itself. */
+function presetIdFor(modelRef: string, presetId: ModelPresetId | null | undefined): ModelPresetId | null {
+  return presetId ?? parseModelPresetModelId(modelRef);
 }
 
 function isSameModelSelection(change: CoworkModelChange): boolean {
@@ -37,8 +43,8 @@ export function recordSessionModelChange(
   const modelChange: CoworkModelChange = {
     previousModelRef,
     nextModelRef,
-    previousPresetId: previous.modelPresetId,
-    nextPresetId: current.modelPresetId,
+    previousPresetId: presetIdFor(previousModelRef, previous.modelPresetId),
+    nextPresetId: presetIdFor(nextModelRef, current.modelPresetId),
   };
   if (isSameModelSelection(modelChange)) return current;
 
@@ -50,7 +56,7 @@ export function recordSessionModelChange(
     if (message.type !== 'system' || message.metadata?.kind !== CoworkSystemMessageKind.ModelChanged || !change) break;
     pendingNoticeIds.push(message.id);
     modelChange.previousModelRef = change.previousModelRef;
-    modelChange.previousPresetId = change.previousPresetId;
+    modelChange.previousPresetId = presetIdFor(change.previousModelRef, change.previousPresetId);
   }
 
   for (const messageId of pendingNoticeIds) {

@@ -4,6 +4,7 @@ import {
   ContextCompactionMode,
   ContextCompactionStatus,
   CoworkSystemMessageKind,
+  ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
 import type { CoworkMessage } from '../../types/cowork';
 import { ActivityStepKind } from './constants';
@@ -32,6 +33,7 @@ import {
   getLiveActivityWindow,
   getLiveEditDiff,
   getMessageModelLabel,
+  getModelReconnectMessageLabel,
   getShellCommandDescription,
   getStreamingTextSignature,
   getThinkingPhaseLabels,
@@ -424,6 +426,43 @@ test('turn answer start index splits trailing answer text from the process', () 
   // an answer-only turn folds nothing
   const answerOnly = chunkConsolidatedItemsForDisplay([activityTextItem('text-1')]);
   expect(getTurnAnswerStartIndex(answerOnly)).toBe(0);
+});
+
+const reconnectMessage = (status: ModelReconnectStatus, attempt = 2): CoworkMessage => ({
+  id: `reconnect-${status}`,
+  type: 'system',
+  content: 'Reconnecting',
+  timestamp: 0,
+  metadata: { kind: CoworkSystemMessageKind.ModelReconnect, status, attempt, maxAttempts: 5 },
+});
+
+test('a reconnect row folds into the process instead of the answer', () => {
+  const chunks = chunkConsolidatedItemsForDisplay([
+    activityThinkingItem('think-1'),
+    { type: 'system', message: reconnectMessage(ModelReconnectStatus.Recovered) },
+    activityThinkingItem('think-2'),
+    activityTextItem('text-final'),
+  ]);
+  const answerStart = getTurnAnswerStartIndex(chunks);
+  expect(chunks[answerStart]).toMatchObject({ kind: 'item', index: 3 });
+
+  // The error card after a failed reconnect stays visible; the row folds.
+  const failed = chunkConsolidatedItemsForDisplay([
+    activityToolItem('tool-1'),
+    { type: 'system', message: reconnectMessage(ModelReconnectStatus.Failed, 5) },
+    {
+      type: 'system',
+      message: { id: 'error-1', type: 'system', content: '', timestamp: 0, metadata: { error: 'failed' } },
+    },
+  ]);
+  expect(failed[getTurnAnswerStartIndex(failed)]).toMatchObject({ kind: 'item', index: 2 });
+});
+
+test('reconnect rows read the attempt and outcome', () => {
+  expect(getModelReconnectMessageLabel(reconnectMessage(ModelReconnectStatus.Retrying))).toBe('连接中断，正在重新连接 2/5');
+  expect(getModelReconnectMessageLabel(reconnectMessage(ModelReconnectStatus.Recovered))).toBe('连接中断，已自动重连');
+  expect(getModelReconnectMessageLabel(reconnectMessage(ModelReconnectStatus.Failed, 5))).toBe('连接反复中断，自动重连 5 次未成功');
+  expect(getModelReconnectMessageLabel(reconnectMessage(ModelReconnectStatus.Stopped))).toBe('已停止重新连接');
 });
 
 test('turn process only folds once a trailing answer exists', () => {

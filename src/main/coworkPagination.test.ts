@@ -73,37 +73,34 @@ function getPagedSessionMessages(db: Database, sessionId: string, limit: number,
 
 /** Mirror of getSessionMessageRailIndex(sessionId) */
 function getSessionMessageRailIndex(db: Database, sessionId: string) {
-  const rows = getAll<{ id: string; type: string; content: string; metadata: string | null; message_offset: number }>(
+  const rows = getAll<{ id: string; type: string; content: string; is_thinking: number; message_offset: number }>(
     db,
-    `SELECT id, type, content, metadata, message_offset
-     FROM (
+    `WITH ordered AS (
        SELECT
-         id,
-         type,
-         content,
-         metadata,
-         sequence,
-         created_at,
+         rowid AS row_id,
          ROW_NUMBER() OVER (
-           ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
-         ) - 1 as message_offset
+           ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, rowid ASC
+         ) - 1 AS message_offset
        FROM cowork_messages
        WHERE session_id = ?
      )
-     WHERE type IN ('user', 'assistant')
-       AND TRIM(content) <> ''
-     ORDER BY message_offset ASC`,
+     SELECT
+       m.id,
+       m.type,
+       m.content,
+       CASE
+         WHEN m.type = 'assistant' AND json_valid(m.metadata)
+           AND json_type(m.metadata, '$.isThinking') = 'true' THEN 1
+         ELSE 0
+       END AS is_thinking,
+       ordered.message_offset
+     FROM ordered
+     JOIN cowork_messages m ON m.rowid = ordered.row_id
+     WHERE m.type IN ('user', 'assistant') AND TRIM(m.content) <> ''
+     ORDER BY ordered.message_offset ASC`,
     [sessionId],
   );
-  return rows.filter((row) => {
-    if (row.type !== 'assistant' || !row.metadata) return true;
-    try {
-      const metadata = JSON.parse(row.metadata) as { isThinking?: unknown };
-      return metadata.isThinking !== true;
-    } catch {
-      return true;
-    }
-  });
+  return rows.filter(row => row.is_thinking !== 1);
 }
 
 // ---------------------------------------------------------------------------

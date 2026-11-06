@@ -4,11 +4,14 @@
 // vendor/dsh-runtime/<target-id>, mirroring the OpenClaw runtime pipeline but
 // starting from the published npm package instead of a source checkout:
 //
-//   npm pack @deepseek-ai/dsh@<pinned> -> extract -> apply pinned patches
-//   -> npm install --omit=dev (platform/arch scoped) -> prune -> verify layout
+//   npm pack @deepseek-ai/dsh@<pinned> -> extract -> npm install --omit=dev
+//   (platform/arch scoped) -> bundle pinned pnpm -> apply pinned patches
+//   -> prune -> verify layout
 //
-// The pinned version lives in package.json under the "dsh" field. The result
-// is offline-complete: user machines never run npm or download anything.
+// The pinned versions live in package.json under the "dsh" field. The result
+// is offline-complete: user machines never run npm or download anything to
+// run dsh. Installing a dsh plugin does download it, with the pnpm bundled
+// here (dsh's plugin manager requires pnpm 11+ and user machines have none).
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -92,6 +95,20 @@ const PATCH_SENTINELS = [
     expect: '_Out_ str16 *name',
     occurrences: 1,
   },
+  {
+    // The require-builtin addon rejects our Electron's V8 fingerprint, so
+    // internalModules() must reach Node internals via --expose-internals.
+    patch: '01-app-boot-expose-internals-fallback.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
+    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
+    occurrences: 1,
+  },
+  {
+    patch: '01-app-boot-expose-internals-fallback.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/worker/profile-resolution-bootstrap.js',
+    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
+    occurrences: 1,
+  },
 ];
 
 const TARGETS = {
@@ -115,12 +132,22 @@ if (!dshMeta || !dshMeta.version || !dshMeta.npm) {
 }
 const dshVersion = dshMeta.version;
 const dshPackage = dshMeta.npm;
+// Exact pnpm release bundled for dsh's plugin manager. Keep it on the major the
+// upstream repo pins in its own packageManager field: the manager reads pnpm 11
+// settings (allowBuilds) and output formats.
+const pnpmVersion = typeof dshMeta.pnpm === 'string' ? dshMeta.pnpm.trim() : '';
+if (!/^\d+\.\d+\.\d+$/.test(pnpmVersion)) {
+  fail('package.json "dsh.pnpm" must pin an exact pnpm version (e.g. "11.28.5").');
+}
 const registry = process.env.DSH_NPM_REGISTRY || dshMeta.registry || '';
 
 const runtimeBaseDir = path.join(rootDir, 'vendor', 'dsh-runtime');
 const outDir = path.join(runtimeBaseDir, targetId);
 const buildInfoPath = path.join(outDir, 'runtime-build-info.json');
 const patchesDir = path.join(rootDir, 'scripts', 'dsh-patches', dshVersion);
+// Mirrors DSH_PNPM_PACKAGE_RELPATH in src/main/libs/dshRuntime.ts.
+const PNPM_PACKAGE_RELPATH = 'package-manager/pnpm';
+const pnpmPackageDir = path.join(outDir, ...PNPM_PACKAGE_RELPATH.split('/'));
 
 function runOrFail(command, args, options, description) {
   // `tar` is resolved to an absolute path by the caller, so it never needs a shell.
@@ -167,7 +194,8 @@ function isRuntimeComplete() {
   return (
     fs.existsSync(path.join(outDir, 'lib', 'bin.js')) &&
     fs.existsSync(path.join(outDir, 'node_modules')) &&
-    fs.existsSync(path.join(outDir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'index.html'))
+    fs.existsSync(path.join(outDir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'index.html')) &&
+    fs.existsSync(path.join(pnpmPackageDir, 'package.json'))
   );
 }
 
@@ -178,8 +206,14 @@ const patchHash = computePatchHash();
 if (process.env.DSH_FORCE_BUILD !== '1' && fs.existsSync(buildInfoPath)) {
   try {
     const info = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
-    if (info.dshVersion === dshVersion && info.patchHash === patchHash && info.target === targetId && isRuntimeComplete()) {
-      log(`Runtime ${targetId} for dsh ${dshVersion} is up to date. Set DSH_FORCE_BUILD=1 to rebuild.`);
+    if (
+      info.dshVersion === dshVersion &&
+      info.patchHash === patchHash &&
+      info.target === targetId &&
+      info.pnpmVersion === pnpmVersion &&
+      isRuntimeComplete()
+    ) {
+      log(`Runtime ${targetId} for dsh ${dshVersion} (pnpm ${pnpmVersion}) is up to date. Set DSH_FORCE_BUILD=1 to rebuild.`);
       process.exit(0);
     }
   } catch (_e) {
@@ -194,7 +228,10 @@ if (target.platform !== process.platform) {
   );
 }
 
-log(`Building dsh runtime ${targetId} (${dshPackage}@${dshVersion}, patches: ${patchHash === 'none' ? 'none' : patchHash.slice(0, 12)})`);
+log(
+  `Building dsh runtime ${targetId} (${dshPackage}@${dshVersion}, pnpm ${pnpmVersion}, ` +
+    `patches: ${patchHash === 'none' ? 'none' : patchHash.slice(0, 12)})`
+);
 
 const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-runtime-'));
 process.on('exit', () => {
@@ -205,7 +242,7 @@ process.on('exit', () => {
   }
 });
 
-// [1/6] Download the published CLI package tarball. `npm pack` of a remote
+// [1/7] Download the published CLI package tarball. `npm pack` of a remote
 // spec only downloads; no scripts run locally.
 const packArgs = ['pack', `${dshPackage}@${dshVersion}`, '--pack-destination', stagingDir, '--loglevel=error'];
 if (registry) packArgs.push(`--registry=${registry}`);
@@ -216,14 +253,14 @@ if (!tarball) {
   fail(`npm pack produced no tarball in ${stagingDir}`);
 }
 
-// [2/6] Extract. npm tarballs always wrap contents in a "package/" directory.
+// [2/7] Extract. npm tarballs always wrap contents in a "package/" directory.
 runOrFail(resolveTarCommand(), ['-xzf', path.join(stagingDir, tarball), '-C', stagingDir], {}, 'tar extract');
 const extractedDir = path.join(stagingDir, 'package');
 if (!fs.existsSync(path.join(extractedDir, 'package.json'))) {
   fail(`Extracted tarball has no package.json at ${extractedDir}`);
 }
 
-// [3/6] Lay down the runtime root and neutralize the manifest: devDependencies
+// [3/7] Lay down the runtime root and neutralize the manifest: devDependencies
 // must not resolve and the CLI package's own lifecycle scripts must never run.
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(runtimeBaseDir, { recursive: true });
@@ -235,7 +272,7 @@ delete runtimePkg.devDependencies;
 delete runtimePkg.scripts;
 fs.writeFileSync(runtimePkgPath, `${JSON.stringify(runtimePkg, null, 2)}\n`);
 
-// [4/6] Install production dependencies scoped to the target platform/arch so
+// [4/7] Install production dependencies scoped to the target platform/arch so
 // npm selects the matching optionalDependencies prebuilds (ripgrep, koffi,
 // landlock, require-builtin). Transitive install scripts stay enabled — the
 // node-pty prebuild/chmod steps are required.
@@ -258,7 +295,15 @@ if (firstInstall.status !== 0) {
   runOrFail('npm', [...installArgs, '--legacy-peer-deps'], { cwd: outDir, env: installEnv }, 'npm install (legacy peer deps)');
 }
 
-// [5/6] Apply LobsterAI patches pinned to this dsh version. Patches target the
+// [5/7] Bundle the pinned pnpm. `dsh web` started directly hands pnpm
+// operations to `pnpm` on PATH, which GUI-launched apps do not have; the app
+// passes this copy to dsh's runCli({ packageManager }) instead. pnpm publishes
+// a self-contained package with no dependencies, so the tarball is unpacked
+// whole beside node_modules (never into it: dsh's dependency graph and the
+// node_modules prune both stay untouched).
+bundlePnpm();
+
+// [6/7] Apply LobsterAI patches pinned to this dsh version. Patches target the
 // installed tree (published lib/*.js under the root or node_modules), so they
 // run after install. Each patch is a module exporting apply(runtimeRoot) — the
 // published bundles carry content-hashed filenames, and `git apply` resolves
@@ -284,7 +329,7 @@ for (const patchFile of listPatchFiles()) {
 }
 assertPatchesLanded();
 
-// [6/6] Prune and verify.
+// [7/7] Prune and verify.
 pruneRuntime();
 verifyRuntimeLayout();
 
@@ -298,14 +343,59 @@ fs.writeFileSync(
       arch: target.arch,
       npmPackage: dshPackage,
       dshVersion,
+      pnpmVersion,
       patchHash,
-      builderVersion: 1,
+      builderVersion: 2,
     },
     null,
     2
   )}\n`
 );
 log(`Done: ${path.relative(rootDir, outDir)}`);
+
+function bundlePnpm() {
+  const packDir = path.join(stagingDir, 'pnpm');
+  fs.mkdirSync(packDir, { recursive: true });
+  const args = ['pack', `pnpm@${pnpmVersion}`, '--pack-destination', packDir, '--loglevel=error'];
+  if (registry) args.push(`--registry=${registry}`);
+  runOrFail('npm', args, { cwd: packDir }, 'npm pack pnpm');
+
+  const pnpmTarball = fs.readdirSync(packDir).find((name) => name.endsWith('.tgz'));
+  if (!pnpmTarball) fail(`npm pack produced no pnpm tarball in ${packDir}`);
+  runOrFail(resolveTarCommand(), ['-xzf', path.join(packDir, pnpmTarball), '-C', packDir], {}, 'tar extract pnpm');
+
+  const extracted = path.join(packDir, 'package');
+  const manifest = JSON.parse(fs.readFileSync(path.join(extracted, 'package.json'), 'utf8'));
+  if (manifest.name !== 'pnpm' || manifest.version !== pnpmVersion) {
+    fail(`Packed ${manifest.name}@${manifest.version}, expected pnpm@${pnpmVersion}`);
+  }
+  if (manifest.dependencies && Object.keys(manifest.dependencies).length > 0) {
+    fail(`pnpm@${pnpmVersion} now declares dependencies; bundling it unpacked would leave them unresolved`);
+  }
+
+  fs.rmSync(pnpmPackageDir, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(pnpmPackageDir), { recursive: true });
+  fs.cpSync(extracted, pnpmPackageDir, { recursive: true });
+
+  // Start it once so a pnpm whose entry is missing or cannot start fails the
+  // build rather than a user's first plugin install. The cwd has no
+  // package.json above it, so no packageManager field can make pnpm switch
+  // versions over the network.
+  const entry = path.join(pnpmPackageDir, ...resolvePnpmBinRelPath(manifest).split('/'));
+  const probe = spawnSync(process.execPath, [entry, '--version'], { cwd: packDir, encoding: 'utf8' });
+  const reported = (probe.stdout || '').trim();
+  if (probe.status !== 0 || reported !== pnpmVersion) {
+    fail(`Bundled pnpm did not report ${pnpmVersion} (exit ${probe.status}, got "${reported}"): ${(probe.stderr || '').trim()}`);
+  }
+  log(`Bundled pnpm ${pnpmVersion} at ${PNPM_PACKAGE_RELPATH} (${Math.round(directorySize(pnpmPackageDir) / 1024 / 1024)} MB)`);
+}
+
+// Same rule the app applies (parseDshPnpmBinRelPath in dshRuntime.ts).
+function resolvePnpmBinRelPath(manifest) {
+  const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin && manifest.bin.pnpm;
+  if (typeof bin !== 'string' || !bin) fail(`pnpm@${pnpmVersion} declares no pnpm bin entry`);
+  return bin.replace(/\\/g, '/').replace(/^\.\//, '');
+}
 
 function pruneGenericFiles(root) {
   let removedBytes = 0;
@@ -433,6 +523,7 @@ function verifyRuntimeLayout() {
     ['node_modules/@deepseek-ai/dsh-base', 'dsh-base bundle'],
     ['node_modules/@deepseek-ai/dsh-web-app', 'dsh-web-app bundle'],
     ['node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html', 'web frontend static assets'],
+    [`${PNPM_PACKAGE_RELPATH}/package.json`, 'bundled pnpm'],
   ];
   for (const [relPath, label] of mustExist) {
     if (!fs.existsSync(path.join(outDir, relPath))) {

@@ -49,6 +49,8 @@ export class SqliteStore {
   private db: Database.Database;
   private dbPath: string;
   private emitter = new EventEmitter();
+  /** Listener count per key; writes to unwatched keys skip reading the previous value. */
+  private watchedKeys = new Map<string, number>();
   private didRunMigration = false;
 
   private constructor(db: Database.Database, dbPath: string) {
@@ -809,7 +811,16 @@ export class SqliteStore {
       callback(payload.newValue, payload.oldValue);
     };
     this.emitter.on('change', handler);
-    return () => this.emitter.off('change', handler);
+    this.watchedKeys.set(key, (this.watchedKeys.get(key) ?? 0) + 1);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      this.emitter.off('change', handler);
+      const remaining = (this.watchedKeys.get(key) ?? 1) - 1;
+      if (remaining > 0) this.watchedKeys.set(key, remaining);
+      else this.watchedKeys.delete(key);
+    };
   }
 
   get<T = unknown>(key: string): T | undefined {
@@ -826,7 +837,9 @@ export class SqliteStore {
   }
 
   set<T = unknown>(key: string, value: T): void {
-    const oldValue = this.get<T>(key);
+    // Some values are large; only parse the previous one when a listener will receive it.
+    const watched = this.watchedKeys.has(key);
+    const oldValue = watched ? this.get<T>(key) : undefined;
     const now = Date.now();
     this.db
       .prepare(
@@ -839,13 +852,14 @@ export class SqliteStore {
     `,
       )
       .run(key, JSON.stringify(value), now);
-    this.emitter.emit('change', { key, newValue: value, oldValue } as ChangePayload<T>);
+    if (watched) this.emitter.emit('change', { key, newValue: value, oldValue } as ChangePayload<T>);
   }
 
   delete(key: string): void {
-    const oldValue = this.get(key);
+    const watched = this.watchedKeys.has(key);
+    const oldValue = watched ? this.get(key) : undefined;
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(key);
-    this.emitter.emit('change', { key, newValue: undefined, oldValue } as ChangePayload);
+    if (watched) this.emitter.emit('change', { key, newValue: undefined, oldValue } as ChangePayload);
   }
 
   getDatabase(): Database.Database {

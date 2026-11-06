@@ -28,3 +28,4 @@ export const MediaBillingStatus = { Reserved: 'reserved', Settled: 'settled', Re
 export const MEDIA_V2_TASKS_PATH = '/api/media/v2/tasks';
 export const MEDIA_TASK_STORE_KEY = 'media.tasks.v2';
 export const MEDIA_INTENT_STORE_KEY = 'media.intents.v2';
+export const MEDIA_INTENT_BODY_KEY_PREFIX = 'media.intentBody.v1:';

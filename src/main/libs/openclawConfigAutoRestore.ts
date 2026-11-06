@@ -2,10 +2,12 @@ import { writeConfigDiagnostic } from './openclawConfigObservation';
 
 /**
  * OpenClaw rewrites its config at read time when the file looks clobbered
- * (e.g. a >50% size drop against its last-known-good baseline, which a
- * sign-out causes by removing the plan model catalog) or invalid. It reports
- * this only as one warning line, and the gateway then runs a config LobsterAI
- * did not author: models and providers the user can no longer select.
+ * (e.g. a >50% size drop against its last-known-good baseline) or invalid. It
+ * reports this only as one warning line, and the gateway then runs a config
+ * LobsterAI did not author: models and providers the user can no longer select.
+ * Sign-out removes the plan model catalog but no longer triggers this: live
+ * writes claim the size-drop waiver (openclawConfigSizeDrop.ts) and the patched
+ * gateway does not "restore" a `.bak` holding the current bytes.
  */
 
 export const OpenClawConfigRestoreSource = {
@@ -47,11 +49,10 @@ export function parseOpenClawConfigAutoRestore(output: string): OpenClawConfigAu
 const MAX_AUTO_RESTORE_RESYNCS = 3;
 
 /**
- * Re-apply LobsterAI's config once per distinct restore. With the aligned
- * backup the restore rewrote identical bytes and the resync is a no-op;
- * otherwise config delivery replaces the restored file (restarting when the
- * gateway refuses the shrink). A repeated restore means the host write does
- * not stick, so stop rather than restart in a loop.
+ * Re-apply LobsterAI's config once per distinct restore: config delivery
+ * replaces the restored file (restarting when the gateway still refuses the
+ * shrink). A repeated restore means the host write does not stick, so stop
+ * rather than restart in a loop.
  */
 export function createOpenClawConfigAutoRestoreHandler(deps: {
   isShuttingDown: () => boolean;

@@ -5,8 +5,6 @@ import {
   ActivitySlotState,
   DailyCheckInAction,
   type DailyCheckInActionResponse,
-  type DailyCheckInContextResponse,
-  type DailyCheckInDescriptor,
 } from '@shared/activity/constants';
 import {
   useCallback,
@@ -30,38 +28,25 @@ import {
   getDailyCheckInDayBoundaryDelay,
   startDailyCheckInAutoRefresh,
 } from './dailyCheckInAutoRefresh';
+import {
+  createDailyCheckInSnapshotStore,
+  type DailyCheckInLoadResult,
+  DailyCheckInLoadResultStatus,
+  type DailyCheckInSnapshot,
+} from './dailyCheckInSnapshotStore';
 import { logSidebarExperienceDiagnostic } from './sidebarExperienceDiagnostics';
+
+export {
+  type DailyCheckInLoadResult,
+  DailyCheckInLoadResultStatus,
+  type DailyCheckInSnapshot,
+};
 
 const DAILY_CHECK_IN_UPDATED_EVENT = 'lobster:daily-check-in-updated';
 
 interface DailyCheckInLoadOptions {
-  retryRevision?: boolean;
   silent?: boolean;
 }
-
-export const DailyCheckInLoadResultStatus = {
-  Ready: 'ready',
-  Unavailable: 'unavailable',
-  Failed: 'failed',
-} as const;
-
-export interface DailyCheckInSnapshot {
-  descriptor: DailyCheckInDescriptor;
-  context: DailyCheckInContextResponse;
-}
-
-type DailyCheckInLoadResult =
-  | {
-      status: typeof DailyCheckInLoadResultStatus.Ready;
-      snapshot: DailyCheckInSnapshot;
-    }
-  | {
-      status: typeof DailyCheckInLoadResultStatus.Unavailable;
-    }
-  | {
-      status: typeof DailyCheckInLoadResultStatus.Failed;
-      code?: number;
-    };
 
 interface ScopedDailyCheckInSnapshot {
   accountScope: string;
@@ -102,7 +87,7 @@ export class DailyCheckInStaleRequestError extends Error {
 
 export async function loadDailyCheckInSnapshot({
   retryRevision = true,
-}: Pick<DailyCheckInLoadOptions, 'retryRevision'> = {}): Promise<DailyCheckInLoadResult> {
+}: { retryRevision?: boolean } = {}): Promise<DailyCheckInLoadResult> {
   const slot = await window.electron.activity.getSlot({
     placement: ActivityPlacement.DesktopSidebar,
   });
@@ -144,6 +129,14 @@ export async function loadDailyCheckInSnapshot({
     snapshot: { descriptor, context: context.data },
   };
 }
+
+/**
+ * Shared by every check-in entry so the account menu can open with the last
+ * known state instead of waiting on two serial activity requests.
+ */
+export const dailyCheckInSnapshotStore = createDailyCheckInSnapshotStore({
+  load: () => loadDailyCheckInSnapshot(),
+});
 
 function createIdempotencyKey(): string {
   const suffix = globalThis.crypto?.randomUUID?.()
@@ -192,8 +185,21 @@ export function useDailyCheckInActivity(
     };
   }, []);
 
+  // The account menu opens before its refresh finishes and pushes the newer
+  // snapshot in afterwards; adopt it instead of keeping the mount-time value.
+  const appliedInitialSnapshotRef = useRef(initialSnapshot);
+  useEffect(() => {
+    if (appliedInitialSnapshotRef.current === initialSnapshot) return;
+    appliedInitialSnapshotRef.current = initialSnapshot;
+    setScopedSnapshot(initialSnapshot
+      ? {
+        accountScope: authAccountScopeRef.current,
+        snapshot: initialSnapshot,
+      }
+      : null);
+  }, [initialSnapshot]);
+
   const load = useCallback(async ({
-    retryRevision = true,
     silent = false,
   }: DailyCheckInLoadOptions = {}): Promise<void> => {
     const requestAccountScope = authAccountScope;
@@ -212,7 +218,7 @@ export function useDailyCheckInActivity(
     }
     if (isCurrentRequest() && !silent) setLoading(true);
     try {
-      const result = await loadDailyCheckInSnapshot({ retryRevision });
+      const result = await dailyCheckInSnapshotStore.refresh(requestAccountScope);
       if (!isCurrentRequest()) return;
       if (result.status === DailyCheckInLoadResultStatus.Ready) {
         setScopedSnapshot({
@@ -316,6 +322,7 @@ export function useDailyCheckInActivity(
           await refresh();
         } else if (result.code === ActivityServerErrorCode.NotActive
             || result.code === ActivityServerErrorCode.NotFound) {
+          dailyCheckInSnapshotStore.replace(requestAccountScope, null);
           loadRequestIdRef.current += 1;
           setScopedSnapshot(null);
         }
@@ -333,13 +340,15 @@ export function useDailyCheckInActivity(
         await refresh();
         throw new Error(i18nService.t('dailyCheckInClaimFailed'));
       }
+      const claimedSnapshot: DailyCheckInSnapshot = {
+        descriptor: target.descriptor,
+        context: result.data.context,
+      };
+      dailyCheckInSnapshotStore.replace(requestAccountScope, claimedSnapshot);
       loadRequestIdRef.current += 1;
       setScopedSnapshot({
         accountScope: requestAccountScope,
-        snapshot: {
-          descriptor: target.descriptor,
-          context: result.data.context,
-        },
+        snapshot: claimedSnapshot,
       });
       window.dispatchEvent(new Event(DAILY_CHECK_IN_UPDATED_EVENT));
       void authService.fetchProfileSummary();

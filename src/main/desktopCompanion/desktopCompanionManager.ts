@@ -20,12 +20,14 @@ import {
 } from '../../shared/desktopCompanion/analytics';
 import { categorizeCompanionApp, CompanionAppCategory, isCompanionQuietCategory } from '../../shared/desktopCompanion/appCategories';
 import {
+  CompanionCapability,
   CompanionPermission as CompanionPermissionValue,
   type CompanionQuickAnswerRequest,
   type CompanionSurfaceSize,
   DEFAULT_DESKTOP_COMPANION_PREFERENCES,
   type DesktopCompanionAttachment,
   type DesktopCompanionDraft,
+  type DesktopCompanionDragEvent,
   DesktopCompanionDragPhase,
   type DesktopCompanionDropFile,
   DesktopCompanionDropSource,
@@ -57,7 +59,9 @@ import {
 import {
   clampCompanionBounds,
   type CompanionComposerLayout,
+  companionDragGrabOffset,
   type CompanionPoint,
+  type CompanionRect,
   companionStageOpensLeft,
   resolveCompanionBounds,
   resolveCompanionComposerLayout,
@@ -75,6 +79,7 @@ import { t } from '../i18n';
 import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companionAnalytics';
 import { copyCompanionText } from './companionClipboard';
 import { CompanionHintsController } from './companionHints';
+import { CompanionLoginTracker, isCompanionLoginSource, normalizeCompanionLoginStart } from './companionLogin';
 import { CompanionResultsController } from './companionResults';
 import { CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
@@ -206,7 +211,8 @@ export class DesktopCompanionManager {
   private fileDragActive = false;
   private draggedFiles: DesktopCompanionDropFile[] = [];
   private foregroundAppId: string | null = null;
-  private dragOrigin: { cursor: CompanionPoint; position: CompanionPoint } | null = null;
+  /** Where the pointer holds the orb during a drag, and where the drag last placed it. */
+  private drag: { grab: CompanionPoint; placed: CompanionRect | null } | null = null;
   private draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private snoozeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly env: CompanionWindowEnvironment;
@@ -221,10 +227,12 @@ export class DesktopCompanionManager {
   private readonly screenshot: CompanionScreenshotController;
   private readonly results: CompanionResultsController;
   private readonly analytics: CompanionAnalytics;
+  private readonly login: CompanionLoginTracker;
 
   constructor(private readonly options: DesktopCompanionOptions) {
     this.enginePhase = options.enginePhase;
     this.analytics = new CompanionAnalytics(options.reportAnalytics, options.getAnalyticsOwner);
+    this.login = new CompanionLoginTracker(this.analytics);
     const { store } = options;
     this.preferences = normalizeCompanionPreferences(store.get(DesktopCompanionStoreKey.Preferences));
     this.draft = normalizeCompanionDraft(store.get(DesktopCompanionStoreKey.Draft));
@@ -282,7 +290,10 @@ export class DesktopCompanionManager {
     this.selection = new CompanionSelectionController({
       analytics: this.analytics,
       preferences: () => this.preferences,
-      isAvailable: () => this.isPresent() && !this.capturing,
+      // Selection tools use direct HTTP, not the agent gateway. A gateway restart
+      // must not hide their answer card and cancel an otherwise healthy request.
+      isAvailable: () => this.preferences.enabled && !this.snooze && !this.capturing,
+      isCapturing: () => this.capturing,
       createWindow: (surface, focusable) => this.createWindow(surface, focusable),
       setPreferences: patch => { this.setPreferences(patch, AnalyticsSource.Selection); },
       publish: () => this.publish(),
@@ -423,6 +434,20 @@ export class DesktopCompanionManager {
 
   resetLanguageTools(): void { this.languageTools.reset(); this.clearTaskAnalytics(); }
 
+  /**
+   * Call once a user login has switched the account in and its session reset has been sent.
+   * A selection card kept open for the sign-in runs its request itself when it sees the new session.
+   */
+  handleLoginSucceeded(): void {
+    // Runs inside the auth exchange: a companion failure must never turn a successful login into an error.
+    try {
+      if (this.login.succeed()) this.languageTools.resumeAfterLogin();
+      else this.languageTools.dropLoginResume();
+    } catch (error) {
+      console.warn('[DesktopCompanion] Continuing a card after login failed:', error);
+    }
+  }
+
   clearTaskAnalytics(): void { this.analytics.clearTasks(); this.panelJourneyId = undefined; }
 
   captureTaskAnalytics(senderId: number): ReturnType<CompanionAnalytics['captureTask']> { return this.analytics.captureTask(senderId); }
@@ -522,7 +547,8 @@ export class DesktopCompanionManager {
     const present = this.isPresent();
     if (present) this.showOrb();
     else this.hideOrb();
-    if (present) this.foreground.start();
+    this.selection.sync();
+    if (present || this.selection.capability === CompanionCapability.Ready) this.foreground.start();
     else this.foreground.stop();
     if (present && this.preferences.dragAssist && !this.snooze) this.fileDrag.start();
     else {
@@ -533,7 +559,6 @@ export class DesktopCompanionManager {
       if (this.stage.stage.kind === DesktopCompanionStageKind.Drop) this.stage.clear();
     }
     if (!present || this.snooze) { this.stage.clear(); this.results.hide(); }
-    this.selection.sync();
   }
 
   private scheduleSnoozeWake(): void {
@@ -621,32 +646,39 @@ export class DesktopCompanionManager {
     this.options.store.set(DesktopCompanionStoreKey.Position, this.position);
   }
 
-  private move(phase: DesktopCompanionDragPhase): void {
+  private move(phase: DesktopCompanionDragPhase, grab?: unknown): void {
     if (!this.orb || this.orb.isDestroyed()) return;
-    if (phase === DesktopCompanionDragPhase.Cancel) { this.dragOrigin = null; return; }
+    if (phase === DesktopCompanionDragPhase.Cancel) { this.drag = null; return; }
     const cursor = screen.getCursorScreenPoint();
+    const size = this.orbSize();
     if (phase === DesktopCompanionDragPhase.Start) {
       // Capture before blur can hide the surface, using main-process state even during rapid clicks.
       this.orbPressVisible = this.panelVisible || this.results.state.visible;
+      // The cursor has often moved on by the time this message arrives. Measuring the drag
+      // from here would leave the orb behind the pointer, so use where the press landed.
       const start = this.orbBounds() ?? this.orb.getBounds();
-      this.dragOrigin = { cursor, position: { x: start.x, y: start.y } };
+      this.drag = {
+        grab: companionDragGrabOffset(grab, size) ?? { x: cursor.x - start.x, y: cursor.y - start.y },
+        placed: null,
+      };
       return;
     }
-    if (!this.dragOrigin) return;
+    if (!this.drag) return;
     const workArea = screen.getDisplayNearestPoint(cursor).workArea;
-    const moved = clampCompanionBounds({
-      ...this.orbSize(),
-      x: this.dragOrigin.position.x + cursor.x - this.dragOrigin.cursor.x,
-      y: this.dragOrigin.position.y + cursor.y - this.dragOrigin.cursor.y,
-    }, workArea);
+    const moved = clampCompanionBounds({ ...size, x: cursor.x - this.drag.grab.x, y: cursor.y - this.drag.grab.y }, workArea);
+    // Moving the window under a still cursor produces pointer events too. Moving again for
+    // them would fight anything else that places the window, which shows as flicker.
+    const placed = this.drag.placed;
+    if (phase === DesktopCompanionDragPhase.Move && placed?.x === moved.x && placed.y === moved.y) return;
     // Follow the pointer freely; settle near the left or right edge only after release.
     const settled = phase === DesktopCompanionDragPhase.End ? snapCompanionOrbToEdge(moved, workArea) : moved;
     this.orb.setBounds(settled, settled.x !== moved.x);
     if (phase === DesktopCompanionDragPhase.End) {
-      this.dragOrigin = null;
+      this.drag = null;
       this.savePosition(settled);
       this.publish();
     } else {
+      this.drag.placed = moved;
       this.position = { x: moved.x, y: moved.y };
     }
     this.stage.reposition();
@@ -979,7 +1011,18 @@ export class DesktopCompanionManager {
         this.analytics.report({ ...event, source });
       } else if (event.action === AnalyticsAction.Action && event.interactionType === Interaction.Stop && source === AnalyticsSource.Result) {
         this.analytics.report({ ...event, source });
+      } else if (event.action === AnalyticsAction.Action && event.interactionType === Interaction.LoginShown && isCompanionLoginSource(source)) {
+        this.analytics.report({ ...event, source });
       }
+    });
+    handle(DesktopCompanionIpc.LoginStart, (value, sender) => {
+      const source = this.analyticsSource(sender.id);
+      const request = normalizeCompanionLoginStart(value);
+      if (!request || !isCompanionLoginSource(source)) return;
+      // The browser takes focus next; an unpinned card would close and lose what the user asked for.
+      if (source === AnalyticsSource.Selection) this.selection.holdForLogin();
+      else this.languageTools.holdForLogin(request.resume);
+      this.login.begin(source, request);
     });
     handle(DesktopCompanionIpc.GetState, () => this.getState());
     handle(DesktopCompanionIpc.SetPreferences, (value, sender) => this.setPreferences(value as Partial<DesktopCompanionPreferences>, this.analyticsSource(sender.id)));
@@ -1058,7 +1101,8 @@ export class DesktopCompanionManager {
     };
     on(DesktopCompanionIpc.Drag, (value, senderId) => {
       if (senderId !== this.orb?.webContents.id) return;
-      if (Object.values(DesktopCompanionDragPhase).includes(value as DesktopCompanionDragPhase)) this.move(value as DesktopCompanionDragPhase);
+      const payload = value as Partial<DesktopCompanionDragEvent> | null;
+      if (payload?.phase && Object.values(DesktopCompanionDragPhase).includes(payload.phase)) this.move(payload.phase, payload.grab);
     });
     on(DesktopCompanionIpc.TaskUpdated, (_value, senderId) => {
       if (senderId !== this.orb?.webContents.id) return;

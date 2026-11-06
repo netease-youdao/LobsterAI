@@ -12,7 +12,10 @@ export function useTranslationFollowUp(key: string, source: string, translation:
   const [turns, setTurns] = useState<CompanionQuickAnswerTurn[]>([]);
   const [streaming, setStreaming] = useState<Streaming | null>(null);
   const [error, setError] = useState('');
-  const [loginRequired, setLoginRequired] = useState(false);
+  // Kept with the conversation it belongs to: the reset effect runs a render late, and the card a
+  // sign-in reopens must not flash the old prompt (and count it as shown again) in that render.
+  const [loginRequiredKey, setLoginRequiredKey] = useState<string | null>(null);
+  const loginRequired = loginRequiredKey === key;
   const [question, setQuestion] = useState('');
   const streamRef = useRef<Streaming | null>(null);
   const stop = useCallback(() => {
@@ -22,7 +25,7 @@ export function useTranslationFollowUp(key: string, source: string, translation:
   }, [api]);
 
   useEffect(() => {
-    stop(); setTurns([]); setError(''); setQuestion(''); setLoginRequired(false);
+    stop(); setTurns([]); setError(''); setQuestion(''); setLoginRequiredKey(null);
     return stop;
   }, [key, stop]);
   useEffect(() => api.onQuickAnswer(event => {
@@ -42,7 +45,7 @@ export function useTranslationFollowUp(key: string, source: string, translation:
   const ask = (history: CompanionQuickAnswerTurn[]) => {
     const requestId = crypto.randomUUID();
     streamRef.current = { requestId, text: '' };
-    setStreaming(streamRef.current); setError(''); setLoginRequired(false);
+    setStreaming(streamRef.current); setError(''); setLoginRequiredKey(null);
     const fail = (message?: string) => {
       if (streamRef.current?.requestId !== requestId) return;
       streamRef.current = null; setStreaming(null);
@@ -51,15 +54,21 @@ export function useTranslationFollowUp(key: string, source: string, translation:
     void api.startQuickAnswer({ requestId, action: CompanionSelectionAction.Ask, text: source,
       history: [{ role: 'assistant', content: translation }, ...history] }).then(result => {
       if (!result.success && streamRef.current?.requestId === requestId) {
-        setLoginRequired(result.code === CompanionQuickAnswerErrorCode.LoginRequired);
+        setLoginRequiredKey(result.code === CompanionQuickAnswerErrorCode.LoginRequired ? key : null);
         fail(result.error);
       }
     }).catch(() => fail());
   };
-  const submit = () => {
-    if (!question.trim() || !translation || streamRef.current) return;
-    const history: CompanionQuickAnswerTurn[] = [...turns, { role: 'user', content: question.trim() }];
-    setQuestion(''); setTurns(history); ask(history);
+  /** Asks a follow-up about the finished translation; returns whether it went out. */
+  const send = (text: string): boolean => {
+    const content = text.trim();
+    if (!content || !translation || streamRef.current) return false;
+    const history: CompanionQuickAnswerTurn[] = [...turns, { role: 'user', content }];
+    setTurns(history); ask(history);
+    return true;
   };
-  return { turns, streaming, error, loginRequired, question, setQuestion, submit, stop, retry: () => ask(turns) };
+  const submit = () => { if (send(question)) setQuestion(''); };
+  // The question a sign-in interrupted: it is the newest turn and still has no answer.
+  const pendingQuestion = loginRequired && turns[turns.length - 1]?.role === 'user' ? turns[turns.length - 1].content : undefined;
+  return { turns, streaming, error, loginRequired, pendingQuestion, question, setQuestion, send, submit, stop, retry: () => ask(turns) };
 }

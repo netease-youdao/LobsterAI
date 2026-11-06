@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { countPastedTextLines } from '../../../shared/cowork/pastedText';
 import { copyTextToClipboard } from '../../services/clipboard';
@@ -6,6 +6,7 @@ import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
 import MessageCopyIcon from '../icons/MessageCopyIcon';
 import XMarkIcon from '../icons/XMarkIcon';
+import { countUserMessageLines } from './userMessageCollapse';
 
 interface PastedTextPreviewModalProps {
   /** Text to preview; the modal is closed while this is null. */
@@ -17,6 +18,23 @@ interface PastedTextPreviewModalProps {
 
 const PastedTextPreviewModal: React.FC<PastedTextPreviewModalProps> = ({ text, onClose, onInsertAsText }) => {
   const [copied, setCopied] = useState(false);
+  const textRef = useRef<HTMLPreElement>(null);
+  const [renderedLineCount, setRenderedLineCount] = useState(0);
+
+  // Count lines as shown, wrapping included, so a long paragraph is not one line.
+  useLayoutEffect(() => {
+    const textElement = textRef.current;
+    if (!textElement) return undefined;
+    const measure = () => setRenderedLineCount(countUserMessageLines(
+      textElement.getBoundingClientRect().height,
+      Number.parseFloat(getComputedStyle(textElement).lineHeight),
+    ));
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(textElement);
+    return () => observer.disconnect();
+  }, [text]);
 
   useEffect(() => {
     if (!copied) return undefined;
@@ -36,7 +54,7 @@ const PastedTextPreviewModal: React.FC<PastedTextPreviewModalProps> = ({ text, o
   if (text === null) return null;
 
   const meta = i18nService.t('coworkPastedTextMeta')
-    .replace('{lines}', String(countPastedTextLines(text)))
+    .replace('{lines}', String(renderedLineCount || countPastedTextLines(text)))
     .replace('{chars}', text.length.toLocaleString());
 
   return (
@@ -85,9 +103,11 @@ const PastedTextPreviewModal: React.FC<PastedTextPreviewModalProps> = ({ text, o
             <XMarkIcon className="h-4 w-4 text-[var(--icon-secondary)]" />
           </button>
         </header>
-        <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-5 py-4 font-mono text-[13px] leading-5 text-foreground">
-          {text}
-        </pre>
+        <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+          <pre ref={textRef} className="whitespace-pre-wrap break-words font-mono text-[13px] leading-5 text-foreground">
+            {text}
+          </pre>
+        </div>
       </section>
     </Modal>
   );

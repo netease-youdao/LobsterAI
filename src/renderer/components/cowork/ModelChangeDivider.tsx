@@ -3,7 +3,7 @@ import React from 'react';
 import { useSelector } from 'react-redux';
 
 import type { CoworkModelChange } from '../../../shared/cowork/modelChange';
-import type { ModelPresetId } from '../../../shared/modelPresets/constants';
+import { type ModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
 import { i18nService } from '../../services/i18n';
 import { modelPresetName } from '../../services/modelPresets';
 import type { RootState } from '../../store';
@@ -17,7 +17,9 @@ const ModelChangeDivider: React.FC<{
 }> = ({ change, showNotice = false, onDismissNotice }) => {
   const models = useSelector((state: RootState) => state.model.availableModels);
   const displayName = (modelRef: string, presetId?: ModelPresetId | null): string => {
-    if (presetId) return modelPresetName(presetId);
+    // Older notices stored an agent-default preset as its bare model id.
+    const resolvedPresetId = presetId ?? parseModelPresetModelId(modelRef);
+    if (resolvedPresetId) return modelPresetName(resolvedPresetId);
     const model = models.find(candidate => !candidate.presetId && matchesOpenClawModelRef(modelRef, candidate));
     return model?.name ?? (modelRef.includes('/') ? modelRef.slice(modelRef.indexOf('/') + 1) : modelRef);
   };

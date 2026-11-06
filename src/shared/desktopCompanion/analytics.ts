@@ -30,6 +30,7 @@ export const CompanionAnalyticsInteraction = {
   OpenSkills: 'open_skills', OpenKits: 'open_kits', ContextMenu: 'context_menu', Copy: 'copy', Pin: 'pin',
   Pause: 'pause', Resume: 'resume', Stop: 'stop', Dismiss: 'dismiss', ExcludeApp: 'exclude_app',
   More: 'more', Permission: 'permission', LoginShown: 'login_shown', Run: 'run',
+  LoginClick: 'login_click', LoginSuccess: 'login_success',
 } as const;
 
 export const CompanionAnalyticsStage = { Shown: 'shown', Submit: 'submit', Result: 'result' } as const;

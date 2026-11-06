@@ -13,12 +13,20 @@
     {
       "from": "dist",
       "to": "dist",
-      "filter": ["**/*"]
+      "filter": ["**/*", "!**/*.map"]
     },
     {
       "from": "dist-electron",
       "to": "dist-electron",
-      "filter": ["**/*"]
+      "filter": [
+        "**/*",
+        "!**/*.map",
+        "!common/**",
+        "!main/**",
+        "!renderer/**",
+        "!scheduledTask/**",
+        "!shared/**"
+      ]
     },
     "!**/*.map",
     "!**/*.d.ts",
@@ -198,6 +206,7 @@
     ],
     "icon": "build/icons/win/icon.ico",
     "requestedExecutionLevel": "asInvoker",
+    "electronLanguages": ["en-US", "zh-CN", "zh-TW"],
     "extraResources": [
       {
         "from": "build-tar/win-resources.tar",

@@ -9,6 +9,8 @@ import {
   ContextCompactionMode,
   ContextCompactionStatus,
   CoworkSystemMessageKind,
+  MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY,
+  ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
 import { buildGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
 import {
@@ -125,6 +127,7 @@ import {
   type OpenClawEngineStatus,
   type OpenClawGatewayConnectionInfo,
 } from '../openclawEngineManager';
+import { loadGatewayClientCtor as loadOpenClawGatewayClientCtor } from '../openclawGatewayClientLoader';
 import {
   extractGatewayHistoryEntries,
   extractGatewayMessageText,
@@ -169,6 +172,14 @@ import { buildCoworkWorkspaceRehydrationBridge } from './coworkWorkspaceRehydrat
 import { extractCronDeliveredTarget } from './cronDeliveryTarget';
 import { buildEmptyResponseHintMetadata, findRecoveredEmptyResponseHintIds } from './emptyResponseHint';
 import { buildMediaGenerationTurnInstruction } from './mediaGenerationTurnInstruction';
+import {
+  applyModelRetryEvent,
+  buildModelReconnectMetadata,
+  getModelReconnectContent,
+  type ModelReconnectState,
+  parseModelRetryEvent,
+  resolveModelReconnectErrorOverride,
+} from './modelReconnect';
 import { OpenClawApprovalController } from './openclawApprovalController';
 import {
   applyLocalTimestampsToEntries,
@@ -192,6 +203,12 @@ import {
   buildOpenClawTranscriptOversizedError,
   inspectOpenClawTranscriptSafety,
 } from './openclawTranscriptSafety';
+import {
+  hasTruncatedHistoryMessages,
+  isTruncatedHistoryPreviewOf,
+  OPENCLAW_HISTORY_TRUNCATION_MARKER,
+  OpenClawTruncatedHistoryRestorer,
+} from './openclawTruncatedHistory';
 import { OpenClawTurnHistorySync } from './openclawTurnHistorySync';
 import {
   checkSessionModelRoute,
@@ -787,6 +804,8 @@ type ActiveTurn = {
    * needed to surface an honest error message instead.
    */
   toolLoopBlockReason?: string;
+  /** The runtime is retrying, or gave up on, a model stream that dropped mid-reply. */
+  modelReconnect?: ModelReconnectState;
   mediaStatusPollCountByToolCallId: Map<string, number>;
   mediaStatusPollCountByTaskId: Map<string, number>;
   mediaStatusPollBaseByToolCallId: Map<string, number>;
@@ -1132,10 +1151,11 @@ export function isPlanModeResponseComplete(text: string): boolean {
 }
 
 function isOpenClawFailureFinalText(text: string): boolean {
-  const trimmed = text.trim();
-  return trimmed.includes(OpenClawFailureFinalText.AgentFailedBeforeReply)
-    || trimmed.includes(OpenClawFailureFinalText.SessionFileLocked)
-    || trimmed.includes(OpenClawFailureFinalText.GenericRunFailure);
+  // Match the runtime failure envelope; normal replies can quote these diagnostics.
+  const trimmed = text.trim().replace(/^⚠️?\s*/, '');
+  return trimmed.startsWith(OpenClawFailureFinalText.AgentFailedBeforeReply)
+    || trimmed.startsWith(OpenClawFailureFinalText.SessionFileLocked)
+    || trimmed.startsWith(OpenClawFailureFinalText.GenericRunFailure);
 }
 
 export function isSignificantAssistantStreamReset(previousLength: number, nextLength: number): boolean {
@@ -1821,6 +1841,8 @@ export function resolveOpenClawRuntimeErrorMessage(
 export type ResolvedOpenClawRuntimeError = {
   message: string;
   enterpriseQuotaError: EnterpriseQuotaErrorDetails | null;
+  /** Reconnecting a dropped model stream failed; the user can continue the turn. */
+  modelStreamInterrupted?: boolean;
 };
 
 const getEnterpriseQuotaErrorMessage = (
@@ -1998,6 +2020,7 @@ export const buildRuntimeErrorMetadata = (
 ): CoworkMessageMetadata => ({
   error: resolvedError.message,
   ...(resolvedError.errorDetail ? { errorDetail: resolvedError.errorDetail } : {}),
+  ...(resolvedError.modelStreamInterrupted ? { [MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY]: true } : {}),
   ...(resolvedError.enterpriseQuotaError
     ? {
       [EnterpriseQuotaMessageMetadataKey.ErrorCode]: resolvedError.enterpriseQuotaError.code,
@@ -2670,6 +2693,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly fullySyncedSessions = new Set<string>();
   /** Per-session cursor: number of gateway history entries (user+assistant) already synced locally. */
   private readonly channelSyncCursor = new Map<string, number>();
+  /** chat.history caps message text for display; full rows are fetched before history is persisted. */
+  private readonly truncatedHistoryRestorer = new OpenClawTruncatedHistoryRestorer();
   /** Sessions re-created after user deletion — use latestOnly sync to avoid replaying old history. */
   private readonly reCreatedChannelSessionIds = new Set<string>();
   /** Channel sessionKeys explicitly deleted by the user. Polling will not re-create these. */
@@ -3952,6 +3977,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }): boolean {
     const { coworkSessionId, openClawSessionKey, state } = options;
     if (!state) return false;
+    // Cron rows carry the job's run model. Manual replies in a scheduled-task
+    // conversation run on the managed key, so the local override owns them.
+    if (isCronSessionKey(openClawSessionKey)) return false;
     const session = this.store.getSession(coworkSessionId);
     if (!session) return false;
 
@@ -3960,7 +3988,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (staleReason) {
       // Never mirror a model that can no longer run. Only a sessions.list row is
       // the entry OpenClaw runs with; history keeps the /model command from before.
-      if (state.explicitOverride && state.source === 'sessions-list' && !isCronSessionKey(openClawSessionKey)) {
+      if (state.explicitOverride && state.source === 'sessions-list') {
         void this.staleModelOverrides.reset({
           sessionId: coworkSessionId,
           sessionKey: openClawSessionKey,
@@ -4234,6 +4262,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionKey,
         limit: OpenClawRuntimeAdapter.FULL_HISTORY_SYNC_LIMIT,
       }, { timeoutMs: 10_000 });
+      if (hasTruncatedHistoryMessages(history?.messages)) {
+        history.messages = await this.restoreTruncatedHistory(client, sessionKey, history.messages);
+      }
       if (!Array.isArray(history?.messages) || history.messages.length === 0) {
         return (
           await this.readFromTranscript(sessionKey, options?.sessionId)
@@ -7136,15 +7167,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     detailRawErrorMessage: string;
   } {
     const toolLoopOverride = resolveOpenClawToolLoopErrorOverride(turn?.toolLoopBlockReason, rawErrorMessage);
-    const planOverride = toolLoopOverride
+    const reconnectOverride = toolLoopOverride
+      ? null
+      : resolveModelReconnectErrorOverride(turn?.modelReconnect, rawErrorMessage);
+    const planOverride = toolLoopOverride || reconnectOverride
       ? null
       : resolvePlanModelSubstitutionErrorOverride(turn?.model, rawErrorMessage, metadata);
     // The plan call's quota capture belongs to this error; keep it from labeling the next one.
     if (planOverride) consumeRecentOpenClawTokenProxyQuotaError();
-    const override = toolLoopOverride ?? planOverride;
+    const override = toolLoopOverride ?? reconnectOverride ?? planOverride;
     if (override) {
       return {
-        resolvedError: buildResolvedRuntimeError(override.errorMessage),
+        resolvedError: {
+          ...buildResolvedRuntimeError(override.errorMessage),
+          ...(override === reconnectOverride ? { modelStreamInterrupted: true } : {}),
+        },
         detailRawErrorMessage: override.detailRawErrorMessage,
       };
     }
@@ -7558,40 +7595,24 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private async loadGatewayClientCtor(clientEntryPath: string): Promise<GatewayClientCtor> {
     // Use require() with file path directly. TypeScript's CJS output downgrades
     // dynamic import() to require(), which doesn't support file:// URLs.
-    const loaded = require(clientEntryPath) as Record<string, unknown>;
-    const direct = loaded.GatewayClient;
-    if (typeof direct === 'function') {
-      return direct as GatewayClientCtor;
-    }
+    return loadOpenClawGatewayClientCtor<GatewayClientCtor>(
+      clientEntryPath,
+      (modulePath) => require(modulePath) as Record<string, unknown>,
+    );
+  }
 
-    const exportedValues = Object.values(loaded);
-    for (const candidate of exportedValues) {
-      if (typeof candidate !== 'function') {
-        continue;
-      }
-      const maybeCtor = candidate as {
-        name?: string;
-        prototype?: {
-          start?: unknown;
-          stop?: unknown;
-          request?: unknown;
-        };
-      };
-      if (maybeCtor.name === 'GatewayClient') {
-        return candidate as GatewayClientCtor;
-      }
-      const proto = maybeCtor.prototype;
-      if (proto
-        && typeof proto.start === 'function'
-        && typeof proto.stop === 'function'
-        && typeof proto.request === 'function') {
-        return candidate as GatewayClientCtor;
-      }
-    }
-
-    const exportKeysPreview = Object.keys(loaded).slice(0, 20).join(', ');
-    throw new Error(
-      `Invalid OpenClaw gateway client module: ${clientEntryPath} (exports: ${exportKeysPreview || 'none'})`,
+  /**
+   * Loads the gateway client module ahead of the first connection. The load
+   * blocks the main thread, so callers run it while the gateway is still
+   * booting instead of between gateway readiness and the client handshake.
+   */
+  prewarmGatewayClient(): void {
+    const { clientEntryPath } = this.engineManager.getGatewayConnectionInfo();
+    if (!clientEntryPath) return;
+    const startedAt = Date.now();
+    void this.loadGatewayClientCtor(clientEntryPath).then(
+      () => console.log(`[ChannelSync] gateway client module prewarmed in ${Date.now() - startedAt}ms`),
+      (error: unknown) => console.warn('[ChannelSync] gateway client module prewarm failed:', error),
     );
   }
 
@@ -8245,6 +8266,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.cancelLifecycleEndFallback(sessionId, turn, 'agent stream continued');
     }
 
+    // Model output after a retry event means the resumed call got through.
+    if (turn.modelReconnect?.status === ModelReconnectStatus.Retrying
+      && (stream === 'assistant' || stream === 'thinking' || stream === 'tool' || stream === 'tools')) {
+      this.settleModelReconnect(sessionId, turn, ModelReconnectStatus.Recovered);
+    }
+
     // Fast-path: skip assistant-stream events — they carry the same text as
     // chat deltas and dispatchAgentEvent() has no handler for stream=assistant.
     if (stream === 'assistant') {
@@ -8260,6 +8287,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       || stream === 'tools'
       || stream === 'thinking'
       || stream === 'compaction'
+      || stream === AgentEventStream.ModelRetry
       || (!stream && isRecord(agentPayload.data) && typeof agentPayload.data.toolCallId === 'string')
       || (stream === 'lifecycle' && getAgentLifecyclePhase(agentPayload.data) !== AgentLifecyclePhase.End);
     if (shouldKeepRunningAfterFinal) {
@@ -8312,6 +8340,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.thinkingController.handleStream(sessionId, turn, agentPayload.data);
       return;
     }
+    if (stream === AgentEventStream.ModelRetry) {
+      this.handleModelRetryEvent(sessionId, turn, agentPayload.data);
+      return;
+    }
   }
 
   private enqueuePendingAgentEvent(runId: string, payload: AgentEventPayload, seq?: number): void {
@@ -8329,6 +8361,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       || stream === 'thinking'
       || stream === 'lifecycle'
       || stream === 'compaction'
+      || stream === AgentEventStream.ModelRetry
       || (!stream && hasToolShape);
     if (!isSupportedStream) return;
 
@@ -9078,6 +9111,56 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.refreshAndEmitContextUsage(sessionId);
       }, 1500);
     }
+  }
+
+  private handleModelRetryEvent(sessionId: string, turn: ActiveTurn, data: unknown): void {
+    const event = parseModelRetryEvent(data);
+    if (!event) {
+      console.warn(`[OpenClawRuntime] ignored a model retry event for session ${sessionId} because the payload was invalid.`);
+      return;
+    }
+    const startsNewDrop = turn.modelReconnect?.status !== ModelReconnectStatus.Retrying;
+    if (startsNewDrop) {
+      // Output of the resumed call belongs after the reconnect row, not inside
+      // the reasoning the dropped call had streamed.
+      this.splitAssistantSegmentBeforeTool(sessionId, turn);
+      turn.agentAssistantTextLength = 0;
+    }
+    const now = Date.now();
+    turn.modelReconnect = applyModelRetryEvent(turn.modelReconnect, event, now);
+    this.upsertModelReconnectMessage(sessionId, turn, now);
+    console.warn(
+      `[OpenClawRuntime] model stream dropped for session ${sessionId}:`,
+      `phase=${event.phase}`,
+      `attempt=${event.attempt}/${event.maxAttempts}`,
+      `delayMs=${event.delayMs ?? 'none'}`,
+      `error=${event.error ?? 'unknown'}`,
+      `code=${event.errorCode ?? 'none'}.`,
+    );
+  }
+
+  private settleModelReconnect(sessionId: string, turn: ActiveTurn, status: ModelReconnectStatus): void {
+    const state = turn.modelReconnect;
+    if (!state || state.status !== ModelReconnectStatus.Retrying) return;
+    turn.modelReconnect = { ...state, status };
+    this.upsertModelReconnectMessage(sessionId, turn, Date.now());
+    console.log(`[OpenClawRuntime] model reconnect for session ${sessionId} settled as ${status} after attempt ${state.attempt}/${state.maxAttempts}.`);
+  }
+
+  private upsertModelReconnectMessage(sessionId: string, turn: ActiveTurn, now: number): void {
+    const state = turn.modelReconnect;
+    if (!state) return;
+    const metadata = buildModelReconnectMetadata(state, turn.runId, now);
+    const content = getModelReconnectContent(state);
+    const existingMessage = this.getSessionMessage(sessionId, state.messageId ?? undefined);
+    if (existingMessage) {
+      this.store.updateMessage(sessionId, existingMessage.id, { content, metadata });
+      this.emit('messageUpdate', sessionId, existingMessage.id, content, metadata);
+      return;
+    }
+    const message = this.store.addMessage(sessionId, { type: 'system', content, metadata }, now);
+    state.messageId = message.id;
+    this.emit('message', sessionId, message);
   }
 
   private refreshAndEmitContextUsage(sessionId: string): void {
@@ -11414,7 +11497,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const session = this.store.getSession(sessionId);
       if (!session) return;
 
-      const plan = buildSubagentChildHistorySyncPlan(session.messages, history.messages);
+      const historyMessages = hasTruncatedHistoryMessages(history.messages)
+        ? await this.restoreTruncatedHistory(client, sessionKey, history.messages)
+        : history.messages;
+      const plan = buildSubagentChildHistorySyncPlan(session.messages, historyMessages);
       if (plan.entriesToStore.length === 0) {
         this.channelSyncCursor.set(sessionId, 0);
         return;
@@ -11460,6 +11546,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionKey,
         limit: FINAL_HISTORY_SYNC_LIMIT,
       }, { timeoutMs: 10_000 });
+      if (hasTruncatedHistoryMessages(history?.messages)) {
+        history.messages = await this.restoreTruncatedHistory(client, sessionKey, history.messages);
+      }
       const runHistoryKey = resolveOpenClawCronRunHistoryKey(sessionKey, history?.sessionId);
       if (!runHistoryKey) {
         console.debug('[CronHistorySync] awaiting transcript identity - sessionKey:', sessionKey);
@@ -11574,6 +11663,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
   }
 
+  private restoreTruncatedHistory(
+    client: GatewayClientLike,
+    sessionKey: string,
+    messages: unknown[],
+  ): Promise<unknown[]> {
+    return this.truncatedHistoryRestorer.restore(client.request.bind(client), sessionKey, messages);
+  }
+
   /**
    * Reconcile local session messages with the authoritative gateway chat.history.
    *
@@ -11612,6 +11709,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionKey,
         limit,
       }, { timeoutMs: 10_000 });
+      if (hasTruncatedHistoryMessages(history?.messages)) {
+        history.messages = await this.restoreTruncatedHistory(client, sessionKey, history.messages);
+      }
       if (!Array.isArray(history?.messages) || history.messages.length === 0) {
         console.log('[Reconcile] empty history — sessionId:', sessionId);
         this.channelSyncCursor.set(sessionId, 0);
@@ -11864,6 +11964,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           sessionKey: turn.sessionKey,
           limit: FINAL_HISTORY_SYNC_LIMIT,
         }, { timeoutMs: 8_000 });
+        if (hasTruncatedHistoryMessages(history?.messages)) {
+          history.messages = await this.restoreTruncatedHistory(client, turn.sessionKey, history.messages);
+        }
         if (
           options.requireActiveTurn
           && (
@@ -11972,6 +12075,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         : this.resolveAssistantSegmentText(turn, canonicalText);
       if (turn.planMode && !options.suppressPlanModeWrapping) {
         canonicalSegmentText = ensurePlanModeProposedPlanBlock(canonicalSegmentText);
+      }
+      if (turn.assistantMessageId && canonicalSegmentText.trim().endsWith(OPENCLAW_HISTORY_TRUNCATION_MARKER)) {
+        const localSegmentText = this.store.getSession(sessionId)?.messages
+          .find((message) => message.id === turn.assistantMessageId)?.content ?? '';
+        if (isTruncatedHistoryPreviewOf(canonicalSegmentText, localSegmentText)) {
+          // chat.message.get could not supply the full row; keep the complete streamed text.
+          canonicalSegmentText = localSegmentText.trim();
+        }
       }
       console.debug('[Debug:syncFinal] canonicalSegmentText length:', canonicalSegmentText.length,
         'committed.length:', turn.committedAssistantText.length,
@@ -12445,6 +12556,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           `[OpenClawRuntime] finalized a running context compaction message as failed during turn cleanup for session ${sessionId}.`,
         );
       }
+      // A turn that ends while a reconnect is pending was stopped or failed;
+      // the row must not keep saying it is reconnecting.
+      this.settleModelReconnect(
+        sessionId,
+        turn,
+        turn.stopRequested ? ModelReconnectStatus.Stopped : ModelReconnectStatus.Failed,
+      );
       // Cancel any pending throttled messageUpdate timer for this turn
       if (turn.assistantMessageId) {
         this.clearPendingMessageUpdate(turn.assistantMessageId);

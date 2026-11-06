@@ -45,23 +45,42 @@ afterEach(() => {
   }
 });
 
-test('copies web-tree-sitter wasm beside the root gateway bundle', () => {
-  const runtimeRoot = makeRuntimeRoot();
-  const target = OPENCLAW_BUNDLE_ASSET_TARGETS[0];
+function writeGatewayBundle(runtimeRoot: string): void {
   writeFile(path.join(runtimeRoot, 'gateway-bundle.mjs'), 'export {};\n');
-  writeFile(path.join(runtimeRoot, target.sourceFile), 'wasm-v1');
+}
+
+test('copies every bundle asset beside the root gateway bundle', () => {
+  const runtimeRoot = makeRuntimeRoot();
+  writeGatewayBundle(runtimeRoot);
+  for (const target of OPENCLAW_BUNDLE_ASSET_TARGETS) {
+    writeFile(path.join(runtimeRoot, target.sourceFile), `${target.targetFile}-v1`);
+  }
 
   const result = ensureOpenClawBundleAssets(runtimeRoot);
 
-  expect(result.created).toEqual([target.targetFile]);
+  expect(result.created).toEqual(OPENCLAW_BUNDLE_ASSET_TARGETS.map(target => target.targetFile));
   expect(result.missingSources).toEqual([]);
-  expect(fs.readFileSync(path.join(runtimeRoot, target.targetFile), 'utf8')).toBe('wasm-v1');
+  for (const target of OPENCLAW_BUNDLE_ASSET_TARGETS) {
+    expect(fs.readFileSync(path.join(runtimeRoot, target.targetFile), 'utf8')).toBe(`${target.targetFile}-v1`);
+  }
+});
+
+test('places dist/build-info.json where the bundled startup checkpoint looks for it', () => {
+  const runtimeRoot = makeRuntimeRoot();
+  writeGatewayBundle(runtimeRoot);
+  const buildInfo = '{"builtAt":"2026-11-05T12:11:51.086Z","commit":"ea806575"}\n';
+  writeFile(path.join(runtimeRoot, 'dist', 'build-info.json'), buildInfo);
+
+  ensureOpenClawBundleAssets(runtimeRoot);
+
+  // The checkpoint resolves ./build-info.json relative to gateway-bundle.mjs.
+  expect(fs.readFileSync(path.join(runtimeRoot, 'build-info.json'), 'utf8')).toBe(buildInfo);
 });
 
 test('refreshes a stale root asset and leaves a matching asset unchanged', () => {
   const runtimeRoot = makeRuntimeRoot();
   const target = OPENCLAW_BUNDLE_ASSET_TARGETS[0];
-  writeFile(path.join(runtimeRoot, 'gateway-bundle.mjs'), 'export {};\n');
+  writeGatewayBundle(runtimeRoot);
   writeFile(path.join(runtimeRoot, target.sourceFile), 'wasm-v2');
   writeFile(path.join(runtimeRoot, target.targetFile), 'wasm-v1');
 
@@ -72,13 +91,14 @@ test('refreshes a stale root asset and leaves a matching asset unchanged', () =>
   expect(unchanged.unchanged).toEqual([target.targetFile]);
 });
 
-test('reports a missing source and never creates an empty root asset', () => {
+test('reports missing sources and never creates an empty root asset', () => {
   const runtimeRoot = makeRuntimeRoot();
-  const target = OPENCLAW_BUNDLE_ASSET_TARGETS[0];
-  writeFile(path.join(runtimeRoot, 'gateway-bundle.mjs'), 'export {};\n');
+  writeGatewayBundle(runtimeRoot);
 
   const result = ensureOpenClawBundleAssets(runtimeRoot);
 
-  expect(result.missingSources).toEqual([target.sourceFile]);
-  expect(fs.existsSync(path.join(runtimeRoot, target.targetFile))).toBe(false);
+  expect(result.missingSources).toEqual(OPENCLAW_BUNDLE_ASSET_TARGETS.map(target => target.sourceFile));
+  for (const target of OPENCLAW_BUNDLE_ASSET_TARGETS) {
+    expect(fs.existsSync(path.join(runtimeRoot, target.targetFile))).toBe(false);
+  }
 });

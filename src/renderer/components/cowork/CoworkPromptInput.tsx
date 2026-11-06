@@ -157,7 +157,7 @@ import AttachmentCard from './AttachmentCard';
 import { isImagePath } from './attachmentPaths';
 import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
 import ChatLoginExperienceModal from './ChatLoginExperienceModal';
-import { getClipboardAttachmentFiles } from './clipboardAttachments';
+import { getClipboardAttachmentFiles, getCopiedMessageImageFiles } from './clipboardAttachments';
 import { CoworkUiEvent } from './constants';
 import { ContextChipTone } from './ContextChip';
 import FolderSelectorPopover from './FolderSelectorPopover';
@@ -2967,6 +2967,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       event.preventDefault();
       void handleIncomingFiles(files, 'paste');
       return;
+    }
+    // A message copied with its copy button carries its images in the HTML
+    // flavor; attach them and let the message text paste as usual.
+    const copiedMessageImages = getCopiedMessageImageFiles(event.clipboardData);
+    if (copiedMessageImages.length > 0) {
+      void handleIncomingFiles(copiedMessageImages, 'paste');
     }
     // Steers and goal objectives are sent as plain text, so keep pastes inline there.
     if (steerInputActive || goalInputActive) return;

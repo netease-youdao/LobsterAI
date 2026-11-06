@@ -15,6 +15,7 @@ import {
   powerSaveBlocker,
   protocol,
   safeStorage,
+  screen,
   session,
   shell,
   type WebContents,
@@ -116,6 +117,7 @@ import {
   CoworkIpcChannel,
   CoworkOnboardingMessageKind,
 } from '../shared/cowork/constants';
+import { isEmbeddingProvider } from '../shared/cowork/embedding';
 import {
   buildCoworkImageAttachmentPreviews,
   type CoworkImageAttachmentPreview,
@@ -184,7 +186,7 @@ import {
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { LogIpc } from '../shared/logExport/constants';
-import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationReason } from '../shared/media/confirmation';
+import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
@@ -289,7 +291,12 @@ import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { isDecisionModelFeatureActive, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
-import { ensureDshEngineReady, registerDshHandlers } from './ipcHandlers/dsh/handlers';
+import {
+  ensureDshEngineReady,
+  reclaimOrphanedDshRuntimesOnStartup,
+  registerDshHandlers,
+  stopDshFeatureRuntimes,
+} from './ipcHandlers/dsh/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerImageEditingHandlers } from './ipcHandlers/imageEditing';
 import { registerKitHandlers } from './ipcHandlers/kits';
@@ -463,6 +470,7 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
+import { createScreenScaleThumbnail, LocalImageThumbnails } from './libs/localImageThumbnails';
 import { exportLogsZip } from './libs/logExport';
 import { getLogExportEntries } from './libs/logExportEntries';
 import { MainLogReporter } from './libs/mainLogReporter';
@@ -471,9 +479,16 @@ import {
   type DevelopmentMainWindowLoadRecovery,
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
-import { inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
+import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
+import { mediaConfirmationQuote } from './libs/mediaConfirmationRequests';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
-import { MediaTaskStore, type MediaTaskTracker as PersistedMediaTaskTracker } from './libs/mediaTaskStore';
+import { compactMediaDetails, compactMessageMetadataMedia, mediaSourceKey } from './libs/mediaMetadataCompaction';
+import { migrateInlineMediaMetadata } from './libs/mediaMetadataMigration';
+import {
+  MEDIA_INTENT_RETRY_WINDOW_MS,
+  MediaTaskStore,
+  type MediaTaskTracker as PersistedMediaTaskTracker,
+} from './libs/mediaTaskStore';
 import { MediaUsageAnalytics } from './libs/mediaUsageAnalytics';
 import { MediaUsageStore } from './libs/mediaUsageStore';
 import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
@@ -531,6 +546,7 @@ import { createDiskCleanupThrottle, isDiskCleanupStopped } from './libs/openclaw
 import {
   isOpenClawConfigStartupFailure,
   OpenClawEngineManager,
+  OpenClawEngineManagerEvent,
   type OpenClawEngineStatus,
 } from './libs/openclawEngineManager';
 import {
@@ -542,6 +558,7 @@ import { OpenClawImConfigRestartTracker } from './libs/openclawImConfigRestart';
 import {
   getCoworkParentSessionId,
   resolveCoworkSessionIdByOpenClawSessionKey,
+  resolveSubagentRequesterCoworkSessionId,
 } from './libs/openclawLocalSessionResolver';
 import { OPENCLAW_LOOPBACK_STATE_FILE, OpenClawLoopbackService, OpenClawLoopbackState } from './libs/openclawLoopbackState';
 import {
@@ -574,7 +591,7 @@ import {
 import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './libs/openclawUserConfigOverlay';
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
-import { collectOpenWithArgv, OpenWithPathQueue } from './libs/openWithPathQueue';
+import { collectOpenWithArgv, findBundledPathArg, OpenWithPathQueue } from './libs/openWithPathQueue';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { recordSessionModelChange } from './libs/sessionModelChange';
@@ -637,7 +654,7 @@ import {
 } from './mediaAccountIsolation';
 import { applyMediaDefaultParameters, MediaDefaultImageBudget } from './mediaDefaultExecution';
 import { MediaDefaultPolicyManager } from './mediaDefaultPolicyManager';
-import { isMediaGenerationConfirmed } from './mediaGenerationConfirmation';
+import { imageConfirmationFailure, imageConfirmationQuestions, isMediaGenerationConfirmed } from './mediaGenerationConfirmation';
 import {
   MediaGenerationGateReason,
   MediaGenerationTool,
@@ -2484,6 +2501,8 @@ const bindOpenClawStatusForwarder = (): void => {
     handleOpenClawUserConfigEngineStatus(status);
   });
   manager.on('configAutoRestored', handleOpenClawConfigAutoRestore);
+  // Load the gateway client while the gateway boots, off the ready-to-handshake path.
+  manager.on(OpenClawEngineManagerEvent.GatewayLoadingConfig, () => openClawRuntimeAdapter?.prewarmGatewayClient());
   openClawStatusForwarderBound = true;
   forwardOpenClawStatus(manager.getStatus());
 };
@@ -5062,9 +5081,10 @@ const clearMediaPollingStateForOwner = (ownerAccountKey: string): void => {
 };
 
 const emitMediaStatusPollUpdate = (update: MediaStatusPollUpdate): void => {
+  const payload = { ...update, details: compactMediaDetails(update.details) };
   BrowserWindow.getAllWindows().forEach(win => {
     if (win.isDestroyed()) return;
-    win.webContents.send(CoworkIpcChannel.MediaStatusPollUpdate, update);
+    win.webContents.send(CoworkIpcChannel.MediaStatusPollUpdate, payload);
   });
 };
 
@@ -5382,6 +5402,18 @@ if (!gotTheLock) {
 
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
     console.debug('[Main] second-instance event', { commandLine, workingDirectory });
+    // An OpenClaw child that runs a bundled script through the app binary
+    // without ELECTRON_RUN_AS_NODE lands here; it must not attach the script
+    // to the prompt or pull the window to the front.
+    const bundledPathArg = findBundledPathArg(commandLine, {
+      cwd: workingDirectory,
+      bundledRoots: [process.resourcesPath, openClawEngineManager?.getRuntimeRoot()]
+        .filter((root): root is string => Boolean(root)),
+    });
+    if (bundledPathArg) {
+      console.warn(`[Main] ignored a second instance started with a bundled file: ${bundledPathArg}`);
+      return;
+    }
     if (isDataMigrationRestoreInProgress) {
       console.log('[DataMigration] ignored second-instance activation while restore is in progress.');
       return;
@@ -6536,6 +6568,9 @@ if (!gotTheLock) {
 
   const extractSessionIdFromKey = (sessionKey: string): string | null =>
     resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey);
+  // Authorization, model selection and file saving; UI events keep the child's own session.
+  const resolveMediaOwnerSessionId = (sessionKey: string, sessionId: string | null): string | null =>
+    sessionId ?? resolveSubagentRequesterCoworkSessionId(getStore().getDatabase(), sessionKey);
 
   /**
    * Handle media generation tool callbacks from the OpenClaw plugin.
@@ -6590,6 +6625,7 @@ if (!gotTheLock) {
     const action = (args.action as string) || 'generate';
     const serverBaseUrl = getServerApiBaseUrl();
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
+    const ownerSessionId = resolveMediaOwnerSessionId(request.context.sessionKey, sessionId);
     // Native runs must not inherit the latest desktop user's usage/selection.
     const nativeRun = Boolean(request.context.runId);
     const turnUserMessage = !nativeRun && sessionId && action === 'generate'
@@ -6600,7 +6636,7 @@ if (!gotTheLock) {
       : getMediaUsageContext(sessionId, turnUserMessage);
     const requestAccountScope = nativeRun
       ? mediaRunAccountScopes.resolve(request.context, getCurrentMediaAccountScope())
-      : resolveMediaTurnAccountScopeForSession(sessionId);
+      : resolveMediaTurnAccountScopeForSession(ownerSessionId);
     const isRequestAccountCurrent = (): boolean => (
       requestAccountScope !== null
       && isMediaAccountScopeCurrent(requestAccountScope, getCurrentMediaAccountScope())
@@ -6621,7 +6657,7 @@ if (!gotTheLock) {
     }
     const selection: MediaSelectionState | undefined = nativeRun
       ? { mode: MediaSelectionMode.Auto }
-      : resolveMediaSelectionForSession(sessionId);
+      : resolveMediaSelectionForSession(ownerSessionId);
     const prompt = typeof args.prompt === 'string' ? args.prompt : '';
     const explicitModel = canonicalizeMediaModelId(typeof args.model === 'string' ? args.model : '');
     const resolvedModelFromSelection = tool === MediaGenerationTool.Image
@@ -6790,22 +6826,22 @@ if (!gotTheLock) {
         let resultLines: string[];
         let detailsAssets: unknown[] = composesImageEditLocally(statusImageEdit?.operation) ? [] : assets;
         let savedCount = 0;
-        if (status === 'succeeded' && statusMediaType === 'image' && sessionId) {
-          const persistResult = await persistGeneratedImages(sessionId, assets, statusImageEdit, String(task.taskId));
+        if (status === 'succeeded' && statusMediaType === 'image' && ownerSessionId) {
+          const persistResult = await persistGeneratedImages(ownerSessionId, assets, statusImageEdit, String(task.taskId));
           if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(String(args.taskId), persistResult?.saved.length ?? 0, assets.length);
           if (persistResult && persistResult.saved.length > 0) {
             savedCount = persistResult.saved.length;
             detailsAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
-              `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
+              `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
             );
           } else {
             resultLines = composesImageEditLocally(statusImageEdit?.operation) ? []
               : resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           }
-        } else if (status === 'succeeded' && statusMediaType === 'video' && sessionId) {
-          const persistResult = await persistGeneratedVideos(sessionId, assets);
+        } else if (status === 'succeeded' && statusMediaType === 'video' && ownerSessionId) {
+          const persistResult = await persistGeneratedVideos(ownerSessionId, assets);
           if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(String(args.taskId), persistResult?.saved.length ?? 0, assets.length);
           if (persistResult && persistResult.saved.length > 0) {
@@ -6837,7 +6873,7 @@ if (!gotTheLock) {
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
           ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
         ];
-        const details = {
+        const details = compactMediaDetails({
           taskId: String(task.taskId),
           ...(statusTracker ? { clientStartedAt: statusTracker.startedAt } : {}),
           protocolVersion: task.protocolVersion,
@@ -6862,7 +6898,7 @@ if (!gotTheLock) {
           mediaType: statusMediaType,
           ...(detailsAssets.length > 0 ? { assets: detailsAssets } : {}),
           ...(task.quotaRemaining != null ? { billing: { quotaRemaining: task.quotaRemaining } } : {}),
-        };
+        });
         if (task.protocolVersion === MediaProtocol.Durable && sessionId) {
           const tracker = getMediaTaskStore().tasks().find(candidate => candidate.taskId === String(task.taskId)
             && candidate.sessionId === sessionId && candidate.ownerAccountKey === requestAccountScope.ownerAccountKey
@@ -7105,21 +7141,42 @@ if (!gotTheLock) {
         params,
       };
 
+      // A turn approval covers later images of this turn at the same model and quote; a new price asks again.
+      const imageTurnApproved = mediaType === MediaType.Image && defaultImageBudget.isTurnApproved(
+        selection?.imageDefault, selectedModel, mediaConfirmationQuote(imageConfirmationQuestions(modelCapability, t)));
       if (mediaType === MediaType.Image
-        && defaultImageBudget.needsConfirmation(selection?.imageDefault, request.context.toolCallId)) {
+        && defaultImageBudget.needsConfirmation(selection?.imageDefault, request.context.toolCallId)
+        && (!imageTurnApproved || defaultImageBudget.wasDeclined(selection?.imageDefault))) {
+        const declined = { behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.UserCancelled };
+        if (defaultImageBudget.wasDeclined(selection?.imageDefault)) return imageConfirmationFailure(declined, t);
         const question = t('mediaExtraImageConfirmDescription');
-        const response = await getMcpRuntime().askUserInternal([{
-          question, title: t('mediaExtraImageConfirmTitle'),
-          subtitle: modelCapability.pricingDescription?.trim() || t('mediaVideoConfirmCostUnknown'),
-          options: [
-            { label: t('mediaVideoConfirmAccept'), description: t('mediaVideoConfirmStart') },
-            { label: t('mediaVideoConfirmCancel'), description: t('mediaVideoConfirmLater') },
-          ],
-        }], undefined, { sessionKey: request.context.sessionKey });
+        const response = await getMcpRuntime().askUserInternal(imageConfirmationQuestions(modelCapability, t), undefined, {
+          sessionKey: request.context.sessionKey,
+          recoverableMedia: {
+            kind: MediaConfirmationKind.Image,
+            turnGroup: defaultImageBudget.turnGroup(selection?.imageDefault, selectedModel),
+            isCurrent: () => isRequestAccountCurrent() && serverBaseUrl === getServerApiBaseUrl(),
+            signal: request.signal,
+            onEvent: event => mediaUsage.confirmationEvent(request.context.toolCallId, event, selectedModel),
+            refresh: async () => {
+              const response = await fetchWithAuth(serverBaseUrl + '/api/media/images/models', { signal: AbortSignal.timeout(15_000) });
+              const body = await response.json() as typeof modelBody;
+              const model = body.code === 0 && body.data?.find(item => canonicalizeMediaModelId(item.modelId) === selectedModel);
+              if (!response.ok || !model || !isRequestAccountCurrent()) throw new Error('Image confirmation refresh failed');
+              return imageConfirmationQuestions(model, t);
+            },
+          },
+        });
         if (!isRequestAccountCurrent()) return staleAccountResult();
-        if (!isMediaGenerationConfirmed(response, question, t('mediaVideoConfirmAccept'))) {
-          return { content: [{ type: 'text', text: t('mediaExtraImageDeclined') }], isError: true,
-            details: { status: 'cancelled', reason: 'USER_CANCELLED' } };
+        if (response.reason === MediaConfirmationReason.UserCancelled) defaultImageBudget.decline(selection?.imageDefault);
+        if (defaultImageBudget.wasDeclined(selection?.imageDefault)
+          || !isMediaGenerationConfirmed(response, question, t('mediaVideoConfirmAccept'))) {
+          return imageConfirmationFailure(defaultImageBudget.wasDeclined(selection?.imageDefault) ? declined : response, t);
+        }
+        if (response.grant === MediaConfirmationGrant.Turn && response.quote
+          && !defaultImageBudget.isTurnApproved(selection?.imageDefault, selectedModel, response.quote)) {
+          defaultImageBudget.approveTurn(selection?.imageDefault, selectedModel, response.quote);
+          console.log(`[MediaGeneration] user approved the remaining images of this turn for model ${selectedModel}`);
         }
       }
 
@@ -7175,15 +7232,19 @@ if (!gotTheLock) {
         params: summarizeMediaGenerationParamsForLog(params),
       }));
       if (!isRequestAccountCurrent()) return staleAccountResult();
+      if (mediaType === MediaType.Image && request.signal?.aborted) {
+        return imageConfirmationFailure({ behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.Interrupted }, t);
+      }
       if (mediaType === 'video' && request.signal?.aborted) {
         return videoConfirmationFailure({ behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.Interrupted }, t);
       }
+      const requestBody = JSON.stringify({ ...generateReq, ...(useDurableTasks ? { mediaType } : {}) });
       const intent = useDurableTasks && sessionId ? getMediaTaskStore().beginIntent({
         callKey: `${sessionId}:${request.context.toolCallId}`,
         ownerAccountKey: requestAccountScope.ownerAccountKey,
         serverBaseUrl, sessionId, mediaType, model: selectedModel, toolCallId: request.context.toolCallId,
         imageEdit,
-        requestBody: JSON.stringify({ ...generateReq, mediaType }),
+        requestBody,
       }) : undefined;
       const clientStartedAt = intent?.createdAt ?? Date.now();
       mediaUsage.submitting(request.context.toolCallId, useDurableTasks ? MediaProtocol.Durable : MediaProtocol.Legacy, selectedModel);
@@ -7195,7 +7256,7 @@ if (!gotTheLock) {
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey,
         },
-        body: intent?.requestBody ?? JSON.stringify({ ...generateReq, ...(useDurableTasks ? { mediaType } : {}) }),
+        body: requestBody,
         signal: AbortSignal.timeout(useDurableTasks ? 30_000 : 150_000),
       });
       console.log(`[MediaGeneration] server returned HTTP ${resp.status} for ${mediaType} generate request.`);
@@ -7328,22 +7389,22 @@ if (!gotTheLock) {
         ...(task.quotaRemaining != null ? [`Quota remaining: ${task.quotaRemaining}`] : []),
       ];
 
-      if (status === 'succeeded' && mediaType === 'image' && sessionId) {
-        const persistResult = await persistGeneratedImages(sessionId, assets, imageEdit, String(task.taskId));
+      if (status === 'succeeded' && mediaType === 'image' && ownerSessionId) {
+        const persistResult = await persistGeneratedImages(ownerSessionId, assets, imageEdit, String(task.taskId));
         if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(request.context.toolCallId, persistResult?.saved.length ?? 0, assets.length);
         if (persistResult && persistResult.saved.length > 0) {
           detailsAssets = persistResult.saved;
           const fileLines = persistResult.saved.map(asset =>
-            `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
+            `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
           );
           lines.push(`Results:\n${fileLines.join('\n')}`);
         } else if (assets.length > 0 && !composesImageEditLocally(imageEdit?.operation)) {
           const resultLines = resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           lines.push(`Results:\n${resultLines.join('\n')}`);
         }
-      } else if (status === 'succeeded' && mediaType === 'video' && sessionId) {
-        const persistResult = await persistGeneratedVideos(sessionId, assets);
+      } else if (status === 'succeeded' && mediaType === 'video' && ownerSessionId) {
+        const persistResult = await persistGeneratedVideos(ownerSessionId, assets);
         if (!isRequestAccountCurrent()) return staleAccountResult();
           mediaUsage.save(request.context.toolCallId, persistResult?.saved.length ?? 0, assets.length);
         if (persistResult && persistResult.saved.length > 0) {
@@ -7440,7 +7501,9 @@ if (!gotTheLock) {
       return handleMediaGenerationCallback(request);
     }
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
-    const selection = request.context.runId ? undefined : resolveMediaSelectionForSession(sessionId);
+    const selection = request.context.runId
+      ? undefined
+      : resolveMediaSelectionForSession(resolveMediaOwnerSessionId(request.context.sessionKey, sessionId));
     return mediaUsage.run({ sessionId: request.context.runId ? null : sessionId,
       selectionSource: request.tool === MediaGenerationTool.Image ? selection?.imageSource : selection?.videoSource,
       policyVersion: selection?.policyVersion,
@@ -7558,7 +7621,8 @@ if (!gotTheLock) {
         if (body.code !== 0) continue;
         const task = body.data!;
         if (tracker.protocolVersion === MediaProtocol.Durable && tracker.toolCallId) {
-          const details = { ...task, clientStartedAt: tracker.startedAt, ...(task.status === MediaTaskStatus.Succeeded ? { deliveryStatus: MediaDeliveryStatus.Pending } : {}), isMediaStatusPolling: true, taskId, mediaType: tracker.mediaType, pollCount: tracker.pollCount };
+          // The server task carries results as inline data URLs; never store or send them as-is.
+          const details = compactMediaDetails({ ...task, clientStartedAt: tracker.startedAt, ...(task.status === MediaTaskStatus.Succeeded ? { deliveryStatus: MediaDeliveryStatus.Pending } : {}), isMediaStatusPolling: true, taskId, mediaType: tracker.mediaType, pollCount: tracker.pollCount });
           emitMediaStatusPollUpdate({ sessionId: tracker.sessionId, toolCallId: tracker.toolCallId, details });
           persistMediaTaskCard(tracker, details);
         }
@@ -7603,13 +7667,13 @@ if (!gotTheLock) {
             if (!isMediaAccountScopeCurrent(trackerAccountScope, getCurrentMediaAccountScope())) continue;
             tracker.savedAssets = saved?.saved ?? tracker.savedAssets;
             const ready = status !== MediaTaskStatus.Succeeded || (assets.length > 0 && saved?.saved.length === assets.length);
-            const details = { ...task, clientStartedAt: tracker.startedAt, taskId, mediaType: tracker.mediaType,
+            const details = compactMediaDetails({ ...task, clientStartedAt: tracker.startedAt, taskId, mediaType: tracker.mediaType,
               ...(composesImageEditLocally(tracker.imageEdit?.operation) ? { resultUrls: saved?.saved.map(asset => asset.url) ?? [] } : {}),
               ...(status === MediaTaskStatus.Succeeded ? {
                 deliveryStatus: ready ? MediaDeliveryStatus.Saved : MediaDeliveryStatus.Retrying,
                 assets: tracker.savedAssets ?? [],
               } : {}),
-            };
+            });
             persistMediaTaskCard(tracker, details);
             if (tracker.toolCallId) emitMediaStatusPollUpdate({ sessionId: tracker.sessionId, toolCallId: tracker.toolCallId, details });
             if (status === MediaTaskStatus.Succeeded) mediaUsage.save(taskId, saved?.saved.length ?? 0, assets.length);
@@ -7619,7 +7683,7 @@ if (!gotTheLock) {
               continue;
             }
             const content = status === MediaTaskStatus.Succeeded
-              ? (saved?.saved ?? []).map(asset => `[${asset.filename}](${pathToFileURL(asset.filePath).toString()})`).join('\n')
+              ? (saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))).join('\n')
               : String(task.errorMessage || t(status === MediaTaskStatus.Timeout ? 'mediaTaskTimedOut'
                 : status === MediaTaskStatus.Cancelled ? 'mediaTaskCancelled' : 'mediaTaskFailed'));
             emitMediaTaskMessage(tracker.sessionId, content, { toolResultDetails: details }, tracker);
@@ -7635,7 +7699,7 @@ if (!gotTheLock) {
             }
             mediaUsage.save(taskId, persistResult?.saved.length ?? 0, assets.length);
             if (persistResult && persistResult.saved.length > 0) {
-              const fileLines = persistResult.saved.map(asset => `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`);
+              const fileLines = persistResult.saved.map(asset => `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`);
               emitMediaTaskMessage(
                 tracker.sessionId,
                 `Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
@@ -7767,17 +7831,12 @@ if (!gotTheLock) {
     }
   };
 
-  const persistMediaTaskCard = (tracker: MediaTaskTracker, details: Record<string, unknown>) => {
+  const persistMediaTaskCard = (tracker: MediaTaskTracker, rawDetails: Record<string, unknown>) => {
     if (!tracker.toolCallId) return;
-    const db = getStore().getDatabase();
-    const rows = db.prepare(`SELECT id, metadata FROM cowork_messages WHERE session_id = ? AND type IN ('tool_use', 'tool_result') AND (
-      json_extract(metadata, '$.toolUseId') = ? OR CAST(json_extract(metadata, '$.toolInput.taskId') AS TEXT) = ?
-      OR CAST(json_extract(metadata, '$.toolResultDetails.taskId') AS TEXT) = ?
-      OR CAST(json_extract(metadata, '$.mediaStatusDetails.taskId') AS TEXT) = ?)`)
-      .all(tracker.sessionId, tracker.toolCallId, tracker.taskId, tracker.taskId, tracker.taskId) as Array<{ id: string; metadata: string }>;
-    for (const row of rows) {
-      const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
-      getCoworkStore().updateMessage(tracker.sessionId, row.id, { metadata: { ...metadata, mediaStatusDetails: details,
+    const details = compactMediaDetails(rawDetails);
+    const rows = getCoworkStore().findMediaTaskMessages(tracker.sessionId, tracker.toolCallId, tracker.taskId);
+    for (const { id, metadata } of rows) {
+      getCoworkStore().updateMessage(tracker.sessionId, id, { metadata: { ...metadata, mediaStatusDetails: details,
         toolResultDetails: { ...(metadata.toolResultDetails as Record<string, unknown> ?? {}), ...details } } });
       if (typeof metadata.toolUseId === 'string' && metadata.toolUseId !== tracker.toolCallId) {
         emitMediaStatusPollUpdate({ sessionId: tracker.sessionId, toolCallId: metadata.toolUseId, details });
@@ -7793,19 +7852,24 @@ if (!gotTheLock) {
       if (tracker.ownerAccountKey !== scope.ownerAccountKey || tracker.serverBaseUrl !== serverBaseUrl) continue;
       for (const asset of tracker.savedAssets ?? []) {
         if (fs.existsSync(asset.filePath)) (tracker.mediaType === 'image' ? persistedGeneratedImageAssetsByUrl : persistedGeneratedVideoAssetsByUrl)
-          .set(`${tracker.sessionId}:${asset.originalUrl || asset.url}`, asset);
+          .set(`${tracker.sessionId}:${mediaSourceKey(asset.originalUrl || asset.url)}`, asset);
       }
-      if (!tracker.delivered && !pendingMediaTasks.has(tracker.taskId) && getCoworkStore().getSession(tracker.sessionId)) {
+      if (!tracker.delivered && !pendingMediaTasks.has(tracker.taskId) && getCoworkStore().sessionExists(tracker.sessionId)) {
         registerMediaTaskForPolling({ ...tracker, accountGeneration: scope.accountGeneration });
       }
     }
+    // Task records are never removed, so ids seen here stay tracked; misses re-read the store.
+    const trackedTaskIds = new Set(getMediaTaskStore().tasks()
+      .filter(task => task.serverBaseUrl === serverBaseUrl)
+      .map(task => task.taskId));
     for (const intent of getMediaTaskStore().intents()) {
       if (intent.rejected || intent.ownerAccountKey !== scope.ownerAccountKey || intent.serverBaseUrl !== serverBaseUrl
-        || !getCoworkStore().getSession(intent.sessionId)) continue;
+        || !getCoworkStore().sessionExists(intent.sessionId)) continue;
       if (intent.taskId) {
         mediaUsage.accept(intent.toolCallId, { taskId: intent.taskId, protocolVersion: MediaProtocol.Durable });
-        const exists = getMediaTaskStore().tasks().some(task => task.taskId === intent.taskId && task.serverBaseUrl === serverBaseUrl);
-        if (!exists && getCoworkStore().getSession(intent.sessionId)) registerMediaTaskForPolling({
+        const tracked = trackedTaskIds.has(intent.taskId)
+          || getMediaTaskStore().tasks().some(task => task.taskId === intent.taskId && task.serverBaseUrl === serverBaseUrl);
+        if (!tracked) registerMediaTaskForPolling({
           taskId: intent.taskId, sessionId: intent.sessionId, mediaType: intent.mediaType, model: intent.model,
           imageEdit: intent.imageEdit,
           ownerAccountKey: intent.ownerAccountKey, accountGeneration: scope.accountGeneration,
@@ -7814,12 +7878,20 @@ if (!gotTheLock) {
         });
         continue;
       }
-      if (Date.now() - (intent.lastAttemptAt ?? intent.createdAt) < 30_000 || Date.now() - intent.createdAt > 86_400_000) continue;
+      if (Date.now() - (intent.lastAttemptAt ?? intent.createdAt) < 30_000
+        || Date.now() - intent.createdAt > MEDIA_INTENT_RETRY_WINDOW_MS) continue;
+      const requestBody = getMediaTaskStore().intentRequestBody(intent);
+      if (requestBody === undefined) {
+        // Without the original payload the submission cannot be replayed under the same idempotency key.
+        console.warn(`[MediaGeneration] Intent ${intent.key} has no stored request body; it will not be resubmitted.`);
+        getMediaTaskStore().saveIntent({ ...intent, rejected: true });
+        continue;
+      }
       getMediaTaskStore().saveIntent({ ...intent, lastAttemptAt: Date.now() });
       try {
         const response = await fetchWithAuth(`${serverBaseUrl}${MEDIA_V2_TASKS_PATH}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': intent.key },
-          body: intent.requestBody, signal: AbortSignal.timeout(30_000),
+          body: requestBody, signal: AbortSignal.timeout(30_000),
         });
         const body = await response.json() as { code: number; data?: { taskId?: string | number }; message?: string };
         if (!isMediaAccountScopeCurrent(scope, getCurrentMediaAccountScope())) return;
@@ -7836,7 +7908,8 @@ if (!gotTheLock) {
       } catch (error) { console.debug('[MediaGeneration] Intent recovery deferred:', error); }
     }
   };
-  const emitMediaTaskMessage = (sessionId: string, content: string, metadata?: Record<string, unknown>, tracker?: MediaTaskTracker) => {
+  const emitMediaTaskMessage = (sessionId: string, content: string, rawMetadata?: Record<string, unknown>, tracker?: MediaTaskTracker) => {
+    const metadata = compactMessageMetadataMedia(rawMetadata);
     let message: CoworkMessage = {
       id: `media-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       type: 'system' as const,
@@ -7889,14 +7962,14 @@ if (!gotTheLock) {
   });
   registerImageEditingHandlers(() => mainWindow, imageEditing);
   const persistGeneratedImages = (sessionId: string, assets: RemoteGeneratedMediaAsset[], edit?: ImageEditRequest, taskId = '') => mediaDownloads.run(
-    `${sessionId}:image:${edit?.id ?? ''}:${taskId}:${JSON.stringify(assets.map(asset => asset.url))}`, async () => {
+    `${sessionId}:image:${edit?.id ?? ''}:${taskId}:${JSON.stringify(assets.map(asset => mediaSourceKey(asset.url)))}`, async () => {
       const result = await persistGeneratedImagesImpl(sessionId, assets, edit);
       if (result && edit) result.saved = await imageEditing.finalize(edit, taskId, result.saved);
       return result;
     },
   );
   const persistGeneratedVideos = (sessionId: string, assets: RemoteGeneratedMediaAsset[]) => mediaDownloads.run(
-    `${sessionId}:video:${JSON.stringify(assets.map(asset => asset.url))}`, () => persistGeneratedVideosImpl(sessionId, assets),
+    `${sessionId}:video:${JSON.stringify(assets.map(asset => mediaSourceKey(asset.url)))}`, () => persistGeneratedVideosImpl(sessionId, assets),
   );
   const persistGeneratedImagesImpl = async (
     sessionId: string,
@@ -7915,7 +7988,7 @@ if (!gotTheLock) {
 
     const cachedAssets: PersistedGeneratedImageAsset[] = [];
     const pendingAssets = imageAssets.filter(asset => {
-      const key = `${sessionId}:${asset.url.trim()}`;
+      const key = `${sessionId}:${mediaSourceKey(asset.url)}`;
       const cached = persistedGeneratedImageAssetsByUrl.get(key);
       if (cached) {
         cachedAssets.push(cached);
@@ -7930,11 +8003,15 @@ if (!gotTheLock) {
     try {
       const result = await persistGeneratedImageAssets({
         cwd: edit && composesImageEditLocally(edit.operation) ? await imageEditing.downloadDirectory(edit) : cwd,
+        recoveryDirectory: edit ? undefined : path.join(app.getPath('userData'), 'generated-images', sessionId),
         assets: pendingAssets,
         fetchAsset: url => session.defaultSession.fetch(url, { signal: AbortSignal.timeout(120_000) }),
       });
       for (const saved of result.saved) {
-        persistedGeneratedImageAssetsByUrl.set(`${sessionId}:${saved.originalUrl || saved.url}`, saved);
+        persistedGeneratedImageAssetsByUrl.set(`${sessionId}:${mediaSourceKey(saved.originalUrl || saved.url)}`, saved);
+        if (saved.savedToRecoveryDirectory) {
+          console.warn('[MediaGeneration] saved image to recovery directory:', serializeForLog({ sessionId, reason: saved.recoveryReason, filePath: saved.filePath }));
+        }
       }
       for (const failed of result.failed) {
         console.warn('[MediaGeneration] failed to persist generated image:', serializeForLog({ sessionId, error: failed.error }));
@@ -7965,7 +8042,7 @@ if (!gotTheLock) {
 
     const cachedAssets: PersistedGeneratedImageAsset[] = [];
     const pendingAssets = videoAssets.filter(asset => {
-      const key = `${sessionId}:${asset.url.trim()}`;
+      const key = `${sessionId}:${mediaSourceKey(asset.url)}`;
       const cached = persistedGeneratedVideoAssetsByUrl.get(key);
       if (cached) {
         cachedAssets.push(cached);
@@ -7984,7 +8061,7 @@ if (!gotTheLock) {
         fetchAsset: url => session.defaultSession.fetch(url, { signal: AbortSignal.timeout(120_000) }),
       });
       for (const saved of result.saved) {
-        persistedGeneratedVideoAssetsByUrl.set(`${sessionId}:${saved.originalUrl || saved.url}`, saved);
+        persistedGeneratedVideoAssetsByUrl.set(`${sessionId}:${mediaSourceKey(saved.originalUrl || saved.url)}`, saved);
       }
       for (const failed of result.failed) {
         console.warn('[MediaGeneration] failed to persist generated video:', serializeForLog({ sessionId, error: failed.error }));
@@ -8297,6 +8374,7 @@ if (!gotTheLock) {
         status: AuthSessionStatus.Authenticated,
         reason: AuthSessionChangeReason.UserLogin,
       }, _event.sender.id);
+      desktopCompanionManager?.handleLoginSucceeded();
       return {
         success: true,
         user: body.data.user,
@@ -12338,15 +12416,6 @@ if (!gotTheLock) {
     }
   });
 
-  const VALID_EMBEDDING_PROVIDERS = [
-    'local',
-    'openai',
-    'gemini',
-    'voyage',
-    'mistral',
-    'ollama',
-  ] as const;
-
   function normalizeEmbeddingConfig(config: {
     embeddingEnabled?: boolean;
     embeddingProvider?: string;
@@ -12359,11 +12428,7 @@ if (!gotTheLock) {
     return {
       embeddingEnabled:
         typeof config.embeddingEnabled === 'boolean' ? config.embeddingEnabled : undefined,
-      embeddingProvider:
-        typeof config.embeddingProvider === 'string' &&
-        (VALID_EMBEDDING_PROVIDERS as readonly string[]).includes(config.embeddingProvider)
-          ? config.embeddingProvider
-          : undefined,
+      embeddingProvider: isEmbeddingProvider(config.embeddingProvider) ? config.embeddingProvider : undefined,
       embeddingModel:
         typeof config.embeddingModel === 'string' ? config.embeddingModel.trim() : undefined,
       embeddingLocalModelPath:
@@ -14396,6 +14461,18 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(ClipboardIpc.WriteTextAndHtml, async (_event, content: { text?: unknown; html?: unknown }) => {
+    try {
+      if (typeof content?.text !== 'string' || typeof content?.html !== 'string') {
+        return { success: false, error: 'Invalid clipboard content' };
+      }
+      clipboard.write({ text: content.text, html: content.html });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
+
   ipcMain.handle(ClipboardIpc.WriteImageFromFile, async (_event, filePath: string) => {
     try {
       const image = nativeImage.createFromPath(filePath);
@@ -15525,6 +15602,12 @@ if (!gotTheLock) {
     mediaStatusPollCounts.clear();
     const browserHost = agentBrowserHost;
     agentBrowserHost = null;
+    // dsh is a plain child process, so nothing stops it when this process
+    // exits, and app.exit() below skips the `will-quit` hook its manager
+    // relies on. Signal it now so its own shutdown overlaps the steps below.
+    const dshStopped = stopDshFeatureRuntimes().catch(error => {
+      console.error('[DSH] Failed to stop the runtime on quit:', error);
+    });
 
     if (browserHost) {
       currentAppCleanupStep = 'agent-browser-storage';
@@ -15579,6 +15662,9 @@ if (!gotTheLock) {
     });
 
     stopOpenClawTokenProxy();
+
+    currentAppCleanupStep = 'dsh-runtime';
+    await dshStopped;
 
     // Stop the cron job polling
     currentAppCleanupStep = 'cron-and-store';
@@ -15745,7 +15831,28 @@ if (!gotTheLock) {
     console.log('[Main] initApp: default project dir ensured');
 
     // 注册 localfile:// 自定义协议，用于安全加载本地媒体文件。
-    protocol.handle(ArtifactPreviewProtocol.LocalFile, createLocalFileProtocolResponse);
+    // The conversation asks for downscaled copies of large images; only macOS and Windows can
+    // build them without decoding on the main thread, elsewhere the original is served.
+    const localImageThumbnails = new LocalImageThumbnails({
+      cacheDirectory: path.join(app.getPath('userData'), 'image-thumbnails'),
+      createThumbnail: isMac
+        ? (filePath, size) => createScreenScaleThumbnail(filePath, size, {
+          scaleFactor: screen.getPrimaryDisplay().scaleFactor,
+          createThumbnailFromPath: (file, points) => nativeImage.createThumbnailFromPath(file, points),
+          createFromBitmap: (bitmap, pixels) => nativeImage.createFromBitmap(bitmap, pixels),
+        })
+        : isWindows
+          ? (filePath, size) => nativeImage.createThumbnailFromPath(filePath, size)
+          : undefined,
+    });
+    protocol.handle(ArtifactPreviewProtocol.LocalFile, request => createLocalFileProtocolResponse(request, {
+      resolveThumbnail: (filePath, stat, edge, fit) => localImageThumbnails.resolve(filePath, stat, edge, fit),
+    }));
+    setTimeout(() => {
+      void localImageThumbnails.prune()
+        .then(removed => { if (removed > 0) console.log(`[LocalImageThumbnails] removed ${removed} expired thumbnails.`); })
+        .catch(error => console.warn('[LocalImageThumbnails] pruning failed:', error));
+    }, 60_000);
     registerSkinElectronIntegration(getSkinRuntimeController().store);
 
     profiler.mark('initStore');
@@ -15780,6 +15887,8 @@ if (!gotTheLock) {
       },
     });
     libraryIndexService.start();
+
+    reclaimOrphanedDshRuntimesOnStartup();
 
     // Dev/E2E convenience: boot the dsh engine once the app is ready and the
     // store can answer provider queries, so app-level checks can assert
@@ -15823,6 +15932,31 @@ if (!gotTheLock) {
       catch { console.warn('[UsageTitle] could not persist pending title.'); }
     });
 
+    // Older builds kept request bodies inline in the intent index; compact it before any window
+    // opens so the one-time cost is not paid during a recovery tick while the user is typing.
+    try { getMediaTaskStore().intents(); }
+    catch (error) { console.warn('[MediaGeneration] Media intent index compaction failed:', error); }
+    // Same for task records whose saved assets older builds kept as inline images.
+    try { getMediaTaskStore().tasks(); }
+    catch (error) { console.warn('[MediaGeneration] Media task index compaction failed:', error); }
+    // Message rows from older builds hold generated images inline; rewrite them once, in the
+    // background, after startup work has settled. Progress is kept, so quitting only pauses it.
+    const MEDIA_METADATA_MIGRATION_IDLE_SECONDS = 3;
+    let mediaMetadataMigrationStopped = false;
+    app.once('before-quit', () => { mediaMetadataMigrationStopped = true; });
+    setTimeout(() => {
+      const startedAt = Date.now();
+      void migrateInlineMediaMetadata({
+        db: getStore().getDatabase(),
+        kv: getStore(),
+        recoveryDirectory: sessionId => path.join(app.getPath('userData'), 'generated-images', sessionId),
+        isIdle: () => powerMonitor.getSystemIdleTime() >= MEDIA_METADATA_MIGRATION_IDLE_SECONDS,
+        shouldStop: () => mediaMetadataMigrationStopped,
+      }).then((result) => {
+        if (result.compactedRows === 0 && result.skippedRows === 0) return;
+        console.log(`[MediaGeneration] compacted inline media in stored messages: ${result.compactedRows} rows, ${(result.bytesBefore / 1e6).toFixed(1)}MB -> ${(result.bytesAfter / 1e6).toFixed(1)}MB, ${result.rescuedImages} images restored to the recovery directory, ${result.skippedRows} rows left as-is, ${result.done ? 'finished' : 'paused'} after ${Date.now() - startedAt}ms.`);
+      }).catch(error => console.warn('[MediaGeneration] Stored message media compaction failed:', error));
+    }, 15_000);
     let mediaRecoveryInFlight = false;
     const mediaRecoveryTimer = setInterval(() => {
       if (mediaRecoveryInFlight) return;
