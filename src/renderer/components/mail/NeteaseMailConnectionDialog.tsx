@@ -24,7 +24,12 @@ export function NeteaseMailConnectionPanel({ onClose, service = neteaseMailServi
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void service.getAvailability().then(value => { if (active) setAvailability(value); })
+    void service.getAvailability().then(value => {
+      if (active) {
+        setAvailability(value);
+        setAllowDelete(value.scopes?.includes(NeteaseMailScope.Delete) ?? false);
+      }
+    })
       .catch(() => { if (active) setErrorKey('neteaseMailUnavailable'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; if (busyRef.current) void service.cancelAuthorization?.(); };
@@ -38,7 +43,11 @@ export function NeteaseMailConnectionPanel({ onClose, service = neteaseMailServi
     try {
       const result = await service.authorize({ allowDelete });
       if (!result.success) setErrorKey(result.code === NeteaseMailFailure.NotReady ? 'neteaseMailConnectionPending' : getNeteaseMailErrorKey(result.code));
-      else setAvailability(await service.getAvailability());
+      else {
+        const value = await service.getAvailability();
+        setAvailability(value);
+        setAllowDelete(value.scopes?.includes(NeteaseMailScope.Delete) ?? false);
+      }
     } catch {
       setErrorKey('neteaseMailUnavailable');
     } finally {
@@ -72,7 +81,7 @@ export function NeteaseMailConnectionPanel({ onClose, service = neteaseMailServi
       <p>{t('neteaseMailAttachmentLimit')}</p><p>{t('neteaseMailQuota')}</p>
     </div>
     <label className="mt-4 flex cursor-pointer items-start gap-2 text-xs leading-5 text-secondary">
-      <input type="checkbox" className="mt-1" checked={allowDelete} disabled={busy} onChange={event => setAllowDelete(event.target.checked)} />
+      <input type="checkbox" className="mt-1" checked={allowDelete} disabled={busy || loading} onChange={event => setAllowDelete(event.target.checked)} />
       <span>{t('neteaseMailRequestDelete')}</span>
     </label>
     <div className="mt-4 text-sm leading-6" aria-live="polite">

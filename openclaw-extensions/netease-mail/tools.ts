@@ -8,6 +8,7 @@ import { AUTHORIZATION_FILE, readMailAuthorization } from './authorization';
 import { connectMailClient } from './client';
 import { getMailConfirmations } from './confirmation';
 import { failureCode, MAIL_FAILURE_CODES, MAIL_PROFILE_ID, MailAction, MailCode, MailForwardMode, type MailResult, mailResult, MailRpc, MailScope, MailStatus, MailTool, payload, record, responseCode, responseData } from './protocol';
+import { trashMessageSummary } from './trash';
 
 const addressList = Type.Array(Type.String({ minLength: 1, maxLength: 254 }), { maxItems: 20 });
 const messageId = Type.String({ minLength: 1, maxLength: 512 });
@@ -81,7 +82,7 @@ export function registerMailTools(api: OpenClawPluginApi, clientId: string): voi
     return Object.entries(schemas).filter(([name]) => grant.scopes.includes(name === MailTool.Trash ? MailScope.Delete : MailScope.Send))
       .map(([name, parameters]) => ({
         name, label: 'NetEase Mail', parameters,
-        description: `${descriptions[name as keyof typeof descriptions]} This call waits for the card action and returns the final outcome. A submitted result means the user already approved and the email service accepted the execution; no further click or send call is needed. Text approval cannot replace the card. Do not retry an unknown outcome or generate another send. Quota errors must be reported to the user without queuing.`,
+        description: `${descriptions[name as keyof typeof descriptions]} This call waits for the card action and returns the final outcome. A submitted or trashed result means the user already approved and the email service accepted the execution; no further click or execution is needed. Text approval cannot replace the card. Do not retry an unknown outcome or repeat an operation. Quota errors must be reported to the user without queuing.`,
         async execute(toolCallId: string, raw: unknown, signal?: AbortSignal, onUpdate?: (result: MailResult) => void) {
           const args = record(raw);
           if (!args || !onUpdate) return mailResult({ code: MailCode.Invalid }, true);
@@ -99,9 +100,13 @@ export function registerMailTools(api: OpenClawPluginApi, clientId: string): voi
             client = await connectMailClient({ stateDir, clientId, endpoint, requiredScope, grantId: currentGrant.id, config });
             let summary: Record<string, unknown>;
             if (name === MailTool.Trash) {
-              const result = payload(await client.call(MailTool.Get, { message_id: args.message_id, mark_read: false }, signal));
-              if (MAIL_FAILURE_CODES.has(responseCode(result))) return mailResult({ code: responseCode(result) }, true);
-              summary = responseData(result);
+              const result = await client.call(MailTool.Get, { message_id: args.message_id, mark_read: false }, signal);
+              const original = trashMessageSummary(result, args.message_id);
+              if (!original) {
+                const code = responseCode(payload(result));
+                return mailResult({ code: MAIL_FAILURE_CODES.has(code) ? code : MailCode.Invalid }, true);
+              }
+              summary = original;
             } else {
               const profile = payload(await client.call(MailTool.Profile, {}, signal));
               if (MAIL_FAILURE_CODES.has(responseCode(profile))) return mailResult({ code: responseCode(profile) }, true);

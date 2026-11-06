@@ -160,6 +160,35 @@ test('malformed execution receipts stay unknown and transport quota failures sta
   }
 });
 
+test.each([
+  [{ structuredContent: { message_id: 'received-id', operation_id: 'trash-operation' } }, MailStatus.Trashed],
+  [{ structuredContent: { message_id: 'another-message' } }, MailStatus.Unknown],
+  [{ structuredContent: { message_id: ' ' } }, MailStatus.Unknown],
+  [{ structuredContent: { saved_sent_mid: 'received-id' } }, MailStatus.Unknown],
+  [{ isError: true, structuredContent: { message_id: 'received-id' } }, MailStatus.Unknown],
+  [{ structuredContent: { code: 500, message_id: 'received-id' } }, MailStatus.Unknown],
+] as const)('a trash receipt confirms only the original message identity', async (response, expected) => {
+  const f = fixture();
+  f.operation.tool = MailTool.Trash;
+  f.operation.args = { message_id: 'received-id' };
+  f.operation.summary = { message_id: 'received-id', subject: 'Delete this sample' };
+  const result = f.pending.execute(f.operation);
+  await vi.waitFor(() => expect(f.onUpdate).toHaveBeenCalledOnce());
+  f.call.mockResolvedValueOnce(response);
+  const id = f.onUpdate.mock.calls[0][0].details.data.confirmation_id;
+  expect(f.pending.resolve(id, 'call', MailAction.Confirm, 'grant')).toBe(true);
+  expect(f.pending.resolve(id, 'call', MailAction.Confirm, 'grant')).toBe(false);
+  const receipt = await result;
+  expect(receipt.details).toMatchObject({ status: expected,
+    operation_summary: f.operation.summary, request_id: f.call.mock.calls[0][1].request_id });
+  if (expected === MailStatus.Trashed) {
+    expect(receipt.details.operation_id).toBe('trash-operation');
+    expect(receipt.details.instruction).toContain('moved this message to Trash');
+  }
+  expect(f.call).toHaveBeenCalledTimes(2);
+  expect(f.call.mock.calls[1][1]).toEqual({ ...f.call.mock.calls[0][1], confirmation_token: 'private-token' });
+});
+
 test('deployed plugin wire values match the desktop boundary', () => {
   expect(MailRpc.Resolve).toBe(NeteaseMailRuntimeRpc.ResolveConfirmation);
   expect(MailRpc.Status).toBe(NeteaseMailRuntimeRpc.ConfirmationStatus);

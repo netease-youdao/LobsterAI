@@ -91,8 +91,9 @@ function MessageCard({ presentation, actionsAvailable = false, onAction }: Netea
   const [outcome, setOutcome] = useState<NeteaseMailOutcome | null>(null);
   const [failure, setFailure] = useState<NeteaseMailError | NeteaseMailFailure | null>(null);
   const expired = expiresAt !== undefined && expiresAt <= now;
-  const limitKeys = getNeteaseMailLimitKeys(message);
-  const incomplete = expiresAt === undefined || !message.from.length || (!deleting && !message.to.length);
+  // Received mail can exceed compose limits; deleting it does not upload or send it.
+  const limitKeys = deleting ? [] : getNeteaseMailLimitKeys(message);
+  const incomplete = expiresAt === undefined || (deleting ? !message.id : !message.from.length || !message.to.length);
   const disabled = busy || Boolean(outcome) || expired || incomplete || !actionsAvailable || !onAction || limitKeys.length > 0;
   const cancelDisabled = busy || Boolean(outcome) || expired || !actionsAvailable || !onAction;
 

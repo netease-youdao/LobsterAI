@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Provider } from 'react-redux';
 import { expect, test } from 'vitest';
 
-import { NeteaseMailBodyFormat, NeteaseMailError, NeteaseMailMessageMode, NeteaseMailTool, NeteaseMailView } from '../../../shared/neteaseMail/constants';
+import { NeteaseMailBodyFormat, NeteaseMailError, NeteaseMailLimits, NeteaseMailMessageMode, NeteaseMailTool, NeteaseMailView } from '../../../shared/neteaseMail/constants';
 import type { NeteaseMailMessage } from '../../../shared/neteaseMail/types';
 import { i18nService } from '../../services/i18n';
 import type { CoworkMessage } from '../../types/cowork';
@@ -38,6 +38,34 @@ test('a quota notice explains the limit without offering an automatic action', (
   expect(html).toContain(i18nService.t('neteaseMailRateLimited'));
   expect(html).toContain(i18nService.t('neteaseMailQuota'));
   expect(html).not.toContain('<button');
+});
+
+test('deleting existing mail requires its identity but does not apply sending limits', () => {
+  const received = {
+    ...message, id: 'received-id', from: [],
+    subject: 'x'.repeat(NeteaseMailLimits.SubjectCharacters + 1),
+    to: Array.from({ length: NeteaseMailLimits.Recipients + 1 }, () => ({ email: 'reader@example.com' })),
+    attachments: Array.from({ length: NeteaseMailLimits.AttachmentCount + 1 }, () => ({ name: 'large.pdf', size: NeteaseMailLimits.AttachmentBytes + 1 })),
+  };
+  const presentation = { ...confirmation, tool: NeteaseMailTool.TrashMessage, message: received, expiresAt: Date.now() + 300_000 };
+  const props = { actionsAvailable: true, onAction: async () => ({ success: false as const, code: NeteaseMailError.InvalidArgument }) };
+  const html = renderToStaticMarkup(React.createElement(NeteaseMailCard, { ...props, presentation }));
+  expect(html).toContain(i18nService.t('neteaseMailDeleteWarning'));
+  expect(html).toContain(i18nService.t('neteaseMailTrash'));
+  expect(html).not.toContain('disabled=""');
+  expect(html).not.toContain(i18nService.t('neteaseMailRecipientLimit'));
+  expect(html).not.toContain(i18nService.t('neteaseMailSubjectLimit'));
+  expect(html).not.toContain(i18nService.t('neteaseMailAttachmentLimit'));
+  const unidentified = renderToStaticMarkup(React.createElement(NeteaseMailCard, {
+    ...props, presentation: { ...presentation, message: { ...received, id: undefined } },
+  }));
+  expect(unidentified).toContain(i18nService.t('neteaseMailConfirmationIncomplete'));
+  expect(unidentified.match(/disabled=""/g)).toHaveLength(1);
+  const sending = renderToStaticMarkup(React.createElement(NeteaseMailCard, {
+    ...props, presentation: { ...presentation, tool: NeteaseMailTool.SendMessage, message: { ...received, from: message.from } },
+  }));
+  expect(sending).toContain(i18nService.t('neteaseMailAttachmentLimit'));
+  expect(sending.match(/disabled=""/g)).toHaveLength(1);
 });
 
 test('mail content is not executed as markup in the plain-text card', () => {
