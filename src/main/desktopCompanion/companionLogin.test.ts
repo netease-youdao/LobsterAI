@@ -1,13 +1,23 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
-  CompanionAnalyticsAction, CompanionAnalyticsInteraction as Interaction, CompanionAnalyticsSource, CompanionAnalyticsTool,
+  CompanionAnalyticsAction, CompanionAnalyticsInteraction as Interaction, CompanionAnalyticsReason, CompanionAnalyticsSource, CompanionAnalyticsTool,
 } from '../../shared/desktopCompanion/analytics';
+import { TranslationTarget } from '../../shared/desktopCompanion/languageTools';
 import { COMPANION_LOGIN_ATTRIBUTION_MS, CompanionLoginTracker, isCompanionLoginSource, normalizeCompanionLoginStart } from './companionLogin';
 
 const JOURNEY_ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
 describe('normalizeCompanionLoginStart', () => {
+  test('retains a supported translation target and quota reason, rejecting arbitrary metadata', () => {
+    expect(normalizeCompanionLoginStart({ tool: CompanionAnalyticsTool.Translate,
+      reason: CompanionAnalyticsReason.AnonymousTranslationDailyLimit, resume: { targetLanguage: TranslationTarget.English } }))
+      .toEqual({ tool: CompanionAnalyticsTool.Translate, reason: CompanionAnalyticsReason.AnonymousTranslationDailyLimit,
+        resume: { targetLanguage: TranslationTarget.English } });
+    expect(normalizeCompanionLoginStart({ tool: CompanionAnalyticsTool.Translate,
+      reason: 'selected-private-text', resume: { targetLanguage: 'unsupported' } }))
+      .toEqual({ tool: CompanionAnalyticsTool.Translate });
+  });
   test('keeps a known tool, a usage ID and a trimmed resume request', () => {
     expect(normalizeCompanionLoginStart({
       tool: CompanionAnalyticsTool.Ask, journeyId: JOURNEY_ID, resume: { question: '  Why this tense?  ', extra: 'x' }, other: 1,
@@ -35,6 +45,16 @@ describe('normalizeCompanionLoginStart', () => {
 });
 
 describe('CompanionLoginTracker', () => {
+  test('carries the exhausted-allowance reason through the click and success events', () => {
+    const report = vi.fn();
+    const tracker = new CompanionLoginTracker({ report }, () => 0);
+    tracker.begin(CompanionAnalyticsSource.LanguageTools, { tool: CompanionAnalyticsTool.Translate,
+      journeyId: JOURNEY_ID, reason: CompanionAnalyticsReason.AnonymousTranslationDailyLimit });
+    tracker.succeed();
+    expect(report.mock.calls.map(([event]) => event.reason)).toEqual([
+      CompanionAnalyticsReason.AnonymousTranslationDailyLimit, CompanionAnalyticsReason.AnonymousTranslationDailyLimit,
+    ]);
+  });
   test('connects the click and the sign-in with one journey and the time between them', () => {
     let now = 1_000;
     const report = vi.fn();

@@ -5,7 +5,7 @@ import { CompanionAppCategory } from './appCategories';
 import { DesktopCompanionSnoozeMode, DesktopCompanionSurface } from './constants';
 import { CompanionDropAction, CompanionFileKind } from './fileKinds';
 import { COMPANION_WELCOME_TOPIC, CompanionHintOutcome, type CompanionHintTopic } from './hintPolicy';
-import { LanguageTool, LanguageToolCode } from './languageTools';
+import { LanguageTool, LanguageToolCode, LanguageToolErrorReason } from './languageTools';
 import { CompanionSelectionAction } from './selectionActions';
 import { COMPANION_SKINS } from './skins';
 
@@ -47,6 +47,7 @@ export const CompanionAnalyticsSetting = {
 export const CompanionAnalyticsReason = {
   LoginRequired: 'login_required', NoModel: 'no_model', InvalidInput: 'invalid_input',
   Unavailable: 'unavailable', Limit: 'limit', Upstream: 'upstream',
+  AnonymousTranslationDailyLimit: LanguageToolErrorReason.AnonymousTranslationDailyLimit,
 } as const;
 
 /** Reuse configured rlog columns; bounded values contain no prompts, paths or raw errors. */

@@ -2,10 +2,10 @@ import { randomUUID } from 'crypto';
 
 import { isUsageId } from '../../shared/analytics/usage';
 import {
-  CompanionAnalyticsAction, CompanionAnalyticsInteraction as Interaction, CompanionAnalyticsSource, CompanionAnalyticsTool,
+  CompanionAnalyticsAction, CompanionAnalyticsInteraction as Interaction, CompanionAnalyticsReason, CompanionAnalyticsSource, CompanionAnalyticsTool,
 } from '../../shared/desktopCompanion/analytics';
 import type { DesktopCompanionLoginStart } from '../../shared/desktopCompanion/constants';
-import type { LanguageToolResume } from '../../shared/desktopCompanion/languageTools';
+import { type LanguageToolResume, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
 import type { CompanionAnalytics } from './companionAnalytics';
 
 /** A sign-in that finishes later than this after the prompt's button is not credited to the prompt. */
@@ -30,10 +30,13 @@ export function normalizeCompanionLoginStart(value: unknown): DesktopCompanionLo
   const question = typeof raw?.question === 'string'
     ? [...raw.question.trim()].slice(0, RESUME_QUESTION_MAX_CHARS).join('')
     : '';
-  const resume: LanguageToolResume | undefined = question ? { question } : undefined;
+  const targetLanguage = Object.values(TranslationTarget).find(target => target === raw?.targetLanguage);
+  const resume: LanguageToolResume | undefined = question || targetLanguage
+    ? { ...(question ? { question } : {}), ...(targetLanguage ? { targetLanguage } : {}) } : undefined;
   return {
     tool,
     ...(isUsageId(input.journeyId) ? { journeyId: input.journeyId } : {}),
+    ...(input.reason === CompanionAnalyticsReason.AnonymousTranslationDailyLimit ? { reason: input.reason } : {}),
     ...(resume ? { resume } : {}),
   };
 }
@@ -43,6 +46,7 @@ interface PendingLogin {
   tool: DesktopCompanionLoginStart['tool'];
   journeyId: string;
   startedAt: number;
+  reason?: DesktopCompanionLoginStart['reason'];
 }
 
 /** Connects a companion sign-in prompt to the sign-in it opened. The newest prompt wins. */
@@ -56,9 +60,10 @@ export class CompanionLoginTracker {
 
   begin(source: CompanionLoginSource, request: DesktopCompanionLoginStart): void {
     const journeyId = request.journeyId ?? randomUUID();
-    this.pending = { source, tool: request.tool, journeyId, startedAt: this.now() };
+    this.pending = { source, tool: request.tool, journeyId, startedAt: this.now(), reason: request.reason };
     this.analytics.report({
       action: CompanionAnalyticsAction.Action, source, interactionType: Interaction.LoginClick, tool: request.tool, journeyId,
+      ...(request.reason ? { reason: request.reason } : {}),
     });
   }
 
@@ -72,6 +77,7 @@ export class CompanionLoginTracker {
     this.analytics.report({
       action: CompanionAnalyticsAction.Action, source: pending.source, interactionType: Interaction.LoginSuccess,
       tool: pending.tool, journeyId: pending.journeyId, durationMs,
+      ...(pending.reason ? { reason: pending.reason } : {}),
     });
     return true;
   }

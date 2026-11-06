@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CompanionAnalyticsSource, CompanionAnalyticsTool } from '../../../shared/desktopCompanion/analytics';
 import { type DesktopCompanionState } from '../../../shared/desktopCompanion/constants';
 import {
-  LanguageTool, LanguageToolCode, type LanguageToolResume, SpeechStatus, TranslationTarget,
+  LanguageTool, LanguageToolCode, LanguageToolErrorReason, type LanguageToolResume, SpeechStatus, TranslationTarget,
 } from '../../../shared/desktopCompanion/languageTools';
 import { CompanionSelectionAction } from '../../../shared/desktopCompanion/selectionActions';
 import { i18nService } from '../../services/i18n';
@@ -91,17 +91,26 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
   const isTranslation = input.tool === LanguageTool.Translate;
   const loginRequired = tools.error === LanguageToolCode.Unauthorized || followUp.loginRequired;
   const translationLoginRequired = tools.error === LanguageToolCode.Unauthorized && tools.errorTool === LanguageTool.Translate;
+  const translationQuota = tools.errorDetail?.quota?.tools.translate ?? tools.quota?.tools.translate;
+  const translationLimitReached = (translationLoginRequired
+    && tools.errorDetail?.reason === LanguageToolErrorReason.AnonymousTranslationDailyLimit)
+    || (isTranslation && !loginRequired && tools.error === null && !translating && !!translation
+      && translationQuota?.unlimitedAfterLogin === true && translationQuota.remainingRequests === 0);
   // The prompt names what was blocked; after the sign-in the card reopens, reruns its tool and resends the question.
-  const loginTool = tools.error !== LanguageToolCode.Unauthorized ? CompanionAnalyticsTool.Ask
+  const loginTool = translationLimitReached ? CompanionAnalyticsTool.Translate
+    : tools.error !== LanguageToolCode.Unauthorized ? CompanionAnalyticsTool.Ask
     : tools.errorTool === LanguageTool.Tts ? CompanionAnalyticsTool.Tts : CompanionAnalyticsTool.Translate;
   const loginFeature = t(loginTool === CompanionAnalyticsTool.Ask ? 'desktopToolsFollowUpFeature'
     : loginTool === CompanionAnalyticsTool.Tts ? 'desktopToolsReadAloud' : 'desktopCompanionActionTranslate');
-  const loginResume: LanguageToolResume | undefined = followUp.pendingQuestion ? { question: followUp.pendingQuestion } : undefined;
+  const loginResume: LanguageToolResume = {
+    ...(isTranslation ? { targetLanguage: tools.target } : {}),
+    ...(followUp.pendingQuestion ? { question: followUp.pendingQuestion } : {}),
+  };
   // A blocked follow-up is answered by the prompt, so it sits under the question; a blocked tool sits under its result.
   const loginInConversation = loginRequired && loginTool === CompanionAnalyticsTool.Ask;
-  const loginPrompt = loginRequired && (
+  const loginPrompt = (loginRequired || translationLimitReached) && (
     <SelectionLoginRequired source={CompanionAnalyticsSource.LanguageTools} tool={loginTool} feature={loginFeature}
-      contextId={input.id ?? ''} resume={loginResume} />
+      contextId={input.id ?? ''} resume={loginResume} translationQuota={translationLimitReached ? translationQuota : undefined} />
   );
   const speechVisible = !isTranslation || playback.status !== SpeechStatus.Idle;
   const speechActive = playback.status !== SpeechStatus.Idle;
@@ -177,7 +186,7 @@ export default function LanguageToolsSurface({ state }: { state: DesktopCompanio
             </div>
           )}
 
-          {loginRequired && !loginInConversation && loginPrompt}
+          {!loginInConversation && loginPrompt}
           {tools.error !== null && tools.error !== LanguageToolCode.Unauthorized && (
             <SelectionError
               message={t(tools.error === LanguageToolCode.DailyLimit && tools.errorTool === LanguageTool.Translate
