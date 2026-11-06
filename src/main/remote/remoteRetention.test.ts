@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { activateLegacyTestTarget } from '../../../tests/helpers/remoteLegacyRegistration';
 import { RemoteCapability } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteReplyCapability } from '../../shared/remote/reply';
@@ -50,7 +51,7 @@ function bridgeFixture() {
   });
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
   bridge.generation = '1'; bridge.retentionSupported = true; bridge.fenceCheckedAt = Date.now();
-  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  const target = activateLegacyTestTarget(store, bridge.targets, owner, 'desktop', bridge.deps.getApiBaseUrl());
   bridge.targetId = target.targetId;
   store.setProjectionIdentity(target.targetId, owner, 'desktop');
   store.setEnabledOwner(owner); create(store);

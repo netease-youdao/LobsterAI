@@ -44,7 +44,7 @@ const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' }
 const owner = { userId: 'A', scopeKey: 'personal' };
 const folders: string[] = [];
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
-function fixture(getTargetId?: () => string | null, presetId?: ModelPresetId) {
+function fixture(getTargetId?: () => string | null, presetId?: ModelPresetId, customThinking = true) {
   const folder = mkdtempSync(path.join(tmpdir(), 'remote-input-')); folders.push(folder);
   const cwd = path.join(folder, 'cwd'); mkdirSync(cwd);
   const values = new Map<string, unknown>();
@@ -63,7 +63,7 @@ function fixture(getTargetId?: () => string | null, presetId?: ModelPresetId) {
     getSession: () => session, agentOwnership: { get: () => ({ version }), canPublish: () => !session } } as unknown as CoworkStore;
   const catalog = { refresh: vi.fn(async () => [{ agentId: 'main', version, defaultWorkspaceId: 'ws', workspaceAvailable: true }]), resolve: () => cwd } as unknown as RemoteAgentCatalog;
   const models = new RemoteModelCatalog(store.remote, () => [{ identity: 'configured-model', runtimeRef: 'provider/model', source: 'custom', displayName: 'Chat', providerLabel: 'Custom',
-    available: true, image: true, toolCalling: true, thinking: { options: ['low', 'high'], default: 'low' }, configuration: {} },
+    available: true, image: true, toolCalling: true, thinking: customThinking ? { options: ['low', 'high'], default: 'low' } : { options: [] }, configuration: {} },
     ...(presetId ? [{ identity: presetId, runtimeRef: `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`,
       source: 'subscription' as const, displayName: presetId, providerLabel: 'LobsterAI', available: true,
       image: true, toolCalling: true, thinking: { options: [] }, configuration: {} }] : [])], getTargetId);
@@ -529,4 +529,45 @@ it('rejects a cached preparation selecting a foreign-origin Agent before model o
     expect(() => service.validate(cached, owner, 'pc', true)).toThrow(RemoteInputReason.AgentUnavailable);
     expect(resolve).not.toHaveBeenCalled();
   } finally { db.close(); }
+});
+
+it.each([false, true])('preserves local custom thinking for inherited input (continuation=%s)', async continuation => {
+  const { service, claim, deps, continueAnonymous } = fixture(undefined, undefined, false);
+  if (continuation) continueAnonymous();
+  const level = continuation ? 'low' : 'high';
+  const agentBefore = structuredClone(deps.store.getAgent('main'));
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(prepared.resolvedInput.options).toEqual({});
+  expect(prepared.inheritedThinking).toBe(level);
+  expect((await service.executionOptions(prepared, () => {})).thinkingLevel).toBe(level);
+  expect(deps.store.getAgent('main')).toEqual(agentBefore);
+  const resumed = new InputPreparationService(deps).read(prepared.preparationId, owner, 'pc');
+  expect((await service.executionOptions(resumed, () => {})).thinkingLevel).toBe(level);
+});
+it('does not accept an explicit custom thinking override absent from the published catalog', async () => {
+  const { service, claim } = fixture(undefined, undefined, false);
+  claim.request.input.options = { thinkingLevel: 'high' };
+  await expect(service.prepare(owner, 'pc', claim, vi.fn(), () => true)).rejects.toThrow(RemoteInputReason.Invalid);
+});
+it('does not inherit the old Agent thinking when explicitly selecting a custom model', async () => {
+  const { service, claim, deps } = fixture(undefined, undefined, false);
+  const model = deps.models.refresh(owner, 'pc')[0];
+  claim.request.input.model = { mode: RemoteInputMode.Selected, modelRef: model.modelRef, expectedVersion: model.version };
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(prepared.inheritedThinking).toBeUndefined();
+  expect((await service.executionOptions(prepared, () => {})).thinkingLevel).toBeUndefined();
+});
+it('invalidates a prepared inherited setting if the desktop configuration changes before execution', async () => {
+  const { service, claim, deps } = fixture(undefined, undefined, false);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  vi.spyOn(deps.store, 'getAgent').mockReturnValue({ enabled: true, model: 'provider/model', thinkingLevel: 'low' } as any);
+  expect(() => service.validate(prepared, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
+  await expect(service.executionOptions(prepared, () => {})).rejects.toThrow(RemoteInputReason.ModelChanged);
+});
+it('rejects tampering with the private inherited setting or adding a public override', async () => {
+  const { service, claim } = fixture(undefined, undefined, false);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(() => service.validate({ ...prepared, inheritedThinking: 'low' }, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
+  const resolvedInput = { ...prepared.resolvedInput, options: { thinkingLevel: 'high' } };
+  expect(() => service.validate({ ...prepared, resolvedInput, inputDigest: payloadHash(resolvedInput) }, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
 });

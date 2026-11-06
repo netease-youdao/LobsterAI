@@ -19,7 +19,7 @@ import { assertRemoteExecutionPermit, markRemoteExecutionDispatched, SessionComm
 const owner = { userId: 'A', scopeKey: 'personal' };
 const resources: Array<() => void> = [];
 afterEach(() => { for (const dispose of resources.splice(0)) dispose(); });
-function fixture(create = false, initialTargetId: string | null = null, initialModel = 'provider/old', initialPreset: ModelPresetId | null = null) {
+function fixture(create = false, initialTargetId: string | null = null, initialModel = 'provider/old', initialPreset: ModelPresetId | null = null, inheritedThinking = false) {
   let targetId = initialTargetId;
   const cwd = mkdtempSync(path.join(tmpdir(), 'input-command-'));
   const db = new Database(':memory:'); resources.push(() => { db.close(); rmSync(cwd, { recursive: true, force: true }); });
@@ -48,8 +48,8 @@ function fixture(create = false, initialTargetId: string | null = null, initialM
   const onRecovered = vi.fn();
   const service = new SessionCommandService(store, runtime as unknown as CoworkRuntime, () => owner, { onInputConfigurationChanged, onRecovered });
   const input: RemoteResolvedInput = { text: 'hello', agentId: 'main', expectedAgentVersion: '1', workspaceId: 'ws',
-    model: { modelRef: 'new-model', version: '1' }, options: { thinkingLevel: 'high' }, attachments: [] };
-  const manifest = { preparationId: 'prep', deviceId: 'pc', owner, targetId: targetId ?? undefined, resolvedInput: input, inputDigest: payloadHash(input), runtimeRef: 'provider/new', cwd } as LocalPreparedInput;
+    model: { modelRef: 'new-model', version: '1' }, options: inheritedThinking ? {} : { thinkingLevel: 'high' }, attachments: [] };
+  const manifest = { preparationId: 'prep', deviceId: 'pc', owner, targetId: targetId ?? undefined, resolvedInput: input, inputDigest: payloadHash(input), runtimeRef: 'provider/new', cwd, ...(inheritedThinking ? { inheritedThinking: 'high' } : {}) } as LocalPreparedInput;
   const preparations = { read: () => manifest, validate: vi.fn(), bind: vi.fn(), executionOptions: async () => ({ prompt: 'hello', modelOverride: 'provider/new', thinkingLevel: 'high', imageAttachments: [] }) } as unknown as InputPreparationService;
   const resolveModel = vi.fn(() => {
     if (targetId !== initialTargetId) throw new Error('Old model reference is unavailable on the current target');
@@ -261,4 +261,14 @@ it('does not treat custom virtual-looking model names as subscription presets', 
   const f = fixture(); f.manifest.runtimeRef = 'custom/yd-fast';
   await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
   expect(f.remote.get('inputRun:run')).toMatchObject({ modelPresetId: null });
+});
+
+it('keeps inherited custom thinking in a new session and execution while hiding unavailable remote choices', async () => {
+  const f = fixture(true, null, 'provider/old', null, true);
+  expect(f.store.getSession('local', 0)).toMatchObject({ thinkingLevel: 'high' });
+  f.resolveModel.mockReturnValue({ item: { modelRef: 'new-model', version: '1', source: 'custom', displayName: 'Chat', providerLabel: 'Custom', thinking: { options: [], default: null } } } as any);
+  expect(f.service.recordCurrentInputModel('local')).toMatchObject({ thinkingLevel: null });
+  await expect(f.service.execute(f.entry, () => true)).resolves.toEqual({ outcome: 'started' });
+  expect(f.store.getSession('local', 0)).toMatchObject({ thinkingLevel: 'high' });
+  expect(f.send).toHaveBeenCalledOnce();
 });

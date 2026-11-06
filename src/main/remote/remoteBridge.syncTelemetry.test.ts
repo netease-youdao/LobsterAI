@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { activateLegacyTestTarget } from '../../../tests/helpers/remoteLegacyRegistration';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
 import { type InboxEntry, RemoteBridge } from './remoteBridge';
@@ -26,7 +27,7 @@ function fixture() {
   bridge.owner = owner; bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
   bridge.generation = '1'; bridge.sameAccountAccess = true;
   store.put('settings:10001:personal', { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
-  const target = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  const target = activateLegacyTestTarget(store, bridge.targets, owner, 'desktop', bridge.deps.getApiBaseUrl());
   bridge.targetId = target.targetId; store.setProjectionIdentity(target.targetId, owner, 'desktop');
   store.setFileEnvironment(target.targetId); store.setWake(() => {}); store.setEnabledOwner(owner);
   store.transaction(() => { db.exec("INSERT INTO cowork_sessions VALUES('local','private-session-content',1,1,'idle')"); store.assignNew('local', owner, 'local_create'); });

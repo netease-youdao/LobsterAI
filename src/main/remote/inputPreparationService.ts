@@ -6,6 +6,7 @@ import { AgentId } from '../../shared/agent/constants';
 import { COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES, type CoworkImageAttachmentPayload, estimateBase64DecodedBytes } from '../../shared/cowork/imageAttachments';
 import { type ModelPresetId, modelPresetModelId, parseModelPresetId } from '../../shared/modelPresets/constants';
 import { OpenClawProviderId } from '../../shared/providers/constants';
+import { parseModelThinkingLevel } from '../../shared/providers/modelThinking';
 import { REMOTE_TEXT_BYTES, type RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryReceipt, type RemotePreparationClaim, type RemoteResolvedInput } from '../../shared/remote/input';
 import type { CoworkStore } from '../coworkStore';
@@ -35,10 +36,18 @@ export interface LocalPreparedInput {
   /** Local-only evidence for retaining an already bound preset during keep_session. */
   presetBinding?: { mode: 'keep_session'; presetId: ModelPresetId; physicalModel: { modelRef: string; version: string };
     sessionThinkingLevel: string | null; thinkingLevel: string | null };
+  /** Desktop-only inherited custom-provider setting, not a remotely selectable option. */
+  inheritedThinking?: string;
   sessionId: string | null; expectedInputVersion: string | null; expectedControlVersion: string | null;
   files: LocalAsset[]; createdAt: number; expiresAt: number; boundCommandId: string | null;
   cacheDirectory?: string; cacheCleanup?: 'deleting';
 }
+export const preparedThinkingLevel = (prepared: LocalPreparedInput): string | null | undefined =>
+  prepared.presetBinding ? prepared.presetBinding.thinkingLevel
+    : prepared.inheritedThinking ?? prepared.resolvedInput.options.thinkingLevel;
+
+const CustomModelSource = 'custom';
+
 interface Dependencies {
   store: CoworkStore; models: RemoteModelCatalog; cacheRoot: string; getOwner(): RemoteOwner | null;
   getTargetId?(): string | null;
@@ -229,6 +238,12 @@ export class InputPreparationService {
       const model = presetId ? this.deps.models.resolveRuntime(owner, deviceId, `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`) : physical;
       const inheritedThinking = mode === RemoteInputMode.Session ? session?.thinkingLevel : mode === RemoteInputMode.Agent ? agent.thinkingLevel : undefined;
       let thinkingLevel = request.input.options?.thinkingLevel ?? (inheritedThinking || model.item.thinking.default);
+      // No advertised choices means no mobile override, not loss of the desktop's existing setting.
+      const preserveInherited = !presetId && model.item.source === CustomModelSource && model.item.thinking.options.length === 0
+        && !Object.prototype.hasOwnProperty.call(request.input.options || {}, 'thinkingLevel')
+        && Boolean(parseModelThinkingLevel(inheritedThinking));
+      const localThinking = preserveInherited ? inheritedThinking! : undefined;
+      if (preserveInherited) thinkingLevel = undefined;
       let presetBinding: LocalPreparedInput['presetBinding'];
       if (presetId) {
         if (!session?.modelOverride || session.modelOverride !== physical.local.runtimeRef) throw new RemoteInputError(RemoteInputReason.ModelChanged);
@@ -362,6 +377,7 @@ export class InputPreparationService {
           ...(targetId ? { targetId } : {}),
           inputDigest: payloadHash(resolvedInput), resolvedInput, cwd, directoryIdentity, runtimeRef: physical.local.runtimeRef,
           ...(presetBinding ? { presetBinding } : {}),
+          ...(localThinking ? { inheritedThinking: localThinking } : {}),
           sessionId: session?.id || null, expectedInputVersion: request.expectedInputVersion || null, expectedControlVersion: request.expectedControlVersion || null,
           files, cacheDirectory: folder, createdAt: Date.now(), expiresAt: Math.min(Date.now() + 15 * 60_000, claim.expiresAt ? Date.parse(claim.expiresAt) : Infinity), boundCommandId: null };
         this.validate(prepared, owner, deviceId, false);
@@ -394,6 +410,13 @@ export class InputPreparationService {
     if (targetId && !remotePublicationAllowed(this.deps.store.remote.db, RemotePublicationKind.Agent, input.agentId, owner, targetId)) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
     if (prepared.sessionId && !this.deps.store.remote.isTaskAdmitted(prepared.sessionId)) throw new RemoteInputError(RemoteInputReason.Stale);
     const model = this.deps.models.resolve(owner, deviceId, input.model.modelRef, input.model.version);
+    if (prepared.inheritedThinking !== undefined) {
+      const inherited = prepared.sessionId ? this.deps.store.getSession(prepared.sessionId, 0)?.thinkingLevel
+        : this.deps.store.getAgent(input.agentId)?.thinkingLevel;
+      if (prepared.presetBinding || model.item.source !== CustomModelSource || model.item.thinking.options.length !== 0
+        || !parseModelThinkingLevel(prepared.inheritedThinking) || inherited !== prepared.inheritedThinking
+        || Object.prototype.hasOwnProperty.call(input.options, 'thinkingLevel')) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    }
     if (prepared.presetBinding) {
       const binding = prepared.presetBinding;
       const session = prepared.sessionId ? this.deps.store.getSession(prepared.sessionId, 0) : null;
@@ -502,7 +525,7 @@ export class InputPreparationService {
       this.assertTarget(prepared);
       if (epoch !== this.operationEpoch) throw new RemoteInputError(RemoteInputReason.Stale);
       checkCurrent();
-      if (prepared.presetBinding) this.validate(prepared, prepared.owner, prepared.deviceId, true);
+      if (prepared.presetBinding || prepared.inheritedThinking !== undefined) this.validate(prepared, prepared.owner, prepared.deviceId, true);
     };
     check();
     await this.validateFiles(prepared, check);
@@ -527,7 +550,7 @@ export class InputPreparationService {
         if (!preview && data.length > COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES) references.push(`[File: ${JSON.stringify(asset.fileName)}]`);
       } else references.push(`[File: ${JSON.stringify(asset.fileName)}] ${JSON.stringify(file.path)}`);
     }
-    const executionThinking = prepared.presetBinding ? prepared.presetBinding.thinkingLevel : prepared.resolvedInput.options.thinkingLevel;
+    const executionThinking = preparedThinkingLevel(prepared);
     return { prompt: [prepared.resolvedInput.text, ...references].filter(Boolean).join('\n\n') || ' ', modelOverride: prepared.runtimeRef,
       ...(executionThinking ? { thinkingLevel: executionThinking } : {}), imageAttachments };
   }

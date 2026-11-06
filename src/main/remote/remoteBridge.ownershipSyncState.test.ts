@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { activateLegacyTestTarget } from '../../../tests/helpers/remoteLegacyRegistration';
 import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
 import { RemoteConnectionReasonCode } from '../../shared/remote/connections';
 import { REMOTE_DEVICE_RETIRED_CODE, RemoteConnectionReason } from '../../shared/remote/constants';
@@ -34,7 +35,7 @@ function fixture() {
   bridge.owner = owner;
   bridge.registration = { deviceId: 'desktop', ...owner, metadataVersion: '1' };
   store.put('settings:10001:personal', { enabled: true, name: 'Desktop', settingsVersion: '1', workspaces: [] });
-  const activation = bridge.targets.activateLegacy({ owner, deviceId: 'desktop', allowPartialLegacy: true });
+  const activation = activateLegacyTestTarget(store, bridge.targets, owner, 'desktop', bridge.deps.getApiBaseUrl());
   bridge.targetId = activation.targetId;
   store.setEnabledOwner(owner);
   store.setProjectionIdentity(activation.targetId, owner, 'desktop');

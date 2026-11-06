@@ -20,6 +20,12 @@ it('wires the real desktop IPC through its actor-aware service when every option
   expect(submissionsStart).toBeGreaterThan(-1);
   expect(submissionsEnd).toBeGreaterThan(submissionsStart);
   const submissions = source.slice(submissionsStart, submissionsEnd);
+  // The bridge now starts after startup configuration is settled, separately from optional controls.
+  const startupStart = source.indexOf('    remoteStartupReady = true;');
+  const startupEnd = source.indexOf('    void ensureOpenClawRunningForCowork()', startupStart);
+  expect(startupStart).toBeGreaterThan(-1);
+  expect(startupEnd).toBeGreaterThan(startupStart);
+  const bridgeStartup = source.slice(startupStart, startupEnd);
   const owner = { userId: 'owner', scopeKey: 'personal' };
   const handlers = new Map<string, (...args: any[]) => any>();
   const authObservers = new Map<string, () => void>();
@@ -30,6 +36,7 @@ it('wires the real desktop IPC through its actor-aware service when every option
     vi.fn(() => { throw new Error('settings unavailable'); }), vi.fn(() => { throw new Error('bridge unavailable'); })];
   const sandbox = {
     console: { warn: vi.fn(), error: vi.fn() }, path, setTimeout, payloadHash: () => 'hash',
+    openClawRuntimeAdapter: null, isQuitting: false, isDataMigrationRestoreInProgress: false,
     getCurrentRemoteOwner: () => owner, getCoworkStore: () => localStore, getCoworkEngineRouter: () => runtime,
     getSessionDeletionService: vi.fn(), SessionCommandService,
     OwnershipAssociationService: class { constructor(_options: unknown) {} },
@@ -47,10 +54,12 @@ it('wires the real desktop IPC through its actor-aware service when every option
     ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => handlers.set(channel, handler) },
   };
   const script = `let remoteSessionCommands=null, ownershipAssociations=null, remoteTelemetryRuntime=null, remoteLocalGc=null,
-    remoteSettingsController=null, remoteBridge=null, remoteCredentialsAllowed=true;
+    remoteSettingsController=null, remoteBridge=null, remoteCredentialsAllowed=true,
+    openClawAccountRecovery=null, remoteStartupReady=false;
     ${submissions}
     ${initializers}
-    initializeSessionExecutionCore(); initializeRemoteControl();`;
+    initializeSessionExecutionCore(); initializeRemoteControl();
+    ${bridgeStartup}`;
   vm.runInNewContext(transformSync(script, { loader: 'ts', format: 'cjs' }).code, sandbox);
   expect(failures.every(failure => failure.mock.calls.length === 1)).toBe(true);
   expect(authObservers.size).toBe(3);
