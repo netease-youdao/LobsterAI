@@ -879,6 +879,7 @@ const INTERNAL_PLUGIN_IDS = [
   'stepfun',
   'xiaomi',
   'openrouter',
+  'requesty',
   'ollama',
   'lm-studio',
   'lobsterai-server',
