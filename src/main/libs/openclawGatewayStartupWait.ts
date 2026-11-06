@@ -54,14 +54,73 @@ export function isGatewayStartupWaitOver(outcome: GatewayStartupWaitOutcome): bo
   return outcome === GatewayStartupWaitOutcome.Stalled || outcome === GatewayStartupWaitOutcome.LimitReached;
 }
 
-/** 10-90% across the base deadline, then creeping toward 95% while extended. */
-export function gatewayStartupProgressPercent(
-  elapsedMs: number,
-  policy: GatewayStartupWaitPolicy = DEFAULT_GATEWAY_STARTUP_WAIT_POLICY,
-): number {
-  if (elapsedMs <= policy.baseTimeoutMs) {
-    return Math.min(90, 10 + Math.round((elapsedMs / policy.baseTimeoutMs) * 80));
+/**
+ * Gateway startup stages, in order, recognized from the milestones the
+ * gateway logs (OpenClaw v2026.8.1: src/cli/gateway-cli/run.ts,
+ * src/gateway/server-runtime-state-prepare.ts and server-startup-post-attach.ts).
+ * Before its first milestone the gateway loads modules and runs its own state
+ * migrations, which is the longest and least predictable stretch.
+ */
+export const GatewayStartupStage = {
+  Spawned: 'spawned',
+  LoadingConfig: 'loading-config',
+  StartingHttp: 'starting-http',
+  StartingChannels: 'starting-channels',
+} as const;
+export type GatewayStartupStage = typeof GatewayStartupStage[keyof typeof GatewayStartupStage];
+
+const GATEWAY_STARTUP_STAGE_ORDER: readonly GatewayStartupStage[] = [
+  GatewayStartupStage.Spawned,
+  GatewayStartupStage.LoadingConfig,
+  GatewayStartupStage.StartingHttp,
+  GatewayStartupStage.StartingChannels,
+];
+
+const GATEWAY_STARTUP_STAGE_MILESTONES: ReadonlyArray<[GatewayStartupStage, string]> = [
+  [GatewayStartupStage.LoadingConfig, 'loading configuration'],
+  [GatewayStartupStage.StartingHttp, 'starting HTTP server'],
+  [GatewayStartupStage.StartingChannels, 'starting channels and sidecars'],
+];
+
+/** Each stage creeps from its floor toward (never reaching) its ceiling. */
+const GATEWAY_STARTUP_STAGE_PROGRESS: Record<GatewayStartupStage, readonly [number, number]> = {
+  [GatewayStartupStage.Spawned]: [20, 50],
+  [GatewayStartupStage.LoadingConfig]: [55, 68],
+  [GatewayStartupStage.StartingHttp]: [70, 83],
+  [GatewayStartupStage.StartingChannels]: [85, 95],
+};
+
+/** Time for a stage to cover half of its remaining progress range. */
+const GATEWAY_STARTUP_STAGE_HALF_LIFE_MS = 6_000;
+
+/** The latest stage a chunk of gateway output announces, if any. */
+export function resolveGatewayStartupStage(text: string): GatewayStartupStage | null {
+  let stage: GatewayStartupStage | null = null;
+  for (const [candidate, milestone] of GATEWAY_STARTUP_STAGE_MILESTONES) {
+    if (text.includes(milestone)) stage = candidate;
   }
-  const extension = Math.max(1, policy.maxWaitMs - policy.baseTimeoutMs);
-  return Math.min(95, 90 + Math.round(((elapsedMs - policy.baseTimeoutMs) / extension) * 5));
+  return stage;
+}
+
+/** Stages only move forward; a repeated or older milestone keeps the current one. */
+export function advanceGatewayStartupStage(
+  current: GatewayStartupStage,
+  next: GatewayStartupStage | null,
+): GatewayStartupStage {
+  if (!next) return current;
+  return GATEWAY_STARTUP_STAGE_ORDER.indexOf(next) > GATEWAY_STARTUP_STAGE_ORDER.indexOf(current) ? next : current;
+}
+
+/**
+ * Progress for a gateway in `stage` for `stageElapsedMs`. Milestones move it
+ * in steps; between them it eases toward the next step, so a normal start
+ * reads as progress instead of sitting near 10% for its whole duration.
+ */
+export function gatewayStartupProgressPercent(
+  stage: GatewayStartupStage,
+  stageElapsedMs: number,
+): number {
+  const [floor, ceiling] = GATEWAY_STARTUP_STAGE_PROGRESS[stage];
+  const remaining = 0.5 ** (Math.max(0, stageElapsedMs) / GATEWAY_STARTUP_STAGE_HALF_LIFE_MS);
+  return Math.min(ceiling - 1, Math.floor(floor + (ceiling - floor) * (1 - remaining)));
 }

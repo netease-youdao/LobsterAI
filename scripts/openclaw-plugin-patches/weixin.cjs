@@ -9,6 +9,7 @@ const { patchWeixinDeliveryLog, patchWeixinSendReceipt } = require('./weixin-sen
 const WEIXIN_PLUGIN_VERSION = '2.4.3';
 const WEIXIN_LAZY_OUTBOUND_HOOKS_MARKER = 'lobster_weixin_lazy_outbound_hooks';
 const WEIXIN_LAZY_INBOUND_SDK_MARKER = 'lobster_weixin_lazy_inbound_sdk';
+const WEIXIN_LONG_POLL_ABORT_MARKER = 'lobster_weixin_longpoll_abort';
 
 function assertWeixinPluginVersion(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
@@ -140,6 +141,97 @@ function patchWeixinLazyInboundSdk(processMessagePath, label, log) {
 
   fs.writeFileSync(processMessagePath, src);
   log(`Patched ${label}: deferred command and typing SDK imports until the first inbound message`);
+}
+
+/** Replaces the first match of `pattern` that follows `anchor`; throws when either is missing. */
+function replaceAfterAnchor(src, anchor, pattern, replacement, label) {
+  const anchorIndex = src.indexOf(anchor);
+  if (anchorIndex === -1) {
+    throw new Error(`${label}: expected "${anchor}" was not found`);
+  }
+  const tail = src.slice(anchorIndex);
+  if (!pattern.test(tail)) {
+    throw new Error(`${label}: expected ${pattern} after "${anchor}" was not found`);
+  }
+  return src.slice(0, anchorIndex) + tail.replace(pattern, replacement);
+}
+
+/**
+ * The getUpdates long poll (up to 35s) ignored the channel abort signal, so
+ * gateway shutdown waited for it to return and LobsterAI killed the gateway
+ * after its 6s grace period. Every kill counts as an unclean boot, and three
+ * within five minutes trip OpenClaw's restart-loop breaker, which stops IM
+ * channels from starting. Aborting the request lets the monitor end at once:
+ * getUpdates already treats an AbortError as an empty poll.
+ */
+function patchWeixinLongPollAbortApi(apiPath, label, log) {
+  if (!fs.existsSync(apiPath)) {
+    return;
+  }
+
+  let src = fs.readFileSync(apiPath, 'utf8');
+  if (src.includes(WEIXIN_LONG_POLL_ABORT_MARKER)) {
+    log(`${label} long-poll abort already wired, skipping patch`);
+    return;
+  }
+
+  const isTypeScript = apiPath.endsWith('.ts');
+  if (isTypeScript) {
+    src = replaceAfterAnchor(
+      src,
+      'export async function apiPostFetch(',
+      /(\n(\s*)timeoutMs\?: number;\n)(\s*label: string;\n\}\): Promise<string> \{)/,
+      '$1$2abortSignal?: AbortSignal;\n$3',
+      label,
+    );
+    src = replaceAfterAnchor(
+      src,
+      'export async function getUpdates(',
+      /(\n(\s*)timeoutMs\?: number;\n)(\s*\},\n\): Promise<GetUpdatesResp>)/,
+      '$1$2abortSignal?: AbortSignal;\n$3',
+      label,
+    );
+  }
+  src = replaceAfterAnchor(
+    src,
+    'export async function apiPostFetch(',
+    /\.\.\.\(controller \? \{ signal: controller\.signal \} : \{\}\),/,
+    `...((controller || params.abortSignal) ? { /* ${WEIXIN_LONG_POLL_ABORT_MARKER} */ signal: controller && params.abortSignal ? AbortSignal.any([controller.signal, params.abortSignal]) : (controller?.signal ?? params.abortSignal) } : {}),`,
+    label,
+  );
+  src = replaceAfterAnchor(
+    src,
+    'export async function getUpdates(',
+    /(\n(\s*)timeoutMs: timeout,\n)(\s*label: "getUpdates",)/,
+    '$1$2abortSignal: params.abortSignal,\n$3',
+    label,
+  );
+
+  fs.writeFileSync(apiPath, src);
+  log(`Patched ${label}: getUpdates long poll now honors the channel abort signal`);
+}
+
+function patchWeixinLongPollAbortMonitor(monitorPath, label, log) {
+  if (!fs.existsSync(monitorPath)) {
+    return;
+  }
+
+  let src = fs.readFileSync(monitorPath, 'utf8');
+  if (src.includes(WEIXIN_LONG_POLL_ABORT_MARKER)) {
+    log(`${label} long-poll abort already wired, skipping patch`);
+    return;
+  }
+
+  src = replaceAfterAnchor(
+    src,
+    'await getUpdates({',
+    /(\n(\s*)timeoutMs: nextTimeoutMs,\n)/,
+    `$1$2abortSignal, // ${WEIXIN_LONG_POLL_ABORT_MARKER}\n`,
+    label,
+  );
+
+  fs.writeFileSync(monitorPath, src);
+  log(`Patched ${label}: monitor passes its abort signal to getUpdates`);
 }
 
 function patchWeixinGatewayMethods(channelPath, label, log) {
@@ -338,6 +430,13 @@ function patchWeixin({ runtimeExtensionsDir, log }) {
     log
   );
 
+  for (const relativePath of ['src/api/api.ts', 'dist/src/api/api.js']) {
+    patchWeixinLongPollAbortApi(path.join(pluginDir, relativePath), `openclaw-weixin/${relativePath}`, log);
+  }
+  for (const relativePath of ['src/monitor/monitor.ts', 'dist/src/monitor/monitor.js']) {
+    patchWeixinLongPollAbortMonitor(path.join(pluginDir, relativePath), `openclaw-weixin/${relativePath}`, log);
+  }
+
   patchWeixinDmPolicy(
     path.join(pluginDir, 'src', 'messaging', 'process-message.ts'),
     'openclaw-weixin/src/messaging/process-message.ts',
@@ -365,5 +464,7 @@ module.exports = {
   patchWeixin,
   patchWeixinLazyInboundSdk,
   patchWeixinLazyOutboundHooks,
+  patchWeixinLongPollAbortApi,
+  patchWeixinLongPollAbortMonitor,
   patchWeixinNarrowSdkImports,
 };

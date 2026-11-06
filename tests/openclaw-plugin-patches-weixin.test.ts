@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -8,8 +10,85 @@ const {
   assertWeixinPluginVersion,
   patchWeixinLazyInboundSdk,
   patchWeixinLazyOutboundHooks,
+  patchWeixinLongPollAbortApi,
+  patchWeixinLongPollAbortMonitor,
   patchWeixinNarrowSdkImports,
 } = require('../scripts/openclaw-plugin-patches/weixin.cjs');
+
+// Shapes of openclaw-weixin 2.4.3 dist/src/api/api.js and dist/src/monitor/monitor.js.
+const WEIXIN_API_JS = [
+  'export async function apiGetFetch(params) {',
+  '    const controller = params.timeoutMs != null ? new AbortController() : undefined;',
+  '    const res = await fetch(params.url, {',
+  '            method: "GET",',
+  '            ...(controller ? { signal: controller.signal } : {}),',
+  '        });',
+  '    return res.text();',
+  '}',
+  'export async function apiPostFetch(params) {',
+  '    const url = new URL(params.endpoint, params.baseUrl);',
+  '    const controller = params.timeoutMs !== undefined ? new AbortController() : undefined;',
+  '    const t = controller != null && params.timeoutMs !== undefined',
+  '        ? setTimeout(() => controller.abort(), params.timeoutMs)',
+  '        : undefined;',
+  '    try {',
+  '        const res = await fetch(url.toString(), {',
+  '            method: "POST",',
+  '            body: params.body,',
+  '            ...(controller ? { signal: controller.signal } : {}),',
+  '        });',
+  '        if (t !== undefined)',
+  '            clearTimeout(t);',
+  '        return await res.text();',
+  '    }',
+  '    catch (err) {',
+  '        if (t !== undefined)',
+  '            clearTimeout(t);',
+  '        throw err;',
+  '    }',
+  '}',
+  'export async function getUpdates(params) {',
+  '    const timeout = params.timeoutMs ?? 35000;',
+  '    try {',
+  '        const rawText = await apiPostFetch({',
+  '            baseUrl: params.baseUrl,',
+  '            endpoint: "ilink/bot/getupdates",',
+  '            body: JSON.stringify({ get_updates_buf: params.get_updates_buf ?? "" }),',
+  '            timeoutMs: timeout,',
+  '            label: "getUpdates",',
+  '        });',
+  '        return JSON.parse(rawText);',
+  '    }',
+  '    catch (err) {',
+  '        if (err instanceof Error && err.name === "AbortError") {',
+  '            return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf };',
+  '        }',
+  '        throw err;',
+  '    }',
+  '}',
+  '',
+].join('\n');
+
+const WEIXIN_MONITOR_JS = [
+  'export async function monitorWeixinProvider(opts) {',
+  '    const { abortSignal } = opts;',
+  '    while (!abortSignal?.aborted) {',
+  '            const resp = await getUpdates({',
+  '                baseUrl,',
+  '                token,',
+  '                get_updates_buf: getUpdatesBuf,',
+  '                timeoutMs: nextTimeoutMs,',
+  '            });',
+  '    }',
+  '}',
+  '',
+].join('\n');
+
+/** Evaluates the patched fixture so the test exercises the patched fetch call. */
+function loadGetUpdates(apiSource: string): (params: Record<string, unknown>) => Promise<unknown> {
+  const body = apiSource.replaceAll('export async function', 'async function');
+  return new Function(`${body}\nreturn getUpdates;`)();
+}
 
 describe('openclaw Weixin plugin startup patches', () => {
   test('uses narrow SDK entry points and defers message-only runtime imports', () => {
@@ -84,6 +163,55 @@ describe('openclaw Weixin plugin startup patches', () => {
 
     expect(fs.readFileSync(pairingPath, 'utf8'))
       .toContain('from "openclaw/plugin-sdk/file-lock"');
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test('lets the channel abort signal end the getUpdates long poll', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weixin-plugin-patch-'));
+    const apiPath = path.join(tempDir, 'api.js');
+    const monitorPath = path.join(tempDir, 'monitor.js');
+    fs.writeFileSync(apiPath, WEIXIN_API_JS);
+    fs.writeFileSync(monitorPath, WEIXIN_MONITOR_JS);
+
+    patchWeixinLongPollAbortApi(apiPath, 'fixture', () => {});
+    patchWeixinLongPollAbortMonitor(monitorPath, 'fixture', () => {});
+    patchWeixinLongPollAbortApi(apiPath, 'fixture', () => {});
+    patchWeixinLongPollAbortMonitor(monitorPath, 'fixture', () => {});
+
+    const patchedApi = fs.readFileSync(apiPath, 'utf8');
+    expect(patchedApi.match(/lobster_weixin_longpoll_abort/g)).toHaveLength(1);
+    expect(patchedApi).toContain('abortSignal: params.abortSignal,');
+    // The GET wrapper is not part of the long poll and keeps its own signal.
+    expect(patchedApi.indexOf('...(controller ? { signal: controller.signal } : {}),'))
+      .toBeLessThan(patchedApi.indexOf('export async function apiPostFetch'));
+    expect(fs.readFileSync(monitorPath, 'utf8')).toContain('abortSignal, // lobster_weixin_longpoll_abort');
+
+    const server = http.createServer((_req, res) => {
+      setTimeout(() => res.end('{"ret":0,"msgs":[]}'), 10_000);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const getUpdates = loadGetUpdates(patchedApi);
+      const controller = new AbortController();
+      const startedAt = Date.now();
+      setTimeout(() => controller.abort(), 50);
+      await expect(getUpdates({ baseUrl, get_updates_buf: 'buf', timeoutMs: 35_000, abortSignal: controller.signal }))
+        .resolves.toEqual({ ret: 0, msgs: [], get_updates_buf: 'buf' });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('fails loudly when the long-poll code no longer matches', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weixin-plugin-patch-'));
+    const apiPath = path.join(tempDir, 'api.js');
+    fs.writeFileSync(apiPath, WEIXIN_API_JS.replace('label: "getUpdates",', 'label: "poll",'));
+
+    expect(() => patchWeixinLongPollAbortApi(apiPath, 'fixture', () => {})).toThrow('fixture: expected');
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

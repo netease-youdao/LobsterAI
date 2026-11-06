@@ -43,18 +43,25 @@ import { createDreamingStartupFailureCollector, OPENCLAW_STARTUP_MIGRATION_REFUS
 import { cleanupStaleGatewayLocks, GatewayLockCleanupAction, openClawRuntimeHoldsLockCoordinators } from './openclawGatewayLock';
 import { buildOpenClawGatewayShutdownBridge, spawnOpenClawGatewayProcess, stopOpenClawGatewayProcess } from './openclawGatewayProcess';
 import {
+  advanceGatewayStartupStage,
   DEFAULT_GATEWAY_STARTUP_WAIT_POLICY,
   evaluateGatewayStartupWait,
   gatewayStartupProgressPercent,
+  GatewayStartupStage,
   GatewayStartupWaitOutcome,
   type GatewayStartupWaitPolicy,
   isGatewayStartupWaitOver,
+  resolveGatewayStartupStage,
 } from './openclawGatewayStartupWait';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { tryAcquireOpenClawLockCoordinator } from './openclawLockCoordinator';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
-import { describeStartupMigrationCheckpoint, readStartupMigrationCheckpointStamp } from './openclawStartupCheckpoint';
+import {
+  describeStartupMigrationCheckpoint,
+  listChangedStartupMigrationCheckpointParts,
+  readStartupMigrationCheckpoint,
+} from './openclawStartupCheckpoint';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
 import { scheduleOpenClawStartupDiskCleanup } from './openclawStartupDiskCleanup';
 import { configRequiresStartupCompatibility, OPENCLAW_STARTUP_PREP_MARKER_FILE, OpenClawStartupPrepMarker, resolveStartupPrepIdentity } from './openclawStartupPrep';
@@ -94,6 +101,11 @@ const GATEWAY_SELF_RESTART_WINDOW_MS = 30_000;
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB = 4096;
 const OPENCLAW_GATEWAY_MAX_OLD_SPACE_OPTION = `--max-old-space-size=${OPENCLAW_GATEWAY_MAX_OLD_SPACE_MB}`;
 const NODE_MAX_OLD_SPACE_RE = /(?:^|\s)--max-old-space-size(?:=|\s|$)/;
+// Diagnostics switch: LOBSTERAI_OPENCLAW_CPU_PROFILE=1 records V8 CPU profiles of the gateway.
+const OPENCLAW_GATEWAY_CPU_PROFILE_ENV = 'LOBSTERAI_OPENCLAW_CPU_PROFILE';
+const OPENCLAW_GATEWAY_CPU_PROFILE_DIR = 'cpu-profiles';
+// Experiment switch: LOBSTERAI_OPENCLAW_GATEWAY_BUNDLE=1 loads gateway-bundle.mjs off Windows too.
+const OPENCLAW_GATEWAY_BUNDLE_ENV = 'LOBSTERAI_OPENCLAW_GATEWAY_BUNDLE';
 const GATEWAY_RECENT_OUTPUT_LINE_LIMIT = 80;
 const OPENCLAW_PLUGIN_VERIFICATION_FAILURE = 'OpenClaw plugin verification failed; refusing to report the gateway ready.';
 const OPENCLAW_TERMINAL_STARTUP_DETAIL_LIMIT = 400;
@@ -398,6 +410,31 @@ export function buildOpenClawGatewayExecArgv(existingNodeOptions: string | undef
   return [OPENCLAW_GATEWAY_MAX_OLD_SPACE_OPTION];
 }
 
+/**
+ * V8 writes each profile when its process exits, so a gateway killed after the
+ * shutdown grace period leaves none. Node children forked with the gateway's
+ * execArgv inherit the flags; the default file names keep their profiles apart.
+ */
+export function buildOpenClawGatewayCpuProfileExecArgv(
+  switchValue: string | undefined,
+  profileDir: string,
+): string[] {
+  if (switchValue?.trim() !== '1') return [];
+  return ['--cpu-prof', `--cpu-prof-dir=${profileDir}`];
+}
+
+/**
+ * Windows always loads the single-file bundle. Elsewhere the bare runtime is
+ * the verified path (packaging drops the bundle there); the switch lets a
+ * developer compare startup cost against it on a runtime that still has one.
+ */
+export function shouldUseOpenClawGatewayBundle(
+  platform: NodeJS.Platform,
+  switchValue: string | undefined,
+): boolean {
+  return platform === 'win32' || switchValue?.trim() === '1';
+}
+
 export function buildOpenClawCompileCacheEnv(compileCacheDir: string): NodeJS.ProcessEnv {
   return {
     NODE_COMPILE_CACHE: compileCacheDir,
@@ -421,6 +458,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private readonly gatewayRecentOutput = new WeakMap<GatewayProcess, string[]>();
   /** Last stdout/stderr activity per process: the startup wait's progress signal. */
   private readonly gatewayLastOutputAt = new WeakMap<GatewayProcess, number>();
+  private readonly gatewayStartupStages = new WeakMap<GatewayProcess, { stage: GatewayStartupStage; enteredAt: number }>();
   private readonly gatewayGenerationByProcess = new WeakMap<GatewayProcess, number>();
   private readonly gatewayFailureByProcess = new WeakMap<GatewayProcess, OpenClawGatewayFailureSnapshot>();
   private readonly expectedGatewayExits = new WeakSet<object>();
@@ -1356,8 +1394,21 @@ export class OpenClawEngineManager extends EventEmitter {
     } else {
       console.log('[OpenClaw] gateway V8 old-space limit is controlled by existing NODE_OPTIONS');
     }
+    const cpuProfileDir = path.join(
+      this.logsDir,
+      OPENCLAW_GATEWAY_CPU_PROFILE_DIR,
+      new Date().toISOString().replace(/[:.]/g, '-'),
+    );
+    const cpuProfileExecArgv = buildOpenClawGatewayCpuProfileExecArgv(
+      process.env[OPENCLAW_GATEWAY_CPU_PROFILE_ENV],
+      cpuProfileDir,
+    );
+    if (cpuProfileExecArgv.length > 0) {
+      ensureDir(cpuProfileDir);
+      console.log(`[OpenClaw] gateway CPU profiling enabled; profiles are written to ${cpuProfileDir} when the gateway exits`);
+    }
     console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs.map(arg => (arg === token ? '<redacted>' : arg)))}`);
-    const checkpointBeforeSpawn = readStartupMigrationCheckpointStamp(this.stateDir);
+    const checkpointBeforeSpawn = readStartupMigrationCheckpoint(this.stateDir);
     // Read after the pre-spawn helpers, which may migrate the file: this is what the child loads.
     let spawnConfigRaw: string | null = null;
     try {
@@ -1370,7 +1421,7 @@ export class OpenClawEngineManager extends EventEmitter {
       executablePath: electronNodeRuntimePath,
       entryPath: openclawEntry,
       args: forkArgs,
-      execArgv: gatewayExecArgv,
+      execArgv: [...gatewayExecArgv, ...cpuProfileExecArgv],
       cwd: runtime.root,
       env,
     });
@@ -1412,8 +1463,15 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     console.log(`[OpenClaw] startGateway: gateway is running, total startup time: ${elapsed()}`);
+    const checkpointAfterReady = readStartupMigrationCheckpoint(this.stateDir);
+    const checkpointOutcome = describeStartupMigrationCheckpoint(
+      checkpointBeforeSpawn?.updatedAt ?? null,
+      checkpointAfterReady?.updatedAt ?? null,
+    );
+    const checkpointChanges = listChangedStartupMigrationCheckpointParts(checkpointBeforeSpawn, checkpointAfterReady);
     console.log(`[OpenClaw] startup summary: prep=${startupPrep.skip ? 'skipped' : 'ran'}`
-      + ` checkpoint=${describeStartupMigrationCheckpoint(checkpointBeforeSpawn, readStartupMigrationCheckpointStamp(this.stateDir))}`
+      + ` checkpoint=${checkpointOutcome}`
+      + (checkpointChanges.length > 0 ? ` checkpointChanged=${checkpointChanges.join(',')}` : '')
       + ` total=${elapsed()}`);
     this.scheduleGatewayRestartBudgetReset(child);
     this.clearScheduledGatewayRestart();
@@ -1819,11 +1877,16 @@ export class OpenClawEngineManager extends EventEmitter {
     // ensureBareEntryFiles already skips extraction when bundle exists,
     // but this method falls through to gateway.asar/openclaw.mjs which
     // ESM loads directly without a CJS wrapper.
-    if (process.platform === 'win32') {
+    if (shouldUseOpenClawGatewayBundle(process.platform, process.env[OPENCLAW_GATEWAY_BUNDLE_ENV])) {
       const bundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
       if (fs.existsSync(bundlePath)) {
-        console.log('[OpenClaw] resolveOpenClawEntry: using bundle fast path');
+        console.log(process.platform === 'win32'
+          ? '[OpenClaw] resolveOpenClawEntry: using bundle fast path'
+          : `[OpenClaw] resolveOpenClawEntry: using bundle fast path (forced by ${OPENCLAW_GATEWAY_BUNDLE_ENV})`);
         return this.ensureGatewayLauncherCjsForBundle(runtimeRoot);
+      }
+      if (process.platform !== 'win32') {
+        console.warn(`[OpenClaw] ${OPENCLAW_GATEWAY_BUNDLE_ENV} is set but ${bundlePath} is missing; using the bare runtime`);
       }
     }
 
@@ -2233,6 +2296,7 @@ export class OpenClawEngineManager extends EventEmitter {
     let lastOutputAwakeMs = 0;
     let extensionLogged = false;
     let pollCount = 0;
+    let lastProgress = 0;
     return new Promise((resolve) => {
       const tick = async () => {
         if (this.shutdownRequested) {
@@ -2294,7 +2358,10 @@ export class OpenClawEngineManager extends EventEmitter {
 
         // Progress belongs to a startup/restart, not a running process whose
         // HTTP endpoint is temporarily slow. Readiness still gates the caller.
-        const progress = gatewayStartupProgressPercent(elapsedMs, policy);
+        const stage = this.gatewayStartupStages.get(child)
+          ?? { stage: GatewayStartupStage.Spawned, enteredAt: startedAt };
+        const progress = Math.max(lastProgress, gatewayStartupProgressPercent(stage.stage, Date.now() - stage.enteredAt));
+        lastProgress = progress;
         if (this.status.phase === OpenClawEnginePhase.Starting) {
           this.setStatus({
             phase: OpenClawEnginePhase.Starting,
@@ -2410,6 +2477,7 @@ export class OpenClawEngineManager extends EventEmitter {
       appendLog(chunk, 'stdout');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
       logStartupMilestone(text);
+      this.noteGatewayStartupStage(child, text);
       console.log(`[OpenClaw stdout] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
       noteConfigAutoRestore(text);
     });
@@ -2427,6 +2495,15 @@ export class OpenClawEngineManager extends EventEmitter {
 
   private noteGatewayOutput(child: GatewayProcess): void {
     this.gatewayLastOutputAt.set(child, Date.now());
+  }
+
+  /** Startup milestones drive the progress shown while the gateway starts. */
+  private noteGatewayStartupStage(child: GatewayProcess, text: string): void {
+    const current = this.gatewayStartupStages.get(child)?.stage ?? GatewayStartupStage.Spawned;
+    const next = advanceGatewayStartupStage(current, resolveGatewayStartupStage(text));
+    if (next !== current) {
+      this.gatewayStartupStages.set(child, { stage: next, enteredAt: Date.now() });
+    }
   }
 
   private recordGatewayFatalFailure(child: GatewayProcess, output: string): void {

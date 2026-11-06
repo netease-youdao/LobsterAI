@@ -1,0 +1,157 @@
+diff --git a/src/config/sessions/session-accessor.reset-empty-transcript.test.ts b/src/config/sessions/session-accessor.reset-empty-transcript.test.ts
+new file mode 100644
+index 00000000000..843ab966156
+--- /dev/null
++++ b/src/config/sessions/session-accessor.reset-empty-transcript.test.ts
+@@ -0,0 +1,101 @@
++import path from "node:path";
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
++import * as agentDatabase from "../../state/openclaw-agent-db.js";
++import {
++  applySessionEntryLifecycleMutation,
++  loadTranscriptEvents,
++  resetSessionEntryLifecycle,
++  upsertSessionEntryCore,
++} from "./session-accessor.js";
++import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
++import { CURRENT_SESSION_VERSION } from "./version.js";
++
++type Scope = { sessionId: string; sessionKey: string; storePath: string };
++
++function eventTypes(events: readonly unknown[]): unknown[] {
++  return events.map((event) => (event as { type?: unknown }).type);
++}
++
++describe("reset boundary on an empty transcript", () => {
++  const tempDirs: string[] = [];
++  let storePath: string;
++
++  beforeEach(() => {
++    storePath = path.join(
++      makeTempDir(tempDirs, "openclaw-reset-empty-transcript-"),
++      "sessions.json",
++    );
++  });
++
++  afterEach(() => {
++    agentDatabase.closeOpenClawAgentDatabasesForTest();
++    cleanupTempDirs(tempDirs);
++  });
++
++  const resets = [
++    {
++      name: "single reset",
++      reset: async (scope: Scope) =>
++        resetSessionEntryLifecycle({
++          buildNextEntry: () => ({ sessionId: scope.sessionId, updatedAt: 20 }),
++          resetBoundary: { context: "clear", reason: "new" },
++          storePath: scope.storePath,
++          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
++        }),
++    },
++    {
++      name: "bulk lifecycle reset",
++      reset: async (scope: Scope) =>
++        applySessionEntryLifecycleMutation({
++          skipMaintenance: true,
++          storePath: scope.storePath,
++          upserts: [
++            {
++              entry: { sessionId: scope.sessionId, updatedAt: 20 },
++              resetBoundary: { context: "clear", reason: "new" },
++              sessionKey: scope.sessionKey,
++            },
++          ],
++        }),
++    },
++  ];
++
++  it.each(resets)(
++    "keeps the session header first after a $name of a new session",
++    async ({ reset }) => {
++      // A channel "/new" can reach a session whose entry exists but whose
++      // transcript has no rows yet.
++      const scope = { sessionId: "fresh-session", sessionKey: "agent:main:empty-reset", storePath };
++      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
++
++      await reset(scope);
++      expect(await loadTranscriptEvents(scope)).toEqual([]);
++
++      appendTranscriptMessageSync(scope, {
++        eventId: "first",
++        message: { role: "user", content: "first message" },
++        parentId: null,
++      });
++      const events = await loadTranscriptEvents(scope);
++      expect(eventTypes(events)).toEqual(["session", "message"]);
++      expect(events[0]).toMatchObject({ type: "session", version: CURRENT_SESSION_VERSION });
++    },
++  );
++
++  it.each(resets)("still bounds a transcript that has history ($name)", async ({ reset }) => {
++    const scope = { sessionId: "used-session", sessionKey: "agent:main:used-reset", storePath };
++    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
++    appendTranscriptMessageSync(scope, {
++      eventId: "earlier",
++      message: { role: "user", content: "earlier" },
++      parentId: null,
++    });
++
++    await reset(scope);
++
++    const events = await loadTranscriptEvents(scope);
++    expect(eventTypes(events)).toEqual(["session", "message", "reset"]);
++    expect(events[2]).toMatchObject({ parentId: "earlier", reason: "new" });
++  });
++});
+diff --git a/src/config/sessions/session-accessor.sqlite-lifecycle.ts b/src/config/sessions/session-accessor.sqlite-lifecycle.ts
+index 2272e8f69ab..2a52f68e5d4 100644
+--- a/src/config/sessions/session-accessor.sqlite-lifecycle.ts
++++ b/src/config/sessions/session-accessor.sqlite-lifecycle.ts
+@@ -214,9 +214,21 @@ export async function resetSessionEntryLifecycle(
+       };
+       runOpenClawAgentWriteTransaction((transactionDb) => {
+         assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
+-        if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
++        const boundaryEvents =
++          shouldAppendResetBoundary && current?.entry.sessionId
++            ? loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId)
++            : [];
++        // An empty transcript has nothing to bound. A boundary written before the
++        // session header would also stop the first message from adding one, and
++        // runtime refuses a header-less transcript on every later turn.
++        if (
++          shouldAppendResetBoundary &&
++          current?.entry.sessionId &&
++          params.resetBoundary &&
++          boundaryEvents.length > 0
++        ) {
+           const event = buildSessionResetBoundaryEvent({
+-            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
++            events: boundaryEvents,
+             ...params.resetBoundary,
+           });
+           const appended = appendTranscriptEventsInTransaction(
+diff --git a/src/config/sessions/session-accessor.sqlite-projection.ts b/src/config/sessions/session-accessor.sqlite-projection.ts
+index 61b04604506..f56ffbd4875 100644
+--- a/src/config/sessions/session-accessor.sqlite-projection.ts
++++ b/src/config/sessions/session-accessor.sqlite-projection.ts
+@@ -396,9 +396,15 @@ export async function applySessionEntryLifecycleMutation(params: {
+         if (sameKeyRemoval && !shouldRemoveSessionEntry(currentEntry, sameKeyRemoval.removal)) {
+           throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
+         }
+-        if (resetBoundary && expectedEntry?.sessionId) {
++        const boundaryEvents =
++          resetBoundary && expectedEntry?.sessionId
++            ? loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId)
++            : [];
++        // Same rule as the single-target reset: never bound an empty transcript,
++        // or the boundary takes the place of the session header.
++        if (resetBoundary && expectedEntry?.sessionId && boundaryEvents.length > 0) {
+           const event = buildSessionResetBoundaryEvent({
+-            events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId),
++            events: boundaryEvents,
+             ...resetBoundary,
+           });
+           const appended = appendTranscriptEventsInTransaction(

@@ -11,6 +11,7 @@ import {
 const RETAINED_PATCHES = [
   'openclaw-aborted-tool-loop-breaker.patch',
   'openclaw-active-exec-sessions-runtime-context.patch',
+  'openclaw-agent-db-integrity-stamp.patch',
   'openclaw-auth-migration-config-commit.patch',
   'openclaw-browser-blocked-hostnames.patch',
   'openclaw-browser-cdp-dispatch-rejection.patch',
@@ -54,6 +55,7 @@ const RETAINED_PATCHES = [
   'openclaw-project-memory-negative-probe.patch',
   'openclaw-provider-auth-warm-cooperative-exit.patch',
   'openclaw-provider-fetch-transient-retry.patch',
+  'openclaw-reset-boundary-empty-transcript.patch',
   'openclaw-run-failure-detail.patch',
   'openclaw-safe-error-metadata.patch',
   'openclaw-session-goal-rpc.patch',
@@ -64,6 +66,7 @@ const RETAINED_PATCHES = [
   'openclaw-skip-derive-prompt-segments-deadloop.patch',
   'openclaw-skip-turn-replay-after-model-call.patch',
   'openclaw-sqlite-readonly-result-file.patch',
+  'openclaw-startup-defer-history-scans.patch',
   'openclaw-subagent-cleanup-finalize-best-effort.patch',
   'openclaw-subagent-shared-gateway-context.patch',
   'openclaw-subagent-settle-failure-event.patch',
@@ -134,6 +137,22 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
     ]);
     expectPatchContains('openclaw-cli-startup-metadata-windows-timeout.patch', [
       'process.platform === "win32" ? 300_000 : 120_000',
+    ]);
+    expectPatchContains('openclaw-agent-db-integrity-stamp.patch', [
+      'if (!consumeSqliteIntegrityStampAdmission(databaseLabel)) {',
+      'admitSqliteIntegrityStamp(pathname)',
+      'recordSqliteIntegrityStampAfterClose(database.path);',
+      'skips the rescan on the start after a verified clean close',
+    ]);
+    expectPatchContains('openclaw-startup-defer-history-scans.patch', [
+      'deferUntilReady: deferUntilGatewayReady,',
+      'void releaseGatewayStartupDeferredWork({',
+      'deferUntilGatewayReady("media maintenance"',
+      'repairs a stale projection before readiness',
+    ]);
+    expectPatchContains('openclaw-reset-boundary-empty-transcript.patch', [
+      'boundaryEvents.length > 0',
+      'keeps the session header first after a $name of a new session',
     ]);
     expectPatchContains('openclaw-device-identity-preservation.patch', [
       'classifyCanonicalRow(canonical, snapshot.identity) === "different"',

@@ -68,6 +68,7 @@ function makeSupervisor() {
     gatewayProcess: null,
     gatewayRecentOutput: new WeakMap(),
     gatewayLastOutputAt: new WeakMap(),
+    gatewayStartupStages: new WeakMap(),
     gatewayGenerationByProcess: new WeakMap(),
     gatewayFailureByProcess: new WeakMap(),
     expectedGatewayExits: new WeakSet(),

@@ -1,0 +1,490 @@
+diff --git a/src/config/sessions/session-transcript-index.orphans.test.ts b/src/config/sessions/session-transcript-index.orphans.test.ts
+new file mode 100644
+index 00000000000..3374c29cc3e
+--- /dev/null
++++ b/src/config/sessions/session-transcript-index.orphans.test.ts
+@@ -0,0 +1,116 @@
++// The orphan sweep must delete exactly what the original NOT IN statements deleted.
++import type { DatabaseSync } from "node:sqlite";
++import { describe, expect, it } from "vitest";
++import { requireNodeSqlite } from "../../infra/node-sqlite.js";
++import { deleteOrphanedTranscriptIndexRowsInTransaction } from "./session-transcript-index.js";
++
++const SCHEMA = `
++  CREATE TABLE transcript_events (
++    session_id TEXT NOT NULL, seq INTEGER NOT NULL, event_json TEXT NOT NULL,
++    created_at INTEGER NOT NULL, PRIMARY KEY (session_id, seq)
++  );
++  CREATE TABLE session_transcript_active_events (
++    session_id TEXT NOT NULL, active_position INTEGER NOT NULL, event_seq INTEGER NOT NULL,
++    message_position INTEGER, context_eligible INTEGER, PRIMARY KEY (session_id, active_position)
++  );
++  CREATE TABLE session_transcript_index_state (
++    session_id TEXT NOT NULL PRIMARY KEY, indexed_seq INTEGER NOT NULL, leaf_event_id TEXT,
++    needs_rebuild INTEGER NOT NULL DEFAULT 0, active_event_count INTEGER NOT NULL DEFAULT 0,
++    active_message_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
++  );
++  CREATE VIRTUAL TABLE session_transcript_fts USING fts5(
++    text, session_id UNINDEXED, message_id UNINDEXED, role UNINDEXED, timestamp UNINDEXED
++  );
++`;
++
++// The statements this sweep replaced, kept as the oracle.
++const ORIGINAL_SWEEP = `
++  DELETE FROM session_transcript_active_events
++    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM transcript_events);
++  DELETE FROM session_transcript_fts
++    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM transcript_events);
++  DELETE FROM session_transcript_index_state
++    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM transcript_events);
++`;
++
++function seed(seedValue: number): DatabaseSync {
++  const { DatabaseSync } = requireNodeSqlite();
++  const db = new DatabaseSync(":memory:");
++  db.exec(SCHEMA);
++  let state = seedValue;
++  const next = () => {
++    state = (state * 1103515245 + 12345) % 2 ** 31;
++    return state;
++  };
++  const sessions = Array.from({ length: 40 }, (_, index) => `session-${index}`);
++  const insertEvent = db.prepare("INSERT INTO transcript_events VALUES (?, ?, '{}', 0)");
++  const insertActive = db.prepare(
++    "INSERT INTO session_transcript_active_events (session_id, active_position, event_seq) VALUES (?, ?, 0)",
++  );
++  const insertState = db.prepare(
++    "INSERT INTO session_transcript_index_state (session_id, indexed_seq, updated_at) VALUES (?, 0, 0)",
++  );
++  const insertFts = db.prepare(
++    "INSERT INTO session_transcript_fts (text, session_id, message_id, role, timestamp) VALUES (?, ?, 'm', 'user', NULL)",
++  );
++  for (const sessionId of sessions) {
++    // Roughly half the sessions keep transcript rows; the rest left index rows behind.
++    if (next() % 2 === 0) {
++      for (let seq = 0; seq < 1 + (next() % 4); seq += 1) {
++        insertEvent.run(sessionId, seq);
++      }
++    }
++    for (let position = 0; position < next() % 3; position += 1) {
++      insertActive.run(sessionId, position);
++    }
++    if (next() % 3 !== 0) {
++      insertState.run(sessionId);
++    }
++    for (let row = 0; row < next() % 3; row += 1) {
++      insertFts.run(`text ${row}`, sessionId);
++    }
++  }
++  // FTS session_id is nullable; NOT IN never matched these rows.
++  insertFts.run("detached", null);
++  return db;
++}
++
++function snapshot(db: DatabaseSync): Record<string, unknown[]> {
++  return {
++    active: db
++      .prepare(
++        "SELECT session_id, active_position FROM session_transcript_active_events ORDER BY 1, 2",
++      )
++      .all(),
++    fts: db.prepare("SELECT rowid, session_id FROM session_transcript_fts ORDER BY rowid").all(),
++    state: db.prepare("SELECT session_id FROM session_transcript_index_state ORDER BY 1").all(),
++  };
++}
++
++describe("deleteOrphanedTranscriptIndexRowsInTransaction", () => {
++  it.each([1, 7, 42, 1234, 99991])(
++    "deletes the same rows as the original sweep (seed %i)",
++    (value) => {
++      const expected = seed(value);
++      expected.exec(ORIGINAL_SWEEP);
++      const actual = seed(value);
++      deleteOrphanedTranscriptIndexRowsInTransaction(actual);
++
++      expect(snapshot(actual)).toEqual(snapshot(expected));
++      expect(snapshot(actual).fts).toContainEqual(expect.objectContaining({ session_id: null }));
++    },
++  );
++
++  it("probes the transcript key instead of listing every transcript session", () => {
++    const db = seed(3);
++    const plan = db
++      .prepare(
++        "EXPLAIN QUERY PLAN SELECT 1 FROM session_transcript_fts WHERE NOT EXISTS (SELECT 1 FROM transcript_events WHERE transcript_events.session_id = session_transcript_fts.session_id)",
++      )
++      .all()
++      .map((row) => String((row as { detail?: unknown }).detail));
++    expect(
++      plan.some((detail) => /SEARCH transcript_events USING .*\(session_id=\?\)/.test(detail)),
++    ).toBe(true);
++  });
++});
+diff --git a/src/config/sessions/session-transcript-index.ts b/src/config/sessions/session-transcript-index.ts
+index a2ae9d64b77..0cdb43ee984 100644
+--- a/src/config/sessions/session-transcript-index.ts
++++ b/src/config/sessions/session-transcript-index.ts
+@@ -506,37 +506,70 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
+   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
+ }
+ 
+-/** Drops index rows for sessions whose transcript rows are gone. */
++/**
++ * Drops index rows for sessions whose transcript rows are gone.
++ *
++ * Each row probes the transcript primary key (one index seek) instead of
++ * `NOT IN (SELECT DISTINCT session_id ...)`: on the FTS5 table SQLite
++ * re-evaluates that list per row, which cost over a second on every gateway
++ * start for a history of ~26k events. Transcript `session_id` is NOT NULL, so
++ * NOT EXISTS keeps the same rows; FTS `session_id` is nullable and NULL rows
++ * never matched NOT IN, so they stay excluded explicitly.
++ */
+ export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
+   const kysely = getIndexKysely(db);
+   executeSqliteQuerySync(
+     db,
+     kysely
+       .deleteFrom("session_transcript_active_events")
+-      .where(
+-        "session_id",
+-        "not in",
+-        kysely.selectFrom("transcript_events").select("session_id").distinct(),
++      .where((eb) =>
++        eb.not(
++          eb.exists(
++            eb
++              .selectFrom("transcript_events")
++              .select("transcript_events.session_id")
++              .whereRef(
++                "transcript_events.session_id",
++                "=",
++                "session_transcript_active_events.session_id",
++              ),
++          ),
++        ),
+       ),
+   );
+   executeSqliteQuerySync(
+     db,
+     kysely
+       .deleteFrom("session_transcript_fts")
+-      .where(
+-        "session_id",
+-        "not in",
+-        kysely.selectFrom("transcript_events").select("session_id").distinct(),
++      .where("session_transcript_fts.session_id", "is not", null)
++      .where((eb) =>
++        eb.not(
++          eb.exists(
++            eb
++              .selectFrom("transcript_events")
++              .select("transcript_events.session_id")
++              .whereRef("transcript_events.session_id", "=", "session_transcript_fts.session_id"),
++          ),
++        ),
+       ),
+   );
+   executeSqliteQuerySync(
+     db,
+     kysely
+       .deleteFrom("session_transcript_index_state")
+-      .where(
+-        "session_id",
+-        "not in",
+-        kysely.selectFrom("transcript_events").select("session_id").distinct(),
++      .where((eb) =>
++        eb.not(
++          eb.exists(
++            eb
++              .selectFrom("transcript_events")
++              .select("transcript_events.session_id")
++              .whereRef(
++                "transcript_events.session_id",
++                "=",
++                "session_transcript_index_state.session_id",
++              ),
++          ),
++        ),
+       ),
+   );
+ }
+diff --git a/src/config/sessions/startup-migration.worktree-workspace-marker.test.ts b/src/config/sessions/startup-migration.worktree-workspace-marker.test.ts
+new file mode 100644
+index 00000000000..44ca655fa1e
+--- /dev/null
++++ b/src/config/sessions/startup-migration.worktree-workspace-marker.test.ts
+@@ -0,0 +1,100 @@
++// The worktree workspace backfill records completion so later starts skip its full scan.
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, expect, it } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
++import { requireNodeSqlite } from "../../infra/node-sqlite.js";
++import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
++import type { OpenClawConfig } from "../types.openclaw.js";
++import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
++import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
++import { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-migration.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++
++afterEach(() => {
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++});
++
++function setup() {
++  const root = tempDirs.make("openclaw-worktree-migration-marker-");
++  const stateDir = path.join(root, "state");
++  const agentWorkspace = path.join(root, "workspace");
++  fs.mkdirSync(agentWorkspace, { recursive: true });
++  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
++  const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
++  const cfg: OpenClawConfig = {
++    agents: { list: [{ id: "main", default: true, workspace: agentWorkspace }] },
++    session: { store: storePath },
++  };
++  const scope = (sessionKey: string) => ({ agentId: "main", env, sessionKey, storePath });
++  // Resolvable: a legacy worktree rooted at the agent workspace.
++  const writeLegacy = async (sessionKey: string, repoRoot = agentWorkspace) =>
++    await replaceSessionEntry(scope(sessionKey), {
++      sessionId: `${sessionKey}-session`,
++      // Recent, or session maintenance prunes the row before the next pass sees it.
++      updatedAt: Date.now(),
++      worktree: { id: sessionKey, branch: `openclaw/${sessionKey}`, repoRoot },
++    });
++  const run = async () =>
++    await migrateManagedWorktreeCanonicalWorkspaces({ agentId: "main", cfg, env, storePath });
++  const marker = () => {
++    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
++      agentId: "main",
++      env,
++    }).path;
++    if (!fs.existsSync(databasePath)) {
++      return "no-database";
++    }
++    const { DatabaseSync } = requireNodeSqlite();
++    const db = new DatabaseSync(databasePath, { readOnly: true });
++    try {
++      const row = db
++        .prepare("SELECT app_version FROM schema_meta WHERE meta_key = ?")
++        .get("managed-worktree-canonical-workspace-v1") as { app_version?: unknown } | undefined;
++      return row?.app_version ?? null;
++    } finally {
++      db.close();
++    }
++  };
++  const canonical = (sessionKey: string) =>
++    loadSessionEntry(scope(sessionKey))?.worktree?.canonicalWorkspaceDir;
++  return { agentWorkspace, canonical, marker, root, run, writeLegacy };
++}
++
++it("records completion once no legacy row is left and skips the scan afterwards", async () => {
++  const t = setup();
++  await t.writeLegacy("agent:main:legacy-a");
++
++  expect(await t.run()).toBe(1);
++  expect(t.canonical("agent:main:legacy-a")).toBe(t.agentWorkspace);
++  expect(t.marker()).toBe("complete");
++
++  // Current writers never produce this shape; a row forced in afterwards is left alone,
++  // which is what proves the completed database is no longer scanned.
++  await t.writeLegacy("agent:main:legacy-b");
++  expect(await t.run()).toBe(0);
++  expect(t.canonical("agent:main:legacy-b")).toBeUndefined();
++});
++
++it("keeps scanning while an unresolvable legacy row remains", async () => {
++  const t = setup();
++  await t.writeLegacy("agent:main:orphan", path.join(t.root, "unrelated-repo"));
++
++  expect(await t.run()).toBe(0);
++  expect(t.marker()).toBeNull();
++
++  await t.writeLegacy("agent:main:legacy-later");
++  expect(await t.run()).toBe(1);
++  expect(t.canonical("agent:main:legacy-later")).toBe(t.agentWorkspace);
++  // The orphan is still unresolved, so the database is still not marked complete.
++  expect(t.marker()).toBeNull();
++});
++
++it("does not create a database just to record completion", async () => {
++  const t = setup();
++  expect(await t.run()).toBe(0);
++  expect(t.marker()).toBe("no-database");
++});
+diff --git a/src/config/sessions/worktree-workspace-migration.ts b/src/config/sessions/worktree-workspace-migration.ts
+index 366eec45519..be3f3bd00ce 100644
+--- a/src/config/sessions/worktree-workspace-migration.ts
++++ b/src/config/sessions/worktree-workspace-migration.ts
+@@ -2,10 +2,17 @@ import path from "node:path";
+ import { sql } from "kysely";
+ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+ import { listRegistryWorktreesForMigration } from "../../agents/worktrees/registry.js";
+-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
++import {
++  executeSqliteQuerySync,
++  executeSqliteQueryTakeFirstSync,
++  getNodeSqliteKysely,
++} from "../../infra/kysely-sync.js";
+ import { resolveProjectRegistry } from "../../projects/project-registry.js";
+ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
++import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
++import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
++import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+ import type { OpenClawConfig } from "../types.openclaw.js";
+ import { patchSessionEntryCore } from "./session-accessor.js";
+ import { parseReadableSqliteSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+@@ -16,6 +23,61 @@ import {
+ } from "./session-accessor.sqlite-scope.js";
+ import type { SessionEntry } from "./types.js";
+ 
++// Persisted worktree entries always carry canonicalWorkspaceDir now: the only
++// writer is session-worktree-preparation.ts (sessions.create accepts just
++// `worktree: true`). A database with no legacy row left cannot gain one, so
++// the scan below, which reads every entry_json (1.5-2 s on a ~1.5k-session
++// store, cold or warm), is recorded as complete and skipped from then on.
++const WORKTREE_WORKSPACE_MIGRATION_META_KEY = "managed-worktree-canonical-workspace-v1";
++const WORKTREE_WORKSPACE_MIGRATION_COMPLETE = "complete";
++
++type WorktreeMigrationMetaDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
++
++type LegacyWorktreeScan = {
++  complete: boolean;
++  databaseOptions: OpenClawAgentDatabaseOptions;
++  entries: Array<{ databasePath: string; entry: SessionEntry; sessionKey: string }>;
++  found: boolean;
++};
++
++function hasLegacyWorktree(entry: SessionEntry): boolean {
++  return Boolean(entry.worktree && !entry.worktree.canonicalWorkspaceDir);
++}
++
++function recordWorktreeWorkspaceMigrationComplete(databaseOptions: OpenClawAgentDatabaseOptions) {
++  try {
++    runOpenClawAgentWriteTransaction(
++      (database) => {
++        const now = Date.now();
++        executeSqliteQuerySync(
++          database.db,
++          getNodeSqliteKysely<WorktreeMigrationMetaDatabase>(database.db)
++            .insertInto("schema_meta")
++            .values({
++              agent_id: database.agentId,
++              app_version: WORKTREE_WORKSPACE_MIGRATION_COMPLETE,
++              created_at: now,
++              meta_key: WORKTREE_WORKSPACE_MIGRATION_META_KEY,
++              role: "agent",
++              schema_version: 1,
++              updated_at: now,
++            })
++            .onConflict((conflict) =>
++              conflict.column("meta_key").doUpdateSet({
++                app_version: WORKTREE_WORKSPACE_MIGRATION_COMPLETE,
++                updated_at: now,
++              }),
++            ),
++        );
++      },
++      databaseOptions,
++      { operationLabel: "sessions.worktree-workspace-migration.complete" },
++    );
++  } catch {
++    // The marker only saves work: without it the next start scans again.
++  }
++}
++
+ function isInside(root: string, target: string): boolean {
+   const relative = path.relative(root, target);
+   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+@@ -62,9 +124,20 @@ function listLegacyWorktreeSessionEntries(params: {
+   agentId: string;
+   env: NodeJS.ProcessEnv;
+   storePath: string;
+-}): Array<{ databasePath: string; entry: SessionEntry; sessionKey: string }> {
++}): LegacyWorktreeScan {
+   const resolved = resolveSqliteScope({ ...params, sessionKey: "" });
++  const databaseOptions = toDatabaseOptions(resolved);
+   const result = withOpenClawAgentDatabaseReadOnly((database) => {
++    const marker = executeSqliteQueryTakeFirstSync(
++      database.db,
++      getNodeSqliteKysely<WorktreeMigrationMetaDatabase>(database.db)
++        .selectFrom("schema_meta")
++        .select("app_version")
++        .where("meta_key", "=", WORKTREE_WORKSPACE_MIGRATION_META_KEY),
++    );
++    if (marker?.app_version === WORKTREE_WORKSPACE_MIGRATION_COMPLETE) {
++      return { complete: true, entries: [] };
++    }
+     const db = getSessionKysely(database.db);
+     const rows = executeSqliteQuerySync(
+       database.db,
+@@ -84,12 +157,15 @@ function listLegacyWorktreeSessionEntries(params: {
+         )
+         .orderBy("session_key", "asc"),
+     ).rows;
+-    return rows.flatMap((row) => {
++    const entries = rows.flatMap((row) => {
+       const entry = parseReadableSqliteSessionEntryRow(database, row);
+       return entry ? [{ databasePath: database.path, entry, sessionKey: row.session_key }] : [];
+     });
+-  }, toDatabaseOptions(resolved));
+-  return result.found ? result.value : [];
++    return { complete: false, entries };
++  }, databaseOptions);
++  return result.found
++    ? { ...result.value, databaseOptions, found: true }
++    : { complete: false, databaseOptions, entries: [], found: false };
+ }
+ 
+ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
+@@ -99,13 +175,19 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
+   storePath: string;
+ }): Promise<number> {
+   const env = params.env ?? process.env;
+-  const worktrees = listRegistryWorktreesForMigration(env);
+-  let migrated = 0;
+-  for (const { databasePath, entry, sessionKey } of listLegacyWorktreeSessionEntries({
++  const scan = listLegacyWorktreeSessionEntries({
+     agentId: params.agentId,
+     env,
+     storePath: params.storePath,
+-  })) {
++  });
++  if (scan.complete) {
++    return 0;
++  }
++  const worktrees = listRegistryWorktreesForMigration(env);
++  let migrated = 0;
++  // Legacy rows this pass could not canonicalize; any left keeps the scan running.
++  let unresolved = 0;
++  for (const { databasePath, entry, sessionKey } of scan.entries) {
+     // Select the workspace by logical owner, but keep writes in the source database:
+     // resolving a custom store selector for another agent can choose a sibling partition.
+     const agentId = resolveAgentIdFromSessionKey(sessionKey, params.agentId);
+@@ -118,6 +200,9 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
+       worktrees,
+     });
+     if (!canonicalWorkspaceDir) {
++      if (hasLegacyWorktree(entry)) {
++        unresolved += 1;
++      }
+       continue;
+     }
+     const updated = await patchSessionEntryCore(
+@@ -138,7 +223,13 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
+     );
+     if (updated?.worktree?.canonicalWorkspaceDir === canonicalWorkspaceDir) {
+       migrated += 1;
++    } else {
++      // A concurrent writer may have changed the row; rescan next start rather than guess.
++      unresolved += 1;
+     }
+   }
++  if (scan.found && unresolved === 0) {
++    recordWorktreeWorkspaceMigrationComplete(scan.databaseOptions);
++  }
+   return migrated;
+ }

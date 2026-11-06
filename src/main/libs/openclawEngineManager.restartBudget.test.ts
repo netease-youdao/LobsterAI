@@ -46,7 +46,8 @@ vi.mock('./openclawSessionLegacyMigration', () => ({
 vi.mock('./openclawMemoryIndexMigration', () => ({ migrateAllFtsOnlyMemoryIndexes: async () => undefined }));
 vi.mock('./openclawStartupCheckpoint', () => ({
   describeStartupMigrationCheckpoint: () => 'unchanged',
-  readStartupMigrationCheckpointStamp: () => null,
+  listChangedStartupMigrationCheckpointParts: () => [],
+  readStartupMigrationCheckpoint: () => null,
 }));
 vi.mock('./openclawGatewayProcess', async (importOriginal) => {
   const { EventEmitter } = await import('events');
@@ -97,6 +98,7 @@ function makeManager() {
     gatewaySpawnedAt: null,
     gatewayRecentOutput: new WeakMap(),
     gatewayLastOutputAt: new WeakMap(),
+    gatewayStartupStages: new WeakMap(),
     gatewayGenerationByProcess: new WeakMap(),
     gatewayFailureByProcess: new WeakMap(),
     expectedGatewayExits: new WeakSet(),

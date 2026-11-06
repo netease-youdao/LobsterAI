@@ -42,6 +42,16 @@ test('identity follows the app, runtime build and helper bundles', () => {
   expect(resolveStartupPrepIdentity(runtimeRoot, '2026.9.24')).not.toBe(identity);
 });
 
+test('rebundling a helper with unchanged content keeps the runtime identity', () => {
+  const identity = resolveStartupPrepIdentity(runtimeRoot, '2026.9.24');
+  const helperPath = path.join(runtimeRoot, 'openclaw-startup-compat.mjs');
+  fs.writeFileSync(helperPath, 'compat');
+  fs.utimesSync(helperPath, new Date(2_000_000_000_000), new Date(2_000_000_000_000));
+  expect(resolveStartupPrepIdentity(runtimeRoot, '2026.9.24')).toBe(identity);
+  fs.rmSync(helperPath);
+  expect(resolveStartupPrepIdentity(runtimeRoot, '2026.9.24')).not.toBe(identity);
+});
+
 test('a recorded clean preparation stays valid until an input changes', () => {
   const identity = resolveStartupPrepIdentity(runtimeRoot, '2026.9.24');
   const legacyDeviceAuth = path.join(stateDir, 'identity', 'device-auth.json');

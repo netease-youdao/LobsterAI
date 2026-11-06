@@ -1,0 +1,634 @@
+diff --git a/src/infra/sqlite-index-schema.ts b/src/infra/sqlite-index-schema.ts
+index 1181794dbe6..a1a36ef9470 100644
+--- a/src/infra/sqlite-index-schema.ts
++++ b/src/infra/sqlite-index-schema.ts
+@@ -1,4 +1,8 @@
+ import type { DatabaseSync } from "node:sqlite";
++import {
++  consumeSqliteIntegrityStampAdmission,
++  noteSqliteIntegrityVerified,
++} from "./sqlite-integrity-stamp.js";
+ import {
+   assertSqliteIntegrity,
+   assertSqliteTableIntegrity,
+@@ -33,6 +37,9 @@ type RepairCanonicalSqliteIndexesOptions = {
+ /**
+  * Verify the whole file once, then use table scans only to locate repairable
+  * index damage. Healthy opens must not multiply integrity work by table count.
++ * A file the opener admitted from an integrity stamp (unchanged since a
++ * verified clean close, see sqlite-integrity-stamp.ts) skips the whole-file
++ * scan; index repair still runs.
+  */
+ export function verifyAndRepairCanonicalSqliteIndexes(
+   db: DatabaseSync,
+@@ -42,7 +49,10 @@ export function verifyAndRepairCanonicalSqliteIndexes(
+ ): string[] {
+   let integrityFailure: Error | undefined;
+   try {
+-    assertSqliteIntegrity(db, databaseLabel);
++    // Admissions exist only for database paths an opener admitted, never for labels.
++    if (!consumeSqliteIntegrityStampAdmission(databaseLabel)) {
++      assertSqliteIntegrity(db, databaseLabel);
++    }
+   } catch (error) {
+     if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
+       throw error;
+@@ -59,6 +69,9 @@ export function verifyAndRepairCanonicalSqliteIndexes(
+   if (integrityFailure && repairedIndexes.length === 0) {
+     throw integrityFailure;
+   }
++  if (!integrityFailure) {
++    noteSqliteIntegrityVerified(databaseLabel);
++  }
+   return repairedIndexes;
+ }
+ 
+diff --git a/src/infra/sqlite-integrity-stamp.test.ts b/src/infra/sqlite-integrity-stamp.test.ts
+new file mode 100644
+index 00000000000..6f93d188216
+--- /dev/null
++++ b/src/infra/sqlite-integrity-stamp.test.ts
+@@ -0,0 +1,139 @@
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import type { DatabaseSync } from "node:sqlite";
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { requireNodeSqlite } from "./node-sqlite.js";
++import {
++  admitSqliteIntegrityStamp,
++  consumeSqliteIntegrityStampAdmission,
++  noteSqliteIntegrityVerified,
++  recordSqliteIntegrityStampAfterClose,
++  resetSqliteIntegrityStampsForTest,
++  resolveSqliteIntegrityStampPath,
++  revokeSqliteIntegrityTrust,
++} from "./sqlite-integrity-stamp.js";
++
++let dir: string;
++let dbPath: string;
++
++function openWal(): DatabaseSync {
++  const { DatabaseSync } = requireNodeSqlite();
++  const db = new DatabaseSync(dbPath);
++  db.exec("PRAGMA journal_mode = WAL;");
++  return db;
++}
++
++function writeRow(value: string): void {
++  const db = openWal();
++  db.prepare("INSERT INTO items (value) VALUES (?)").run(value);
++  db.close();
++}
++
++/** A verified, cleanly closed database with a fresh stamp. */
++function stampFreshDatabase(): void {
++  const db = openWal();
++  db.exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, value TEXT)");
++  db.close();
++  noteSqliteIntegrityVerified(dbPath);
++  expect(recordSqliteIntegrityStampAfterClose(dbPath)).toBe(true);
++}
++
++beforeEach(() => {
++  resetSqliteIntegrityStampsForTest();
++  dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-integrity-stamp-")));
++  dbPath = path.join(dir, "agent.sqlite");
++});
++
++afterEach(() => {
++  resetSqliteIntegrityStampsForTest();
++  fs.rmSync(dir, { force: true, recursive: true });
++});
++
++describe("sqlite integrity stamp", () => {
++  it("never stamps a file this process did not verify", () => {
++    const db = openWal();
++    db.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)");
++    db.close();
++
++    expect(recordSqliteIntegrityStampAfterClose(dbPath)).toBe(false);
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(dbPath))).toBe(false);
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(false);
++  });
++
++  it("admits an unchanged file once and deletes the stamp", () => {
++    stampFreshDatabase();
++    resetSqliteIntegrityStampsForTest();
++
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(true);
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(dbPath))).toBe(false);
++    expect(consumeSqliteIntegrityStampAdmission(dbPath)).toBe(true);
++    // Single use: the admission and the stamp are both gone.
++    expect(consumeSqliteIntegrityStampAdmission(dbPath)).toBe(false);
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(false);
++  });
++
++  it("rejects a file written after the stamp", () => {
++    stampFreshDatabase();
++    writeRow("after stamp");
++
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(false);
++  });
++
++  it("rejects a metadata change before admission but tolerates the opener's chmod after it", () => {
++    stampFreshDatabase();
++    fs.chmodSync(dbPath, 0o600);
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(false);
++
++    stampFreshDatabase();
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(true);
++    fs.chmodSync(dbPath, 0o600);
++    expect(consumeSqliteIntegrityStampAdmission(dbPath)).toBe(true);
++  });
++
++  it("drops an admission when content changes before the integrity gate", () => {
++    stampFreshDatabase();
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(true);
++    writeRow("between admission and gate");
++
++    expect(consumeSqliteIntegrityStampAdmission(dbPath)).toBe(false);
++  });
++
++  it("does not stamp or admit while a WAL holds committed frames", () => {
++    stampFreshDatabase();
++    const writer = openWal();
++    writer.exec("PRAGMA wal_autocheckpoint = 0;");
++    writer.prepare("INSERT INTO items (value) VALUES (?)").run("in wal");
++
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(false);
++    noteSqliteIntegrityVerified(dbPath);
++    expect(recordSqliteIntegrityStampAfterClose(dbPath)).toBe(false);
++    writer.close();
++  });
++
++  it("rejects a byte-identical replacement file", () => {
++    stampFreshDatabase();
++    const copy = `${dbPath}.copy`;
++    fs.copyFileSync(dbPath, copy);
++    const { atime, mtime } = fs.statSync(dbPath);
++    fs.utimesSync(copy, atime, mtime);
++    fs.renameSync(copy, dbPath);
++
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(false);
++  });
++
++  it("treats an unreadable stamp as absent and removes it", () => {
++    stampFreshDatabase();
++    fs.writeFileSync(resolveSqliteIntegrityStampPath(dbPath), "{not json");
++
++    expect(admitSqliteIntegrityStamp(dbPath)).toBe(false);
++  });
++
++  it("revokes process trust and the on-disk stamp", () => {
++    stampFreshDatabase();
++    revokeSqliteIntegrityTrust(dbPath);
++
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(dbPath))).toBe(false);
++    expect(recordSqliteIntegrityStampAfterClose(dbPath)).toBe(false);
++  });
++});
+diff --git a/src/infra/sqlite-integrity-stamp.ts b/src/infra/sqlite-integrity-stamp.ts
+new file mode 100644
+index 00000000000..4eed50ec5c4
+--- /dev/null
++++ b/src/infra/sqlite-integrity-stamp.ts
+@@ -0,0 +1,193 @@
++/**
++ * Remembers that a SQLite file passed a full integrity check in this process
++ * and was then closed cleanly, so the next process can skip rescanning it
++ * while the file is provably unchanged.
++ *
++ * A full `PRAGMA integrity_check` reads every page. On a large agent database
++ * with a cold page cache (first start after a reboot or a long idle) that is
++ * several seconds of random reads on every gateway start. The stamp binds the
++ * check result to the file's identity (device, inode, birth, change and
++ * modification times, size) as of the clean close. Any later write, chmod,
++ * copy, restore or replacement changes that identity, and a leftover WAL or
++ * hot journal means the main file is not the whole database, so either case
++ * falls back to the full check. The daily background verifier still scans
++ * every database independently of this stamp.
++ */
++import fs from "node:fs";
++import path from "node:path";
++
++const SQLITE_INTEGRITY_STAMP_SUFFIX = ".integrity-stamp.json";
++const SQLITE_INTEGRITY_STAMP_VERSION = 1;
++const SQLITE_INTEGRITY_STAMP_FILE_MODE = 0o600;
++const SQLITE_PENDING_SIDECAR_SUFFIXES = ["-wal", "-journal"] as const;
++
++type SqliteFileStamp = {
++  birthtimeNs: string;
++  ctimeNs: string;
++  dev: string;
++  ino: string;
++  mtimeNs: string;
++  size: string;
++};
++
++const STAMP_KEYS = ["birthtimeNs", "ctimeNs", "dev", "ino", "mtimeNs", "size"] as const;
++// Between admission and the integrity gate the opener tightens file modes,
++// which moves ctime; content changes still move mtime or size.
++const ADMISSION_KEYS = ["birthtimeNs", "dev", "ino", "mtimeNs", "size"] as const;
++
++// Paths whose integrity this process proved (or admitted from a stamp).
++const verifiedPaths = new Set<string>();
++// Single-use admissions taken before the opener touched file metadata.
++const admissions = new Map<string, SqliteFileStamp>();
++
++export function resolveSqliteIntegrityStampPath(pathname: string): string {
++  return `${path.resolve(pathname)}${SQLITE_INTEGRITY_STAMP_SUFFIX}`;
++}
++
++function readSqliteFileStamp(pathname: string): SqliteFileStamp | null {
++  const stat = fs.statSync(pathname, { bigint: true, throwIfNoEntry: false });
++  if (!stat?.isFile()) {
++    return null;
++  }
++  return {
++    birthtimeNs: String(stat.birthtimeNs),
++    ctimeNs: String(stat.ctimeNs),
++    dev: String(stat.dev),
++    ino: String(stat.ino),
++    mtimeNs: String(stat.mtimeNs),
++    size: String(stat.size),
++  };
++}
++
++/** A non-empty WAL or any rollback journal means the main file alone is not the database. */
++function hasPendingSqliteSidecars(pathname: string): boolean {
++  return SQLITE_PENDING_SIDECAR_SUFFIXES.some((suffix) => {
++    const stat = fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false });
++    return stat !== undefined && (!stat.isFile() || stat.size > 0);
++  });
++}
++
++function sameStamp(
++  left: SqliteFileStamp,
++  right: Partial<Record<keyof SqliteFileStamp, unknown>>,
++  keys: readonly (keyof SqliteFileStamp)[],
++): boolean {
++  return keys.every((key) => left[key] === right[key]);
++}
++
++function removeStampFile(stampPath: string): void {
++  try {
++    fs.rmSync(stampPath, { force: true });
++  } catch {
++    // An undeletable stamp is still harmless: it only matches an unchanged file.
++  }
++}
++
++/**
++ * Read and consume the stamp for `pathname` before anything (including a
++ * permission chmod) touches the file. Returns whether the file is unchanged
++ * since its last verified clean close. The stamp is deleted either way: from
++ * here on this process may write the file, and only a clean close re-stamps it.
++ */
++export function admitSqliteIntegrityStamp(pathname: string): boolean {
++  const resolvedPath = path.resolve(pathname);
++  const stampPath = resolveSqliteIntegrityStampPath(resolvedPath);
++  admissions.delete(resolvedPath);
++  let recorded: unknown;
++  try {
++    recorded = JSON.parse(fs.readFileSync(stampPath, "utf8"));
++  } catch {
++    return false;
++  }
++  removeStampFile(stampPath);
++  try {
++    const current = readSqliteFileStamp(resolvedPath);
++    if (
++      !current ||
++      hasPendingSqliteSidecars(resolvedPath) ||
++      typeof recorded !== "object" ||
++      recorded === null ||
++      (recorded as { version?: unknown }).version !== SQLITE_INTEGRITY_STAMP_VERSION
++    ) {
++      return false;
++    }
++    const file = (recorded as { file?: unknown }).file;
++    if (typeof file !== "object" || file === null || !sameStamp(current, file, STAMP_KEYS)) {
++      return false;
++    }
++    admissions.set(resolvedPath, current);
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++/**
++ * Consume this process's admission for the integrity gate about to run.
++ * True only when an admission exists and the file content is unchanged since.
++ */
++export function consumeSqliteIntegrityStampAdmission(pathname: string): boolean {
++  const resolvedPath = path.resolve(pathname);
++  const admission = admissions.get(resolvedPath);
++  admissions.delete(resolvedPath);
++  if (!admission) {
++    return false;
++  }
++  try {
++    const current = readSqliteFileStamp(resolvedPath);
++    return current !== null && sameStamp(admission, current, ADMISSION_KEYS);
++  } catch {
++    return false;
++  }
++}
++
++/** Record that this process proved (or admitted) the file's integrity. */
++export function noteSqliteIntegrityVerified(pathname: string): void {
++  verifiedPaths.add(path.resolve(pathname));
++}
++
++/** Forget any trust in `pathname`, in this process and on disk. */
++export function revokeSqliteIntegrityTrust(pathname: string): void {
++  const resolvedPath = path.resolve(pathname);
++  verifiedPaths.delete(resolvedPath);
++  admissions.delete(resolvedPath);
++  removeStampFile(resolveSqliteIntegrityStampPath(resolvedPath));
++}
++
++/**
++ * Stamp `pathname` after this process closed its connection. Writes nothing
++ * unless this process verified the file and SQLite left no pending WAL or
++ * journal (another connection still open, or a failed checkpoint). Never throws.
++ */
++export function recordSqliteIntegrityStampAfterClose(pathname: string): boolean {
++  const resolvedPath = path.resolve(pathname);
++  if (!verifiedPaths.has(resolvedPath)) {
++    return false;
++  }
++  const stampPath = resolveSqliteIntegrityStampPath(resolvedPath);
++  const tempPath = `${stampPath}.${process.pid}.tmp`;
++  try {
++    if (hasPendingSqliteSidecars(resolvedPath)) {
++      return false;
++    }
++    const file = readSqliteFileStamp(resolvedPath);
++    if (!file) {
++      return false;
++    }
++    fs.writeFileSync(
++      tempPath,
++      `${JSON.stringify({ version: SQLITE_INTEGRITY_STAMP_VERSION, file, stampedAt: new Date().toISOString() })}\n`,
++      { mode: SQLITE_INTEGRITY_STAMP_FILE_MODE },
++    );
++    fs.renameSync(tempPath, stampPath);
++    return true;
++  } catch {
++    removeStampFile(tempPath);
++    return false;
++  }
++}
++
++export function resetSqliteIntegrityStampsForTest(): void {
++  verifiedPaths.clear();
++  admissions.clear();
++}
+diff --git a/src/state/openclaw-agent-db-maintenance.ts b/src/state/openclaw-agent-db-maintenance.ts
+index ed9ddf2ae32..320cf4e0790 100644
+--- a/src/state/openclaw-agent-db-maintenance.ts
++++ b/src/state/openclaw-agent-db-maintenance.ts
+@@ -1,6 +1,10 @@
+ import type { DatabaseSync } from "node:sqlite";
+ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
+ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
++import {
++  admitSqliteIntegrityStamp,
++  recordSqliteIntegrityStampAfterClose,
++} from "../infra/sqlite-integrity-stamp.js";
+ import {
+   createNewerSqliteSchemaVersionError,
+   readSqliteUserVersion,
+@@ -73,6 +77,8 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
+   pathname: string;
+ }): void {
+   const agentId = normalizeAgentId(options.agentId);
++  // Before ensureOpenClawAgentDatabaseSchema tightens modes, which moves ctime.
++  admitSqliteIntegrityStamp(options.pathname);
+   const database = openNodeSqliteDatabase(options.pathname);
+   try {
+     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+@@ -108,5 +114,6 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
+   } finally {
+     clearNodeSqliteKyselyCacheForDatabase(database);
+     database.close();
++    recordSqliteIntegrityStampAfterClose(options.pathname);
+   }
+ }
+diff --git a/src/state/openclaw-agent-db.integrity-stamp.test.ts b/src/state/openclaw-agent-db.integrity-stamp.test.ts
+new file mode 100644
+index 00000000000..f55cf69147f
+--- /dev/null
++++ b/src/state/openclaw-agent-db.integrity-stamp.test.ts
+@@ -0,0 +1,127 @@
++// Agent database opens skip the full integrity rescan only for a file left
++// unchanged since a verified clean close.
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import type { DatabaseSync } from "node:sqlite";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { requireNodeSqlite } from "../infra/node-sqlite.js";
++import { resolveSqliteIntegrityStampPath } from "../infra/sqlite-integrity-stamp.js";
++import {
++  closeOpenClawAgentDatabaseByPath,
++  closeOpenClawAgentDatabasesForTest,
++  openOpenClawAgentDatabase,
++  recordOpenClawAgentDatabaseOpenFailure,
++} from "./openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
++
++let stateDir: string;
++let env: NodeJS.ProcessEnv;
++let integrityChecksByPath: Map<string, number>;
++
++function integrityChecks(pathname: string): number {
++  return integrityChecksByPath.get(pathname) ?? 0;
++}
++
++/** Ends this "process": closes cleanly and forgets all in-process trust, like a restart. */
++function restart(): void {
++  closeOpenClawAgentDatabasesForTest();
++  integrityChecksByPath.clear();
++}
++
++/**
++ * Creates the database, then gives it one fully verified current-version open
++ * and a clean close. A brand-new file is still at schema version 0 when its
++ * first open checks it, which is the always-verify migration path.
++ */
++function createStampedDatabase(): string {
++  const pathname = openOpenClawAgentDatabase({ agentId: "main", env }).path;
++  restart();
++  openOpenClawAgentDatabase({ agentId: "main", env });
++  expect(integrityChecks(pathname)).toBeGreaterThan(0);
++  restart();
++  expect(fs.existsSync(resolveSqliteIntegrityStampPath(pathname))).toBe(true);
++  return pathname;
++}
++
++beforeEach(() => {
++  closeOpenClawAgentDatabasesForTest();
++  stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-stamp-")));
++  env = { OPENCLAW_STATE_DIR: stateDir };
++  integrityChecksByPath = new Map();
++  const { DatabaseSync } = requireNodeSqlite();
++  const prepare = DatabaseSync.prototype.prepare;
++  vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
++    this: DatabaseSync,
++    sql: string,
++    ...rest: unknown[]
++  ) {
++    if (/^PRAGMA integrity_check/i.test(sql)) {
++      const location = this.location() ?? ":memory:";
++      integrityChecksByPath.set(location, (integrityChecksByPath.get(location) ?? 0) + 1);
++    }
++    return (prepare as (...args: unknown[]) => ReturnType<DatabaseSync["prepare"]>).call(
++      this,
++      sql,
++      ...rest,
++    );
++  });
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++  fs.rmSync(stateDir, { force: true, recursive: true });
++});
++
++describe("agent database integrity stamp", () => {
++  it("does not stamp a database whose only check ran on the migration path", () => {
++    const pathname = openOpenClawAgentDatabase({ agentId: "main", env }).path;
++    expect(integrityChecks(pathname)).toBeGreaterThan(0);
++    restart();
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(pathname))).toBe(false);
++  });
++
++  it("skips the rescan on the start after a verified clean close", () => {
++    const pathname = createStampedDatabase();
++
++    const second = openOpenClawAgentDatabase({ agentId: "main", env });
++    expect(integrityChecks(pathname)).toBe(0);
++    // The stamp is consumed while this process may write the file.
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(pathname))).toBe(false);
++    expect(second.db.prepare("SELECT 1 AS ok").get()).toEqual({ ok: 1 });
++  });
++
++  it("rescans after a write by another connection", () => {
++    const pathname = createStampedDatabase();
++
++    const { DatabaseSync } = requireNodeSqlite();
++    const external = new DatabaseSync(pathname);
++    external.exec("CREATE TABLE IF NOT EXISTS external_probe (id INTEGER PRIMARY KEY)");
++    external.exec("DROP TABLE external_probe");
++    external.close();
++
++    openOpenClawAgentDatabase({ agentId: "main", env });
++    expect(integrityChecks(pathname)).toBeGreaterThan(0);
++  });
++
++  it("leaves no stamp behind while the database is open, so a crash forces a rescan", () => {
++    const pathname = createStampedDatabase();
++    openOpenClawAgentDatabase({ agentId: "main", env });
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(pathname))).toBe(false);
++  });
++
++  it("drops the stamp when this process records damage", () => {
++    const pathname = createStampedDatabase();
++    openOpenClawAgentDatabase({ agentId: "main", env });
++    expect(closeOpenClawAgentDatabaseByPath(pathname)).toBe(true);
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(pathname))).toBe(true);
++
++    const damage = Object.assign(new Error("database disk image is malformed"), {
++      name: "SqliteIntegrityError",
++    });
++    recordOpenClawAgentDatabaseOpenFailure(pathname, damage);
++    expect(fs.existsSync(resolveSqliteIntegrityStampPath(pathname))).toBe(false);
++  });
++});
+diff --git a/src/state/openclaw-agent-db.ts b/src/state/openclaw-agent-db.ts
+index 799117a018f..eb46a144b52 100644
+--- a/src/state/openclaw-agent-db.ts
++++ b/src/state/openclaw-agent-db.ts
+@@ -7,6 +7,12 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+ import { isPathInside } from "../infra/path-guards.js";
+ import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+ import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
++import {
++  admitSqliteIntegrityStamp,
++  recordSqliteIntegrityStampAfterClose,
++  resetSqliteIntegrityStampsForTest,
++  revokeSqliteIntegrityTrust,
++} from "../infra/sqlite-integrity-stamp.js";
+ import {
+   confirmSqliteFileIntegrity,
+   isTerminalSqliteIntegrityError,
+@@ -144,6 +150,8 @@ export function confirmOpenClawAgentDatabaseIntegrity(
+   // Closing breaks process ownership of the pathname. A replacement must
+   // revalidate and claim its schema before the path can become trusted again.
+   validatedAgentDatabasePaths.delete(resolvedPath);
++  // A suspected failure must never be answered from a stamp.
++  revokeSqliteIntegrityTrust(resolvedPath);
+   return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
+ }
+ 
+@@ -157,6 +165,7 @@ export function recordOpenClawAgentDatabaseOpenFailure(
+   if (recorded) {
+     // Quarantine revokes this process's trust because doctor may replace the file.
+     validatedAgentDatabasePaths.delete(path.resolve(pathname));
++    revokeSqliteIntegrityTrust(pathname);
+   }
+   return recorded;
+ }
+@@ -319,6 +328,13 @@ export function openOpenClawAgentDatabase(
+   let openedDatabase: OpenClawAgentDatabase | undefined;
+   let openedWalMaintenance: SqliteWalMaintenance | undefined;
+   try {
++    // Must precede the permission sweep below: chmod moves ctime, which the stamp binds.
++    if (admitSqliteIntegrityStamp(pathname)) {
++      agentDbLog.debug("agent database unchanged since its last verified clean close", {
++        agentId,
++        path: pathname,
++      });
++    }
+     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+     // Free a slot before constructing the new handle: under real descriptor
+     // pressure the 65th open would otherwise fail before eviction could run.
+@@ -368,6 +384,7 @@ export function openOpenClawAgentDatabase(
+         maintenance?.close();
+         db.close();
+         validatedAgentDatabasePaths.delete(pathname);
++        revokeSqliteIntegrityTrust(pathname);
+         if (
+           err instanceof Error &&
+           (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
+@@ -484,6 +501,10 @@ function closeCachedOpenClawAgentDatabase(
+   if (database.db.isOpen) {
+     database.db.close();
+   }
++  if (!incognitoDatabases.has(database)) {
++    // Skipped unless this process verified the file and SQLite folded the WAL back.
++    recordSqliteIntegrityStampAfterClose(database.path);
++  }
+   const lease = cachedDatabaseLeases.get(database.path);
+   if (lease) {
+     releaseOpenClawAgentDatabaseLease(lease.leaseId, { env: lease.env });
+@@ -628,6 +649,7 @@ export function disposeOpenClawAgentDatabaseByPath(
+   const resolvedPath = path.resolve(pathname);
+   // Disposal can be followed by file deletion or recreation, so revalidate next open.
+   validatedAgentDatabasePaths.delete(resolvedPath);
++  revokeSqliteIntegrityTrust(resolvedPath);
+   const matchingDatabases = [...cachedDatabases.values()].filter((candidate) =>
+     isSameOpenClawAgentDatabasePath(candidate.path, resolvedPath),
+   );
+@@ -693,4 +715,5 @@ export function closeOpenClawAgentDatabasesForTest(): void {
+   closeOpenClawAgentDatabases();
+   validatedAgentDatabasePaths.clear();
+   terminalOpenLatch.clearAll();
++  resetSqliteIntegrityStampsForTest();
+ }

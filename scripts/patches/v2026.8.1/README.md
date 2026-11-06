@@ -1055,3 +1055,98 @@ keeps its old runtime until restarted. Historical usage rows are unchanged;
 actual token savings require a new execution against the rebuilt runtime.
 Remove the patch when upstream provides equivalent trace ownership, late
 completion checks and scoped context reduction.
+
+## Reset boundary on an empty transcript
+
+`openclaw-reset-boundary-empty-transcript.patch` stops session resets from
+writing a `reset` boundary into a transcript that has no rows yet. Both writers
+(`resetSessionEntryLifecycle` and the bulk lifecycle projection) previously
+appended the boundary unconditionally. When a channel `/new` reached a session
+whose entry existed but whose transcript was still empty, the boundary became
+the first row. `ensureTranscriptHeader` only writes a header into an empty
+transcript, so the following user messages were stored without one, and the
+session manager then refused every turn with `Persisted legacy session
+transcripts require doctor/import migration before runtime use`.
+
+An empty transcript has nothing to bound, so skipping the boundary changes no
+visible history; the first message then writes the current-version header as
+usual. Transcripts with history still receive the boundary.
+
+The patch does not repair transcripts that are already header-less. Deleting
+the affected session in LobsterAI calls `sessions.delete` with
+`deleteTranscript: true`, and the next channel message starts a clean session.
+
+Remove the patch when upstream skips or headers the boundary for empty
+transcripts. Validate a channel `/new` as the first message of a new
+conversation, then a normal reply, and a `/new` on a conversation with history.
+
+## Agent database integrity stamp
+
+`openclaw-agent-db-integrity-stamp.patch` stops every gateway start from
+re-running a full `PRAGMA integrity_check` on agent databases that have not
+changed since the previous process verified them and closed them cleanly.
+Each physical open used to scan the whole file before its first write
+(`openOpenClawAgentDatabase`, and again in state-migration maintenance when the
+startup checkpoint missed). On a 305 MB main agent database with a cold page
+cache that is 6–8 s of random reads per start (about 0.25 s warm), measured with
+`npm run perf:openclaw:bench -- --cold-cache --cpu-prof`.
+
+`src/infra/sqlite-integrity-stamp.ts` writes `<db>.integrity-stamp.json` after a
+clean close, only when this process proved the file (a passed check, or an
+admitted stamp) and SQLite left no non-empty WAL and no journal. The stamp holds
+the main file's device, inode, birth, change and modification times and size.
+The opener admits the stamp before its permission chmod (which moves ctime) and
+deletes it at once, so a process that dies while the database is open leaves
+none behind. `verifyAndRepairCanonicalSqliteIndexes` skips only the whole-file
+scan for an admitted path whose content is still unchanged; canonical index
+repair still runs. Schema upgrades and pending migrations take the
+always-verify path and do not stamp. Recording damage, a confirmation request,
+disposal or a failed open revokes the stamp. The daily background verifier is
+unchanged and still scans every database.
+
+What still forces a full check: a crash or SIGKILL while the database is open, any
+write or chmod by another tool, copy/restore/replacement of the file, a leftover
+WAL, the first current-version open of a new database, and every upgrade.
+
+Remove the patch when upstream caches integrity results across processes or
+moves the open-time scan off the startup path. Validate with the bench: a
+`--cold-cache` warm restart must not show `runSqliteCheck` under
+`openOpenClawAgentDatabase`, and `--config-change` runs must stay functionally
+identical to the baseline runtime.
+
+## Defer full-history startup scans until the gateway is quiet
+
+`openclaw-startup-defer-history-scans.patch` moves the startup passes that read
+the whole session history, but that readiness does not depend on, to after
+readiness. node:sqlite is synchronous, so such a pass blocks the event loop
+even when nothing awaits it; on a cold page cache each costs 1–2 s, and
+removing one only moves its cold reads to the next reader of the same pages
+(see `specs/bugfixes/openclaw-gateway-startup-speed/`). They therefore all move
+together:
+
+- the worktree workspace backfill and the transcript index orphan sweep in
+  `runStartupSessionMigration` (gateway startup only; TUI and other callers
+  keep running them inline). Legacy store refusal, main-key migration and
+  projection repair still run before readiness: the sweep is deferred only
+  when `listSessionsNeedingTranscriptIndexReconcile` finds no stale projection;
+- the first worker placement session-retirement pass (the periodic sweep is
+  unchanged);
+- the first media maintenance run, including the managed outgoing media GC.
+
+`server-startup-deferred-work.ts` queues them from the start of startup
+maintenance and releases them after `startupTrace.mark("ready")`. The release
+waits 3 s, then for 1 s without active gateway root work before each task (at
+most 60 s), so the readiness probe and the client's first requests are answered
+first. Work queued while the release drains joins the queue; closing skips the
+rest; a failure logs `deferred startup work failed (...)` and the next task runs.
+
+Measured with `npm run perf:openclaw:bench -- --cold-cache` against the runtime
+with only the integrity stamp: ready 6.38 s → 2.96 s on a cold restart,
+13.68 s → 12.68 s on a start that reruns state migrations, health summaries
+identical. With `--hold 20000` every deferred task ran within ~9 s of ready; the
+longest event-loop stall after ready was ~1.1 s (the orphan sweep).
+
+Remove the patch when upstream bounds these scans or moves them off the event
+loop. Validate with `--cold-cache --hold 20000 --cpu-prof`: no full-history
+scan before `[gateway] ready`, every deferred task sampled after it, and health
+summaries matching the baseline runtime.

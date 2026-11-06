@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -40,6 +41,20 @@ export function readStartupPrepProbeSignature(filePath: string): string {
   }
 }
 
+/**
+ * Helper bundles are rewritten with fresh mtimes by every `openclaw:bundle`
+ * (and every dev runtime rebuild) even when their content is unchanged, so
+ * they are identified by content.
+ */
+function readStartupPrepHelperSignature(filePath: string): string {
+  try {
+    return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')}`;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? MISSING_SIGNATURE : `error:${code ?? 'unknown'}`;
+  }
+}
+
 /** A restored or replaced shared-state database gets a new file identity. */
 function readStateDatabaseSignature(stateDir: string): string {
   try {
@@ -66,8 +81,8 @@ export function resolveStartupPrepIdentity(runtimeRoot: string, appVersion: stri
     appVersion,
     typeof runtimeVersion === 'string' ? runtimeVersion : null,
     typeof builtAt === 'string' ? builtAt : null,
-    readStartupPrepProbeSignature(path.join(runtimeRoot, OPENCLAW_STARTUP_COMPATIBILITY_ENTRY)),
-    readStartupPrepProbeSignature(path.join(runtimeRoot, OPENCLAW_STARTUP_MIGRATION_ENTRY)),
+    readStartupPrepHelperSignature(path.join(runtimeRoot, OPENCLAW_STARTUP_COMPATIBILITY_ENTRY)),
+    readStartupPrepHelperSignature(path.join(runtimeRoot, OPENCLAW_STARTUP_MIGRATION_ENTRY)),
   ]);
 }
 

@@ -1,0 +1,693 @@
+diff --git a/src/gateway/server-maintenance.ts b/src/gateway/server-maintenance.ts
+index 080e95433e2..ca95a27bd5c 100644
+--- a/src/gateway/server-maintenance.ts
++++ b/src/gateway/server-maintenance.ts
+@@ -58,6 +58,7 @@ import {
+ } from "./server-media-cleanup-lifecycle.js";
+ import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
+ import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
++import { deferUntilGatewayReady } from "./server-startup-deferred-work.js";
+ import { formatError } from "./server-utils.js";
+ import { setBroadcastHealthUpdate } from "./server/health-state.js";
+ import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+@@ -515,7 +516,19 @@ export function startGatewayMaintenanceTimers(params: {
+         return;
+       }
+       mediaCleanupInterval = setInterval(runMediaMaintenance, 60 * 60_000);
+-      runMediaMaintenance();
++      // The outgoing-media GC reads every session key; at startup that is a cold,
++      // event-loop-blocking pass, so the first run waits for a quiet gateway.
++      deferUntilGatewayReady("media maintenance", async () => {
++        if (mediaCleanupStopped) {
++          return;
++        }
++        runMediaMaintenance();
++        await Promise.allSettled([
++          playbackTranscodeCacheCleanupLoader.peek(),
++          managedOutgoingCleanupLoader.peek(),
++          mediaCleanupInFlight,
++        ]);
++      });
+     });
+   };
+   let stopMediaCleanupPromise: Promise<MediaCleanupStopResult> | undefined;
+diff --git a/src/gateway/server-startup-deferred-work.test.ts b/src/gateway/server-startup-deferred-work.test.ts
+new file mode 100644
+index 00000000000..296a0ca7009
+--- /dev/null
++++ b/src/gateway/server-startup-deferred-work.test.ts
+@@ -0,0 +1,161 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import {
++  beginGatewayStartupDeferral,
++  deferUntilGatewayReady,
++  releaseGatewayStartupDeferredWork,
++  resetGatewayStartupDeferralForTest,
++} from "./server-startup-deferred-work.js";
++
++// No grace or quiet window: these cases cover ordering, failures and closing.
++const IMMEDIATE = { graceMs: 0, maxWaitMs: 1_000, pollMs: 1, quietMs: 0 };
++
++afterEach(() => {
++  resetGatewayStartupDeferralForTest();
++});
++
++describe("gateway startup deferred work", () => {
++  it("holds queued work until release, then runs it in order", async () => {
++    const order: string[] = [];
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("first", async () => order.push("first"));
++    deferUntilGatewayReady("second", async () => order.push("second"));
++    await new Promise<void>((resolve) => {
++      setImmediate(resolve);
++    });
++    expect(order).toEqual([]);
++
++    await releaseGatewayStartupDeferredWork({
++      timing: IMMEDIATE,
++      isClosing: () => false,
++      log: { warn: vi.fn() },
++    });
++    expect(order).toEqual(["first", "second"]);
++  });
++
++  it("yields to the event loop before each task", async () => {
++    const order: string[] = [];
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("scan", async () => order.push("scan"));
++    const released = releaseGatewayStartupDeferredWork({
++      timing: IMMEDIATE,
++      isClosing: () => false,
++      log: { warn: vi.fn() },
++    });
++    order.push("ready");
++    await released;
++    expect(order).toEqual(["ready", "scan"]);
++  });
++
++  it("logs a failed task and keeps going", async () => {
++    const warn = vi.fn();
++    const ran = vi.fn(async () => undefined);
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("broken", async () => {
++      throw new Error("boom");
++    });
++    deferUntilGatewayReady("next", ran);
++    await releaseGatewayStartupDeferredWork({
++      timing: IMMEDIATE,
++      isClosing: () => false,
++      log: { warn },
++    });
++    expect(warn).toHaveBeenCalledWith(
++      expect.stringContaining("deferred startup work failed (broken)"),
++    );
++    expect(ran).toHaveBeenCalledOnce();
++  });
++
++  it("skips remaining work once the gateway is closing", async () => {
++    const ran = vi.fn(async () => undefined);
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("late", ran);
++    await releaseGatewayStartupDeferredWork({
++      timing: IMMEDIATE,
++      isClosing: () => true,
++      log: { warn: vi.fn() },
++    });
++    expect(ran).not.toHaveBeenCalled();
++  });
++
++  it("runs at once outside a deferring startup and after release", async () => {
++    const outside = vi.fn(async () => undefined);
++    deferUntilGatewayReady("outside", outside);
++    expect(outside).toHaveBeenCalledOnce();
++
++    beginGatewayStartupDeferral();
++    await releaseGatewayStartupDeferredWork({
++      timing: IMMEDIATE,
++      isClosing: () => false,
++      log: { warn: vi.fn() },
++    });
++    const afterRelease = vi.fn(async () => undefined);
++    deferUntilGatewayReady("after", afterRelease);
++    expect(afterRelease).toHaveBeenCalledOnce();
++  });
++
++  it("drops work left by a startup that never became ready", async () => {
++    const stale = vi.fn(async () => undefined);
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("stale", stale);
++    beginGatewayStartupDeferral();
++    await releaseGatewayStartupDeferredWork({
++      timing: IMMEDIATE,
++      isClosing: () => false,
++      log: { warn: vi.fn() },
++    });
++    expect(stale).not.toHaveBeenCalled();
++  });
++
++  it("waits for in-flight gateway work to settle before each task", async () => {
++    const ran = vi.fn(async () => undefined);
++    let active = 1;
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("scan", ran);
++    const released = releaseGatewayStartupDeferredWork({
++      timing: { graceMs: 0, maxWaitMs: 5_000, pollMs: 2, quietMs: 20 },
++      getActiveWorkCount: () => active,
++      isClosing: () => false,
++      log: { warn: vi.fn() },
++    });
++    await new Promise<void>((resolve) => {
++      setTimeout(resolve, 60);
++    });
++    expect(ran).not.toHaveBeenCalled();
++    active = 0;
++    await released;
++    expect(ran).toHaveBeenCalledOnce();
++  });
++
++  it("runs anyway once the quiet wait reaches its cap", async () => {
++    const ran = vi.fn(async () => undefined);
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("scan", ran);
++    await releaseGatewayStartupDeferredWork({
++      timing: { graceMs: 0, maxWaitMs: 30, pollMs: 2, quietMs: 1_000 },
++      getActiveWorkCount: () => 1,
++      isClosing: () => false,
++      log: { warn: vi.fn() },
++    });
++    expect(ran).toHaveBeenCalledOnce();
++  });
++
++  it("queues work that arrives while the released queue is still waiting", async () => {
++    const order: string[] = [];
++    let active = 1;
++    beginGatewayStartupDeferral();
++    deferUntilGatewayReady("startup", async () => order.push("startup"));
++    const released = releaseGatewayStartupDeferredWork({
++      timing: { graceMs: 0, maxWaitMs: 5_000, pollMs: 2, quietMs: 10 },
++      getActiveWorkCount: () => active,
++      isClosing: () => false,
++      log: { warn: vi.fn() },
++    });
++    // A post-ready service starting now must not run before the gateway is quiet.
++    const late = vi.fn(async () => order.push("late"));
++    deferUntilGatewayReady("late", late);
++    expect(late).not.toHaveBeenCalled();
++    active = 0;
++    await released;
++    expect(order).toEqual(["startup", "late"]);
++  });
++});
+diff --git a/src/gateway/server-startup-deferred-work.ts b/src/gateway/server-startup-deferred-work.ts
+new file mode 100644
+index 00000000000..c93e8d5292c
+--- /dev/null
++++ b/src/gateway/server-startup-deferred-work.ts
+@@ -0,0 +1,130 @@
++/**
++ * Startup work that reads the whole session history but is not needed to
++ * serve the first request, queued until the gateway reports ready.
++ *
++ * node:sqlite is synchronous: a full-history scan blocks the event loop even
++ * when its promise is not awaited, so fire-and-forget scans still delay
++ * readiness. On a cold page cache each of them costs seconds, and removing one
++ * only moves the cost to the next reader of the same pages, so they all run
++ * here, one at a time, after readiness.
++ */
++type DeferredStartupTask = {
++  label: string;
++  run: () => Promise<unknown>;
++};
++
++type DeferredWorkLog = { warn: (message: string) => void };
++
++// Readiness alone is not enough: the first scan would block the event loop
++// right away and delay the readiness probe and the client's first requests.
++// Wait out the post-ready burst, then for a quiet gateway before each task.
++const POST_READY_GRACE_MS = 3_000;
++const QUIET_MS = 1_000;
++const QUIET_POLL_MS = 250;
++const MAX_QUIET_WAIT_MS = 60_000;
++
++type QuietWaitOptions = {
++  getActiveWorkCount: () => number;
++  isClosing: () => boolean;
++  maxWaitMs: number;
++  pollMs: number;
++  quietMs: number;
++};
++
++function sleep(ms: number): Promise<void> {
++  return new Promise((resolve) => {
++    // Never keep a closing process alive for deferred maintenance.
++    setTimeout(resolve, ms).unref?.();
++  });
++}
++
++/** Resolves once no root work ran for `quietMs`, the wait cap passed, or the gateway closes. */
++async function waitForQuietGateway(options: QuietWaitOptions): Promise<void> {
++  const startedAt = Date.now();
++  let quietSince = Date.now();
++  while (!options.isClosing() && Date.now() - startedAt < options.maxWaitMs) {
++    if (options.getActiveWorkCount() > 0) {
++      quietSince = Date.now();
++    } else if (Date.now() - quietSince >= options.quietMs) {
++      return;
++    }
++    await sleep(options.pollMs);
++  }
++}
++
++let deferring = false;
++// True while a released queue still waits for quiet or runs; late arrivals join it.
++let draining = false;
++let generation = 0;
++let pending: DeferredStartupTask[] = [];
++
++/** Starts queueing for a gateway startup; drops anything left from an earlier one. */
++export function beginGatewayStartupDeferral(): void {
++  generation += 1;
++  deferring = true;
++  draining = false;
++  pending = [];
++}
++
++/**
++ * Runs `run` once the gateway is ready and quiet: queued during startup or
++ * while the released queue drains (post-ready services start then too), and
++ * run at once otherwise (a settled lifecycle, or a caller outside startup).
++ */
++export function deferUntilGatewayReady(label: string, run: () => Promise<unknown>): void {
++  if (deferring || draining) {
++    pending.push({ label, run });
++    return;
++  }
++  void run().catch(() => undefined);
++}
++
++/** Releases queued work once readiness is published. Never throws. */
++export function releaseGatewayStartupDeferredWork(params: {
++  isClosing: () => boolean;
++  log: DeferredWorkLog;
++  /** Requests and ticks in flight; deferred work waits until this stays at zero. */
++  getActiveWorkCount?: () => number;
++  timing?: Partial<{ graceMs: number; maxWaitMs: number; pollMs: number; quietMs: number }>;
++}): Promise<void> {
++  const releasedGeneration = generation;
++  deferring = false;
++  draining = true;
++  const quiet: QuietWaitOptions = {
++    getActiveWorkCount: params.getActiveWorkCount ?? (() => 0),
++    isClosing: params.isClosing,
++    maxWaitMs: params.timing?.maxWaitMs ?? MAX_QUIET_WAIT_MS,
++    pollMs: params.timing?.pollMs ?? QUIET_POLL_MS,
++    quietMs: params.timing?.quietMs ?? QUIET_MS,
++  };
++  const current = () => generation === releasedGeneration;
++  return (async () => {
++    try {
++      await sleep(params.timing?.graceMs ?? POST_READY_GRACE_MS);
++      while (current() && pending.length > 0) {
++        await waitForQuietGateway(quiet);
++        const task = pending.shift();
++        if (!task || !current() || params.isClosing()) {
++          return;
++        }
++        try {
++          await task.run();
++        } catch (error) {
++          params.log.warn(`deferred startup work failed (${task.label}): ${String(error)}`);
++        }
++      }
++    } finally {
++      if (current()) {
++        draining = false;
++        pending = [];
++      }
++    }
++  })();
++}
++
++export function resetGatewayStartupDeferralForTest(): void {
++  generation += 1;
++  deferring = false;
++  draining = false;
++  pending = [];
++}
+diff --git a/src/gateway/server-startup-finish.ts b/src/gateway/server-startup-finish.ts
+index 6134bb7d95d..955161ff1cf 100644
+--- a/src/gateway/server-startup-finish.ts
++++ b/src/gateway/server-startup-finish.ts
+@@ -15,6 +15,7 @@ import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from ".
+ import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
+ import { GATEWAY_EVENTS } from "./server-methods-list.js";
+ import { getRequiredSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
++import { releaseGatewayStartupDeferredWork } from "./server-startup-deferred-work.js";
+ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+ import type { GatewayHttpTransport } from "./server-transport-bridge.js";
+ 
+@@ -335,6 +336,11 @@ export async function finishGatewayStartup(params: {
+   kernel.setPostAttachHandles(postAttachHandles, startupPluginRuntimeClaim);
+   startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
+   startupTrace.mark("ready");
++  void releaseGatewayStartupDeferredWork({
++    isClosing: () => lifecycle.closePreludeStarted,
++    log,
++    getActiveWorkCount: () => getActiveGatewayRootWorkCount(),
++  });
+   if (sidecarStartup === "defer") {
+     log.info("gateway ready");
+   }
+diff --git a/src/gateway/server-startup-plugins.test.ts b/src/gateway/server-startup-plugins.test.ts
+index 509659548a4..90075979011 100644
+--- a/src/gateway/server-startup-plugins.test.ts
++++ b/src/gateway/server-startup-plugins.test.ts
+@@ -253,6 +253,8 @@ describe("runGatewayStartupMaintenance", () => {
+       cfg: {},
+       env: process.env,
+       log,
++      // Full-history passes queue until the gateway reports ready.
++      deferUntilReady: expect.any(Function),
+     });
+     expect(migrateLegacyDevicePairingStore).toHaveBeenCalledWith({ log });
+     expect(migrateLegacyNodePairingStore).toHaveBeenCalledWith({ log });
+diff --git a/src/gateway/server-startup-plugins.ts b/src/gateway/server-startup-plugins.ts
+index faa995cbdff..5d862c107b8 100644
+--- a/src/gateway/server-startup-plugins.ts
++++ b/src/gateway/server-startup-plugins.ts
+@@ -18,6 +18,10 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
+ import { listGatewayMethods } from "./server-methods-list.js";
+ import type { GatewayContextResolver } from "./server-methods/types.js";
+ import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
++import {
++  beginGatewayStartupDeferral,
++  deferUntilGatewayReady,
++} from "./server-startup-deferred-work.js";
+ 
+ type GatewayPluginBootstrapLog = {
+   info: (message: string) => void;
+@@ -53,6 +57,8 @@ export async function runGatewayStartupMaintenance(params: {
+   minimalTestGateway: boolean;
+   log: GatewayPluginBootstrapLog;
+ }): Promise<void> {
++  // Full-history scans that readiness does not depend on queue until the gateway is ready.
++  beginGatewayStartupDeferral();
+   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
+     cfgAtStart: params.cfgAtStart,
+     startupRuntimeConfig: params.startupRuntimeConfig,
+@@ -77,6 +83,7 @@ export async function runGatewayStartupMaintenance(params: {
+           cfg: params.cfgAtStart,
+           env: process.env,
+           log: params.log,
++          deferUntilReady: deferUntilGatewayReady,
+         }),
+       );
+       const { migrateLegacyDevicePairingStore } =
+diff --git a/src/gateway/server-startup-session-migration.ts b/src/gateway/server-startup-session-migration.ts
+index 9794823c392..598be240f42 100644
+--- a/src/gateway/server-startup-session-migration.ts
++++ b/src/gateway/server-startup-session-migration.ts
+@@ -3,19 +3,96 @@ import {
+   type SessionStartupMigrationLogger,
+ } from "../config/sessions/startup-migration.js";
+ import type { OpenClawConfig } from "../config/types.openclaw.js";
++import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db.js";
+ 
+ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
+   reconcileSessionTranscriptIndexes?: typeof import("../config/sessions/session-transcript-reconcile.js").reconcileSessionTranscriptIndexes;
++  /** Whether any session in the database has a stale transcript projection. */
++  transcriptProjectionNeedsRepair?: (
++    database: OpenClawAgentDatabaseOptions,
++  ) => boolean | Promise<boolean>;
+ };
+ 
+-/** Await SQLite maintenance and projection repair before serving session history. */
++type WorktreeBackfill = NonNullable<
++  SessionMigrationDeps["migrateManagedWorktreeCanonicalWorkspaces"]
++>;
++
++async function defaultTranscriptProjectionNeedsRepair(
++  database: OpenClawAgentDatabaseOptions,
++): Promise<boolean> {
++  const [{ withOpenClawAgentDatabaseReadOnly }, { listSessionsNeedingTranscriptIndexReconcile }] =
++    await Promise.all([
++      import("../state/openclaw-agent-db-readonly.js"),
++      import("../config/sessions/session-transcript-index.js"),
++    ]);
++  const result = withOpenClawAgentDatabaseReadOnly(
++    (readOnly) => listSessionsNeedingTranscriptIndexReconcile(readOnly.db).length > 0,
++    database,
++  );
++  // Unreadable means unknown: repair before serving, as without deferral.
++  return !result.found || result.value;
++}
++
++/**
++ * Await SQLite maintenance and projection repair before serving session history.
++ *
++ * With `deferUntilReady` (gateway startup), only the work history depends on
++ * stays ahead of readiness: legacy store refusal, main-key migration, and
++ * projection repair when a projection is actually stale. The full-history
++ * passes that find nothing on a healthy store, the worktree workspace backfill
++ * and the orphaned-index sweep, run after readiness. Orphaned index rows belong
++ * to sessions that no longer exist, so sweeping them late changes no history.
++ */
+ export async function runStartupSessionMigration(params: {
+   cfg: OpenClawConfig;
+   env?: NodeJS.ProcessEnv;
+   log: SessionStartupMigrationLogger;
+   deps?: SessionMigrationDeps;
++  deferUntilReady?: (label: string, run: () => Promise<unknown>) => void;
+ }): Promise<void> {
+-  const databases = await runSessionStartupMigration(params);
++  const deferUntilReady = params.deferUntilReady;
++  const deferredBackfills: Array<Parameters<WorktreeBackfill>[0]> = [];
++  const backfill: WorktreeBackfill | undefined =
++    params.deps?.migrateManagedWorktreeCanonicalWorkspaces;
++  const databases = await runSessionStartupMigration({
++    cfg: params.cfg,
++    env: params.env,
++    log: params.log,
++    deps: {
++      ...params.deps,
++      ...(deferUntilReady
++        ? {
++            migrateManagedWorktreeCanonicalWorkspaces: async (args) => {
++              deferredBackfills.push(args);
++              return 0;
++            },
++          }
++        : {}),
++    },
++  });
++  if (deferUntilReady && deferredBackfills.length > 0) {
++    deferUntilReady("session worktree workspace backfill", async () => {
++      const run =
++        backfill ??
++        (await import("../config/sessions/worktree-workspace-migration.js"))
++          .migrateManagedWorktreeCanonicalWorkspaces;
++      let migrated = 0;
++      for (const args of deferredBackfills) {
++        try {
++          migrated += await run(args);
++        } catch (error) {
++          params.log.warn(
++            `session: worktree workspace backfill failed for ${args.agentId}; continuing: ${String(error)}`,
++          );
++        }
++      }
++      if (migrated > 0) {
++        params.log.info(
++          `session: recorded canonical workspaces for ${migrated} managed-worktree session(s)`,
++        );
++      }
++    });
++  }
+   if (databases.length === 0) {
+     return;
+   }
+@@ -23,8 +100,15 @@ export async function runStartupSessionMigration(params: {
+     params.deps?.reconcileSessionTranscriptIndexes ??
+     (await import("../config/sessions/session-transcript-reconcile.js"))
+       .reconcileSessionTranscriptIndexes;
++  const needsRepair =
++    params.deps?.transcriptProjectionNeedsRepair ?? defaultTranscriptProjectionNeedsRepair;
+   let reconciledSessions = 0;
++  const deferredReconciles: OpenClawAgentDatabaseOptions[] = [];
+   for (const database of databases) {
++    if (deferUntilReady && !(await needsRepair(database))) {
++      deferredReconciles.push(database);
++      continue;
++    }
+     const result = await reconcile(database);
+     reconciledSessions += result.reconciledSessions;
+   }
+@@ -33,4 +117,17 @@ export async function runStartupSessionMigration(params: {
+       `session: rebuilt ${reconciledSessions} transcript projection(s) before serving history`,
+     );
+   }
++  if (deferUntilReady && deferredReconciles.length > 0) {
++    deferUntilReady("session transcript index sweep", async () => {
++      for (const database of deferredReconciles) {
++        try {
++          await reconcile(database);
++        } catch (error) {
++          params.log.warn(
++            `session: transcript index sweep failed for ${database.agentId}; continuing: ${String(error)}`,
++          );
++        }
++      }
++    });
++  }
+ }
+diff --git a/src/gateway/server-worker-placement-startup.ts b/src/gateway/server-worker-placement-startup.ts
+index 01580549d7b..dcd2a255bf9 100644
+--- a/src/gateway/server-worker-placement-startup.ts
++++ b/src/gateway/server-worker-placement-startup.ts
+@@ -16,6 +16,7 @@ import { createGitHubPublicationRuntime } from "./github-publication-runtime.js"
+ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
+ import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+ import { emitSessionsChanged } from "./server-methods/session-change-event.js";
++import { deferUntilGatewayReady } from "./server-startup-deferred-work.js";
+ import { createGatewayWorkerPlacementChangePublisher } from "./server-worker-placement-change-events.js";
+ import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
+ import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
+@@ -668,11 +669,18 @@ export function createGatewayWorkerPlacementRuntime(
+       if (hooks.isClosePreludeStarted()) {
+         return await stopBeforeReady();
+       }
+-      void trackOperation(
+-        placementReconcile,
+-        publishPlacementChanges(() => sessionRetirement.reconcile()),
+-        "Worker placement reconcile sweep failed",
+-      );
++      // Session evidence reads every session key; the periodic sweep keeps
++      // retiring placements, so the first pass waits for gateway readiness.
++      deferUntilGatewayReady("worker placement session retirement", async () => {
++        if (stopped || hooks.isClosePreludeStarted()) {
++          return;
++        }
++        await trackOperation(
++          placementReconcile,
++          publishPlacementChanges(() => sessionRetirement.reconcile()),
++          "Worker placement reconcile sweep failed",
++        );
++      });
+       void sweepDiskSpace();
+       placementReconcileInterval = setInterval(
+         sweepActivePlacements,
+diff --git a/src/gateway/session-startup-migration.deferral.test.ts b/src/gateway/session-startup-migration.deferral.test.ts
+new file mode 100644
+index 00000000000..192bfd0dbe2
+--- /dev/null
++++ b/src/gateway/session-startup-migration.deferral.test.ts
+@@ -0,0 +1,109 @@
++/** Gateway startup keeps only history-critical session maintenance ahead of readiness. */
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import { runStartupSessionMigration } from "./server-startup-session-migration.js";
++
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++
++afterEach(() => {
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++});
++
++async function setup() {
++  const stateDir = tempDirs.make("openclaw-session-startup-deferral-");
++  const env = { OPENCLAW_STATE_DIR: stateDir };
++  const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
++  await upsertSessionEntryCore(
++    {
++      agentId: "main",
++      defaultAgentId: "main",
++      env,
++      sessionKey: "agent:main:startup",
++    },
++    { sessionId: "startup-session", updatedAt: Date.now() },
++  );
++  closeOpenClawAgentDatabasesForTest();
++  const deferred: Array<{ label: string; run: () => Promise<unknown> }> = [];
++  const deferUntilReady = (label: string, run: () => Promise<unknown>) => {
++    deferred.push({ label, run });
++  };
++  const deps = {
++    migrateManagedWorktreeCanonicalWorkspaces: vi.fn(async () => 0),
++    reconcileSessionTranscriptIndexes: vi.fn(async () => ({ reconciledSessions: 0 })),
++  };
++  return { cfg, deferUntilReady, deferred, deps, env };
++}
++
++describe("runStartupSessionMigration with deferral", () => {
++  it("defers the backfill and the index sweep of a healthy store until readiness", async () => {
++    const t = await setup();
++    const transcriptProjectionNeedsRepair = vi.fn(() => false);
++    await runStartupSessionMigration({
++      cfg: t.cfg,
++      env: t.env,
++      log: { info: vi.fn(), warn: vi.fn() },
++      deps: { ...t.deps, transcriptProjectionNeedsRepair },
++      deferUntilReady: t.deferUntilReady,
++    });
++
++    expect(transcriptProjectionNeedsRepair).toHaveBeenCalledOnce();
++    expect(t.deps.migrateManagedWorktreeCanonicalWorkspaces).not.toHaveBeenCalled();
++    expect(t.deps.reconcileSessionTranscriptIndexes).not.toHaveBeenCalled();
++    expect(t.deferred.map((task) => task.label)).toEqual([
++      "session worktree workspace backfill",
++      "session transcript index sweep",
++    ]);
++
++    for (const task of t.deferred) {
++      await task.run();
++    }
++    expect(t.deps.migrateManagedWorktreeCanonicalWorkspaces).toHaveBeenCalledOnce();
++    expect(t.deps.reconcileSessionTranscriptIndexes).toHaveBeenCalledOnce();
++  });
++
++  it("repairs a stale projection before readiness", async () => {
++    const t = await setup();
++    await runStartupSessionMigration({
++      cfg: t.cfg,
++      env: t.env,
++      log: { info: vi.fn(), warn: vi.fn() },
++      deps: { ...t.deps, transcriptProjectionNeedsRepair: () => true },
++      deferUntilReady: t.deferUntilReady,
++    });
++
++    expect(t.deps.reconcileSessionTranscriptIndexes).toHaveBeenCalledOnce();
++    expect(t.deferred.map((task) => task.label)).toEqual(["session worktree workspace backfill"]);
++  });
++
++  it("checks the real projection state of a fresh store without deferring repair", async () => {
++    const t = await setup();
++    await runStartupSessionMigration({
++      cfg: t.cfg,
++      env: t.env,
++      log: { info: vi.fn(), warn: vi.fn() },
++      deps: t.deps,
++      deferUntilReady: t.deferUntilReady,
++    });
++    // The default check reads the store; a session without transcript rows needs no repair.
++    expect(t.deps.reconcileSessionTranscriptIndexes).not.toHaveBeenCalled();
++    expect(t.deferred.map((task) => task.label)).toContain("session transcript index sweep");
++  });
++
++  it("keeps everything inline without a deferral hook", async () => {
++    const t = await setup();
++    await runStartupSessionMigration({
++      cfg: t.cfg,
++      env: t.env,
++      log: { info: vi.fn(), warn: vi.fn() },
++      deps: t.deps,
++    });
++    expect(t.deps.migrateManagedWorktreeCanonicalWorkspaces).toHaveBeenCalledOnce();
++    expect(t.deps.reconcileSessionTranscriptIndexes).toHaveBeenCalledOnce();
++    expect(t.deferred).toEqual([]);
++  });
++});

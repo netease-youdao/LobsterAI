@@ -22,6 +22,7 @@ vi.mock('electron', () => ({
 import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
 import {
   buildOpenClawCompileCacheEnv,
+  buildOpenClawGatewayCpuProfileExecArgv,
   buildOpenClawGatewayExecArgv,
   extractOpenClawConfigIssueLines,
   extractOpenClawPluginVerificationFailure,
@@ -31,6 +32,7 @@ import {
   OpenClawEngineManager,
   type OpenClawEngineStatus,
   probeOpenClawGatewayStartup,
+  shouldUseOpenClawGatewayBundle,
 } from './openclawEngineManager';
 
 const PLUGIN_FAILURE = 'OpenClaw plugin verification failed; refusing to report the gateway ready.';
@@ -63,6 +65,28 @@ describe('buildOpenClawGatewayExecArgv', () => {
 
   test('respects an existing max old space setting with space syntax', () => {
     expect(buildOpenClawGatewayExecArgv('--max-old-space-size 8192 --trace-warnings')).toEqual([]);
+  });
+});
+
+describe('buildOpenClawGatewayCpuProfileExecArgv', () => {
+  test('profiles the gateway only when the switch is exactly on', () => {
+    const profileDir = '/Users/me/Library/Application Support/LobsterAI/openclaw/logs/cpu-profiles/run';
+    expect(buildOpenClawGatewayCpuProfileExecArgv('1', profileDir))
+      .toEqual(['--cpu-prof', `--cpu-prof-dir=${profileDir}`]);
+    expect(buildOpenClawGatewayCpuProfileExecArgv(' 1 ', profileDir)).toHaveLength(2);
+    expect(buildOpenClawGatewayCpuProfileExecArgv(undefined, profileDir)).toEqual([]);
+    expect(buildOpenClawGatewayCpuProfileExecArgv('', profileDir)).toEqual([]);
+    expect(buildOpenClawGatewayCpuProfileExecArgv('true', profileDir)).toEqual([]);
+  });
+});
+
+describe('shouldUseOpenClawGatewayBundle', () => {
+  test('always uses the bundle on Windows and only on request elsewhere', () => {
+    expect(shouldUseOpenClawGatewayBundle('win32', undefined)).toBe(true);
+    expect(shouldUseOpenClawGatewayBundle('darwin', undefined)).toBe(false);
+    expect(shouldUseOpenClawGatewayBundle('darwin', '0')).toBe(false);
+    expect(shouldUseOpenClawGatewayBundle('darwin', '1')).toBe(true);
+    expect(shouldUseOpenClawGatewayBundle('linux', ' 1 ')).toBe(true);
   });
 });
 
@@ -161,6 +185,7 @@ describe('gateway startup wait across system sleep', () => {
       expectedGatewayExits: new WeakSet(),
       gatewayReadyProcesses: new WeakSet(),
       gatewayLastOutputAt: new WeakMap([[child, Date.now()]]),
+      gatewayStartupStages: new WeakMap(),
       status: { phase: OpenClawEnginePhase.Starting, version: '2026.8.1', canRetry: false, gatewayPort: 18789 },
       isGatewayStartupReady: async () => ready,
     });
