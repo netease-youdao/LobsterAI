@@ -1767,6 +1767,9 @@ export interface ResolvedMcpServer {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  // Internal launchers only: child env key -> gateway env variable name.
+  // Never populate from user/marketplace data; ordinary env values stay literal.
+  gatewayEnvRefs?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
   // Per-server tool allow/deny lists -> openclaw mcp.servers.*.toolFilter.
@@ -1838,16 +1841,20 @@ export function buildOpenClawMcpServers(
       normalizedRemoteUrl = escapeOpenClawEnvTemplate(normalizedUrl.url);
     }
 
-    // Everything below is user or marketplace data: escape `${VAR}` so OpenClaw
-    // writes it verbatim instead of resolving it from the gateway env.
+    // Escape ordinary launch values, including those supplied by built-ins.
+    // Only explicitly declared internal gateway env references may expand.
     switch (server.transportType) {
-      case 'stdio':
+      case 'stdio': {
         if (server.command) entry.command = escapeOpenClawEnvTemplate(server.command);
         if (server.args?.length) entry.args = server.args.map(escapeOpenClawEnvTemplate);
         if (server.cwd) entry.cwd = escapeOpenClawEnvTemplate(server.cwd);
-        if (server.env && Object.keys(server.env).length > 0)
-          entry.env = escapeOpenClawEnvTemplateRecord(server.env);
+        const env = escapeOpenClawEnvTemplateRecord(server.env ?? {});
+        for (const [key, variable] of Object.entries(server.gatewayEnvRefs ?? {})) {
+          env[key] = `\${${variable}}`;
+        }
+        if (Object.keys(env).length > 0) entry.env = env;
         break;
+      }
       case 'sse':
         entry.url = normalizedRemoteUrl;
         if (server.headers && Object.keys(server.headers).length > 0)
@@ -3389,14 +3396,14 @@ export class OpenClawConfigSync {
     // otherwise the gateway rejects the config as invalid.
     if (hasPreinstalledPlugin(WeixinPlugin.Id)) {
       const weixinChannelEnabled = !!weixinConfig?.enabled;
+      // ClawBot is a direct-only channel that only the account which scanned
+      // the QR code can reach, so any narrower DM policy can only lock that
+      // owner out. Stored dmPolicy/allowFrom values are ignored on purpose;
+      // the plugin patch makes the plugin honor this over its built-in pairing.
       const weixinChannel: Record<string, unknown> = {
         enabled: weixinChannelEnabled,
-        dmPolicy: weixinConfig?.dmPolicy || 'open',
-        allowFrom: (() => {
-          const ids = weixinConfig?.allowFrom?.length ? [...weixinConfig.allowFrom] : [];
-          if ((weixinConfig?.dmPolicy || 'open') === 'open' && !ids.includes('*')) ids.push('*');
-          return ids;
-        })(),
+        dmPolicy: 'open',
+        allowFrom: ['*'],
       };
       managedConfig.channels = {
         ...((managedConfig.channels as Record<string, unknown>) || {}),

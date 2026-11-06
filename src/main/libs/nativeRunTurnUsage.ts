@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto';
 
 import { type CoworkLlmTrace, isValidLlmTraceId } from '../../shared/cowork/llmTurnUsage';
 import { type ModelPresetId, parseModelPresetModelId } from '../../shared/modelPresets/constants';
+import { t } from '../i18n';
 import { createLlmTraceId } from './llmTrace';
 import { hasLlmUsageContext, registerLlmUsageContext } from './llmUsageContext';
 import { buildChannelDisplayName, parseChannelSessionKey } from './openclawChannelSessionSync';
 
 /**
  * Package-model traces and media tasks of runs that OpenClaw starts itself
- * (IM messages, cron jobs). The client did not start these turns, so the
+ * (IM messages, cron jobs, heartbeats). The client did not start these turns, so the
  * model-routing plugin reports each run's traces, and the run's user message
  * is bound to them when the turn ends.
  */
@@ -76,6 +77,14 @@ function nativeSession(report: NativeRunLlmTraceReport): NativeRunUsage['session
     const title = resolveSessionTitle?.(report.sessionKey, report.jobId)?.trim()
       || (typeof report.jobTitle === 'string' && report.jobTitle.trim()) || report.jobId;
     return { sessionId: `cron:${report.jobId}`, title, userMessage };
+  }
+  if (report.trigger === 'heartbeat') {
+    const id = createHash('sha256').update(report.sessionKey).digest('hex');
+    return {
+      sessionId: `heartbeat:${id}`,
+      title: t('heartbeatUsageTitle'),
+      userMessage: t('heartbeatUsagePurpose'),
+    };
   }
   if (report.trigger !== 'user' || report.messageProvider === 'webchat') return undefined;
   const channel = parseChannelSessionKey(report.sessionKey);

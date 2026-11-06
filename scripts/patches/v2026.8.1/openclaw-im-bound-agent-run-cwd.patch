@@ -133,8 +133,72 @@ index 89a10f8c..f5e549c4 100644
    abortedLastRun: boolean;
    explicitSkillSelections?: ExplicitSkillSelection[];
    autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
+diff --git a/src/auto-reply/reply/get-reply.config-override.test.ts b/src/auto-reply/reply/get-reply.config-override.test.ts
+index be04ff69..c663b1ba 100644
+--- a/src/auto-reply/reply/get-reply.config-override.test.ts
++++ b/src/auto-reply/reply/get-reply.config-override.test.ts
+@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+ import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
+ import type { OpenClawConfig } from "../../config/config.js";
++import {
++  clearRuntimeConfigSnapshot,
++  setRuntimeConfigSnapshot,
++} from "../../config/runtime-snapshot.js";
+ import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+ import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
+@@ -23,6 +27,7 @@ type CaptureSessionDiffBaseline =
+   (typeof import("../../sessions/session-diff.js"))["captureSessionDiffBaseline"];
+ const mocks = vi.hoisted(() => ({
+   captureSessionDiffBaseline: vi.fn<CaptureSessionDiffBaseline>(),
++  handleInlineActions: vi.fn(),
+   resolveReplyDirectives: vi.fn(),
+   initSessionState: vi.fn(),
+ }));
+@@ -115,6 +120,8 @@ describe("getReplyFromConfig configOverride", () => {
+     mocks.resolveReplyDirectives.mockReset();
+     mocks.initSessionState.mockReset();
+     mocks.captureSessionDiffBaseline.mockReset();
++    mocks.handleInlineActions.mockReset();
++    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+     vi.mocked(loadConfigMock).mockReset();
+     vi.mocked(runPreparedReplyMock).mockReset();
+ 
+@@ -218,6 +225,31 @@ describe("getReplyFromConfig configOverride", () => {
+     });
+   });
+ 
++  it("resolves run cwd from the hot-reloaded runtime snapshot over a stale channel config", async () => {
++    const { ctx } = await prepareBaselineClaimSession("hot-reloaded-cwd");
++    mocks.handleInlineActions.mockImplementationOnce(async (input: unknown) => {
++      const params = input as { directives?: unknown; cleanedBody?: string };
++      return {
++        kind: "continue",
++        directives: params.directives ?? {},
++        cleanedBody: params.cleanedBody ?? "run after capture",
++        abortedLastRun: false,
++      };
++    });
++    setRuntimeConfigSnapshot({ agents: { defaults: { cwd: "/repo/new" } } });
++    try {
++      await getReplyFromConfig(ctx, undefined, {
++        agents: { defaults: { cwd: "/repo/old" } },
++      } as OpenClawConfig);
++    } finally {
++      clearRuntimeConfigSnapshot();
++    }
++
++    expect(runPreparedReplyMock).toHaveBeenCalledWith(
++      expect.objectContaining({ cwd: path.resolve("/repo/new") }),
++    );
++  });
++
+   it("uses complete configOverride without reloading config", async () => {
+     const { withFullRuntimeReplyConfig } = await import("./get-reply-fast-path.js");
+     vi.mocked(loadConfigMock).mockImplementation(() => {
 diff --git a/src/auto-reply/reply/get-reply.ts b/src/auto-reply/reply/get-reply.ts
-index ff8ba4b1..7d873e35 100644
+index ff8ba4b1..61d5b361 100644
 --- a/src/auto-reply/reply/get-reply.ts
 +++ b/src/auto-reply/reply/get-reply.ts
 @@ -7,6 +7,7 @@ import {
@@ -145,16 +209,30 @@ index ff8ba4b1..7d873e35 100644
    resolveAgentWorkspaceDir,
    resolveSessionAgentId,
    resolveAgentSkillsFilter,
-@@ -544,6 +545,8 @@ export async function getReplyFromConfig(
+@@ -22,6 +23,7 @@ import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs
+ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
+ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
++import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+ import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+ import { logVerbose } from "../../globals.js";
+@@ -544,6 +546,14 @@ export async function getReplyFromConfig(
          }),
    );
    const workspaceDir = workspace.dir;
++  // Agent cwd hot-reloads, but low-level channel dispatches may pass the config
++  // captured at channel start; resolve it from the live runtime snapshot.
 +  const runCwd =
-+    resolveAgentRunCwd(cfg, agentId, optsWithCommandQueueOverride?.cwd) ?? workspaceDir;
-
++    resolveAgentRunCwd(
++      getRuntimeConfigSnapshot() ?? cfg,
++      agentId,
++      optsWithCommandQueueOverride?.cwd,
++    ) ?? workspaceDir;
+ 
    if (
      !isFastTestEnv &&
-@@ -979,6 +981,7 @@ export async function getReplyFromConfig(
+@@ -979,6 +989,7 @@ export async function getReplyFromConfig(
          sessionId,
          storePath,
          workspaceDir,
@@ -162,7 +240,7 @@ index ff8ba4b1..7d873e35 100644
          abortedLastRun,
          autoFallbackPrimaryProbe,
        }),
-@@ -1328,6 +1331,7 @@ export async function getReplyFromConfig(
+@@ -1328,6 +1339,7 @@ export async function getReplyFromConfig(
        sessionId,
        storePath,
        workspaceDir,

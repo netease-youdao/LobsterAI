@@ -91,3 +91,15 @@ test('mergeCoworkTextExportMessages keeps stored order and prefers current messa
   expect(merged[1].content).toBe('new streaming text');
   expect(merged[2].content).toBe('not persisted yet');
 });
+
+test('buildCoworkSessionMarkdown fences pasted text from user messages', () => {
+  const content = 'check this\n\n<pasted_text id="p1">\n# not a heading\n```js\nx()\n```\n</pasted_text id="p1">';
+  const markdown = buildCoworkSessionMarkdown(
+    createSession([]),
+    [createMessage('message-1', 'user', content)],
+    key => key,
+  );
+
+  expect(markdown).toContain('check this\n\n### coworkPastedTextTitle\n\n````\n# not a heading\n```js\nx()\n```\n````');
+  expect(markdown).not.toContain('<pasted_text');
+});

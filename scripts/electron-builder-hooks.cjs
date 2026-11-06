@@ -21,6 +21,7 @@ const { verifyOpenClawPluginSdkBridge } = require('./openclaw-plugin-sdk-bridge.
 const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
 const { pruneOpenClawMacPayload } = require('./openclaw-mac-payload.cjs');
 const { configureBetterSqlite3MacPayload } = require('./better-sqlite3-mac-payload.cjs');
+const { prepareMacSkills, verifyPackagedMacSkills } = require('./skill-mac-dependencies.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -714,8 +715,11 @@ async function beforePack(context) {
   }
   configureBetterSqlite3MacPayload(context);
   ensureBundledOpenClawRuntime(context);
-  // Install skill dependencies first (for all platforms)
-  installSkillDependencies();
+  if (isMacTarget(context)) {
+    prepareMacSkills(context);
+  } else {
+    installSkillDependencies();
+  }
 
   if (isWindowsTarget(context)) {
     // Pack all large resource directories into a single tar for faster NSIS
@@ -779,6 +783,10 @@ async function beforePack(context) {
 }
 
 async function afterPack(context) {
+  if (isMacTarget(context)) {
+    verifyPackagedMacSkills(context, context.packager.projectDir);
+  }
+
   if (isWindowsTarget(context)) {
     // afterPack runs after extraResources are in place and before the NSIS
     // targets archive appOutDir, so the sizes measured here are exactly what

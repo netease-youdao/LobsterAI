@@ -56,3 +56,14 @@ test('title input is bounded in Unicode characters without splitting emoji', () 
   expect(input).toBe('😀'.repeat(SESSION_TITLE_INPUT_MAX_CHARS));
   expect(Array.from(buildSessionTitleInput('', [{ name: '字'.repeat(500) }]))).toHaveLength(80);
 });
+
+test('titles use pasted text as plain text', () => {
+  const prompt = '看看\n\n<pasted_text id="p1">\nError: boom\nat main()\n</pasted_text id="p1">';
+  expect(buildSessionTitleFromInput(prompt, '新对话')).toBe('看看 Error: boom at main()');
+  expect(buildSessionTitleInput('', [{ name: 'Error: boom', pastedText: 'Error: boom\nat main()' }]))
+    .toBe('Error: boom\nat main()');
+  expect(buildSessionTitleInput('看看', [
+    { name: 'Error: boom', pastedText: 'Error: boom' },
+    { name: 'app.log' },
+  ])).toBe('看看\napp.log\nError: boom');
+});

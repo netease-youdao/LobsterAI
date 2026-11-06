@@ -21,6 +21,7 @@ jobs:
       main: ${{ steps.changes.outputs.main }}
       skills: ${{ steps.changes.outputs.skills }}
       scripts: ${{ steps.changes.outputs.scripts }}
+      tests: ${{ steps.changes.outputs.tests }}
       docs: ${{ steps.changes.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +49,13 @@ jobs:
             scripts:
               - 'scripts/**'
               - 'electron-builder.json'
+            tests:
+              - 'src/**/*.test.ts'
+              - 'tests/**'
+              - 'vitest.config.ts'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
             docs:
               - 'docs/**'
               - '**/*.md'
@@ -156,9 +164,20 @@ jobs:
       - run: npm install
       - run: npm run build:skills
 
-  # ========== Stage 6: 测试 (Node.js 内置) ==========
+  # ========== Stage 6: Vitest ==========
   test:
-    needs: [build-main]
+    needs: [changed-files, lint, build-main]
+    # Script/test-only PRs can skip build-main and still need regression coverage.
+    if: >-
+      ${{ !cancelled()
+          && needs.lint.result == 'success'
+          && (needs.build-main.result == 'success' || needs.build-main.result == 'skipped')
+          && (github.event_name == 'push'
+              || needs.changed-files.outputs.main == 'true'
+              || needs.changed-files.outputs.renderer == 'true'
+              || needs.changed-files.outputs.skills == 'true'
+              || needs.changed-files.outputs.scripts == 'true'
+              || needs.changed-files.outputs.tests == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

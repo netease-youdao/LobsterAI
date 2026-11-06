@@ -74,6 +74,8 @@ export function getAutoPreviewOpenTarget(artifact: Artifact): ArtifactAutoPrevie
 }
 
 function getAutoPreviewPriority(artifact: Artifact): number | null {
+  // Raster images already show inline in the conversation; opening the panel would only repeat them.
+  if (artifact.type === ArtifactTypeValue.Image) return null;
   const category = getAutoPreviewCategory(artifact);
   if (!category) return null;
   const priority = AUTO_PREVIEW_PRIORITY.indexOf(category);

@@ -158,9 +158,10 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
           key => key !== 'pinned' && key !== 'sortOrder',
         );
         if (shouldSyncOpenClawConfig) {
+          // `agents.defaults.cwd` / `agents.entries.<id>.cwd` hot-reload in OpenClaw:
+          // channel and cron runs resolve cwd from the republished runtime config.
           syncOpenClawConfig({
             reason: workingDirectoryChanged ? 'agent-working-directory-updated' : 'agent-updated',
-            restartGatewayIfRunning: workingDirectoryChanged,
           }).catch(err => {
             console.error('[OpenClaw] config sync after agent update failed:', err);
           });

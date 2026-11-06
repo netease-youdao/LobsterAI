@@ -5,6 +5,8 @@ Base: release/2026.10.19, febf529d1
 
 ## Behavior
 
+> 2026-10-27: the review window and its expiry/renew flow are replaced by re-checking the price on confirmation; see `2026-10-27-video-confirmation-reprice-on-confirm.md`.
+
 - Video confirmation has a two-minute review window starting when its card is visible in the focused renderer. Queue time and time in another conversation do not start that window.
 - Review expiry invalidates approval, retains the original description/references, and offers "Refresh cost and confirm again". Refresh reads the current model catalogue, keeps the selected model and request parameters, and requires another explicit approval.
 - A request remains available for at most 30 minutes from creation. Renderer reload and conversation switching recover the live request through the existing pending-questions snapshot. This is in-process recovery: quitting the app, stopping the runtime/tool, losing the callback connection, changing account/server, or the retention limit ends the request without submitting it.

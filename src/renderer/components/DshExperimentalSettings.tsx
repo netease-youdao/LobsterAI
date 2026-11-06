@@ -8,7 +8,16 @@ import {
   resolveDshOpenWorkbenchErrorCode,
 } from '../services/dshAnalytics';
 import { i18nService } from '../services/i18n';
-import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_META_TEXT, SETTINGS_SECTION_TITLE_TEXT } from './settings/settingsTypography';
+import DeepSeekIcon from './icons/providers/DeepSeekIcon';
+import {
+  SETTINGS_ACTION_BUTTON_CLASS,
+  SettingsCard,
+  SettingsItem,
+  SettingsSection,
+  SettingsStatusBadge,
+  SettingsStatusTone,
+} from './settings/SettingsLayout';
+import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT, SETTINGS_META_TEXT } from './settings/settingsTypography';
 
 interface DshInstallView {
   stage: string;
@@ -24,13 +33,13 @@ interface DshEngineStateView {
   install?: DshInstallView | null;
 }
 
-const PHASE_LABEL_KEY: Record<string, string> = {
-  [DshEnginePhase.Ready]: 'dshStatusReady',
-  [DshEnginePhase.Starting]: 'dshStatusStarting',
-  [DshEnginePhase.Stopped]: 'dshStatusStopped',
-  [DshEnginePhase.Installing]: 'dshStatusInstalling',
-  [DshEnginePhase.Failed]: 'dshStatusFailed',
-  [DshEnginePhase.NotInstalled]: 'dshStatusNotInstalled',
+const PHASE_BADGE: Record<string, { labelKey: string; tone: SettingsStatusTone }> = {
+  [DshEnginePhase.Ready]: { labelKey: 'dshStatusReady', tone: SettingsStatusTone.Success },
+  [DshEnginePhase.Starting]: { labelKey: 'dshStatusStarting', tone: SettingsStatusTone.Progress },
+  [DshEnginePhase.Stopped]: { labelKey: 'dshStatusStopped', tone: SettingsStatusTone.Neutral },
+  [DshEnginePhase.Installing]: { labelKey: 'dshStatusInstalling', tone: SettingsStatusTone.Progress },
+  [DshEnginePhase.Failed]: { labelKey: 'dshStatusFailed', tone: SettingsStatusTone.Danger },
+  [DshEnginePhase.NotInstalled]: { labelKey: 'dshStatusNotInstalledShort', tone: SettingsStatusTone.Neutral },
 };
 
 const ERROR_LABEL_KEY: Record<string, string> = {
@@ -161,97 +170,102 @@ export const DshExperimentalSettings: React.FC = () => {
   }, [engineState.phase, refresh]);
 
   const install = engineState.install ?? null;
-  const phaseLabel = i18nService.t(PHASE_LABEL_KEY[engineState.phase] ?? 'dshStatusStopped');
+  const phaseBadge = PHASE_BADGE[engineState.phase] ?? PHASE_BADGE[DshEnginePhase.Stopped];
   const errorLabelKey = engineState.errorCode ? ERROR_LABEL_KEY[engineState.errorCode] : undefined;
   const engineError = errorLabelKey ? i18nService.t(errorLabelKey) : null;
-  const phaseDotClass =
-    engineState.phase === DshEnginePhase.Ready
-      ? 'bg-emerald-500'
-      : engineState.phase === DshEnginePhase.Starting || engineState.phase === DshEnginePhase.Installing
-        ? 'bg-amber-400'
-        : engineState.phase === DshEnginePhase.Failed
-          ? 'bg-red-500'
-          : 'bg-muted-foreground/40';
+  const visibleError = openError ?? engineError;
+  // The badge carries the phase, so the row only adds what the badge can't.
+  const workbenchDescription = engineState.phase === DshEnginePhase.NotInstalled
+    ? i18nService.t('dshStatusNotInstalled')
+    : engineState.version ? `dsh ${engineState.version}` : undefined;
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-border bg-card p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h4 className={`${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>{i18nService.t('dshSettingsTitle')}</h4>
-            <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-muted-foreground`}>{i18nService.t('dshSettingsDesc')}</p>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            aria-label={i18nService.t('dshEnableLabel')}
-            onClick={() => void handleToggle()}
-            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
-              enabled ? 'bg-primary' : 'bg-muted'
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-                enabled ? 'translate-x-6' : 'translate-x-1'
+    <SettingsSection
+      icon={<DeepSeekIcon />}
+      title={i18nService.t('dshSettingsTitle')}
+      description={i18nService.t('dshSettingsDesc')}
+      action={enabled ? (
+        <SettingsStatusBadge tone={phaseBadge.tone} label={i18nService.t(phaseBadge.labelKey)} />
+      ) : null}
+    >
+      <SettingsCard>
+        <SettingsItem
+          title={i18nService.t('dshEnableLabel')}
+          control={(
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              aria-label={i18nService.t('dshEnableLabel')}
+              onClick={() => void handleToggle()}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                enabled ? 'bg-primary' : 'bg-muted'
               }`}
-            />
-          </button>
-        </div>
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  enabled ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          )}
+        />
 
         {enabled && (
-          <p className={`mt-4 border-t border-border pt-4 ${SETTINGS_META_TEXT} text-muted-foreground`}>
-            {i18nService.t('dshSharedDataNote')}
-          </p>
+          <div className="px-4 py-3">
+            <div className="flex items-center justify-between gap-6">
+              <div className="min-w-0 flex-1">
+                <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                  {i18nService.t('dshWorkbenchLabel')}
+                </div>
+                {workbenchDescription && (
+                  <div className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{workbenchDescription}</div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleOpenWorkbench()}
+                disabled={opening}
+                className={SETTINGS_ACTION_BUTTON_CLASS}
+              >
+                {opening ? i18nService.t('dshOpening') : i18nService.t('dshOpenWorkbench')}
+              </button>
+            </div>
+
+            {install && (
+              <div className="mt-3">
+                <div className="h-1.5 overflow-hidden rounded-full bg-primary/20">
+                  {install.stage === DshInstallStage.Download ? (
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-300"
+                      style={{ width: `${installPercent(install)}%` }}
+                    />
+                  ) : (
+                    <div className="h-full w-full animate-pulse rounded-full bg-primary/60" />
+                  )}
+                </div>
+                <p className={`mt-2 ${SETTINGS_META_TEXT} text-secondary`}>{installLabel(install)}</p>
+                <p className={`mt-1 ${SETTINGS_META_TEXT} text-secondary/70`}>
+                  {i18nService.t('dshInstallFirstRunNote')}
+                </p>
+              </div>
+            )}
+
+            {visibleError && <p className={`mt-2 ${SETTINGS_META_TEXT} text-red-500`}>{visibleError}</p>}
+          </div>
         )}
 
         {enabled && engineState.sessionStoreShared === false && (
-          <p className={`mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 ${SETTINGS_META_TEXT} text-amber-700 dark:text-amber-400`}>
+          <div className={`px-4 py-3 ${SETTINGS_META_TEXT} text-amber-700 dark:text-amber-400`}>
             {i18nService.t('dshSessionStoreIsolatedNote')}
-          </p>
-        )}
-
-        {enabled && install && (
-          <div className="mt-4 border-t border-border pt-4">
-            <div className="h-1.5 overflow-hidden rounded-full bg-primary/20">
-              {install.stage === DshInstallStage.Download ? (
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-300"
-                  style={{ width: `${installPercent(install)}%` }}
-                />
-              ) : (
-                <div className="h-full w-full animate-pulse rounded-full bg-primary/60" />
-              )}
-            </div>
-            <p className={`mt-2 ${SETTINGS_META_TEXT} text-muted-foreground`}>{installLabel(install)}</p>
-            <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted-foreground/70`}>
-              {i18nService.t('dshInstallFirstRunNote')}
-            </p>
           </div>
         )}
+      </SettingsCard>
 
-        {enabled && (
-          <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className={`h-2 w-2 rounded-full ${phaseDotClass}`} />
-              <span>{phaseLabel}</span>
-              {engineState.version && <span className="text-muted-foreground/60">dsh {engineState.version}</span>}
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleOpenWorkbench()}
-              disabled={opening}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {opening ? i18nService.t('dshOpening') : i18nService.t('dshOpenWorkbench')}
-            </button>
-          </div>
-        )}
-
-        {openError && <p className="mt-3 text-xs text-red-500">{openError}</p>}
-        {!openError && engineError && <p className="mt-3 text-xs text-red-500">{engineError}</p>}
-      </div>
-    </div>
+      {enabled && (
+        <p className={`px-1 ${SETTINGS_META_TEXT} text-secondary`}>{i18nService.t('dshSharedDataNote')}</p>
+      )}
+    </SettingsSection>
   );
 };
 

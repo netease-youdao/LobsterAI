@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { CoworkTurnUsageStatus } from '../../shared/cowork/llmTurnUsage';
+import { CoworkTurnUsageStatus, getCoworkLlmTrace } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessage } from '../coworkStore';
 import { type CoworkTurnUsageEvent, CoworkTurnUsageService, type CoworkTurnUsageServiceDeps } from './coworkTurnUsage';
 import { clearLlmUsageContexts, getLlmUsageHeaders, LlmUsageHeader } from './llmUsageContext';
@@ -45,6 +45,10 @@ type Harness = {
   stats: { requests: number; completed: number } | null;
   statsByTrace?: Record<string, { requests: number; completed: number }>;
   conversation?: CoworkMessage[];
+  owner: string;
+  active?: boolean;
+  isForkCopy?: boolean;
+  latestMessage?: CoworkMessage;
   claimNativeRunTurnUsage: ReturnType<typeof vi.fn<(runIds: string[]) => NativeRunTurnUsage | null>>;
 };
 
@@ -70,7 +74,12 @@ const createHarness = (options: {
     getMessage: (sessionId: string, messageId: string) => (
       sessionId === SESSION_ID && messageId === harness.message.id ? harness.message : null
     ),
-    getLatestUserMessage: (sessionId: string) => (sessionId === SESSION_ID ? harness.message : null),
+    getLatestUserMessage: (sessionId: string) => (sessionId === SESSION_ID ? harness.latestMessage ?? harness.message : null),
+    findUserMessageByTrace: (traceId: string, sessionId?: string) => (
+      sessionId === SESSION_ID && !harness.isForkCopy && harness.message.type === 'user'
+        && getCoworkLlmTrace(harness.message.metadata)?.traceId === traceId
+        ? { sessionId, message: harness.message } : null
+    ),
     getRecentConversationMessages: () => harness.conversation ?? [harness.message],
     updateMessage,
   }));
@@ -83,6 +92,7 @@ const createHarness = (options: {
     sleep,
     getStore,
     stats: { requests: 3, completed: 3 },
+    owner: 'account-a:1',
     claimNativeRunTurnUsage,
     service: undefined as unknown as CoworkTurnUsageService,
   };
@@ -90,6 +100,8 @@ const createHarness = (options: {
     getStore,
     fetchWithAuth,
     hasAuthTokens: () => options.signedIn ?? true,
+    getSessionKey: () => harness.owner,
+    isTurnActive: () => harness.active === true,
     buildServerUrl: pathWithQuery => `https://server.test${pathWithQuery}&keyfrom=lobsterai`,
     getTraceStats: traceId => (harness.statsByTrace ? harness.statsByTrace[traceId] ?? null : harness.stats),
     emitTurnUsage: event => events.push(event),
@@ -430,6 +442,9 @@ describe('CoworkTurnUsageService', () => {
 
     await harness.service.settleLatestTurn(SESSION_ID);
     await expect(harness.service.refresh(SESSION_ID, MESSAGE_ID)).resolves.toBeNull();
+    await expect(harness.service.refreshExactTrace({
+      traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner,
+    })).resolves.toBeNull();
 
     expect(harness.getStore).not.toHaveBeenCalled();
     expect(harness.fetchWithAuth).not.toHaveBeenCalled();
@@ -547,5 +562,89 @@ describe('CoworkTurnUsageService', () => {
     harness.message.type = 'assistant';
     await expect(harness.service.refresh(SESSION_ID, MESSAGE_ID)).resolves.toBeNull();
     expect(harness.fetchWithAuth).not.toHaveBeenCalled();
+  });
+
+  test('allows an explicit manual refresh of a fork copy without selecting it for background refresh', async () => {
+    const harness = createHarness();
+    harness.isForkCopy = true;
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+
+    await expect(harness.service.refreshExactTrace({ traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner })).resolves.toBeNull();
+    await expect(harness.service.refresh(SESSION_ID, MESSAGE_ID)).resolves.toMatchObject({ requestCount: 3 });
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+  });
+
+  test('refreshes the exact earlier trace after the next turn starts and its message is replaced', async () => {
+    const harness = createHarness();
+    harness.latestMessage = { ...harness.message, id: 'next-turn', metadata: { llmTrace: { traceId: RELATED_TRACE_ID, startedAt: 2000 } } };
+    harness.fetchWithAuth.mockImplementationOnce(async () => {
+      harness.message = { ...harness.message, id: 'reconciled-prior-turn' };
+      return jsonResponse({ code: 0, data: summary(4) });
+    });
+
+    await harness.service.refreshExactTrace({ traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner });
+
+    expect(harness.message.metadata?.turnUsage).toMatchObject({ requestCount: 4 });
+    expect(harness.latestMessage.metadata?.turnUsage).toBeUndefined();
+    expect(harness.events.at(-1)?.messageId).toBe('reconciled-prior-turn');
+  });
+
+  test('coalesces completions during a summary fetch into a trailing refresh', async () => {
+    const harness = createHarness();
+    harness.active = true;
+    let resolveFetch!: (response: Response) => void;
+    harness.fetchWithAuth
+      .mockReturnValueOnce(new Promise(resolve => { resolveFetch = resolve; }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(5) }));
+    const first = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    const origin = { traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner };
+    const second = harness.service.refreshExactTrace(origin);
+    const third = harness.service.refreshExactTrace(origin);
+    resolveFetch(jsonResponse({ code: 0, data: summary(3) }));
+
+    const results = await Promise.all([first, second, third]);
+
+    expect(results.every(result => result?.requestCount === 5)).toBe(true);
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(2);
+    expect(harness.message.metadata?.turnUsage).toMatchObject({ requestCount: 5 });
+  });
+
+  test('cancels a queued exact-trace refresh when session access is revoked', async () => {
+    let allowed = true;
+    const harness = createHarness({ captureSessionAccess: () => () => allowed });
+    const response = deferred<Response>();
+    harness.fetchWithAuth.mockReturnValueOnce(response.promise);
+
+    const first = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    const second = harness.service.refreshExactTrace({
+      traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner,
+    });
+    allowed = false;
+    response.resolve(jsonResponse({ code: 0, data: summary(3) }));
+
+    await expect(first).resolves.toBeNull();
+    await expect(second).resolves.toBeNull();
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+  });
+
+  test('discards a late summary when the account changes before its body is read', async () => {
+    const harness = createHarness();
+    const origin = { traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner };
+    const response = jsonResponse({ code: 0, data: summary(4) });
+    vi.spyOn(response, 'json').mockImplementation(async () => {
+      harness.owner = 'account-b:2';
+      return { code: 0, data: summary(4) };
+    });
+    harness.fetchWithAuth.mockResolvedValueOnce(response);
+
+    await expect(harness.service.refreshExactTrace(origin)).resolves.toBeNull();
+    await expect(harness.service.refreshExactTrace(origin)).resolves.toBeNull();
+
+    expect(harness.updateMessage).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage.mock.calls[0][2].metadata.turnUsage.status).toBe(CoworkTurnUsageStatus.Pending);
+    expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
   });
 });

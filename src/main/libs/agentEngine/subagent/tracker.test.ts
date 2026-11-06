@@ -86,6 +86,25 @@ test('deleteSubagentRun removes a single run, messages, and gateway transcript',
   );
 });
 
+test('isChildSession recognizes a materialized child whatever its session key', () => {
+  const tracker = new SubagentTracker(runStore, messageStore, () => null);
+  runStore.insertSubagentRun({
+    id: 'run-visible',
+    parentSessionId: 'parent-1',
+    sessionKey: 'agent:blog:dashboard:visible-child',
+    childCoworkSessionId: 'child-session-1',
+    agentId: 'blog',
+    task: 'publish',
+    label: 'publish',
+    status: 'running',
+    createdAt: 1000,
+  });
+
+  expect(tracker.isChildSession('child-session-1')).toBe(true);
+  expect(tracker.isChildSession('parent-1')).toBe(false);
+  expect(new SubagentTracker(null as never, null, () => null).isChildSession('child-session-1')).toBe(false);
+});
+
 test('deleteSubagentRun returns after local deletion without waiting for gateway cleanup', async () => {
   let resolveGatewayDelete: (() => void) | null = null;
   const gatewayDeletePromise = new Promise<void>((resolve) => {

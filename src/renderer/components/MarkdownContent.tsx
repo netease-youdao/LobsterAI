@@ -14,6 +14,7 @@ import remarkMath from 'remark-math';
 import type { ArtifactFileAccess } from '../../shared/artifactPreview/types';
 import { i18nService } from '../services/i18n';
 import { normalizeShellFilePath } from '../services/shellAppsCache';
+import { getCachedImageSize, rememberImageSize } from '../utils/imageDisplaySize';
 import { showShellFailureToast, showToast } from '../utils/localFileActions';
 import { transformMarkdownTextSegments } from '../utils/markdownCodeSegments';
 import { remarkDetailsBlocks } from '../utils/remarkDetailsBlocks';
@@ -560,6 +561,9 @@ const ExternalLink: React.FC<ExternalLinkProps> = ({ href, anchorProps, children
   );
 };
 
+// Matches the max-h-96 limit on markdown images.
+const MARKDOWN_IMAGE_MAX_HEIGHT = 384;
+
 const createMarkdownComponents = (
   resolveLocalFilePath?: (href: string, text: string) => string | null,
   onImageClick?: (image: { src: string; alt?: string | null }) => void,
@@ -655,11 +659,23 @@ const createMarkdownComponents = (
   img: ({ node: _node, className: _className, src, alt, ...props }: any) => {
     const resolvedSrc = resolveMarkdownImageSrc(src, alt, resolveLocalFilePath, fileAccess);
     const altText = typeof alt === 'string' ? alt : null;
+    // An image shown before (reopened task, remounted turn) reserves its final box,
+    // so the content below it does not jump when it decodes again.
+    const knownSize = props.width || props.height ? null : getCachedImageSize(resolvedSrc);
     return (
       <img
         className={`max-w-full max-h-96 object-contain rounded-xl ${spacing === 'compact' ? 'my-2' : 'my-4'}${onImageClick ? ' cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
         src={resolvedSrc}
         alt={altText ?? undefined}
+        style={knownSize ? {
+          width: Math.min(knownSize.width, (MARKDOWN_IMAGE_MAX_HEIGHT * knownSize.width) / knownSize.height),
+          aspectRatio: `${knownSize.width} / ${knownSize.height}`,
+        } : undefined}
+        onLoad={(event: React.SyntheticEvent<HTMLImageElement>) => rememberImageSize(
+          resolvedSrc,
+          event.currentTarget.naturalWidth,
+          event.currentTarget.naturalHeight,
+        )}
         onClick={onImageClick && resolvedSrc ? () => onImageClick({ src: resolvedSrc, alt: altText }) : undefined}
         {...props}
       />

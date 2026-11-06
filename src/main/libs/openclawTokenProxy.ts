@@ -25,7 +25,7 @@ import {
 } from '../../shared/providers/modelRuntimeProfiles';
 import type { EnterpriseAuthSessionSnapshot } from '../enterpriseAccount/membershipRevocation';
 import { createLlmSpanId, createLlmTraceId } from './llmTrace';
-import { clearLlmUsageContexts, getLlmUsageHeaders, LlmUsageHeader } from './llmUsageContext';
+import { clearLlmUsageContexts, getLlmUsageContext, getLlmUsageHeaders, LlmUsageHeader } from './llmUsageContext';
 import { listenOnLoopback } from './loopbackListen';
 import {
   clearNativeRunTurnUsage,
@@ -81,6 +81,7 @@ let enterpriseMembershipRevokedHandler: (
 ) | null = null;
 let inboundAuthTokenGetter: (() => string | null) | null = null;
 let lastUnauthorizedWarnAt = 0;
+let requestFinishedHandler: OpenClawTokenProxyConfig['onRequestFinished'];
 
 export type OpenClawTokenProxyMembershipRevocationEvent = {
   code: number;
@@ -93,6 +94,7 @@ export type OpenClawTokenProxyConfig = {
   getServerBaseUrl: () => string;
   getAccountContextHeaders?: () => Record<string, string>;
   getSessionKey?: () => string | null;
+  onRequestFinished?: (origin: { traceId: string; sessionId: string; owner: string }) => void;
   getClientVersion: () => string;
   getEnterpriseAuthSessionSnapshot?: () => EnterpriseAuthSessionSnapshot | null;
   onEnterpriseMembershipRevoked?: (
@@ -134,6 +136,7 @@ type ProxyRequestTrace = {
   serverTraceId: string | null;
   status: number | null;
   finished: boolean;
+  usageOrigin?: { traceId: string; sessionId: string; owner: string };
   /** Prompt prefix compared with the previous request of the same conversation. */
   promptPrefix?: { key: string; observation: PromptPrefixObservation };
   promptUsage?: PromptUsage;
@@ -160,6 +163,7 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   serverBaseUrlGetter = config.getServerBaseUrl;
   accountContextHeadersGetter = config.getAccountContextHeaders ?? null;
   sessionKeyGetter = config.getSessionKey ?? null;
+  requestFinishedHandler = config.onRequestFinished;
   clientVersionGetter = config.getClientVersion;
   enterpriseAuthSessionSnapshotGetter = config.getEnterpriseAuthSessionSnapshot ?? null;
   enterpriseMembershipRevokedHandler = config.onEnterpriseMembershipRevoked ?? null;
@@ -206,6 +210,7 @@ export function stopOpenClawTokenProxy(): void {
   serverBaseUrlGetter = null;
   accountContextHeadersGetter = null;
   sessionKeyGetter = null;
+  requestFinishedHandler = undefined;
   clientVersionGetter = null;
   enterpriseAuthSessionSnapshotGetter = null;
   enterpriseMembershipRevokedHandler = null;
@@ -293,6 +298,14 @@ function finishProxyRequest(
     console.warn(message);
   }
   logPromptPrefixObservation(trace);
+  // Capture attribution at admission, never from the latest turn/account at completion.
+  if (trace.usageOrigin && trace.usageOrigin.owner === sessionKeyGetter?.()) {
+    try {
+      requestFinishedHandler?.(trace.usageOrigin);
+    } catch (error) {
+      console.warn('[OpenClawTokenProxy] failed to refresh completed request usage.', error);
+    }
+  }
 }
 
 function parseJsonBody(body: Buffer): unknown {
@@ -380,6 +393,9 @@ async function handleNativeRunLlmTraceReport(req: http.IncomingMessage, res: htt
     res.end(JSON.stringify({ error: 'Invalid native run trace report' }));
     return;
   }
+  // A causal heartbeat retains its root trace. Restore its original context
+  // before the native reporter can register a generic heartbeat conversation.
+  if (typeof report.traceId === 'string') getLlmUsageContext(report.traceId, sessionKeyGetter?.());
   if (recordNativeRunLlmTrace(report, Date.now(), sessionKeyGetter?.() ?? undefined)) {
     console.debug(
       `[OpenClawTokenProxy] native run ${String(report.runId)} uses trace=${String(report.traceId)}`
@@ -515,6 +531,15 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
     const body = await collectRequestBody(req);
     requestTrace = createProxyRequestTrace(req.headers[LLM_TRACEPARENT_HEADER], req.url?.split('?')[0] ?? '/');
+    const usageContext = requestTrace.generated ? null : getLlmUsageContext(requestTrace.traceId, requestSessionKey);
+    if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)
+      || (usageContext && usageContext.owner !== undefined && usageContext.owner !== requestSessionKey)) {
+      writeAuthSessionChanged(res);
+      return;
+    }
+    if (usageContext && requestSessionKey && !requestTrace.generated) {
+      requestTrace.usageOrigin = { traceId: requestTrace.traceId, sessionId: usageContext.sessionId, owner: requestSessionKey };
+    }
     recordProxyRequestStarted(requestTrace, body.length);
     const parsedBody = parseJsonBody(body);
     // Invalid/non-JSON bodies are forwarded unchanged and receive no mode label.

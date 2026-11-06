@@ -9,7 +9,11 @@ import {
   isInternalCompactionSystemText,
 } from '../../../common/coworkSystemMessages';
 import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
-import { getMessageModelLabel as getSharedMessageModelLabel } from '../../../shared/cowork/messageModelLabel';
+import {
+  getMessageModelLabel as getSharedMessageModelLabel,
+  getMessageModelLabelParts as getSharedMessageModelLabelParts,
+  type MessageModelLabelParts,
+} from '../../../shared/cowork/messageModelLabel';
 import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { parseModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
@@ -930,6 +934,11 @@ export const buildConversationTurns = (
 };
 
 // ── Metadata helpers ─────────────────────────────────────────────────────────
+
+export type { MessageModelLabelParts } from '../../../shared/cowork/messageModelLabel';
+
+export const getMessageModelLabelParts = (metadata?: CoworkMessageMetadata | null): MessageModelLabelParts | null =>
+  getSharedMessageModelLabelParts(metadata, modelPresetName);
 
 export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null =>
   getSharedMessageModelLabel(metadata, modelPresetName);

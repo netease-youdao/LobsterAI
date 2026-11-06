@@ -7,15 +7,18 @@ import {
   type CoworkImageAttachmentPreview,
   isBrowserAnnotationTransportImage,
 } from '../../../shared/cowork/imageAttachments';
+import { expandPastedTextBlocks, extractPastedTextBlocks } from '../../../shared/cowork/pastedText';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
-import type { KitReference } from '../../../shared/kit/constants';
+import type { InstalledKitRecord, KitReference } from '../../../shared/kit/constants';
 import { copyTextToClipboard } from '../../services/clipboard';
 import { i18nService } from '../../services/i18n';
 import { useImageEditSnapshots } from '../../services/imageEditSnapshots';
 import { buildKitReferences } from '../../services/kitCapability';
+import { resolveLocalizedText, skillService } from '../../services/skill';
 import type { CoworkImageAttachment, CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import type { MarketplaceKit } from '../../types/kit';
 import type { Skill } from '../../types/skill';
+import { fitImageSize, readBase64ImageSize } from '../../utils/imageDisplaySize';
 import { formatMessageDateTime } from '../../utils/tokenFormat';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
 import { extractUserMessageFileAttachments } from '../../utils/userMessageFileAttachments';
@@ -29,14 +32,23 @@ import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge
 import BrowserAnnotationMessageAttachments, {
   type BrowserAnnotationAttachmentOpenPayload,
 } from './BrowserAnnotationMessageAttachments';
+import {
+  type ContextChipDetail,
+  ContextChipDetailKind,
+  ContextChipWithDetails,
+} from './ContextChipDetails';
 import { reportConversationMessageAction } from './conversationAnalytics';
 import ImagePreviewModal, { type ImagePreviewSource } from './ImagePreviewModal';
+import { resolveKitDetailSkills } from './kitDetailSkills';
 import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
   messageMetaClassName,
 } from './messageDisplayUtils';
+import { UserMessagePastedTexts } from './PastedTextCards';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
+import { useKitDetailCatalog } from './useKitDetailCatalog';
+import UserMessageCollapsible from './UserMessageCollapsible';
 import UserMessageContent from './UserMessageContent';
 import UserMessageFileAttachments from './UserMessageFileAttachments';
 
@@ -123,66 +135,140 @@ const ReEditButton: React.FC<{
   );
 };
 
-// ── UserMessageSkillBadges ───────────────────────────────────────────────────
+// ── UserMessageCapabilityChips ───────────────────────────────────────────────
 
-const UserMessageSkillBadges: React.FC<{ skills: Skill[] }> = ({ skills }) => {
-  if (skills.length === 0) return null;
+const buildSkillDetail = (skill: Skill): ContextChipDetail => {
+  const name = skillService.getLocalizedSkillName(skill.id, skill.name);
+  const origin = skill.isBuiltIn
+    ? i18nService.t('skillOriginBuiltIn')
+    : skill.isOfficial ? i18nService.t('official') : i18nService.t('skillOriginMine');
+  return {
+    kind: ContextChipDetailKind.Skill,
+    name,
+    identifier: name === skill.name ? undefined : skill.name,
+    iconUrl: skillService.getSkillIcon(skill.id),
+    description: skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description),
+    meta: [
+      i18nService.t('skills'),
+      origin,
+      ...(skill.version ? [`v${skill.version}`] : []),
+    ],
+  };
+};
+
+interface KitDetailSources {
+  marketplaceKits: MarketplaceKit[];
+  installedKits: Record<string, InstalledKitRecord>;
+  /** Skill ids the message resolved for its kits; only attributable with a single kit. */
+  messageKitSkillIds: string[];
+  loading: boolean;
+}
+
+const buildKitDetail = (
+  kitReference: KitReference,
+  label: string,
+  sources: KitDetailSources,
+): ContextChipDetail => {
+  const kit = sources.marketplaceKits.find(item => item.id === kitReference.id);
+  const installedKit = sources.installedKits[kitReference.id];
+  const includedSkills = resolveKitDetailSkills({
+    marketplaceKit: kit,
+    installedKit,
+    messageSkillIds: sources.messageKitSkillIds,
+  }).map(skill => (skill.name ? resolveLocalizedText(skill.name) : skillService.getLocalizedSkillName(skill.id, skill.id)));
+  const version = kit?.version ?? installedKit?.version;
+  return {
+    kind: ContextChipDetailKind.Kit,
+    name: kit ? resolveLocalizedText(kit.name) : label,
+    iconUrl: kit?.icon,
+    description: kit ? resolveLocalizedText(kit.description) : '',
+    meta: [
+      i18nService.t('kits'),
+      ...(kit?.author ? [i18nService.t('kitOfficial')] : []),
+      ...(version ? [`v${version}`] : []),
+      ...(includedSkills.length > 0
+        ? [i18nService.t('kitSkillCount').replace('{count}', String(includedSkills.length))]
+        : []),
+    ],
+    includedSkills,
+    loading: !kit && sources.loading,
+  };
+};
+
+// Same chips, order and inline placement as the composer, so a sent message
+// reads the way it was typed; clicking one shows what the skill or kit does.
+const renderCapabilityChips = (
+  skills: Skill[],
+  kitReferences: KitReference[],
+  kitSources: KitDetailSources,
+  onOpenKit: (kitId: string) => void,
+): React.ReactNode[] => [
+  ...skills.map(skill => (
+    <ContextChipWithDetails
+      key={`skill:${skill.id}`}
+      icon={SkillIcon}
+      label={skill.name}
+      detail={buildSkillDetail(skill)}
+      className="mr-1.5 align-top"
+    />
+  )),
+  ...kitReferences.map(kitReference => {
+    const label = kitReference.name?.trim() || `@${kitReference.id}`;
+    return (
+      <ContextChipWithDetails
+        key={`kit:${kitReference.uri || kitReference.id}`}
+        icon={SidebarKitsIcon}
+        label={label}
+        detail={buildKitDetail(kitReference, label, kitSources)}
+        onOpen={() => onOpenKit(kitReference.id)}
+        className="mr-1.5 align-top"
+      />
+    );
+  }),
+];
+
+// ── MessageImageThumbnail (local) ───────────────────────────────────────────
+
+// Matches the thumbnail's max-w-[16rem] / max-h-48 limits.
+const MESSAGE_IMAGE_THUMBNAIL_MAX_WIDTH = 256;
+const MESSAGE_IMAGE_THUMBNAIL_MAX_HEIGHT = 192;
+
+const MessageImageThumbnail: React.FC<{
+  image: CoworkImageAttachment | CoworkImageAttachmentPreview;
+  onOpen: (image: ImagePreviewSource) => void;
+}> = React.memo(({ image, onOpen }) => {
+  const src = `data:${image.mimeType};base64,${image.base64Data}`;
+  // Size the box from the image header up front, so the message does not grow
+  // (and shift the conversation) when the thumbnail finishes decoding.
+  const reservedSize = useMemo(() => {
+    const naturalSize = readBase64ImageSize(image.base64Data);
+    return naturalSize
+      ? fitImageSize(naturalSize, MESSAGE_IMAGE_THUMBNAIL_MAX_WIDTH, MESSAGE_IMAGE_THUMBNAIL_MAX_HEIGHT)
+      : null;
+  }, [image.base64Data]);
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {skills.map(skill => (
-        <div
-          key={skill.id}
-          className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-md bg-primary-muted px-2.5 text-[13px] font-normal leading-5 text-foreground"
-          title={skill.description}
-        >
-          <SkillIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
-          <span className="min-w-0 truncate">
-            {skill.name}
-          </span>
-        </div>
-      ))}
+    <div className="relative group">
+      <img
+        src={src}
+        alt={image.name}
+        className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border border-border hover:border-primary transition-colors"
+        style={reservedSize ?? undefined}
+        title={image.name}
+        onClick={() => onOpen({
+          src,
+          localPath: image.localPath,
+          alt: image.name,
+          name: image.name,
+        })}
+      />
+      <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
+        <PhotoIcon className="h-3 w-3 flex-shrink-0" />
+        <span className="truncate">{image.name}</span>
+      </div>
     </div>
   );
-};
-
-const UserMessageKitBadges: React.FC<{ kitReferences: KitReference[] }> = ({ kitReferences }) => {
-  if (kitReferences.length === 0) return null;
-
-  return (
-    <>
-      {kitReferences.map(kitReference => {
-        const displayName = kitReference.name?.trim() || `@${kitReference.id}`;
-        return (
-          <div
-            key={kitReference.uri || kitReference.id}
-            className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-md bg-primary-muted px-2.5 text-[13px] font-normal leading-5 text-foreground"
-            title={kitReference.uri}
-          >
-            <SidebarKitsIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
-            <span className="min-w-0 truncate">
-              {displayName}
-            </span>
-          </div>
-        );
-      })}
-    </>
-  );
-};
-
-const UserMessageCapabilityBadges: React.FC<{
-  kitReferences: KitReference[];
-  skills: Skill[];
-}> = ({ kitReferences, skills }) => {
-  if (kitReferences.length === 0 && skills.length === 0) return null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <UserMessageKitBadges kitReferences={kitReferences} />
-      <UserMessageSkillBadges skills={skills} />
-    </div>
-  );
-};
+});
 
 // ── UserMessageItem ──────────────────────────────────────────────────────────
 
@@ -214,19 +300,26 @@ const UserMessageItem: React.FC<{
   const metadata = message.metadata as CoworkMessageMetadata | undefined;
   const imageEdits = useImageEditSnapshots(message, sessionId);
   const isGoalSettingMessage = hasGoalSettingMessageMetadata(metadata);
-  const { text: displayContent, attachments: fileAttachments } = useMemo(
-    () => extractUserMessageFileAttachments(parseUserMessageForDisplay(message.content || '', {
-      localMediaAttachments: Array.isArray(metadata?.localMediaAttachments)
-        ? metadata.localMediaAttachments
-        : [],
-    })),
-    [message.content, metadata?.localMediaAttachments]
-  );
+  const { text: displayContent, attachments: fileAttachments, pastedTexts } = useMemo(() => {
+    // Pasted-text blocks are kept verbatim, so split them out before the
+    // display parser normalizes IM metadata and blank lines.
+    const { text, blocks } = extractPastedTextBlocks(message.content || '');
+    return {
+      ...extractUserMessageFileAttachments(parseUserMessageForDisplay(text, {
+        localMediaAttachments: Array.isArray(metadata?.localMediaAttachments)
+          ? metadata.localMediaAttachments
+          : [],
+      })),
+      pastedTexts: blocks,
+    };
+  }, [message.content, metadata?.localMediaAttachments]);
+  const copyContent = useMemo(() => expandPastedTextBlocks(message.content || ''), [message.content]);
 
   const messageSkillIds = Array.isArray(metadata?.skillIds) ? metadata.skillIds : [];
   const messageSkills = messageSkillIds
     .map(id => skills.find(s => s.id === id))
     .filter((s): s is NonNullable<typeof s> => s !== undefined);
+  const { installedKits, loading: kitCatalogLoading, ensureKitLoaded } = useKitDetailCatalog(marketplaceKits);
   const metadataKitReferences = Array.isArray(metadata?.kitReferences) ? metadata.kitReferences : [];
   const messageKitIds = Array.isArray(metadata?.kitIds) ? metadata.kitIds : [];
   const messageKitReferences = metadataKitReferences.length > 0
@@ -253,6 +346,18 @@ const UserMessageItem: React.FC<{
     && !imageEdits.some(snapshot => snapshot.source.filePath === image.localPath)
   );
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
+  const capabilityChips = hasCapabilityBadges
+    ? renderCapabilityChips(messageSkills, messageKitReferences, {
+      marketplaceKits,
+      installedKits,
+      messageKitSkillIds: messageKitReferences.length === 1
+        ? metadata?.resolvedKitCapabilities?.skillIds ?? []
+        : [],
+      loading: kitCatalogLoading,
+    }, ensureKitLoaded)
+    : null;
+  const hasDisplayText = Boolean(displayContent?.trim());
+  const hasPastedTexts = pastedTexts.length > 0;
   const handleImagePreviewOpen = useCallback((image: ImagePreviewSource) => {
     reportConversationMessageAction({
       actionType: 'open_message_image',
@@ -267,6 +372,12 @@ const UserMessageItem: React.FC<{
     });
     onReEdit?.(message);
   }, [message, onReEdit]);
+  const handlePastedTextOpen = useCallback(() => {
+    reportConversationMessageAction({
+      actionType: 'open_message_pasted_text',
+      message,
+    });
+  }, [message]);
   const handleFileAttachmentReveal = useCallback(() => {
     reportConversationMessageAction({
       actionType: 'reveal_message_file',
@@ -308,7 +419,7 @@ const UserMessageItem: React.FC<{
                   />
                 )}
                 {browserAnnotationCount > 0 && (
-                  <div className={(selectedTextSnippets.length > 0 || displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
+                  <div className={(selectedTextSnippets.length > 0 || hasPastedTexts || displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
                     <BrowserAnnotationAttachmentBadge
                       draftKey={sessionId ?? ''}
                       batches={browserAnnotations}
@@ -320,7 +431,7 @@ const UserMessageItem: React.FC<{
                   </div>
                 )}
                 {selectedTextSnippets.length > 0 && (
-                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
+                  <div className={(hasPastedTexts || displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0 || hasCapabilityBadges) ? 'mb-2' : ''}>
                     <SelectedTextSnippetBadge
                       snippets={selectedTextSnippets}
                       align="right"
@@ -328,22 +439,32 @@ const UserMessageItem: React.FC<{
                     />
                   </div>
                 )}
-                {hasCapabilityBadges && (
-                  <div className={(displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0) ? 'mb-2' : ''}>
-                    <UserMessageCapabilityBadges
-                      kitReferences={messageKitReferences}
-                      skills={messageSkills}
-                    />
+                {hasCapabilityBadges && !hasDisplayText && (
+                  <div
+                    data-cowork-search-exclude="true"
+                    className={`text-markdown-body-compact ${(hasPastedTexts || displayImageAttachments.length > 0 || fileAttachments.length > 0) ? 'mb-2' : ''}`}
+                  >
+                    {capabilityChips}
                   </div>
                 )}
+                {hasPastedTexts && (
+                  <UserMessagePastedTexts
+                    blocks={pastedTexts}
+                    className={(displayContent?.trim() || displayImageAttachments.length > 0 || fileAttachments.length > 0) ? 'mb-2' : ''}
+                    onOpen={handlePastedTextOpen}
+                  />
+                )}
                 {displayContent?.trim() && (
-                  <div data-cowork-search-message-id={message.id}>
-                    <UserMessageContent
-                      content={displayContent}
-                      className="max-w-none"
-                      onImageClick={handleImagePreviewOpen}
-                    />
-                  </div>
+                  <UserMessageCollapsible>
+                    <div data-cowork-search-message-id={message.id}>
+                      <UserMessageContent
+                        content={displayContent}
+                        className="max-w-none"
+                        onImageClick={handleImagePreviewOpen}
+                        leading={capabilityChips}
+                      />
+                    </div>
+                  </UserMessageCollapsible>
                 )}
                 {imageEdits.map(snapshot => {
                   const preview = imageAttachmentPreviews.find(image => image.localPath === snapshot.source.filePath);
@@ -353,24 +474,7 @@ const UserMessageItem: React.FC<{
                 {displayImageAttachments.length > 0 && (
                   <div className={`flex flex-wrap gap-2 ${displayContent?.trim() ? 'mt-2' : ''}`}>
                     {displayImageAttachments.map((img, idx) => (
-                      <div key={idx} className="relative group">
-                        <img
-                          src={`data:${img.mimeType};base64,${img.base64Data}`}
-                          alt={img.name}
-                          className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border border-border hover:border-primary transition-colors"
-                          title={img.name}
-                          onClick={() => handleImagePreviewOpen({
-                            src: `data:${img.mimeType};base64,${img.base64Data}`,
-                            localPath: img.localPath,
-                            alt: img.name,
-                            name: img.name,
-                          })}
-                        />
-                        <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
-                          <PhotoIcon className="h-3 w-3 flex-shrink-0" />
-                          <span className="truncate">{img.name}</span>
-                        </div>
-                      </div>
+                      <MessageImageThumbnail key={idx} image={img} onOpen={handleImagePreviewOpen} />
                     ))}
                   </div>
                 )}
@@ -386,14 +490,14 @@ const UserMessageItem: React.FC<{
                 <div className={messageMetaClassName(isHovered, 'right')} aria-hidden={!isHovered}>
                   <span>{formatMessageDateTime(message.timestamp)}</span>
                   <CopyButton
-                    content={message.content}
+                    content={copyContent}
                     onCopy={(result) => reportConversationMessageAction({
                       actionType: 'copy_message',
                       message,
                       params: {
                         result,
                         copySource: 'user_message',
-                        copiedLength: message.content.length,
+                        copiedLength: copyContent.length,
                       },
                     })}
                     visible={isHovered}

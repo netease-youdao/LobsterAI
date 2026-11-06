@@ -111,6 +111,7 @@ import { getServerApiBaseUrl } from '../endpoints';
 import { createCoworkLlmTrace, createLlmTraceparent } from '../llmTrace';
 import { registerLlmUsageContext } from '../llmUsageContext';
 import { presetContextWindowSelection } from '../modelPresetContext';
+import type { ProviderModelCatalog } from '../openclawAgentModels';
 import { extractOpenClawAssistantStreamParts,extractOpenClawAssistantStreamText } from '../openclawAssistantText';
 import {
   buildManagedSessionKey,
@@ -209,6 +210,7 @@ import {
   SessionModelRouteError,
   SessionModelRouteVerdict,
 } from './sessionModelRouteGuard';
+import { StaleSessionModelOverrideResetter } from './staleSessionModelOverride';
 import {
   buildSubagentChildHistorySyncPlan,
 } from './subagent/childHistorySync';
@@ -278,6 +280,9 @@ const GATEWAY_READY_TIMEOUT_MS = 60_000;
 const BROWSER_GATEWAY_REQUEST_TIMEOUT_MS = 30_000;
 const BROWSER_GATEWAY_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 const FINAL_HISTORY_SYNC_LIMIT = 50;
+// A subagent child transcript is replaced wholesale from chat.history, so it
+// needs the whole run (the gateway's per-request maximum), not a tail window.
+const SUBAGENT_CHILD_HISTORY_SYNC_LIMIT = 1000;
 const CHANNEL_SESSION_DISCOVERY_LIMIT = 200;
 export const OPENCLAW_CHAT_SEND_PAYLOAD_LIMIT_BYTES = 30 * 1000 * 1000;
 export const OPENCLAW_CHAT_SEND_PAYLOAD_SAFETY_MARGIN_BYTES = 500 * 1000;
@@ -545,6 +550,8 @@ type OpenClawRuntimeAdapterOptions = {
   getRemoteCommandId?: () => string | undefined;
   prepareDeliverableSync?: (sessionId: string, cwd: string) => Promise<void>;
   normalizeModelRef?: (modelRef: string) => string;
+  /** Providers and models synced into openclaw.json; enables stale session override cleanup. */
+  getModelCatalog?: () => ProviderModelCatalog;
   onChannelPromptSubmit?: (event: {
     agentId: string;
     conversationState: PromptAnalyticsConversationStateValue;
@@ -2655,6 +2662,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly lastSystemPromptBySession = new Map<string, string>();
   private readonly sessionModelPatchStateBySession = new Map<string, SessionModelPatchState>();
   private readonly sessionModelPatchQueue = new Map<string, Promise<void>>();
+  private readonly staleModelOverrides = new StaleSessionModelOverrideResetter({
+    getModelCatalog: () => this.options.getModelCatalog?.(),
+    normalizeModelRef: modelRef => this.normalizeModelRef(modelRef),
+    listChannelSessionModelOverrides: () => this.store.listChannelSessionModelOverrides()
+      .filter(entry => !isManagedSessionKey(entry.sessionKey) && !isCronSessionKey(entry.sessionKey)),
+    getSessionModelOverride: sessionId => this.store.getSession(sessionId, 0)?.modelOverride ?? null,
+    isSessionBusy: sessionId => this.activeTurns.has(sessionId),
+    patchModelToAgentDefault: options => this.patchSessionModelToAgentDefault(options),
+    clearLocalModelOverride: (sessionId, modelRef) => this.clearStaleLocalModelOverride(sessionId, modelRef),
+  });
   private readonly gatewayHistoryCountBySession = new Map<string, number>();
   // Keep one cursor per local cron conversation, even when its base alias advances.
   private readonly cronHistoryCursorBySession = new Map<string, { runHistoryKey: string; count: number }>();
@@ -4070,6 +4087,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!session) return false;
 
     const normalizedModelRef = state.modelRef ? this.normalizeModelRef(state.modelRef) : '';
+    const staleReason = this.staleModelOverrides.findStaleReason(normalizedModelRef);
+    if (staleReason) {
+      // Never mirror a model that can no longer run. Only a sessions.list row is
+      // the entry OpenClaw runs with; history keeps the /model command from before.
+      if (state.explicitOverride && state.source === 'sessions-list' && !isCronSessionKey(openClawSessionKey)) {
+        void this.staleModelOverrides.reset({
+          sessionId: coworkSessionId,
+          sessionKey: openClawSessionKey,
+          modelRef: normalizedModelRef,
+          availability: staleReason,
+          trigger: 'channel session poll',
+        });
+      }
+      return false;
+    }
     const agentDefaultModel = this.resolveAgentDefaultModelRef(session);
     const nextModelOverride =
       normalizedModelRef && (state.explicitOverride || normalizedModelRef !== agentDefaultModel)
@@ -4112,6 +4144,67 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     );
     this.notifySessionModelOverrideChanged(coworkSessionId, nextModelOverride);
     return true;
+  }
+
+  /**
+   * Resets IM session overrides whose provider or model was removed or disabled.
+   * IM messages run in OpenClaw without LobsterAI, so this runs when the
+   * gateway connects and after provider settings change.
+   */
+  reconcileStaleSessionModelOverrides(trigger: string): Promise<void> {
+    return this.staleModelOverrides.reconcile(trigger).catch((error) => {
+      console.warn('[OpenClawRuntime] failed to reconcile stale session model overrides:', error);
+    });
+  }
+
+  private async patchSessionModelToAgentDefault(options: {
+    sessionId: string;
+    sessionKey: string;
+    reason: string;
+    shouldPatch: () => boolean;
+  }): Promise<boolean> {
+    const { sessionId, sessionKey, reason, shouldPatch } = options;
+    let patched = false;
+    await this.enqueueSessionModelPatch(sessionId, async () => {
+      if (!shouldPatch()) return;
+      await this.requestSessionPatchWithProfile({
+        sessionId,
+        sessionKey,
+        patch: { model: null },
+        source: 'staleModelOverride',
+        reason,
+      });
+      this.sessionModelPatchStateBySession.delete(sessionId);
+      patched = true;
+    });
+    return patched;
+  }
+
+  private clearStaleLocalModelOverride(sessionId: string, modelRef: string): void {
+    this.store.updateSession(sessionId, { modelOverride: '' }, { touchUpdatedAt: false });
+    this.sessionModelPatchStateBySession.delete(sessionId);
+    this.notifySessionModelOverrideChanged(sessionId, '');
+    const notice = this.store.addMessage(sessionId, {
+      type: 'system',
+      content: t('coworkSessionModelOverrideUnavailable', { model: modelRef }),
+    });
+    this.emit('message', sessionId, notice);
+  }
+
+  /** A turn never starts on a model that can no longer run; it falls back to the agent model. */
+  private async resolveTurnModelOverride(session: CoworkSession, sessionKey: string): Promise<string> {
+    if (!session.modelOverride || session.modelPresetId) return session.modelOverride;
+    const modelRef = this.normalizeModelRef(session.modelOverride);
+    const availability = this.staleModelOverrides.findStaleReason(modelRef);
+    if (!availability) return session.modelOverride;
+    const cleared = await this.staleModelOverrides.reset({
+      sessionId: session.id,
+      sessionKey,
+      modelRef,
+      availability,
+      trigger: 'before chat.send',
+    });
+    return cleared ? '' : session.modelOverride;
   }
 
   private syncChannelSessionRunStatus(options: {
@@ -6275,13 +6368,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const turnToken = this.nextTurnToken(sessionId);
 
     const agent = this.store.getAgent(agentId);
-    const rawCurrentModel = session.modelOverride || agent?.model || '';
+    const sessionModelOverride = await this.resolveTurnModelOverride(session, sessionKey);
+    const rawCurrentModel = sessionModelOverride || agent?.model || '';
     // Normalize only agent-level model refs (may need provider migration).
     // Session modelOverride is user-selected and must not be rewritten.
-    const currentModel = session.modelOverride
+    const currentModel = sessionModelOverride
       ? rawCurrentModel
       : (rawCurrentModel ? this.normalizeModelRef(rawCurrentModel) : '');
-    if (!session.modelOverride && currentModel && currentModel !== rawCurrentModel && agent?.id) {
+    if (!sessionModelOverride && currentModel && currentModel !== rawCurrentModel && agent?.id) {
       this.store.updateAgent(agent.id, { model: currentModel });
     }
     const thinkingLevel = session.modelPresetId
@@ -6298,7 +6392,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sessionKey,
         model: currentModel,
         thinkingLevel: thinkingLevel || undefined,
-        source: session.modelOverride
+        source: sessionModelOverride
           ? SessionModelPatchSource.SessionOverride
           : SessionModelPatchSource.AgentModel,
       });
@@ -6573,7 +6667,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.buildInjectedSystemPrompt(normalizedSystemPrompt, agentId),
       ));
     }
-    sections.push(buildOpenClawLocalTimeContextPrompt());
     if (currentModel) {
       sections.push(`[Session info]\nCurrent model: ${currentModel}`);
     }
@@ -6616,6 +6709,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       if (planMode) {
         sections.push(buildPlanModeOutboundReminder());
       }
+      // Sample after startup/rehydration; retries reuse this completed string.
+      sections.push(buildOpenClawLocalTimeContextPrompt());
       return sections.join('\n\n');
     }
 
@@ -6680,6 +6775,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (planMode) {
       sections.push(buildPlanModeOutboundReminder());
     }
+    // History probes may be slow. Freeze time only when the prompt is ready.
+    sections.push(buildOpenClawLocalTimeContextPrompt());
     return sections.join('\n\n');
   }
 
@@ -6918,6 +7015,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           this.subscribeToGatewaySessionEvents(client);
           if (this.channelSessionSync) this.startChannelPolling();
           void this.questionController.restorePending();
+          void this.reconcileStaleSessionModelOverrides('gateway ready');
           if (notifyReady) {
             try { this.options.onGatewayClientReady?.(); }
             catch (error) { console.warn('[ChannelSync] gateway ready callback failed:', error); }
@@ -11769,7 +11867,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     sessionKey: string,
     options?: { isFullSync?: boolean },
   ): Promise<void> {
-    if (isSubagentSessionKey(sessionKey)) {
+    if (isSubagentSessionKey(sessionKey) || this.subagentTracker.isChildSession(sessionId)) {
       await this.syncSubagentChildHistory(sessionId, sessionKey, options);
       return;
     }
@@ -11785,7 +11883,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private async syncSubagentChildHistory(
     sessionId: string,
     sessionKey: string,
-    options?: { isFullSync?: boolean },
+    _options?: { isFullSync?: boolean },
   ): Promise<void> {
     const client = this.gatewayClient;
     if (!client) {
@@ -11793,14 +11891,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
 
-    const limit = options?.isFullSync
-      ? OpenClawRuntimeAdapter.FULL_HISTORY_SYNC_LIMIT
-      : FINAL_HISTORY_SYNC_LIMIT;
-
     try {
-      const history = await client.request<{ messages?: unknown[] }>('chat.history', {
+      const history = await client.request<{ messages?: unknown[]; hasMore?: boolean }>('chat.history', {
         sessionKey,
-        limit,
+        limit: SUBAGENT_CHILD_HISTORY_SYNC_LIMIT,
       }, { timeoutMs: 10_000 });
       if (!Array.isArray(history?.messages) || history.messages.length === 0) {
         this.channelSyncCursor.set(sessionId, 0);
@@ -11814,6 +11908,17 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         previousCountKnown: previousHistoryCountKnown,
         previousCount: previousHistoryCount,
       });
+
+      // Older records exist before this window (a very long run, or the
+      // gateway's byte cap). Replacing the transcript with it would drop the
+      // task and the earliest steps, so keep the streamed local transcript.
+      if (history.hasMore === true) {
+        console.debug(
+          '[SubagentHistorySync] skipped truncated history window - sessionId:', sessionId,
+          'messages:', history.messages.length,
+        );
+        return;
+      }
 
       const session = this.store.getSession(sessionId);
       if (!session) return;

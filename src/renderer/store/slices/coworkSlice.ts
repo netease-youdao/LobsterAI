@@ -53,6 +53,8 @@ export interface DraftAttachment {
   isImage?: boolean;
   isDirectory?: boolean;
   dataUrl?: string;
+  /** Full text of a large paste shown as a card; path is `pasted:<id>`. */
+  pastedText?: string;
 }
 
 export const PlanConfirmationState = {

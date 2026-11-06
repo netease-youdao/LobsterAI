@@ -44,7 +44,7 @@ const clientStartedAt = (details: MediaDetails): number | undefined => {
 
 // A late query response must not turn a finished task back into a running one,
 // or turn an already saved file back into a pending download.
-const mergeDetails = (previous: MediaDetails, next: MediaDetails): MediaDetails => {
+export const mergeMediaTaskDetails = (previous: MediaDetails, next: MediaDetails): MediaDetails => {
   if ((TERMINAL_MEDIA_TASK_STATUSES.has(String(previous.status))
       && !TERMINAL_MEDIA_TASK_STATUSES.has(String(next.status)))
     || (previous.deliveryStatus === MediaDeliveryStatus.Saved
@@ -54,7 +54,7 @@ const mergeDetails = (previous: MediaDetails, next: MediaDetails): MediaDetails 
   return { ...previous, ...next };
 };
 
-const detailsOf = (group: ToolGroupItem): MediaDetails => mergeDetails(
+const detailsOf = (group: ToolGroupItem): MediaDetails => mergeMediaTaskDetails(
   group.toolResult?.metadata?.toolResultDetails as MediaDetails ?? {},
   group.toolUse.metadata?.mediaStatusDetails as MediaDetails ?? {},
 );
@@ -73,7 +73,7 @@ export const buildMediaTaskPresentations = (turns: readonly ConversationTurn[]):
       const createdAt = taskCreatedAt(details);
       const task = tasks.get(taskId);
       if (task) {
-        task.details = mergeDetails(task.details, details);
+        task.details = mergeMediaTaskDetails(task.details, details);
         task.startedAt = clientStartedAt(task.details) ?? createdAt ?? task.startedAt ?? resultReceivedAt(item.group);
       } else {
         tasks.set(taskId, {

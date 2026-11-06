@@ -80,6 +80,14 @@ describe('conversation search', () => {
     expect(matches).toHaveLength(1);
   });
 
+  test('places pasted-text card content after the visible user text', () => {
+    const content = 'see below\n\n<pasted_text id="p1">\nneedle in paste\n</pasted_text id="p1">';
+
+    expect(getConversationSearchMessageText(message('user-paste', 'user', content)))
+      .toBe('see below\n\nneedle in paste');
+    expect(findConversationSearchMatches([message('user-paste', 'user', content)], 'needle')).toHaveLength(1);
+  });
+
   test('treats regular-expression characters literally', () => {
     const matches = findConversationSearchMatches([
       message('literal', 'user', 'Use [a-z].* literally, then [a-z].* again.'),

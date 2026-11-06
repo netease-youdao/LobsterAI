@@ -302,6 +302,16 @@ export class SubagentTracker {
   // ── Public query API ───────────────────────────────────────────────────
 
   /**
+   * Whether a Cowork session was materialized for a spawn. Visible spawns get
+   * a dashboard session key rather than a `:subagent:` one, so the key alone
+   * does not identify a child session.
+   */
+  isChildSession(coworkSessionId: string): boolean {
+    if (typeof this.store?.hasChildSession !== 'function') return false;
+    return this.store.hasChildSession(coworkSessionId);
+  }
+
+  /**
    * Returns persisted subagent runs for a parent session.
    * Merges in-memory status with database records for real-time accuracy.
    * Records stuck in 'running' from a previous app session (no in-memory state)

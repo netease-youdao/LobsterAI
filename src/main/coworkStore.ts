@@ -30,6 +30,7 @@ import {
   type CoworkTurnUsage,
   type CoworkTurnUsageAnchor,
   getCoworkTurnUsage,
+  isValidLlmTraceId,
 } from '../shared/cowork/llmTurnUsage';
 import { mergeCoworkMessageMetadata } from '../shared/cowork/messageMetadata';
 import type { CoworkModelChange } from '../shared/cowork/modelChange';
@@ -526,7 +527,10 @@ export interface CoworkMessageMetadata {
     name?: string;
   }>;
   /** User messages: trace carried by every model request of the turn. */
-  llmTrace?: CoworkLlmTrace;
+  llmTrace?: CoworkLlmTrace & {
+    /** Local origin ownership survives history reconciliation and process reload. */
+    usageContext?: { sessionId: string; ownerAccountKey: string; serverBaseUrl: string };
+  };
   /** User messages: credits and tokens the turn consumed on LobsterAI models. */
   turnUsage?: CoworkTurnUsage;
   /** Server media task IDs created by this turn; prices are read from the server. */
@@ -1479,6 +1483,22 @@ export class CoworkStore {
     return row ? this.parseStoredMessage(sessionId, row) : null;
   }
 
+  /** Exact primary trace only. Fork copies and ambiguous legacy matches are not owners. */
+  findUserMessageByTrace(traceId: string, sessionId?: string): { sessionId: string; message: CoworkMessage } | null {
+    if (!isValidLlmTraceId(traceId)) return null;
+    const rows = this.getAll<CoworkMessageRow & { session_id: string }>(`
+      SELECT id, session_id, type, content, metadata, created_at, sequence
+      FROM cowork_messages
+      WHERE type = 'user' ${sessionId ? 'AND session_id = ?' : ''}
+        AND CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.llmTrace.traceId') END = ?
+        AND COALESCE(CASE WHEN json_valid(metadata)
+          THEN json_extract(metadata, '$.llmTrace.usageContext.sessionId') END, session_id) = session_id
+      LIMIT 2
+    `, sessionId ? [sessionId, traceId] : [traceId]);
+    if (rows.length !== 1) return null;
+    return { sessionId: rows[0].session_id, message: this.parseStoredMessage(rows[0].session_id, rows[0]) };
+  }
+
   private parseStoredMessage(sessionId: string, row: CoworkMessageRow): CoworkMessage {
     let metadata: Record<string, unknown> | undefined;
     if (row.metadata) {
@@ -1716,6 +1736,25 @@ export class CoworkStore {
       [agentId],
     );
     return rows.map(row => row.id);
+  }
+
+  /** IM sessions pinned to their own model, with the OpenClaw session that stores the pin. */
+  listChannelSessionModelOverrides(): Array<{ sessionId: string; modelOverride: string; sessionKey: string }> {
+    if (!this.hasIMSessionMappingsTable()) return [];
+    const rows = this.getAll<{ id: string; model_override: string; openclaw_session_key: string }>(
+      `
+      SELECT s.id, s.model_override, MAX(m.openclaw_session_key) AS openclaw_session_key
+      FROM cowork_sessions s
+      JOIN im_session_mappings m ON m.cowork_session_id = s.id
+      WHERE s.model_override != '' AND COALESCE(m.openclaw_session_key, '') != ''
+      GROUP BY s.id
+    `,
+    );
+    return rows.map(row => ({
+      sessionId: row.id,
+      modelOverride: row.model_override,
+      sessionKey: row.openclaw_session_key,
+    }));
   }
 
   private deleteSessionRows(ids: string[]): string[] {
@@ -3894,6 +3933,21 @@ export class CoworkStore {
             createdAt,
             now,
           );
+
+        // The spawn task is the child's first user turn, but the gateway writes
+        // it only after the child run starts, and a long run's history window
+        // no longer reaches it. Seed it so the child session opens with its input.
+        const task = options.task?.trim();
+        if (task) {
+          this.db
+            .prepare(
+              `
+              INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+              VALUES (?, ?, 'user', ?, NULL, ?, 1)
+            `,
+            )
+            .run(uuidv4(), options.id, task, createdAt);
+        }
       }
     });
 

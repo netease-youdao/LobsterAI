@@ -69,6 +69,7 @@ export interface CoworkSteerAttachment {
   isImage?: boolean;
   isDirectory?: boolean;
   dataUrl?: string;
+  pastedText?: string;
 }
 
 export interface CoworkQueuedMediaSelection {

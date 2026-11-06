@@ -94,8 +94,8 @@ test('generation elapsed time excludes time spent awaiting video confirmation', 
   const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   try {
     expect(buildMediaTaskPresentations(turnsOf(messages)).get('generate')?.startedAt).toBe(now - 3_000);
-    expect(renderCalls(messages)).toContain('已等待 3 秒');
-    expect(renderCalls(messages)).not.toContain('已等待 84 秒');
+    expect(renderCalls(messages)).toContain('0:03');
+    expect(renderCalls(messages)).not.toContain('1:24');
   } finally {
     clock.mockRestore();
   }
@@ -112,8 +112,8 @@ test('local submission time wins over a skewed server clock and survives later p
   const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   try {
     expect(buildMediaTaskPresentations(turnsOf(messages)).get('generate-local')?.startedAt).toBe(now);
-    expect(renderCalls(messages)).toContain('已等待 0 秒');
-    expect(renderCalls(messages)).not.toContain('已等待 27 秒');
+    expect(renderCalls(messages)).toContain('0:00');
+    expect(renderCalls(messages)).not.toContain('0:27');
   } finally { clock.mockRestore(); }
 });
 
@@ -159,7 +159,7 @@ test('a task without an acknowledged timestamp does not display a misleading ela
   messages[0].metadata!.mediaStatusDetails = messages[1].metadata!.toolResultDetails;
   messages.pop();
   expect(buildMediaTaskPresentations(turnsOf(messages)).get('generate')?.startedAt).toBeUndefined();
-  expect(renderCalls(messages)).not.toContain('已等待');
+  expect(renderCalls(messages)).not.toMatch(/>\d+:\d{2}</);
 });
 
 test.each([MediaTaskStatus.Cancelled, MediaTaskStatus.Failed, MediaTaskStatus.Timeout, MediaTaskStatus.Succeeded])(
@@ -171,9 +171,10 @@ test.each([MediaTaskStatus.Cancelled, MediaTaskStatus.Failed, MediaTaskStatus.Ti
     ];
     const html = renderCalls(messages);
     expect(html.match(/data-media-task-id="293"/g)).toHaveLength(1);
-    expect(html.match(/生成任务 293 的调用记录/g)).toHaveLength(2);
+    expect(html.match(/查看了图片生成进度/g)).toHaveLength(2);
+    expect(html).not.toContain('调用记录');
     expect(html).toContain('本次预扣积分已退回');
-    expect(html).not.toContain('已等待');
+    expect(html).not.toMatch(/>\d+:\d{2}</);
     // Calls and their original results remain in the expanded tool history.
     const turns = turnsOf(messages);
     expect(consolidateMediaPolling(turns[0].assistantItems, buildMediaTaskPresentations(turns)))
@@ -181,6 +182,14 @@ test.each([MediaTaskStatus.Cancelled, MediaTaskStatus.Failed, MediaTaskStatus.Ti
     expect(messages.filter(message => message.content === 'Original tool result')).toHaveLength(3);
   },
 );
+
+test('progress checks on a video task read as video checks', () => {
+  const messages = [...mediaCall('generate', '294'), ...mediaCall('query', '294', {}, true)]
+    .map(message => message.type === 'tool_use'
+      ? { ...message, metadata: { ...message.metadata, toolName: 'lobsterai_video_generate' } }
+      : message);
+  expect(renderCalls(messages)).toContain('查看了视频生成进度');
+});
 
 test('queries in later turns share the first card and do not merge different tasks', () => {
   const messages = [

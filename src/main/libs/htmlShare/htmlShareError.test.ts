@@ -56,4 +56,15 @@ describe('htmlShareError', () => {
     );
     expect(sanitizeOptionalHtmlShareContent(' 123 ', 3)).toBe('123');
   });
+
+  test.each([undefined, null, '', ' \n\t '])(
+    'treats absent or blank optional content as missing: %j',
+    content => {
+      expect(sanitizeOptionalHtmlShareContent(content, 1024)).toBeUndefined();
+    },
+  );
+
+  test.each([0, false, {}, []])('rejects non-string content: %j', content => {
+    expect(() => sanitizeOptionalHtmlShareContent(content, 1024)).toThrow('content must be a string.');
+  });
 });

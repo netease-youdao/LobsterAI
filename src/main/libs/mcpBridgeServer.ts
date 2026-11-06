@@ -1,15 +1,17 @@
 /**
  * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
- * Provides AskUser, media-generation, decision-model, in-app browser and Office
- * editor (Word, Excel, PowerPoint) endpoints. Binds to 127.0.0.1 only and
- * requires the bridge secret, which persists for an app version so OpenClaw's
- * config stays stable.
+ * Provides AskUser, media-generation, decision-model, in-app browser, Office
+ * editor (Word, Excel, PowerPoint) and host-info endpoints. Binds to 127.0.0.1
+ * only and requires the bridge secret, which persists for an app version so
+ * OpenClaw's config stays stable.
  */
 import crypto from 'crypto';
 import http from 'http';
 
-import type { MediaConfirmationCommand, MediaConfirmationResponse, MediaConfirmationState } from '../../shared/media/confirmation';
+import type {
+  MediaConfirmationCommand, MediaConfirmationResponse, MediaConfirmationState, VideoConfirmationDetails,
+} from '../../shared/media/confirmation';
 import { MediaConfirmationReason } from '../../shared/media/confirmation';
 import { listenOnLoopback } from './loopbackListen';
 import { MediaConfirmationRequests, type RecoverableMediaConfirmation } from './mediaConfirmationRequests';
@@ -45,6 +47,8 @@ export type AskUserRequest = {
     subtitle?: string;
     options: Array<{ label: string; description?: string }>;
     multiSelect?: boolean;
+    /** Video generation confirmations: what the desktop card lays out. */
+    video?: VideoConfirmationDetails;
   }>;
 };
 
@@ -184,6 +188,15 @@ export class McpBridgeServer {
     return this._port ? `http://127.0.0.1:${this._port}/agent-settings/tool` : null;
   }
   onAgentSettingsTool(handler: AgentSettingsToolHandler): void { this.onAgentSettingsToolCallback = handler; }
+
+  /**
+   * Per-launch host facts (the app's process id) for bridge clients. They are
+   * served here instead of being written into openclaw.json: any config change
+   * makes OpenClaw rerun its startup migrations on the next gateway start.
+   */
+  get hostInfoUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/host/info` : null;
+  }
 
   editorCallbackUrl(route: string): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/${route}/tool` : null;
@@ -407,6 +420,12 @@ export class McpBridgeServer {
 
     if (req.url?.startsWith('/decision/tool')) {
       await this.handleDecisionTool(req, res);
+      return;
+    }
+
+    if (req.url?.startsWith('/host/info')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ pid: process.pid }));
       return;
     }
 

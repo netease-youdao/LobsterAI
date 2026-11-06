@@ -4656,7 +4656,7 @@ const Settings: React.FC<SettingsProps> = ({
         return <RemoteDeviceSettings onLogin={onShowLogin} loginAllowed={enterpriseConfig?.ui?.login !== 'hide'} />;
       case 'experimental':
         return (
-          <div className="space-y-4">
+          <div className="space-y-8">
             <DshExperimentalSettings />
             <DecisionModelExperimentalSettings draftRef={decisionModelDraftRef} />
           </div>

@@ -4,8 +4,9 @@
  */
 
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowLeftIcon, CheckCircleIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, EllipsisVerticalIcon, ExclamationTriangleIcon, PlusIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, CheckCircleIcon, EllipsisVerticalIcon, ExclamationTriangleIcon, PlusIcon, QrCodeIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { ArrowPathIcon } from '@heroicons/react/24/outline';
+import { AgentId } from '@shared/agent';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
@@ -18,17 +19,22 @@ import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { RootState } from '../../store';
 import { clearError,setDingTalkConfig, setDingTalkInstanceConfig, setDiscordConfig, setDiscordInstanceConfig, setEmailInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setNeteaseBeeChanConfig, setNimConfig, setNimInstanceConfig, setPopoInstanceConfig, setQQConfig, setQQInstanceConfig, setTelegramInstanceConfig, setTelegramOpenClawConfig, setWecomConfig, setWecomInstanceConfig, setWeixinConfig } from '../../store/slices/imSlice';
-import type { EmailInstanceConfig, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, WeixinOpenClawConfig } from '../../types/im';
+import type { EmailInstanceConfig, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig } from '../../types/im';
 import { MAX_DINGTALK_INSTANCES, MAX_DISCORD_INSTANCES, MAX_EMAIL_INSTANCES, MAX_FEISHU_INSTANCES, MAX_NIM_INSTANCES, MAX_POPO_INSTANCES, MAX_QQ_INSTANCES, MAX_TELEGRAM_INSTANCES, MAX_WECOM_INSTANCES } from '../../types/im';
+import { getAgentDisplayNameById } from '../../utils/agentDisplay';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
+import { formatAgentTaskRelativeTime } from '../agentSidebar/time';
+import CardToggle from '../common/CardToggle';
 import Modal from '../common/Modal';
 import ComposeIcon from '../icons/ComposeIcon';
 import EditIcon from '../icons/EditIcon';
 import TrashIcon from '../icons/TrashIcon';
-import { SETTINGS_ITEM_TITLE_TEXT, SETTINGS_SECTION_TITLE_TEXT } from '../settings/settingsTypography';
+import { SETTINGS_ACTION_BUTTON_CLASS, SettingsCard, SettingsItem } from '../settings/SettingsLayout';
+import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT, SETTINGS_SECTION_TITLE_TEXT } from '../settings/settingsTypography';
 import DingTalkInstanceSettings from './DingTalkInstanceSettings';
 import DiscordInstanceSettings from './DiscordInstanceSettings';
 import FeishuInstanceSettings from './FeishuInstanceSettings';
+import IMPlatformHeader from './IMPlatformHeader';
 import NimInstanceSettings from './NimInstanceSettings';
 import { nimFallbackInstanceSchema, nimFallbackUiHints } from './nimSchemaFallback';
 import PopoInstanceSettings from './PopoInstanceSettings';
@@ -38,38 +44,6 @@ import TelegramInstanceSettings from './TelegramInstanceSettings';
 import WecomInstanceSettings from './WecomInstanceSettings';
 
 
-
-// Reusable guide card component for platform setup instructions
-const PlatformGuide: React.FC<{
-  title?: string;
-  steps: string[];
-  guideUrl?: string;
-  guideLabel?: string;
-}> = ({ title, steps, guideUrl, guideLabel }) => (
-  <div className="mb-3 p-3 rounded-lg border border-dashed border-border-subtle">
-    {title && (
-      <p className="text-xs text-foreground leading-relaxed mb-1.5 font-medium">{title}</p>
-    )}
-    <ol className="text-xs text-secondary space-y-1 list-decimal list-inside">
-      {steps.map((step, i) => (
-        <li key={i}>{step}</li>
-      ))}
-    </ol>
-    {guideUrl && (
-      <button
-        type="button"
-        onClick={() => {
-          window.electron.shell.openExternal(guideUrl).catch((err: unknown) => {
-            console.error('[IM] Failed to open guide URL:', err);
-          });
-        }}
-        className="mt-2 text-xs font-medium text-primary dark:text-primary hover:text-primary dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
-      >
-        {guideLabel || i18nService.t('imViewGuide')}
-      </button>
-    )}
-  </div>
-);
 
 const verdictColorClass: Record<IMConnectivityTestResult['verdict'], string> = {
   pass: 'bg-green-500/15 text-green-600 dark:text-green-400',
@@ -398,6 +372,7 @@ function translateIMError(error: string | null): string {
 const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
+  const agents = useSelector((state: RootState) => state.agent.agents);
   const [activePlatform, setActivePlatform] = useState<Platform>('weixin');
   const [activeQQInstanceId, setActiveQQInstanceId] = useState<string | null>(null);
   const [activeFeishuInstanceId, setActiveFeishuInstanceId] = useState<string | null>(null);
@@ -432,11 +407,8 @@ const IMSettings: React.FC = () => {
   const [weixinQrStatus, setWeixinQrStatus] = useState<'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'>('idle');
   const [weixinQrUrl, setWeixinQrUrl] = useState<string>('');
   const [weixinQrError, setWeixinQrError] = useState<string>('');
-  const [weixinAllowFromInput, setWeixinAllowFromInput] = useState<string>('');
-  const [isWeixinDmPolicyMenuOpen, setIsWeixinDmPolicyMenuOpen] = useState(false);
   const weixinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const weixinLoginRequestRef = useRef(0);
-  const weixinDmPolicyMenuRef = useRef<HTMLDivElement>(null);
   const [_localIp, setLocalIp] = useState<string>('');
   const isMountedRef = useRef(true);
 
@@ -465,33 +437,9 @@ const IMSettings: React.FC = () => {
   }, [instanceMenuTarget]);
 
   useEffect(() => {
-    if (!isWeixinDmPolicyMenuOpen) return undefined;
-
-    const closeWeixinDmPolicyMenu = (event: PointerEvent) => {
-      if (weixinDmPolicyMenuRef.current?.contains(event.target as Node)) return;
-      setIsWeixinDmPolicyMenuOpen(false);
-    };
-
-    const handleWeixinDmPolicyMenuKeydown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      // Claim the press during capture so the settings panel stays open.
-      event.preventDefault();
-      setIsWeixinDmPolicyMenuOpen(false);
-    };
-
-    document.addEventListener('pointerdown', closeWeixinDmPolicyMenu);
-    document.addEventListener('keydown', handleWeixinDmPolicyMenuKeydown, true);
-    return () => {
-      document.removeEventListener('pointerdown', closeWeixinDmPolicyMenu);
-      document.removeEventListener('keydown', handleWeixinDmPolicyMenuKeydown, true);
-    };
-  }, [isWeixinDmPolicyMenuOpen]);
-
-  useEffect(() => {
     setInstanceMenuTarget(null);
     setRenamingInstance(null);
     setDeleteConfirmTarget(null);
-    setIsWeixinDmPolicyMenuOpen(false);
   }, [activePlatform]);
 
   // Fetch local IP for POPO webhook placeholder
@@ -734,18 +682,12 @@ const IMSettings: React.FC = () => {
   const weixinOpenClawConfig = config.weixin;
   const weixinRuntimeAccountId = status.weixin?.accountId || '';
   const weixinAccountId = weixinOpenClawConfig.accountId || weixinRuntimeAccountId;
-  const weixinDmPolicyOptions: Array<{ value: WeixinOpenClawConfig['dmPolicy']; label: string }> = [
-    { value: 'open', label: i18nService.t('imDmPolicyOpen') },
-    { value: 'pairing', label: i18nService.t('imDmPolicyPairing') },
-    { value: 'allowlist', label: i18nService.t('imDmPolicyAllowlist') },
-    { value: 'disabled', label: i18nService.t('imDmPolicyDisabled') },
-  ];
-
-  const updateWeixinDmPolicy = (dmPolicy: WeixinOpenClawConfig['dmPolicy']) => {
-    setIsWeixinDmPolicyMenuOpen(false);
-    if (dmPolicy === weixinOpenClawConfig.dmPolicy) return;
-    void imService.updateConfig({ weixin: { ...weixinOpenClawConfig, dmPolicy } });
-  };
+  // Single-instance platforms bind by platform key; unbound channels fall back to the main agent.
+  const weixinAgentName = getAgentDisplayNameById(
+    config.settings?.platformAgentBindings?.weixin || AgentId.Main,
+    agents,
+  );
+  const weixinLastInboundAt = status.weixin?.lastInboundAt ?? null;
 
   const persistConnectedWeixinConfig = async (accountId: string) => {
     dispatch(setWeixinConfig({ enabled: true, accountId }));
@@ -1190,15 +1132,6 @@ const IMSettings: React.FC = () => {
     return 'bg-gray-500/15 text-gray-500 dark:text-gray-400';
   };
 
-  const getPlatformSwitchColorClass = (platform: Platform): string => {
-    const displayState = getPlatformDisplayState(platform);
-    if (displayState === IMRuntimeDisplayState.Connected) return 'bg-green-500';
-    if (displayState === IMRuntimeDisplayState.Connecting || displayState === IMRuntimeDisplayState.Starting) return 'bg-sky-500';
-    if (displayState === IMRuntimeDisplayState.Failed) return 'bg-red-500';
-    if (displayState === IMRuntimeDisplayState.PendingSave) return 'bg-yellow-500';
-    return 'bg-gray-300 dark:bg-gray-600';
-  };
-
   const getPlatformStatusDotClass = (platform: Platform): string | null => {
     const displayState = getPlatformDisplayState(platform);
     if (displayState === IMRuntimeDisplayState.Connected) return 'bg-green-500';
@@ -1208,6 +1141,19 @@ const IMSettings: React.FC = () => {
     if (displayState === IMRuntimeDisplayState.PendingSave) return 'bg-yellow-500';
     if (displayState === IMRuntimeDisplayState.Failed) return 'bg-red-500';
     return null;
+  };
+
+  const renderPlatformStatusPill = (platform: Platform) => {
+    const displayState = getPlatformDisplayState(platform);
+    const isBusy = displayState === IMRuntimeDisplayState.Connecting || displayState === IMRuntimeDisplayState.Starting;
+    return (
+      <span className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${getPlatformStatusColorClass(platform)}`}>
+        {isBusy
+          ? <ArrowPathIcon className="h-3 w-3 animate-spin" />
+          : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+        {getPlatformStatusLabel(platform)}
+      </span>
+    );
   };
 
   const renderSaveReminder = (platform: Platform) => (
@@ -1535,9 +1481,9 @@ const IMSettings: React.FC = () => {
       type="button"
       onClick={() => handleConnectivityTest(platform)}
       disabled={isLoading || testingPlatform === platform}
-      className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]"
+      className={SETTINGS_ACTION_BUTTON_CLASS}
     >
-      <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
+      <SignalIcon className="h-3.5 w-3.5" />
       {testingPlatform === platform
         ? i18nService.t('imConnectivityTesting')
         : connectivityResults[platform]
@@ -1684,13 +1630,6 @@ const IMSettings: React.FC = () => {
     if (platform === 'discord') return !!getStringField(instance, 'botToken');
     if (platform === 'popo') return !!(getStringField(instance, 'appKey') && getStringField(instance, 'appSecret') && getStringField(instance, 'aesKey'));
     return false;
-  };
-
-  const getDmPolicyLabel = (policy?: string): string => {
-    if (policy === 'pairing') return i18nService.t('imDmPolicyPairing');
-    if (policy === 'allowlist') return i18nService.t('imDmPolicyAllowlist');
-    if (policy === 'disabled') return i18nService.t('imDmPolicyDisabled');
-    return i18nService.t('imDmPolicyOpen');
   };
 
   const addInstanceForPlatform = async (platform: Platform) => {
@@ -1872,20 +1811,13 @@ const IMSettings: React.FC = () => {
 
     return (
       <div className="space-y-5">
-        <div className="flex items-center gap-3 border-b border-border-subtle pb-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="min-w-0">
-              <h3 className={`truncate ${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>
-                {i18nService.t('imChannelBotsTitle').replace('{platform}', i18nService.t(platform))}
-              </h3>
-              <p className="mt-0.5 whitespace-nowrap text-xs text-green-600 dark:text-green-400">
-                {i18nService.t('imInstanceSummary')
-                  .replace('{connected}', String(connectedCount))
-                  .replace('{total}', String(instances.length))}
-              </p>
-            </div>
-          </div>
-        </div>
+        <IMPlatformHeader
+          logo={PlatformRegistry.logo(platform)}
+          name={i18nService.t('imChannelBotsTitle').replace('{platform}', i18nService.t(platform))}
+          description={i18nService.t('imInstanceSummary')
+            .replace('{connected}', String(connectedCount))
+            .replace('{total}', String(instances.length))}
+        />
 
         <div
           className="grid w-full gap-3"
@@ -2076,13 +2008,11 @@ const IMSettings: React.FC = () => {
   return (
     <div className="flex h-full gap-3">
       {/* Platform List - Left Side */}
-      <div className="w-44 flex-shrink-0 space-y-1.5 overflow-y-auto border-r border-border pr-3">
+      <nav className="flex w-44 flex-shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border pr-3">
         {platforms.map((platform) => {
           const logo = PlatformRegistry.logo(platform);
           const isActive = activePlatform === platform;
-          const isEnabled = isPlatformEnabled(platform);
           const statusDotClass = getPlatformStatusDotClass(platform);
-          const canToggle = isEnabled || canStart(platform);
 
           return (
             <button
@@ -2094,85 +2024,58 @@ const IMSettings: React.FC = () => {
                   setActiveInstanceForPlatform(platform, null);
                 }
               }}
-              className={`flex w-full items-center rounded-xl border p-2 text-left transition-colors ${
-                isActive
-                  ? 'border-primary bg-primary-muted shadow-subtle'
-                  : 'border-transparent bg-surface hover:bg-surface-raised'
+              aria-current={isActive ? 'page' : undefined}
+              title={statusDotClass ? `${i18nService.t(platform)} · ${getPlatformStatusLabel(platform)}` : undefined}
+              className={`group flex h-10 w-full flex-shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-left transition-colors ${
+                isActive ? 'bg-primary-muted' : 'hover:bg-surface-raised'
               }`}
             >
-              <div className="mr-2 flex h-7 w-7 flex-shrink-0 items-center justify-center">
-                <img
-                  src={logo}
-                  alt={i18nService.t(platform)}
-                  className="h-6 w-6 rounded-md object-contain"
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className={`truncate ${SETTINGS_ITEM_TITLE_TEXT} font-normal text-foreground/80`}>
-                    {i18nService.t(platform)}
-                  </span>
-                  {statusDotClass && (
-                    <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusDotClass}`} />
-                  )}
-                </span>
-              </div>
-              {!isMultiInstancePlatform(platform) && (
-                <span
-                  className={`ml-2 flex h-4 w-7 flex-shrink-0 items-center rounded-full transition-colors ${
-                    isEnabled ? getPlatformSwitchColorClass(platform) : 'bg-gray-300 dark:bg-gray-600'
-                  } ${(!canToggle || togglingPlatform === platform) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handlePlatformToggle(platform);
-                  }}
-                >
-                  <span
-                    className={`h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
-                      isEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
-                    }`}
-                  />
-                </span>
+              <img
+                src={logo}
+                alt=""
+                className="h-[22px] w-[22px] flex-shrink-0 rounded-md object-contain"
+              />
+              <span className={`min-w-0 flex-1 truncate ${SETTINGS_ITEM_TITLE_TEXT} ${
+                isActive ? 'font-medium text-foreground' : 'text-secondary group-hover:text-foreground'
+              }`}>
+                {i18nService.t(platform)}
+              </span>
+              {statusDotClass && (
+                <span className={`h-2 w-2 flex-shrink-0 rounded-full ${statusDotClass}`} />
               )}
             </button>
           );
         })}
-      </div>
+      </nav>
 
       {/* Platform Settings - Right Side */}
       <div className="min-w-0 flex-1 space-y-4 overflow-y-auto pl-3 pr-4 [scrollbar-gutter:stable]">
         {/* Header with status (only for single-instance platforms without per-instance headers) */}
-        {(activePlatform === 'weixin' || activePlatform === 'netease-bee') && (
-          <div className="flex items-center gap-3 border-b border-border-subtle pb-4">
-            <div className="flex items-center gap-2">
-              <h3 className={`${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>
-                {`${i18nService.t(activePlatform)}${i18nService.t('settings')}`}
-              </h3>
-            </div>
-            <div className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${getPlatformStatusColorClass(activePlatform)}`}>
-              {(() => {
-                const displayState = getPlatformDisplayState(activePlatform);
-                return (displayState === IMRuntimeDisplayState.Connecting || displayState === IMRuntimeDisplayState.Starting) ? (
-                  <ArrowPathIcon className="h-3 w-3 animate-spin" />
-                ) : null;
-              })()}
-              {getPlatformStatusLabel(activePlatform)}
-            </div>
-            {activePlatform === 'weixin' && (
-              <div className="ml-auto flex items-center gap-2">
-                {renderConnectivityTestButton('weixin')}
-                <button
-                  type="button"
-                  onClick={() => void handleWeixinQrLogin()}
-                  disabled={weixinQrStatus === 'loading' || weixinQrStatus === 'waiting'}
-                  className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {weixinAccountId ? i18nService.t('imRescan') : i18nService.t('imWeixinScanBtn')}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        {(activePlatform === 'weixin' || activePlatform === 'netease-bee') && (() => {
+          const isEnabled = isPlatformEnabled(activePlatform);
+          const canToggle = isEnabled || canStart(activePlatform);
+          return (
+            <IMPlatformHeader
+              logo={PlatformRegistry.logo(activePlatform)}
+              name={i18nService.t(activePlatform)}
+              description={activePlatform === 'weixin' ? i18nService.t('imWeixinDescription') : undefined}
+              status={renderPlatformStatusPill(activePlatform)}
+              actions={(
+                <>
+                  <span className="flex items-center gap-2">
+                    <span className="text-xs text-secondary">{i18nService.t('enable')}</span>
+                    <CardToggle
+                      isOn={isEnabled}
+                      label={i18nService.t(isEnabled ? 'disable' : 'enable')}
+                      onToggle={() => handlePlatformToggle(activePlatform)}
+                      disabled={!canToggle || togglingPlatform === activePlatform}
+                    />
+                  </span>
+                </>
+              )}
+            />
+          );
+        })()}
 
 
         {/* DingTalk Settings (multi-instance) */}
@@ -2882,233 +2785,186 @@ const IMSettings: React.FC = () => {
         )}
 
         {/* Weixin (微信) Settings */}
-        {activePlatform === 'weixin' && (
-          <div className="space-y-3">
-            {/* Scan QR code section */}
-            {(!weixinAccountId || (weixinQrStatus !== 'idle' && weixinQrStatus !== 'success')) && (
-              <div className="rounded-lg border border-dashed border-border-subtle p-4 text-center space-y-3">
-                {(weixinQrStatus === 'idle' || weixinQrStatus === 'error') && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void handleWeixinQrLogin()}
-                      className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {i18nService.t('imWeixinScanBtn')}
-                    </button>
-                    <p className="text-xs text-secondary">
+        {activePlatform === 'weixin' && (() => {
+          const isWeixinQrVisible = (weixinQrStatus === 'showing' || weixinQrStatus === 'waiting') && !!weixinQrUrl;
+          const isWeixinQrBusy = weixinQrStatus === 'loading' || weixinQrStatus === 'waiting';
+          const weixinGuideUrl = PlatformRegistry.guideUrl('weixin');
+          const weixinGuideSteps = [
+            i18nService.t('imWeixinGuideStep1'),
+            i18nService.t('imWeixinGuideStep2'),
+            i18nService.t('imWeixinGuideStep3'),
+          ];
+          const groupLabelClass = `px-1 ${SETTINGS_DESCRIPTION_TEXT} font-medium text-secondary`;
+
+          return (
+            <div className="space-y-5 pt-2">
+              {renderPlatformRuntimeNotice('weixin')}
+
+              {/* Error display */}
+              {shouldShowWeixinError && weixinLastError && (
+                <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">
+                  {isWeixinCredentialMissingError
+                    ? i18nService.t('imWeixinCredentialsMissing')
+                    : translateIMError(weixinLastError)}
+                </div>
+              )}
+
+              {/* QR login: first-time setup, or a rescan in progress */}
+              {(!weixinAccountId || (weixinQrStatus !== 'idle' && weixinQrStatus !== 'success')) && (
+                <div className="flex gap-5 rounded-xl border border-border bg-surface p-5">
+                  <div className="flex h-44 w-44 flex-shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-raised">
+                    {isWeixinQrVisible ? (
+                      <div className="rounded-lg bg-white p-2 shadow-subtle">
+                        <QRCodeSVG value={weixinQrUrl} size={148} />
+                      </div>
+                    ) : weixinQrStatus === 'loading' ? (
+                      <ArrowPathIcon className="h-6 w-6 animate-spin text-primary" />
+                    ) : weixinQrStatus === 'success' ? (
+                      <CheckCircleIcon className="h-10 w-10 text-green-500" />
+                    ) : (
+                      <QrCodeIcon className="h-12 w-12 text-secondary/40" />
+                    )}
+                  </div>
+
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <h4 className={`${SETTINGS_ITEM_TITLE_TEXT} font-semibold text-foreground`}>
+                      {isWeixinQrVisible ? i18nService.t('imWeixinQrScanPrompt') : i18nService.t('imWeixinConnectTitle')}
+                    </h4>
+                    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
                       {i18nService.t('imWeixinScanHint')}
                     </p>
+                    <ol className="mt-3 space-y-2">
+                      {weixinGuideSteps.map((step, index) => (
+                        <li key={step} className={`flex items-start gap-2.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                          <span className="mt-px flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-primary-muted text-[11px] font-semibold text-primary">
+                            {index + 1}
+                          </span>
+                          <span className="min-w-0">{step}</span>
+                        </li>
+                      ))}
+                    </ol>
+
+                    <div className="mt-auto flex flex-wrap items-center gap-3 pt-4">
+                      {isWeixinQrVisible ? (
+                        <span className="inline-flex items-center gap-2 text-xs text-secondary">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                          {i18nService.t('imWeixinQrWaiting')}
+                        </span>
+                      ) : weixinQrStatus === 'success' ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                          <CheckCircleIcon className="h-4 w-4" />
+                          {i18nService.t('imWeixinQrSuccess')}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleWeixinQrLogin()}
+                          disabled={isWeixinQrBusy}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {weixinQrStatus === 'loading'
+                            ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                            : <QrCodeIcon className="h-3.5 w-3.5" />}
+                          {weixinQrStatus === 'loading'
+                            ? i18nService.t('imWeixinQrLoading')
+                            : weixinAccountId ? i18nService.t('imRescan') : i18nService.t('imWeixinScanBtn')}
+                        </button>
+                      )}
+                      {weixinGuideUrl && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            window.electron.shell.openExternal(weixinGuideUrl).catch((err: unknown) => {
+                              console.error('[IM] Failed to open guide URL:', err);
+                            });
+                          }}
+                          className="text-xs font-medium text-secondary underline-offset-2 transition-colors hover:text-primary hover:underline"
+                        >
+                          {i18nService.t('imViewGuide')}
+                        </button>
+                      )}
+                    </div>
+
                     {weixinQrStatus === 'error' && weixinQrError && (
-                      <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                      <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
                         <XCircleIcon className="h-4 w-4 flex-shrink-0" />
-                        <span>
+                        <span className="min-w-0">
                           {i18nService.t('imWeixinQrFailed')}
                           {weixinQrError !== i18nService.t('imWeixinQrFailed') && `: ${weixinQrError}`}
                         </span>
                       </div>
                     )}
-                  </>
-                )}
-                {weixinQrStatus === 'loading' && (
-                  <div className="flex items-center justify-center gap-2 py-4">
-                    <ArrowPathIcon className="h-5 w-5 animate-spin text-primary" />
-                    <span className="text-sm text-secondary">
-                      {i18nService.t('imWeixinQrLoading')}
-                    </span>
                   </div>
-                )}
-                {(weixinQrStatus === 'showing' || weixinQrStatus === 'waiting') && weixinQrUrl && (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium text-foreground">
-                      {i18nService.t('imWeixinQrScanPrompt')}
-                    </p>
-                    <div className="flex justify-center">
-                      <div className="p-3 bg-white rounded-lg border border-border-subtle">
-                        <QRCodeSVG value={weixinQrUrl} size={192} />
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {weixinQrStatus === 'success' && (
-                  <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
-                    <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
-                    {i18nService.t('imWeixinQrSuccess')}
-                  </div>
-                )}
-              </div>
-            )}
+                </div>
+              )}
 
-            {weixinAccountId && (
-              <div className="rounded-xl border border-border-subtle bg-surface p-3 shadow-subtle">
-                <div className="space-y-4">
-                  <section>
-                    <h4 className="mb-2 text-xs font-medium text-secondary">
-                      {i18nService.t('imAccountSection')}
-                    </h4>
-                    <div className="flex min-h-[42px] items-center rounded-lg border border-border-subtle bg-surface px-3">
-                      <span className="text-xs font-medium text-foreground">
-                        {i18nService.t('imAccountIdLabel')}
-                      </span>
-                      <span className="ml-auto min-w-0 truncate pl-4 text-xs font-medium text-secondary select-text" title={weixinAccountId}>
-                        {weixinAccountId}
-                      </span>
-                    </div>
-                  </section>
-
-                  <section>
-                    <h4 className="mb-2 text-xs font-medium text-secondary">
-                      {i18nService.t('imReceivePermission')}
-                    </h4>
-                    <div className="relative" ref={weixinDmPolicyMenuRef}>
-                      <button
-                        type="button"
-                        onClick={() => setIsWeixinDmPolicyMenuOpen((open) => !open)}
-                        className={`flex min-h-[42px] w-full items-center rounded-lg border px-3 text-left transition-colors ${
-                          isWeixinDmPolicyMenuOpen
-                            ? 'border-primary bg-surface-raised shadow-subtle'
-                            : 'border-border-subtle bg-surface hover:border-border hover:bg-surface-raised'
-                        }`}
-                        aria-haspopup="listbox"
-                        aria-expanded={isWeixinDmPolicyMenuOpen}
-                      >
-                        <span className="text-xs font-medium text-foreground">
-                          {i18nService.t('imDmPolicyLabel')}
-                        </span>
-                        <span className="ml-auto text-xs font-medium text-foreground">
-                          {getDmPolicyLabel(weixinOpenClawConfig.dmPolicy)}
-                        </span>
-                        <ChevronDownIcon className={`ml-2 h-3.5 w-3.5 flex-shrink-0 text-secondary transition-transform ${isWeixinDmPolicyMenuOpen ? 'rotate-180' : ''}`} />
-                      </button>
-                      {isWeixinDmPolicyMenuOpen && (
-                        <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-lg border border-border bg-surface shadow-popover popover-enter">
-                          <div
-                            className="py-1"
-                            role="listbox"
-                            aria-label={i18nService.t('imDmPolicyLabel')}
+              {weixinAccountId && (
+                <>
+                  <section className="space-y-2">
+                    <h4 className={groupLabelClass}>{i18nService.t('imWeixinConnectionSection')}</h4>
+                    <SettingsCard>
+                      <SettingsItem
+                        title={i18nService.t('imAccountIdLabel')}
+                        description={(
+                          <span className="block truncate font-mono select-text" title={weixinAccountId}>
+                            {weixinAccountId}
+                          </span>
+                        )}
+                        control={(
+                          <button
+                            type="button"
+                            onClick={() => void handleWeixinQrLogin()}
+                            disabled={isWeixinQrBusy}
+                            className={SETTINGS_ACTION_BUTTON_CLASS}
                           >
-                            {weixinDmPolicyOptions.map((option) => {
-                              const selected = option.value === weixinOpenClawConfig.dmPolicy;
-                              return (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  role="option"
-                                  aria-selected={selected}
-                                  onClick={() => updateWeixinDmPolicy(option.value)}
-                                  className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors ${
-                                    selected
-                                      ? 'bg-primary/10 text-primary'
-                                      : 'text-foreground hover:bg-surface-raised'
-                                  }`}
-                                >
-                                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                                  {selected && <CheckIcon className="h-3.5 w-3.5 flex-shrink-0" />}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                            <QrCodeIcon className="h-3.5 w-3.5" />
+                            {i18nService.t('imRescan')}
+                          </button>
+                        )}
+                      />
+                      <SettingsItem
+                        title={i18nService.t('imWeixinLastMessageLabel')}
+                        description={weixinLastInboundAt
+                          ? i18nService.t('imWeixinLastMessageAgo')
+                            .replace('{time}', formatAgentTaskRelativeTime(weixinLastInboundAt).compact)
+                          : i18nService.t('imWeixinNoMessageYet')}
+                        control={renderConnectivityTestButton('weixin')}
+                      />
+                      <SettingsItem
+                        title={i18nService.t('imWeixinReplyAgentLabel')}
+                        description={i18nService.t('imWeixinReplyAgentHint')}
+                        control={(
+                          <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                            {weixinAgentName}
+                          </span>
+                        )}
+                      />
+                    </SettingsCard>
                   </section>
 
-                  <details className="group">
-                    <summary className="flex min-h-[42px] cursor-pointer list-none items-center rounded-lg border border-border-subtle bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:border-border hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
-                      {i18nService.t('imAdvancedSettings')}
-                      <ChevronRightIcon className="ml-auto h-3.5 w-3.5 text-secondary transition-transform group-open:rotate-90" />
-                    </summary>
-                    <div className="mt-3 rounded-lg border border-border-subtle bg-surface p-3">
-                      <label className="block text-xs font-medium text-secondary">
-                        {i18nService.t('imAllowFromLabel')}
-                      </label>
-                      <div className="mt-2 flex gap-2">
-                        <input
-                          type="text"
-                          value={weixinAllowFromInput}
-                          onChange={(e) => setWeixinAllowFromInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              const id = weixinAllowFromInput.trim();
-                              if (id && !weixinOpenClawConfig.allowFrom.includes(id)) {
-                                const newIds = [...weixinOpenClawConfig.allowFrom, id];
-                                setWeixinAllowFromInput('');
-                                void imService.updateConfig({ weixin: { ...weixinOpenClawConfig, allowFrom: newIds } });
-                              }
-                            }
-                          }}
-                          className="block flex-1 rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30"
-                          placeholder={i18nService.t('imAllowFromPlaceholder')}
-                        />
+                  <div className={`px-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                    <span>
+                      {i18nService.t('imWeixinUsageTip')}
+                      {weixinGuideUrl && (
                         <button
                           type="button"
                           onClick={() => {
-                            const id = weixinAllowFromInput.trim();
-                            if (id && !weixinOpenClawConfig.allowFrom.includes(id)) {
-                              const newIds = [...weixinOpenClawConfig.allowFrom, id];
-                              setWeixinAllowFromInput('');
-                              void imService.updateConfig({ weixin: { ...weixinOpenClawConfig, allowFrom: newIds } });
-                            }
+                            window.electron.shell.openExternal(weixinGuideUrl).catch((err: unknown) => {
+                              console.error('[IM] Failed to open guide URL:', err);
+                            });
                           }}
-                          className="rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                          className="ml-1.5 font-medium text-primary underline-offset-2 hover:underline"
                         >
-                          {i18nService.t('add')}
+                          {i18nService.t('imViewGuide')}
                         </button>
-                      </div>
-                      {weixinOpenClawConfig.allowFrom.length > 0 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {weixinOpenClawConfig.allowFrom.map((id) => (
-                            <span
-                              key={id}
-                              className="inline-flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-2 py-0.5 text-xs text-foreground"
-                            >
-                              {id}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const newIds = weixinOpenClawConfig.allowFrom.filter((uid) => uid !== id);
-                                  void imService.updateConfig({ weixin: { ...weixinOpenClawConfig, allowFrom: newIds } });
-                                }}
-                                className="text-secondary transition-colors hover:text-red-500 dark:hover:text-red-400"
-                                aria-label={i18nService.t('delete')}
-                              >
-                                <XMarkIcon className="h-3 w-3" />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
                       )}
-                    </div>
-                  </details>
-                </div>
-              </div>
-            )}
-
-            {renderPlatformRuntimeNotice('weixin')}
-
-            {/* Error display */}
-            {shouldShowWeixinError && weixinLastError && (
-              <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">
-                {isWeixinCredentialMissingError
-                  ? i18nService.t('imWeixinCredentialsMissing')
-                  : translateIMError(weixinLastError)}
-              </div>
-            )}
-
-            {/* Platform Guide */}
-            {!weixinAccountId && (
-              <PlatformGuide
-                steps={[
-                  i18nService.t('imWeixinGuideStep1'),
-                  i18nService.t('imWeixinGuideStep2'),
-                  i18nService.t('imWeixinGuideStep3'),
-                ]}
-                guideUrl={PlatformRegistry.guideUrl('weixin')}
-              />
-            )}
-          </div>
-        )}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* WeCom (企业微信) Multi-Instance Settings */}
         {activePlatform === 'wecom' && (() => {

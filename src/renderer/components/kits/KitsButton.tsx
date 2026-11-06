@@ -79,9 +79,13 @@ const KitsButton: React.FC<KitsButtonProps> = ({
         ref={buttonRef}
         type="button"
         onClick={handleButtonClick}
-        className={`flex h-[34px] w-[34px] items-center justify-center rounded-lg text-secondary hover:bg-surface-raised hover:text-foreground transition-colors ${className}`}
+        className={`flex h-[34px] w-[34px] items-center justify-center rounded-lg transition-colors ${
+          isPopoverOpen ? 'bg-surface-raised text-foreground' : 'text-secondary hover:bg-surface-raised hover:text-foreground'
+        } ${className}`}
         title={i18nService.t('kits')}
         aria-label={i18nService.t('kits')}
+        aria-haspopup="menu"
+        aria-expanded={isPopoverOpen}
       >
         <SidebarKitsIcon className={iconClassName} />
       </button>

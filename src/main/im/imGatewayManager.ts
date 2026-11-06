@@ -124,7 +124,9 @@ export interface IMGatewayManagerOptions {
 export class IMGatewayManager extends EventEmitter {
   private readonly weixinPluginActivation = new WeixinPluginActivation(async () => {
     if (!this.getConfig().weixin?.enabled) {
-      await this.syncOpenClawConfig?.('weixin-qr-plugin-activation', { restartGatewayIfRunning: true, requireSuccess: true });
+      // Plugin activation is represented in config and can be applied by the
+      // gateway. Refreshing a QR code must not force a process restart.
+      await this.syncOpenClawConfig?.('weixin-qr-plugin-activation', { restartGatewayIfRunning: false, requireSuccess: true });
     }
   });
   private imStore: IMStore;

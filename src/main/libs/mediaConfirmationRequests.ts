@@ -26,13 +26,24 @@ interface Pending {
   options: RecoverableMediaConfirmation;
   resolve: (response: MediaConfirmationResponse) => void;
   startedAt: number;
+  /** When the displayed price was read from the model catalogue. */
+  quotedAt: number;
   displayed: boolean;
-  reviewTimer?: ReturnType<typeof setTimeout>;
   retentionTimer?: ReturnType<typeof setTimeout>;
   detachAbort?: () => void;
 }
 
-/** A soft expiry invalidates consent, not the request. Nothing submits until a fresh explicit answer. */
+/** What the user agreed to pay; a re-read catalogue with the same quote keeps their consent valid. */
+const quoteOf = (questions: AskUserRequest['questions']): string =>
+  JSON.stringify(questions.map(question => [
+    question.subtitle ?? '', question.video?.estimatedCredits ?? null, question.video?.pricingNote ?? '',
+  ]));
+
+/**
+ * Paid video consent. There is no review deadline: a quote older than
+ * `QuoteFreshMs` is re-read when the user confirms, submitting at once if the
+ * price is unchanged and asking again otherwise. Requests end after `RetentionMs`.
+ */
 export class MediaConfirmationRequests {
   private readonly pending = new Map<string, Pending>();
 
@@ -73,6 +84,7 @@ export class MediaConfirmationRequests {
         options,
         resolve,
         startedAt,
+        quotedAt: startedAt,
         displayed: false,
       };
       this.pending.set(entry.request.requestId, entry);
@@ -155,24 +167,6 @@ export class MediaConfirmationRequests {
     );
   }
 
-  private expireReview(entry: Pending): void {
-    if (
-      !this.current(entry) ||
-      entry.request.mediaConfirmation.status !== MediaConfirmationStatus.Visible
-    )
-      return;
-    clearTimeout(entry.reviewTimer);
-    entry.request = {
-      ...entry.request,
-      mediaConfirmation: {
-        ...entry.request.mediaConfirmation,
-        status: MediaConfirmationStatus.Expired,
-      },
-    };
-    this.event(entry, MediaConfirmationOutcome.Expired, MediaConfirmationReason.Expired);
-    this.publish(entry);
-  }
-
   private finish(
     entry: Pending,
     outcome: MediaConfirmationOutcome,
@@ -180,7 +174,6 @@ export class MediaConfirmationRequests {
     response?: MediaConfirmationResponse,
   ): void {
     if (!this.pending.delete(entry.request.requestId)) return;
-    clearTimeout(entry.reviewTimer);
     clearTimeout(entry.retentionTimer);
     entry.detachAbort?.();
     this.event(entry, outcome, reason);
@@ -220,70 +213,16 @@ export class MediaConfirmationRequests {
     if (!entry || !this.current(entry)) return false;
     const state = entry.request.mediaConfirmation;
     if (command.revision !== state.revision) return false;
-    if (state.status === MediaConfirmationStatus.Visible && state.expiresAt! <= this.now())
-      this.expireReview(entry);
     if (command.action === MediaConfirmationAction.Shown) {
       if (state.status !== MediaConfirmationStatus.Waiting) return true;
       entry.displayed = true;
       entry.request = {
         ...entry.request,
-        mediaConfirmation: {
-          ...entry.request.mediaConfirmation,
-          status: MediaConfirmationStatus.Visible,
-          expiresAt: this.now() + MediaConfirmationPolicy.ReviewMs,
-        },
+        mediaConfirmation: { ...state, status: MediaConfirmationStatus.Visible },
       };
-      entry.reviewTimer = setTimeout(
-        () => this.expireReview(entry),
-        MediaConfirmationPolicy.ReviewMs,
-      );
       this.event(entry, MediaConfirmationOutcome.Shown);
       this.publish(entry);
       return true;
-    }
-    if (command.action === MediaConfirmationAction.Renew) {
-      if (entry.request.mediaConfirmation.status !== MediaConfirmationStatus.Expired) return false;
-      entry.request = {
-        ...entry.request,
-        mediaConfirmation: {
-          ...entry.request.mediaConfirmation,
-          status: MediaConfirmationStatus.Refreshing,
-        },
-      };
-      this.publish(entry);
-      try {
-        const questions = await entry.options.refresh();
-        if (!this.current(entry)) return false;
-        entry.request = {
-          ...entry.request,
-          questions,
-          mediaConfirmation: {
-            ...entry.request.mediaConfirmation,
-            revision: state.revision + 1,
-            status: MediaConfirmationStatus.Waiting,
-            expiresAt: undefined,
-          },
-        };
-        this.event(entry, MediaConfirmationOutcome.Renewed);
-        this.publish(entry);
-        return true;
-      } catch {
-        if (!this.current(entry)) return false;
-        entry.request = {
-          ...entry.request,
-          mediaConfirmation: {
-            ...entry.request.mediaConfirmation,
-            status: MediaConfirmationStatus.Expired,
-          },
-        };
-        this.event(
-          entry,
-          MediaConfirmationOutcome.RefreshFailed,
-          MediaConfirmationReason.RefreshFailed,
-        );
-        this.publish(entry);
-        return false;
-      }
     }
     if (command.action !== MediaConfirmationAction.Respond) return false;
     const response = command.response;
@@ -291,7 +230,7 @@ export class MediaConfirmationRequests {
       this.finish(entry, MediaConfirmationOutcome.Denied, MediaConfirmationReason.UserCancelled);
       return true;
     }
-    if (entry.request.mediaConfirmation.status !== MediaConfirmationStatus.Visible) return false;
+    if (state.status !== MediaConfirmationStatus.Visible) return false;
     const question = entry.request.questions[0];
     const valid =
       entry.request.questions.length === 1 &&
@@ -308,10 +247,59 @@ export class MediaConfirmationRequests {
       );
       return true;
     }
+    if (this.now() - entry.quotedAt < MediaConfirmationPolicy.QuoteFreshMs) {
+      this.allow(entry, response);
+      return true;
+    }
+    return this.reprice(entry, response);
+  }
+
+  private allow(entry: Pending, response: MediaConfirmationResponse): void {
     this.finish(entry, MediaConfirmationOutcome.Allowed, undefined, {
       behavior: ConfirmationBehavior.Allow,
       answers: response.answers,
     });
+  }
+
+  /** Re-reads a stale quote at confirmation: an unchanged price submits, a new one needs a fresh answer. */
+  private async reprice(entry: Pending, response: MediaConfirmationResponse): Promise<boolean> {
+    const previous = entry.request;
+    entry.request = {
+      ...previous,
+      mediaConfirmation: { ...previous.mediaConfirmation, status: MediaConfirmationStatus.Refreshing },
+    };
+    this.publish(entry);
+    let questions: AskUserRequest['questions'];
+    try {
+      questions = await entry.options.refresh();
+    } catch {
+      if (!this.current(entry)) return false;
+      entry.request = {
+        ...entry.request,
+        mediaConfirmation: { ...entry.request.mediaConfirmation, status: MediaConfirmationStatus.Visible },
+      };
+      this.event(entry, MediaConfirmationOutcome.RefreshFailed, MediaConfirmationReason.RefreshFailed);
+      this.publish(entry);
+      return false;
+    }
+    if (!this.current(entry)) return false;
+    entry.quotedAt = this.now();
+    if (quoteOf(questions) === quoteOf(previous.questions)) {
+      this.allow(entry, response);
+      return true;
+    }
+    entry.request = {
+      ...entry.request,
+      questions,
+      mediaConfirmation: {
+        ...entry.request.mediaConfirmation,
+        revision: previous.mediaConfirmation.revision + 1,
+        status: MediaConfirmationStatus.Visible,
+        repriced: { previousCredits: previous.questions[0]?.video?.estimatedCredits },
+      },
+    };
+    this.event(entry, MediaConfirmationOutcome.Renewed);
+    this.publish(entry);
     return true;
   }
 }

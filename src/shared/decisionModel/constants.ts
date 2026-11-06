@@ -41,12 +41,17 @@ export const DECISION_MODEL_CONFIG_STORE_KEY = 'decision_model_config';
 // registers the decision_evaluate tool.
 export const DECISION_MODEL_PLUGIN_ID = 'lobster-decision';
 
-/** Settings as the settings card shows them, key included like provider keys. */
+/** One saved key per provider, so switching providers keeps the others. */
+export type DecisionModelApiKeys = Partial<Record<DecisionModelProvider, string>>;
+
+/** Settings as the settings card shows them, keys included like provider keys. */
 export interface DecisionModelConfigView {
   enabled: boolean;
   provider: DecisionModelProvider;
   endpoint: string;
+  /** Key of the selected provider. */
   apiKey: string;
+  apiKeys: DecisionModelApiKeys;
   /** Enabled and fully configured, so the agent has the tool. */
   active: boolean;
 }
@@ -55,8 +60,10 @@ export interface DecisionModelConfigUpdate {
   enabled?: boolean;
   provider?: DecisionModelProvider;
   endpoint?: string;
-  /** Omitted keeps the saved key; an empty string clears it. */
+  /** Key of the provider the update leaves selected. Omitted keeps the saved key; an empty string clears it. */
   apiKey?: string;
+  /** Per provider: omitted keeps the saved key; an empty string clears it. */
+  apiKeys?: DecisionModelApiKeys;
 }
 
 export interface DecisionModelTestResult {

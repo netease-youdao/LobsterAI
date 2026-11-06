@@ -132,6 +132,7 @@ export const getPortalTurnUsageUrl = (traceId: string) => {
 export const getPortalCreditsDetailUrl = () => `${getPortalBase()}/profile/detail`;
 export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;
+export const getPortalPennyActivityUrl = () => `${getPortalBase()}/activity/penny?keyfrom=client_menu`;
 export const getPortalCreditsResetActivityUrl = (campaignCode?: string) => (
   `${getPortalBase()}/profile?activity=credits_reset${campaignCode ? `&campaignCode=${encodeURIComponent(campaignCode)}` : ''}`
 );

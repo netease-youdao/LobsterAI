@@ -1,0 +1,27 @@
+/* An edit in flight: the regions being changed breathe, a thin bar runs, and the new version develops into view. */
+.image-edit-progress-bar {
+  position: absolute;
+  inset-block: 0;
+  width: 36%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, transparent, var(--lobster-primary), transparent);
+  animation: image-edit-progress 1.8s ease-in-out infinite;
+}
+.image-edit-region-working { animation: image-edit-region-pulse 1.6s ease-in-out infinite; }
+.image-edit-reveal { animation: image-edit-reveal 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes image-edit-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(280%); }
+}
+@keyframes image-edit-region-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes image-edit-reveal {
+  from { opacity: 0.6; filter: blur(14px) saturate(1.25); transform: scale(0.985); }
+  to { opacity: 1; filter: none; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .image-edit-progress-bar, .image-edit-region-working, .image-edit-reveal { animation: none; }
+  .image-edit-progress-bar { width: 100%; opacity: 0.5; }
+}

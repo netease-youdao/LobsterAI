@@ -1,14 +1,15 @@
 /** Local confirmation protocol. Analytics reuse existing Hive columns. */
 export const MediaConfirmationPolicy = {
   Kind: 'video_generation',
-  ReviewMs: 120_000,
+  /** A quote older than this is re-read from the model catalogue when the user confirms. */
+  QuoteFreshMs: 120_000,
   RetentionMs: 30 * 60_000,
 } as const;
 
 export const MediaConfirmationStatus = {
   Waiting: 'waiting',
   Visible: 'visible',
-  Expired: 'expired',
+  /** Re-reading a stale quote after the user confirmed. */
   Refreshing: 'refreshing',
 } as const;
 export type MediaConfirmationStatus =
@@ -16,7 +17,6 @@ export type MediaConfirmationStatus =
 
 export const MediaConfirmationAction = {
   Shown: 'shown',
-  Renew: 'renew',
   Respond: 'respond',
 } as const;
 export type MediaConfirmationAction =
@@ -59,8 +59,9 @@ export interface MediaConfirmationState {
   revision: number;
   sequence: number;
   status: MediaConfirmationStatus;
-  expiresAt?: number;
   retainedUntil: number;
+  /** Set when confirming found a new price; the user must answer again. */
+  repriced?: { previousCredits?: number };
 }
 
 export interface MediaConfirmationResponse {
@@ -94,7 +95,58 @@ export const readMediaConfirmationState = (value: unknown): MediaConfirmationSta
     item.sequence >= 0 &&
     Object.values(MediaConfirmationStatus).includes(item.status) &&
     Number.isFinite(item.retainedUntil) &&
-    (item.expiresAt === undefined || Number.isFinite(item.expiresAt))
+    (item.repriced === undefined || (typeof item.repriced === 'object' && item.repriced !== null))
     ? item
     : undefined;
+};
+
+export const VideoReferenceKind = { Image: 'image', Video: 'video' } as const;
+export type VideoReferenceKind = (typeof VideoReferenceKind)[keyof typeof VideoReferenceKind];
+
+/**
+ * Structured facts for the desktop confirmation card. The question text keeps
+ * the same facts in prose because it is also the answer key.
+ */
+export interface VideoConfirmationDetails {
+  model: string;
+  prompt: string;
+  portalUrl: string;
+  resolution?: string;
+  durationSeconds?: number;
+  aspectRatio?: string;
+  audio?: boolean;
+  estimatedCredits?: number;
+  pricingNote?: string;
+  references: Array<{ kind: VideoReferenceKind; thumbnail?: string }>;
+}
+
+const optionalString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value : undefined;
+const optionalNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+export const readVideoConfirmationDetails = (value: unknown): VideoConfirmationDetails | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const item = value as Record<string, unknown>;
+  const model = optionalString(item.model);
+  const prompt = optionalString(item.prompt);
+  const portalUrl = optionalString(item.portalUrl);
+  if (!model || !prompt || !portalUrl) return undefined;
+  const kinds = Object.values(VideoReferenceKind) as string[];
+  const references = (Array.isArray(item.references) ? item.references : [])
+    .filter((reference): reference is { kind: VideoReferenceKind; thumbnail?: unknown } =>
+      !!reference && typeof reference === 'object' && kinds.includes((reference as { kind?: string }).kind ?? ''))
+    .map(reference => ({ kind: reference.kind, thumbnail: optionalString(reference.thumbnail) }));
+  return {
+    model,
+    prompt,
+    portalUrl,
+    resolution: optionalString(item.resolution),
+    durationSeconds: optionalNumber(item.durationSeconds),
+    aspectRatio: optionalString(item.aspectRatio),
+    audio: typeof item.audio === 'boolean' ? item.audio : undefined,
+    estimatedCredits: optionalNumber(item.estimatedCredits),
+    pricingNote: optionalString(item.pricingNote),
+    references,
+  };
 };

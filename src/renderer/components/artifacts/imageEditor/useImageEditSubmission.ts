@@ -1,11 +1,11 @@
 import { useEffect, useRef } from 'react';
 
-import { type CoworkImageAttachmentPayload } from '../../../../shared/cowork/imageAttachments';
+import { type CoworkImageAttachmentPayload, formatCoworkImageAttachmentLimit } from '../../../../shared/cowork/imageAttachments';
 import { CoworkSteerStatus } from '../../../../shared/cowork/steer';
 import { hasImageEditModel } from '../../../../shared/imageEditing/availability';
 import { ImageEditorEvent } from '../../../../shared/imageEditing/types';
 import { type MediaSelection } from '../../../../shared/media/defaultPolicy';
-import { prepareCoworkPromptPayload } from '../../../services/coworkPromptPayload';
+import { CoworkPromptPayloadFailureCode, prepareCoworkPromptPayload } from '../../../services/coworkPromptPayload';
 import { i18nService } from '../../../services/i18n';
 import { imageEditAttachment, type ImageEditSubmitEvent } from '../../../services/imageEditing';
 import { store } from '../../../store';
@@ -58,7 +58,13 @@ export function useImageEditSubmission(options: Options): void {
         const result = await prepareCoworkPromptPayload({ basePrompt: '', attachments: [attachment], selectedTextSnippets: [],
           modelSupportsImage: context.modelSupportsImage, readFileAsDataUrl: path => window.electron.dialog.readFileAsDataUrl(path),
           fileLabel: i18nService.t('coworkAttachmentFile'), folderLabel: i18nService.t('coworkAttachmentFolder') });
-        if (!result.success) throw new Error(i18nService.t('imageEditFailed'));
+        if (!result.success) {
+          const { failure } = result;
+          throw new Error(failure.code === CoworkPromptPayloadFailureCode.ImageTooLarge
+            ? i18nService.t('coworkImageAttachmentTooLarge').replace('{name}', failure.attachmentName)
+              .replace('{limit}', formatCoworkImageAttachmentLimit(failure.maxBytes))
+            : i18nService.t('imageEditFailed'));
+        }
         const payload = result.payload;
         return (await context.onSubmit(payload.finalPrompt, undefined, payload.imageAttachments, payload.mediaReferences,
           undefined, undefined, CoworkCollaborationMode.Default)) !== false;

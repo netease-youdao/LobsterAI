@@ -7,10 +7,72 @@ import vm from 'vm';
 
 import { AuthRefreshFailureKind, AuthSessionStatus } from '../../shared/auth/constants';
 import { CoworkIpcChannel } from '../../shared/cowork/constants';
+import { formatLlmTraceparent } from '../../shared/cowork/llmTurnUsage';
 import { AuthSessionRequestError } from '../libs/authSessionManager';
+import {
+  clearLlmUsageContexts, configureLlmUsageContextResolver, getLlmUsageContext,
+  getLlmUsageHeaders, LlmUsageHeader, registerLlmUsageContext,
+} from '../libs/llmUsageContext';
+import { clearNativeRunTurnUsage, recordNativeRunLlmTrace } from '../libs/nativeRunTurnUsage';
 import { OpenClawAccountRecovery } from '../libs/openclawAccountRecovery';
 import { remoteNetworkBinaryDownload } from './remoteNetworkProtocol';
 import { currentRemoteExecution, SessionCommandService } from './sessionCommandService';
+
+it.each([false, true])('does not recover or register inaccessible turn usage (persisted ownership=%s)', persisted => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf8');
+  const start = source.indexOf('  configureLlmUsageContextResolver(');
+  const end = source.indexOf('  coworkTurnUsageService =', start);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  const traceId = 'a'.repeat(32);
+  const traceparent = formatLlmTraceparent(traceId, 'b'.repeat(16));
+  const owner = 'account-a:1';
+  const scope = { ownerAccountKey: 'personal:account-a', accountGeneration: 1 };
+  const target = {
+    sessionId: 'private-session',
+    message: { id: 'private-message', content: 'private prompt', metadata: { llmTrace: {
+      traceId,
+      ...(persisted ? { usageContext: {
+        sessionId: 'private-session', ownerAccountKey: scope.ownerAccountKey, serverBaseUrl: 'https://example.invalid',
+      } } : {}),
+    } } },
+  };
+  let accessible = false;
+  const canView = vi.fn(() => accessible);
+  const updateMessage = vi.fn();
+  const sandbox = {
+    configureLlmUsageContextResolver, getAuthSessionKey: () => owner,
+    getCoworkStore: () => ({ findUserMessageByTrace: () => target, updateMessage }),
+    canViewCoworkSession: canView, getCurrentMediaAccountScope: () => scope,
+    getServerApiBaseUrl: () => 'https://example.invalid',
+    mediaTurnAccountScopeBySession: new Map(),
+  };
+  clearLlmUsageContexts();
+  clearNativeRunTurnUsage();
+  try {
+    vm.runInNewContext(transformSync(source.slice(start, end), { loader: 'ts', format: 'cjs' }).code, sandbox);
+    expect(getLlmUsageContext(traceId, owner)).toEqual({ sessionId: target.sessionId, userMessage: '', owner: null });
+    expect(getLlmUsageHeaders(traceparent, undefined, owner)).toEqual({});
+    expect(recordNativeRunLlmTrace({ runId: 'late-heartbeat', traceId }, Date.now(), owner)).toBe(false);
+    registerLlmUsageContext(traceId, target.sessionId, target.message.content, { owner });
+    expect(getLlmUsageHeaders(traceparent, undefined, owner)).toEqual({});
+    expect(updateMessage).not.toHaveBeenCalled();
+    expect(canView).toHaveBeenCalledWith(target.sessionId);
+
+    accessible = true;
+    clearLlmUsageContexts();
+    registerLlmUsageContext(traceId, target.sessionId, target.message.content, { owner });
+    expect(getLlmUsageHeaders(traceparent, undefined, owner)).toMatchObject({
+      [LlmUsageHeader.Session]: target.sessionId,
+      [LlmUsageHeader.UserMessage]: encodeURIComponent(target.message.content),
+    });
+    expect(updateMessage).toHaveBeenCalledTimes(persisted ? 0 : 1);
+  } finally {
+    configureLlmUsageContextResolver(undefined);
+    clearLlmUsageContexts();
+    clearNativeRunTurnUsage();
+  }
+});
 
 it('wires the real desktop IPC through its actor-aware service when every optional remote initializer fails', async () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf8');

@@ -48,6 +48,26 @@ function manifest(root: string, relative: string, value: object): void {
   write(root, relative, JSON.stringify(value));
 }
 
+/** A complete packaging input, independent of developer-installed skills and ignored lockfiles. */
+function macPackContext(appOutDir: string, arch: number, universal = false) {
+  const projectDir = tempDir();
+  const dependency = { version: '1.0.0' };
+  manifest(projectDir, 'SKILLs/fixture-skill/package.json', { name: 'fixture-skill' });
+  manifest(projectDir, 'SKILLs/fixture-skill/package-lock.json', {
+    lockfileVersion: 3,
+    packages: { '': { name: 'fixture-skill' }, 'node_modules/fixture-dependency': dependency },
+  });
+  manifest(appOutDir, 'LobsterAI.app/Contents/Resources/SKILLs/fixture-skill/node_modules/fixture-dependency/package.json', dependency);
+  const platform = {};
+  return {
+    appOutDir, arch, electronPlatformName: 'darwin',
+    packager: {
+      projectDir, platform, appInfo: { productFilename: 'LobsterAI' },
+      info: { options: { targets: new Map([[platform, new Map(universal ? [[Arch.universal, ['dmg']]] : [])]]) } },
+    },
+  };
+}
+
 function writeKoffiStub(root: string): void {
   for (const [file, format] of [['index.js', 'CJS'], ['index.mjs', 'ESM']]) {
     write(root, `node_modules/koffi/${file}`, `// Stub (${format}): this package is not needed for headless gateway operation.\n`);
@@ -440,7 +460,7 @@ test.each(macTargets)('runs $target payload pruning from the real afterPack hook
   const installed = path.join(appOutDir, 'LobsterAI.app', 'Contents', 'Resources', 'cfmind');
   fs.cpSync(root, installed, { recursive: true });
   write(installed, 'node_modules/.bin/unused');
-  await afterPack({ appOutDir, arch, electronPlatformName: 'darwin', packager: { appInfo: { productFilename: 'LobsterAI' } } });
+  await afterPack(macPackContext(appOutDir, arch));
   expect(fs.existsSync(path.join(installed, 'gateway.asar'))).toBe(false);
   expect(fs.existsSync(path.join(installed, 'gateway-bundle.mjs'))).toBe(false);
   expect(fs.existsSync(path.join(installed, 'node_modules/.bin'))).toBe(false);
@@ -455,13 +475,22 @@ test.each([Arch.arm64, Arch.x64, Arch.universal])('preserves universal build res
   for (const { native } of macTargets) write(installed, `dist/native/${native}/fs-safe-native.node`);
   write(installed, 'gateway-bundle.mjs');
   const before = snapshot(installed);
-  const platform = {};
-  await afterPack({
-    appOutDir, arch, electronPlatformName: 'darwin',
-    packager: {
-      platform, appInfo: { productFilename: 'LobsterAI' },
-      info: { options: { targets: new Map([[platform, new Map([[Arch.universal, ['dmg']]])]]) } },
-    },
-  });
+  await afterPack(macPackContext(appOutDir, arch, true));
   expect(snapshot(installed)).toEqual(before);
+});
+
+test.each([
+  { installedVersion: undefined, reason: 'ENOENT' },
+  { installedVersion: '0.9.0', reason: 'Version mismatch' },
+])('rejects invalid packaged skill dependencies before pruning: $reason', async ({ installedVersion, reason }) => {
+  const appOutDir = tempDir();
+  const context = macPackContext(appOutDir, Arch.arm64);
+  const resources = path.join(appOutDir, 'LobsterAI.app', 'Contents', 'Resources');
+  const dependency = 'SKILLs/fixture-skill/node_modules/fixture-dependency/package.json';
+  if (installedVersion) manifest(resources, dependency, { version: installedVersion });
+  else fs.rmSync(path.join(resources, dependency));
+  write(resources, 'cfmind/gateway-bundle.mjs');
+
+  await expect(afterPack(context)).rejects.toThrow(reason);
+  expect(fs.readFileSync(path.join(resources, 'cfmind/gateway-bundle.mjs'), 'utf8')).toBe('fixture');
 });

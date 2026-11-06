@@ -29,6 +29,7 @@ import { COWORK_TEMP_SESSION_ID_PREFIX, CoworkOnboardingMessageKind } from '../.
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
 import type { CoworkImageAttachmentPreview } from '../../../shared/cowork/imageAttachments';
 import type { CoworkLocalInput } from '../../../shared/cowork/inputAttachments';
+import { extractPastedTextBlocks } from '../../../shared/cowork/pastedText';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
   type CoworkMessageRailIndexItem,
@@ -146,6 +147,8 @@ import {
   getAutoPreviewOpenTarget,
   selectAutoPreviewArtifact,
 } from '../artifacts/autoPreviewPolicy';
+import ImageStudioHost from '../artifacts/imageEditor/ImageStudioHost';
+import { preloadInlineImages } from '../artifacts/imageEditor/InlineImageGallery';
 import ComposeIcon from '../icons/ComposeIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import SidebarSearchIcon from '../icons/SidebarSearchIcon';
@@ -219,8 +222,10 @@ import {
   mergeCoworkTextExportMessages,
 } from './sessionExport';
 import SubagentSpawnCard from './SubagentSpawnCard';
+import { useConversationEntrySettle } from './useConversationEntrySettle';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
 import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
+import { expandCollapsedUserMessage } from './userMessageCollapse';
 import UserMessageContent from './UserMessageContent';
 import UserMessageItem from './UserMessageItem';
 interface CoworkSessionDetailProps {
@@ -1781,6 +1786,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsViewportAtSessionBottom(true);
     updateShouldAutoScroll(true);
   }, [currentSession?.id, updateShouldAutoScroll]);
+
+  const setConversationContentElement = useConversationEntrySettle({
+    sessionId: currentSession?.id,
+    scrollContainerRef,
+    canHoldBottom: () => shouldAutoScrollRef.current
+      && !isNavigatingRef.current
+      && !isExportingImageRef.current
+      && !conversationSearchViewportLockedRef.current,
+  });
 
   const handleCompactContext = useCallback(() => {
     if (!currentSession?.id) {
@@ -3829,14 +3843,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const toLoad = detected.filter(a => a.filePath && !loadedFileIdsRef.current.has(a.id));
       if (toLoad.length === 0) return;
 
+      // Load in parallel and add everything in one pass: one re-render instead of one per
+      // file, and an image gallery that appears complete and at its final size instead of
+      // growing tile by tile (which shifts the conversation while a task is being opened).
       const loadFiles = async () => {
-        for (const artifact of toLoad) {
+        const loadedArtifacts = await Promise.all(toLoad.map(async (artifact) => {
           const loaded = await loadDetectedFileArtifact(artifact, cwd);
           // Mark as loaded either way to avoid retrying missing files.
           loadedFileIdsRef.current.add(artifact.id);
-          if (loaded) {
-            dispatch(addArtifact({ sessionId, artifact: loaded }));
-          }
+          return loaded;
+        }));
+        const artifactsToAdd = loadedArtifacts.filter((artifact): artifact is Artifact => artifact !== null);
+        await preloadInlineImages(artifactsToAdd);
+        for (const artifact of artifactsToAdd) {
+          dispatch(addArtifact({ sessionId, artifact }));
         }
       };
       loadFiles();
@@ -4837,7 +4857,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // no scroll event can reach either pagination edge in that state.
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container) return;
+    // The loading row is still mounted when a prepended page commits, so
+    // measure again once it is gone; otherwise a long collapsed turn stops
+    // loading before its user message, which no scroll can then reach.
+    if (!container || isLoadingMoreMessages) return;
     const sessionId = currentSession?.id;
     const offset = currentSession?.messagesOffset ?? 0;
     const loadedCount = currentSession?.messages.length ?? 0;
@@ -4877,6 +4900,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentSession?.messages.length,
     currentSession?.messagesOffset,
     currentSession?.totalMessages,
+    isLoadingMoreMessages,
   ]);
 
   // Restore scroll position synchronously before browser paint when messages are prepended
@@ -5145,12 +5169,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         imageAttachments = restoredImages;
       }
 
-      // Set text content
+      // Set text content; large pastes go back into the composer as cards.
+      const { text: reEditText, blocks: pastedTexts } = extractPastedTextBlocks(message.content || '');
       if (message.content?.trim()) {
-        ref.setValue(message.content);
+        ref.setValue(reEditText);
       }
       // Restore image attachments (always call to clear previous attachments)
       ref.setImageAttachments(imageAttachments);
+      ref.addPastedTexts(pastedTexts);
       const selectedTextSnippets = (metadata?.selectedTextSnippets ?? []) as CoworkSelectedTextSnippet[];
       ref.setSelectedTextSnippets(selectedTextSnippets);
       // Restore active skills
@@ -5586,6 +5612,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         conversationSearchMatches,
         activeConversationSearchMatchKey,
       );
+
+      // A match clipped by a collapsed long user message is measurable but
+      // hidden; open the message and measure again on the next frame.
+      if (
+        result.activeRange
+        && result.activeElement
+        && attempt < 10
+        && expandCollapsedUserMessage(result.activeElement)
+      ) {
+        frameId = window.requestAnimationFrame(() => locateTarget(attempt + 1));
+        return;
+      }
 
       const rangeRect = result.activeRange?.getBoundingClientRect();
       const hasUsableRange = Boolean(rangeRect && isUsableConversationSearchRect(rangeRect));
@@ -6577,23 +6615,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               onAskInSideChat={handleOpenSelectedTextInSideChat}
             />
           )}
-          {isLoadingMoreMessages && (
-            <div className="py-2 text-center text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-              {i18nService.t('loading')}
-            </div>
-          )}
-          {renderConversationTurns()}
-          {isContextCompacting && (
-            <div className={`${COWORK_DETAIL_GUTTER_CLASS} animate-message-in`}>
-              <div className={COWORK_DETAIL_CONTENT_CLASS}>
-                <ContextCompactionDivider
-                  label={i18nService.t('coworkContextCompacting')}
-                  active
-                />
+          <div ref={setConversationContentElement}>
+            {isLoadingMoreMessages && (
+              <div className="py-2 text-center text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('loading')}
               </div>
-            </div>
-          )}
-          <div className={hasDockedQuestion ? 'h-4' : 'h-20'} />
+            )}
+            {renderConversationTurns()}
+            {isContextCompacting && (
+              <div className={`${COWORK_DETAIL_GUTTER_CLASS} animate-message-in`}>
+                <div className={COWORK_DETAIL_CONTENT_CLASS}>
+                  <ContextCompactionDivider
+                    label={i18nService.t('coworkContextCompacting')}
+                    active
+                  />
+                </div>
+              </div>
+            )}
+            <div className={hasDockedQuestion ? 'h-4' : 'h-20'} />
+          </div>
         </div>
 
         {/* Turn Navigation Rail — to the left of scrollbar */}
@@ -7138,6 +7178,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     )}
       </div>
       </div>
+      <ImageStudioHost sessionId={currentSession.id} />
     </MarkdownLinkOpenerContext.Provider>
     </ArtifactFileShareProvider>
   );

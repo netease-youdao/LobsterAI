@@ -14,6 +14,10 @@ export interface SubscriptionTrialState {
   reason?: string;
   serverTimeEpochMs: number;
   endAtEpochMs: number | null;
+  /** Older servers omit this field; treat a missing value as hidden. */
+  clientMenuEntryVisible?: boolean;
+  firstRenewalPrice?: number;
+  firstRenewalDiscountEnabled?: boolean;
 }
 
 export interface SubscriptionTrialBridge {

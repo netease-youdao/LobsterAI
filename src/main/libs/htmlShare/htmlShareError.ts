@@ -55,9 +55,8 @@ export function sanitizeOptionalHtmlShareContent(
     throw new Error('content must be a string.');
   }
   const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error('content is required.');
-  }
+  // File-backed artifacts carry empty inline content; the request validates its source separately.
+  if (!trimmed) return undefined;
   if (trimmed.length > maxLength) {
     throw createHtmlShareSizeError(
       HtmlShareFailureKind.InputTooLong,

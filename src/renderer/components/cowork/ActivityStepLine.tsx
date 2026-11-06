@@ -6,12 +6,12 @@ import {
   GlobeAltIcon,
   MagnifyingGlassIcon,
   PhotoIcon,
-  UserGroupIcon,
   WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import React from 'react';
 
 import ComposeIcon from '../icons/ComposeIcon';
+import SubagentIcon from '../icons/SubagentIcon';
 import { ActivityStepKind } from './constants';
 import type { ActivityLiveDetail } from './messageDisplayUtils';
 
@@ -27,7 +27,8 @@ const STEP_ICONS: Record<
   [ActivityStepKind.Search]: MagnifyingGlassIcon,
   [ActivityStepKind.Web]: GlobeAltIcon,
   [ActivityStepKind.Media]: PhotoIcon,
-  [ActivityStepKind.Agent]: UserGroupIcon,
+  // The subagent panel's icon, so spawning and waiting on a subagent match it.
+  [ActivityStepKind.Agent]: SubagentIcon,
   [ActivityStepKind.Todo]: ClipboardDocumentListIcon,
   [ActivityStepKind.Schedule]: ClockIcon,
   [ActivityStepKind.Tool]: WrenchScrewdriverIcon,

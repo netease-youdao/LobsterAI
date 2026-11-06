@@ -2,13 +2,28 @@ import { getCoworkLlmTrace, isValidLlmTraceId, parseLlmTraceparent } from '../..
 import { type ModelPresetId, parseModelPresetId } from '../../shared/modelPresets/constants';
 
 const MAX_CONTEXTS = 512;
+export type LlmUsageContext = {
+  sessionId: string;
+  userMessage: string;
+  modelPresetId?: unknown;
+  resolvedModelId?: unknown;
+  title?: string;
+  owner?: string | null;
+};
+// Registration can persist the exact origin; cache misses recover only that origin.
+let contextResolver: ((traceId: string, registration?: LlmUsageContext) => LlmUsageContext | null) | undefined;
 const contexts = new Map<string, {
+  context: LlmUsageContext;
   headers: Record<string, string>;
   modelPresetId: ModelPresetId | null;
   resolvedModelId: string | null;
-  owner?: string;
+  owner?: string | null;
 }>();
 let titleReporter: ((sessionId: string, title?: string) => void) | undefined;
+
+export function configureLlmUsageContextResolver(resolver: typeof contextResolver): void {
+  contextResolver = resolver;
+}
 
 export function configureUsageTitleReporter(reporter: (sessionId: string, title?: string) => void): void {
   titleReporter = reporter;
@@ -33,19 +48,37 @@ export function registerLlmUsageContext(
   selection?: { modelPresetId?: unknown; resolvedModelId?: unknown; title?: string; owner?: string },
 ): void {
   if (!isValidLlmTraceId(traceId) || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(sessionId)) return;
+  const registration = { sessionId, userMessage, ...selection };
+  const context = contextResolver?.(traceId, registration) ?? registration;
+  cacheLlmUsageContext(traceId, context);
+  if (context.owner !== null) reportUsageSessionTitle(context.sessionId, context.title);
+}
+
+function cacheLlmUsageContext(traceId: string, context: LlmUsageContext): void {
+  const userMessage = Array.from(context.userMessage).slice(0, 200).join('');
   contexts.delete(traceId);
   contexts.set(traceId, {
+    context: { ...context, userMessage },
     headers: {
-      [LlmUsageHeader.Session]: sessionId,
+      [LlmUsageHeader.Session]: context.sessionId,
       [LlmUsageHeader.Turn]: traceId,
-      [LlmUsageHeader.UserMessage]: encodeURIComponent(Array.from(userMessage).slice(0, 200).join('')),
+      [LlmUsageHeader.UserMessage]: encodeURIComponent(userMessage),
     },
-    modelPresetId: parseModelPresetId(selection?.modelPresetId),
-    resolvedModelId: typeof selection?.resolvedModelId === 'string' ? selection.resolvedModelId.trim() : null,
-    owner: selection?.owner,
+    modelPresetId: parseModelPresetId(context.modelPresetId),
+    resolvedModelId: typeof context.resolvedModelId === 'string' ? context.resolvedModelId.trim() : null,
+    owner: context.owner,
   });
   while (contexts.size > MAX_CONTEXTS) contexts.delete(contexts.keys().next().value!);
-  reportUsageSessionTitle(sessionId, selection?.title);
+}
+
+export function getLlmUsageContext(traceId: string, owner?: string | null): LlmUsageContext | null {
+  if (!isValidLlmTraceId(traceId)) return null;
+  const cached = contexts.get(traceId);
+  if (!cached || (owner !== undefined && cached.owner !== undefined && cached.owner !== owner)) {
+    const restored = contextResolver?.(traceId);
+    if (restored) cacheLlmUsageContext(traceId, restored);
+  }
+  return contexts.get(traceId)?.context ?? null;
 }
 
 /** Whether the client registered this trace for a turn it started. */
@@ -56,9 +89,10 @@ export function hasLlmUsageContext(traceId: string): boolean {
 /** A proxy-generated request trace has no registered user turn and stays ungrouped. */
 export function getLlmUsageHeaders(traceparent?: string, requestModel?: unknown, owner?: string | null): Record<string, string> {
   const trace = traceparent ? parseLlmTraceparent(traceparent) : null;
+  if (trace) getLlmUsageContext(trace.traceId, owner);
   const context = trace ? contexts.get(trace.traceId) : undefined;
   if (!trace || !context) return {};
-  if (context.owner && context.owner !== owner) return {};
+  if (context.owner !== undefined && context.owner !== owner) return {};
   contexts.delete(trace.traceId);
   contexts.set(trace.traceId, context);
   // Only the model resolved for this turn carries the selected mode. Tool models,

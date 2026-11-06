@@ -29,10 +29,11 @@ import {
 } from '../../services/lowCreditPurchaseOffer';
 import type { RootState } from '../../store';
 import type { LowCreditPurchaseOffer } from '../../store/slices/authSlice';
-import type { Artifact } from '../../types/artifact';
+import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import { revealLocalPathWithToast } from '../../utils/localFileActions';
 import { ArtifactPreviewCard } from '../artifacts';
+import InlineImageGallery from '../artifacts/imageEditor/InlineImageGallery';
 import AbnormalIcon from '../icons/AbnormalIcon';
 import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
@@ -45,7 +46,8 @@ import AssistantMessageItem from './AssistantMessageItem';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
-import { buildMediaTaskPresentations, type MediaTaskPresentations } from './mediaTaskPresentation';
+import { isMediaTaskSettled } from './MediaTaskCard';
+import { buildMediaTaskPresentations, isMediaGenerationToolName, type MediaTaskPresentations } from './mediaTaskPresentation';
 import { MessageCopyButton } from './MessageActionButton';
 import {
   canFoldTurnProcess,
@@ -94,31 +96,6 @@ import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
 import TurnUsageChip from './TurnUsageChip';
 import { useStreamStall } from './useStreamStall';
-
-const encodeLocalPathForUrl = (filePath: string): string => {
-  return filePath
-    .replace(/\\/g, '/')
-    .split('/')
-    .map((segment, index) => {
-      if (index === 0 && segment === '') return '';
-      if (/^[A-Za-z]:$/.test(segment)) return segment;
-      return encodeURIComponent(segment);
-    })
-    .join('/');
-};
-
-const toLocalFileSrc = (filePath: string): string => {
-  const normalized = filePath.trim().replace(/^file:\/\//i, '').replace(/^localfile:\/\//i, '');
-  const withoutLeadingDriveSlash = /^\/[A-Za-z]:/.test(normalized) ? normalized.slice(1) : normalized;
-  const encoded = encodeLocalPathForUrl(withoutLeadingDriveSlash);
-  if (/^[A-Za-z]:/.test(withoutLeadingDriveSlash)) {
-    return `localfile:///${encoded}`;
-  }
-  if (encoded.startsWith('/')) {
-    return `localfile://${encoded}`;
-  }
-  return `localfile:///${encoded}`;
-};
 
 // ── ContextCompressionIcon ───────────────────────────────────────────────────
 
@@ -552,30 +529,6 @@ const VideoArtifactPathList: React.FC<{ artifacts: Artifact[] }> = ({ artifacts 
   );
 };
 
-// ── MediaImageInline ────────────────────────────────────────────────────────
-
-const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) => {
-  if (artifacts.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {artifacts.map(artifact => {
-        const src = artifact.filePath
-          ? toLocalFileSrc(artifact.filePath)
-          : artifact.content;
-        if (!src) return null;
-        return (
-          <img
-            key={artifact.id}
-            src={src}
-            alt={artifact.title || ''}
-            className="max-w-[320px] max-h-[240px] rounded-lg border border-border object-contain"
-          />
-        );
-      })}
-    </div>
-  );
-};
-
 // ── AssistantTurnBlock ───────────────────────────────────────────────────────
 
 const AssistantTurnBlock: React.FC<{
@@ -684,10 +637,19 @@ const AssistantTurnBlock: React.FC<{
       : [],
     [artifacts, localServiceDirectory, turn],
   );
+  // Raster images are shown in the conversation itself; the remaining artifacts keep their file cards.
+  const imageArtifacts = useMemo(
+    () => artifactCards.filter(artifact => artifact.type === ArtifactTypeValue.Image),
+    [artifactCards],
+  );
+  const fileArtifactCards = useMemo(
+    () => artifactCards.filter(artifact => artifact.type !== ArtifactTypeValue.Image),
+    [artifactCards],
+  );
   const visibleArtifactCards = useMemo(() => {
-    return artifactCardsExpanded ? artifactCards : artifactCards.slice(0, 3);
-  }, [artifactCards, artifactCardsExpanded]);
-  const hiddenArtifactCardCount = Math.max(0, artifactCards.length - visibleArtifactCards.length);
+    return artifactCardsExpanded ? fileArtifactCards : fileArtifactCards.slice(0, 3);
+  }, [fileArtifactCards, artifactCardsExpanded]);
+  const hiddenArtifactCardCount = Math.max(0, fileArtifactCards.length - visibleArtifactCards.length);
   const retainedMediaPollCountsRef = useRef<Map<string, number>>(new Map());
   const currentMediaPollCounts = useMemo(
     () => collectMediaPollCounts(consolidatedItems),
@@ -933,16 +895,12 @@ const AssistantTurnBlock: React.FC<{
         return null;
       }
 
-      // Check if there are image artifacts for this message (inline MEDIA display)
-      const imageArtifacts = artifacts?.filter(a =>
-        a.type === 'image' && a.messageId === item.message.id,
+      // A message that only carries MEDIA tokens has nothing to say: its images show in the turn's gallery.
+      const hasMessageImages = artifacts?.some(a =>
+        a.type === ArtifactTypeValue.Image && a.messageId === item.message.id,
       );
-      if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
-        return (
-          <div key={item.message.id}>
-            <MediaImageInline artifacts={imageArtifacts} />
-          </div>
-        );
+      if (hasMessageImages && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
+        return null;
       }
 
       return (
@@ -1078,6 +1036,11 @@ const AssistantTurnBlock: React.FC<{
   const liveStatusText = liveTailItem && isActivityItemLive(liveTailItem) && !isTailTextStalled
     ? getActivityLiveStatusText(liveTailItem)
     : null;
+  // While a generation placeholder is the step running right now it already shows
+  // the progress and elapsed time; the status line below would only repeat them.
+  const isLiveMediaPlaceholder = liveTailItem?.type === 'tool_group'
+    && isMediaGenerationToolName(String(liveTailItem.group.toolUse.metadata?.toolName ?? ''))
+    && [...taskPresentations.values()].some(presentation => presentation.showCard && !isMediaTaskSettled(presentation.details));
 
   const handleProcessToggle = () => {
     const nextExpanded = !isProcessExpanded;
@@ -1098,15 +1061,11 @@ const AssistantTurnBlock: React.FC<{
     return null;
   }
 
-  const hasModelSwitchNotice = consolidatedItems.some(item => item.type === 'system'
-    && item.message.id === modelSwitchNoticeMessageId
-    && isModelChangeMessage(item.message));
-
   return (
-    <div className={`${hasModelSwitchNotice ? 'pb-2' : 'py-2'} ${COWORK_DETAIL_GUTTER_CLASS}`}>
+    <div className={`py-2 ${COWORK_DETAIL_GUTTER_CLASS}`}>
       <div className={COWORK_DETAIL_CONTENT_CLASS}>
         <div className="flex items-start gap-3">
-          <div className={`flex-1 min-w-0 ${hasModelSwitchNotice ? 'pb-3' : 'py-3'} space-y-3`}>
+          <div className="flex-1 min-w-0 py-3 space-y-3">
             {shouldFoldProcess ? (
               <>
                 {/* Unlike step lines, the duration line keeps its arrow: it is
@@ -1130,7 +1089,7 @@ const AssistantTurnBlock: React.FC<{
             ) : (
               renderChunks.map((chunk, chunkIndex) => renderChunk(chunk, chunkIndex))
             )}
-            {showActivityIndicator && (
+            {showActivityIndicator && (activityStatusOverride || !isLiveMediaPlaceholder) && (
               <ActivityIndicator
                 fingerprint={getTurnActivityFingerprint(turn)}
                 startTimestamp={getTurnStartTimestamp(turn)}
@@ -1143,44 +1102,47 @@ const AssistantTurnBlock: React.FC<{
             {artifacts && artifacts.length > 0 && (
               <div className="space-y-2 pt-1">
                 <VideoArtifactPathList artifacts={videoPathArtifacts} />
-                <div className="artifact-preview-card-group w-full overflow-hidden rounded-lg border border-border">
-                  <div className="divide-y divide-border">
-                    {visibleArtifactCards.map(artifact => (
-                      <ArtifactPreviewCard
-                        key={artifact.id}
-                        artifact={artifact}
-                        localServiceDirectory={localServiceDirectory}
-                        onOpenLocalService={onOpenLocalService}
-                        onDeployLocalService={onDeployLocalService}
-                        onOpenHtmlFile={onOpenHtmlFile}
-                        onOpenPreview={onOpenArtifactPreview}
-                      />
-                    ))}
-                  </div>
-                  {(hiddenArtifactCardCount > 0 || (artifactCardsExpanded && artifactCards.length > 3)) && (
-                    <div className="border-t border-border px-4 py-2 text-center">
-                      {hiddenArtifactCardCount > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => setArtifactCardsExpanded(true)}
-                          className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
-                        >
-                          <span>{i18nService.t('artifactPreviewCardShowMore').replace('{count}', String(hiddenArtifactCardCount))}</span>
-                          <ChevronDownIcon className="h-4 w-4" />
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setArtifactCardsExpanded(false)}
-                          className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
-                        >
-                          <span>{i18nService.t('artifactPreviewCardShowLess')}</span>
-                          <ChevronUpIcon className="h-4 w-4" />
-                        </button>
-                      )}
+                <InlineImageGallery artifacts={imageArtifacts} editable={!onOpenArtifactPreview} />
+                {fileArtifactCards.length > 0 && (
+                  <div className="artifact-preview-card-group w-full overflow-hidden rounded-lg border border-border">
+                    <div className="divide-y divide-border">
+                      {visibleArtifactCards.map(artifact => (
+                        <ArtifactPreviewCard
+                          key={artifact.id}
+                          artifact={artifact}
+                          localServiceDirectory={localServiceDirectory}
+                          onOpenLocalService={onOpenLocalService}
+                          onDeployLocalService={onDeployLocalService}
+                          onOpenHtmlFile={onOpenHtmlFile}
+                          onOpenPreview={onOpenArtifactPreview}
+                        />
+                      ))}
                     </div>
-                  )}
-                </div>
+                    {(hiddenArtifactCardCount > 0 || (artifactCardsExpanded && fileArtifactCards.length > 3)) && (
+                      <div className="border-t border-border px-4 py-2 text-center">
+                        {hiddenArtifactCardCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setArtifactCardsExpanded(true)}
+                            className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
+                          >
+                            <span>{i18nService.t('artifactPreviewCardShowMore').replace('{count}', String(hiddenArtifactCardCount))}</span>
+                            <ChevronDownIcon className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setArtifactCardsExpanded(false)}
+                            className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
+                          >
+                            <span>{i18nService.t('artifactPreviewCardShowLess')}</span>
+                            <ChevronUpIcon className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

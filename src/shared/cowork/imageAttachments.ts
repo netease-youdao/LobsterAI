@@ -1,4 +1,9 @@
 export const COWORK_IMAGE_ATTACHMENT_MAX_BYTES = 30 * 1000 * 1000;
+/**
+ * OpenClaw's gateway rejects any single chat image above this (media-core `MAX_IMAGE_BYTES`),
+ * regardless of `agents.defaults.mediaMaxMb`. Larger images are re-encoded before sending.
+ */
+export const COWORK_IMAGE_ATTACHMENT_MODEL_MAX_BYTES = 6 * 1024 * 1024;
 export const COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES = 512 * 1024;
 
 export const CoworkImageAttachmentRole = {

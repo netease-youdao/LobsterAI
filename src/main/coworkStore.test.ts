@@ -215,6 +215,27 @@ function insertSession(
   ).run(id, title, pinned, pinOrder, agentId, now, now);
 }
 
+test('finds the persisted origin trace without choosing the latest turn or a fork copy', () => {
+  insertSession('origin');
+  insertSession('fork');
+  const traceId = 'a'.repeat(32);
+  const metadata = JSON.stringify({ llmTrace: {
+    traceId, startedAt: 1000,
+    usageContext: { sessionId: 'origin', ownerAccountKey: 'personal:user-a', serverBaseUrl: 'https://server.example' },
+  } });
+  insertMessage('original-message', 'origin', 'user', 'original', metadata, 1);
+  insertMessage('next-message', 'origin', 'user', 'next', JSON.stringify({ llmTrace: { traceId: 'b'.repeat(32), startedAt: 2000 } }), 2);
+  insertMessage('broken-message', 'origin', 'user', 'broken', '{broken', 3);
+  insertMessage('fork-copy', 'fork', 'user', 'original', metadata, 1);
+
+  expect(store.findUserMessageByTrace(traceId)).toMatchObject({ sessionId: 'origin', message: { id: 'original-message' } });
+  expect(store.findUserMessageByTrace(traceId, 'origin')?.message.id).toBe('original-message');
+  expect(store.findUserMessageByTrace(traceId, 'fork')).toBeNull();
+  expect(store.findUserMessageByTrace('invalid')).toBeNull();
+  insertMessage('ambiguous-message', 'origin', 'user', 'duplicate', metadata, 4);
+  expect(store.findUserMessageByTrace(traceId)).toBeNull();
+});
+
 /** Insert a message row directly, bypassing CoworkStore.addMessage. */
 function insertMessage(
   id: string,
@@ -681,6 +702,29 @@ test('deleteSession removes the continuity capsule row', () => {
 
   const rows = db.prepare('SELECT COUNT(*) AS count FROM cowork_session_capsules WHERE session_id = ?').get(sid) as { count: number };
   expect(rows.count).toBe(0);
+});
+
+test('listChannelSessionModelOverrides returns IM sessions pinned to their own model', () => {
+  const sessionKey = 'agent:main:moltbot-popo:bot:direct:user@example.com';
+  const im = store.createSession('IM', '/tmp', '', 'local', [], 'main', 'deepseek/deepseek-v4-flash');
+  const imAgentModel = store.createSession('IM agent model', '/tmp');
+  const unmapped = store.createSession('IM without key', '/tmp', '', 'local', [], 'main', 'deepseek/deepseek-v4-flash');
+  store.createSession('Desktop', '/tmp', '', 'local', [], 'main', 'deepseek/deepseek-v4-flash');
+  const insertMapping = db.prepare(
+    `INSERT INTO im_session_mappings (
+      im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at
+    ) VALUES (?, 'popo', ?, 'main', ?, 1, 1)`,
+  );
+  insertMapping.run('direct:user', im.id, sessionKey);
+  insertMapping.run('direct:other', imAgentModel.id, 'agent:main:moltbot-popo:bot:direct:other');
+  insertMapping.run('direct:legacy', unmapped.id, null);
+
+  expect(store.listChannelSessionModelOverrides()).toEqual([
+    { sessionId: im.id, modelOverride: 'deepseek/deepseek-v4-flash', sessionKey },
+  ]);
+
+  store.updateSession(im.id, { modelOverride: '' });
+  expect(store.listChannelSessionModelOverrides()).toEqual([]);
 });
 
 test('forkSession copies the source continuity capsule to the forked session', () => {
@@ -1722,6 +1766,44 @@ test('subagent materialization cannot pass an exclusive parent ownership reserva
     expect(() => store.upsertSubagentChildSession({ id: 'blocked-child', parentSessionId: 'reserved-parent', childSessionKey: 'child-key', title: 'Child', agentId: 'main' })).toThrow();
     expect(store.getSession('blocked-child')).toBeNull();
   } finally { release?.(); }
+});
+
+test('subagent upsert seeds the spawn task as the first user message once', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
+  insertSession('parent-task');
+  const options = {
+    id: 'child-task',
+    parentSessionId: 'parent-task',
+    childSessionKey: 'agent:blog:subagent:child-task',
+    title: 'Publish',
+    agentId: 'main',
+    task: '  Publish the translated article.\n',
+    createdAt: 1234,
+  };
+  store.upsertSubagentChildSession(options);
+  store.addMessage(options.id, { type: 'system', content: 'Subagent failed.' }, 2000);
+  store.upsertSubagentChildSession({ ...options, status: 'error' });
+
+  expect(store.getSession(options.id)?.messages.map(({ type, content, timestamp }) => ({ type, content, timestamp })))
+    .toEqual([
+      { type: 'user', content: 'Publish the translated article.', timestamp: 1234 },
+      { type: 'system', content: 'Subagent failed.', timestamp: 2000 },
+    ]);
+});
+
+test('subagent upsert without a task leaves the child transcript empty', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
+  insertSession('parent-no-task');
+  store.upsertSubagentChildSession({
+    id: 'child-no-task',
+    parentSessionId: 'parent-no-task',
+    childSessionKey: 'agent:blog:subagent:child-no-task',
+    title: 'Child',
+    agentId: 'main',
+    task: '   ',
+  });
+
+  expect(store.getSession('child-no-task')?.messages).toEqual([]);
 });
 
 test('outer session transaction publishes final values once and drops rollback or reverted writes', () => {

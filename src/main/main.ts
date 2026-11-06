@@ -165,7 +165,7 @@ import {
   type HtmlShareStatus as HtmlShareStatusValue,
 } from '../shared/htmlShare/constants';
 import { imageEditMessageMetadata } from '../shared/imageEditing/messageSnapshot';
-import { ImageEditingIpc, ImageEditOperation, type ImageEditRequest } from '../shared/imageEditing/types';
+import { ImageEditingIpc, type ImageEditRequest } from '../shared/imageEditing/types';
 import type {
   InstalledKitRecord,
   KitReference,
@@ -414,6 +414,7 @@ import {
   performPendingDataMigrationRestoreSync,
 } from './libs/dataMigration/dataMigrationService';
 import { DesktopNotificationManager } from './libs/desktopNotificationManager';
+import { clearLegacyDevelopmentServerHttpCache } from './libs/developmentHttpCache';
 import {
   buildDevelopmentProtocolArgs,
   DevelopmentProtocolSwitch,
@@ -470,12 +471,12 @@ import {
   buildArtifactIdentityClientSourceKey,
   buildHtmlShareClientSourceKey,
 } from './libs/htmlShare/htmlShareSourceKey';
-import { ImageEditingService, ImageEditResultError } from './libs/imageEditing';
+import { composesImageEditLocally, ImageEditingService, ImageEditResultError } from './libs/imageEditing';
 import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyfromAttribution';
 import { LibraryThumbnailRenderer } from './libs/libraryThumbnailRenderer';
 import { LibraryThumbnailService } from './libs/libraryThumbnailService';
 import { shouldRejectNativeLibraryThumbnail } from './libs/libraryThumbnailValidation';
-import { configureUsageTitleReporter, getMediaUsageContext, reportUsageSessionTitle } from './libs/llmUsageContext';
+import { configureLlmUsageContextResolver, configureUsageTitleReporter, getMediaUsageContext, reportUsageSessionTitle } from './libs/llmUsageContext';
 import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
@@ -731,7 +732,7 @@ import { showStartupRecoveryWindow } from './startupRecoveryWindow';
 import { SubagentMessageStore } from './subagentMessageStore';
 import { SubagentRunStore } from './subagentRunStore';
 import { createTray, destroyTray, updateTrayMenu, updateTrayReminder } from './trayManager';
-import { videoConfirmationFailure, videoConfirmationQuestions } from './videoGenerationConfirmation';
+import { videoConfirmationFailure, videoConfirmationQuestions, videoConfirmationReferences } from './videoGenerationConfirmation';
 import {
   AppWindowStoreKey,
   MIN_APP_WINDOW_HEIGHT,
@@ -4447,6 +4448,7 @@ const getCoworkEngineRouter = () => {
             return getOpenClawEngineManager().startGateway(reason);
           },
           normalizeModelRef: normalizeOpenClawModelRef,
+          getModelCatalog: buildAvailableOpenClawProviders,
           onChannelPromptSubmit: (event, sessionId) => {
             getTaskUsageAnalytics().begin(sessionId, {},
               event.conversationState === PromptAnalyticsConversationState.ContinueSession, UsageOrigin.Im);
@@ -5784,6 +5786,13 @@ if (!gotTheLock) {
           console.error('[OpenClaw] Failed to sync config after app_config update:', syncResult.error);
         }
       }
+      // IM sessions pinned to a removed provider would fail every message.
+      if (impactDecision.reasons.some(reason => (
+        reason === OpenClawConfigImpactReason.AppProviderConfig
+        || reason === OpenClawConfigImpactReason.AppProviderSecret
+      ))) {
+        void openClawRuntimeAdapter?.reconcileStaleSessionModelOverrides('provider settings changed');
+      }
     }
   });
 
@@ -6909,6 +6918,46 @@ if (!gotTheLock) {
 
   registerOwnershipHandlers(() => ownershipAssociations);
 
+  configureLlmUsageContextResolver((traceId, registration) => {
+    const currentOwner = getAuthSessionKey();
+    const context = registration ? { ...registration, owner: registration.owner ?? currentOwner } : null;
+    const target = getCoworkStore().findUserMessageByTrace(traceId, registration?.sessionId);
+    if (!target) return context;
+    if (!canViewCoworkSession(target.sessionId)) {
+      // Retain the trace binding so native reports cannot reassign an inaccessible turn.
+      return { sessionId: target.sessionId, userMessage: '', owner: null };
+    }
+    const trace = target.message.metadata?.llmTrace;
+    if (!trace) return context;
+    const scope = getCurrentMediaAccountScope();
+    let persisted = trace.usageContext;
+    if (!persisted) {
+      // Only live registration proves ownership of legacy metadata. Recovery
+      // never assigns an old trace to whoever happens to be signed in now.
+      if (!context || !scope || context.owner !== currentOwner) {
+        return { ...context, sessionId: target.sessionId, userMessage: target.message.content, owner: null };
+      }
+      const admittedScope = mediaTurnAccountScopeBySession.get(target.sessionId);
+      if (admittedScope && !isMediaAccountScopeSnapshotCurrent(admittedScope, scope)) {
+        return { ...context, owner: null };
+      }
+      persisted = { sessionId: target.sessionId, ownerAccountKey: scope.ownerAccountKey, serverBaseUrl: getServerApiBaseUrl() };
+      getCoworkStore().updateMessage(target.sessionId, target.message.id, {
+        metadata: { ...target.message.metadata, llmTrace: { ...trace, usageContext: persisted } },
+      });
+    }
+    const sameOwner = persisted.ownerAccountKey === scope?.ownerAccountKey
+      && persisted.serverBaseUrl === getServerApiBaseUrl();
+    return {
+      ...context,
+      sessionId: target.sessionId,
+      userMessage: target.message.content,
+      modelPresetId: target.message.metadata?.modelPresetId,
+      resolvedModelId: target.message.metadata?.resolvedModelId,
+      owner: sameOwner ? currentOwner : null,
+    };
+  });
+
   coworkTurnUsageService = new CoworkTurnUsageService({
     getStore: () => getCoworkStore(),
     captureSessionAccess: sessionId => {
@@ -6917,6 +6966,9 @@ if (!gotTheLock) {
     },
     fetchWithAuth,
     hasAuthTokens: () => Boolean(getAuthTokens()?.accessToken),
+    getSessionKey: getAuthSessionKey,
+    isTurnActive: (sessionId, messageId) => Boolean(coworkEngineRouter?.isSessionActive(sessionId))
+      && getCoworkStore().getLatestUserMessage(sessionId)?.id === messageId,
     buildServerUrl: pathWithQuery => appendKeyfromQuery(`${getServerApiBaseUrl()}${pathWithQuery}`),
     getTraceStats: getOpenClawTokenProxyTraceStats,
     claimNativeRunTurnUsage,
@@ -7590,7 +7642,7 @@ if (!gotTheLock) {
         }));
 
         let resultLines: string[];
-        let detailsAssets: unknown[] = statusImageEdit?.operation === ImageEditOperation.RemoveBackground ? [] : assets;
+        let detailsAssets: unknown[] = composesImageEditLocally(statusImageEdit?.operation) ? [] : assets;
         let savedCount = 0;
         if (status === 'succeeded' && statusMediaType === 'image' && sessionId) {
           const persistResult = await persistGeneratedImages(sessionId, assets, statusImageEdit, String(task.taskId));
@@ -7603,7 +7655,7 @@ if (!gotTheLock) {
               `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
             );
           } else {
-            resultLines = statusImageEdit?.operation === ImageEditOperation.RemoveBackground ? []
+            resultLines = composesImageEditLocally(statusImageEdit?.operation) ? []
               : resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           }
         } else if (status === 'succeeded' && statusMediaType === 'video' && sessionId) {
@@ -7802,6 +7854,7 @@ if (!gotTheLock) {
         '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
         '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
         '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+        '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
       };
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
@@ -7925,7 +7978,13 @@ if (!gotTheLock) {
       }
 
       if (mediaType === 'video') {
-        const confirmationInput = { model: selectedModel, params, prompt, portalUrl: getPortalTasksUrl() };
+        const references = videoConfirmationReferences(params, source => {
+          if (/^https?:\/\//i.test(source)) return source;
+          if (!source.startsWith('data:image/')) return undefined;
+          const image = nativeImage.createFromDataURL(source);
+          return image.isEmpty() ? undefined : `data:image/jpeg;base64,${image.resize({ height: 96 }).toJPEG(80).toString('base64')}`;
+        });
+        const confirmationInput = { model: selectedModel, params, prompt, portalUrl: getPortalTasksUrl(), references };
         const confirmResponse = await getMcpRuntime().askUserInternal(
           videoConfirmationQuestions(confirmationInput, modelCapability, t), undefined, {
             sessionKey: request.context.sessionKey,
@@ -7957,8 +8016,16 @@ if (!gotTheLock) {
           modelSelectionReason: happyHorse11Selection.reason,
           inputImageCount: happyHorse11Selection.imageCount,
         } : {}),
-        promptLength: prompt.length,
-        promptPreview: prompt.slice(0, 120),
+        // Log what is actually sent: image edits replace or extend the tool prompt.
+        promptLength: generateReq.prompt.length,
+        promptPreview: generateReq.prompt.slice(0, 120),
+        ...(imageEdit ? {
+          imageEdit: {
+            operation: imageEdit.operation,
+            toolPromptLength: prompt.length,
+            ...(imageEdit.eraseCrop ? { crop: [imageEdit.eraseCrop.x, imageEdit.eraseCrop.y, imageEdit.eraseCrop.width, imageEdit.eraseCrop.height] } : {}),
+          },
+        } : {}),
         params: summarizeMediaGenerationParamsForLog(params),
       }));
       if (!isRequestAccountCurrent()) return staleAccountResult();
@@ -8094,7 +8161,7 @@ if (!gotTheLock) {
         mimeType: resolveGeneratedMediaAssetMimeType(mediaType, url),
         ...(args.filename ? { filename: args.filename as string } : {}),
       }));
-      let detailsAssets: unknown[] = imageEdit?.operation === ImageEditOperation.RemoveBackground ? [] : assets;
+      let detailsAssets: unknown[] = composesImageEditLocally(imageEdit?.operation) ? [] : assets;
 
       const billing: Record<string, unknown> = {};
       if (task.quotaRemaining != null) billing.quotaRemaining = task.quotaRemaining;
@@ -8125,7 +8192,7 @@ if (!gotTheLock) {
             `  - [${asset.filename}](${pathToFileURL(asset.filePath).toString()})`
           );
           lines.push(`Results:\n${fileLines.join('\n')}`);
-        } else if (assets.length > 0 && imageEdit?.operation !== ImageEditOperation.RemoveBackground) {
+        } else if (assets.length > 0 && !composesImageEditLocally(imageEdit?.operation)) {
           const resultLines = resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           lines.push(`Results:\n${resultLines.join('\n')}`);
         }
@@ -8391,7 +8458,7 @@ if (!gotTheLock) {
             tracker.savedAssets = saved?.saved ?? tracker.savedAssets;
             const ready = status !== MediaTaskStatus.Succeeded || (assets.length > 0 && saved?.saved.length === assets.length);
             const details = { ...task, clientStartedAt: tracker.startedAt, taskId, mediaType: tracker.mediaType,
-              ...(tracker.imageEdit?.operation === ImageEditOperation.RemoveBackground ? { resultUrls: saved?.saved.map(asset => asset.url) ?? [] } : {}),
+              ...(composesImageEditLocally(tracker.imageEdit?.operation) ? { resultUrls: saved?.saved.map(asset => asset.url) ?? [] } : {}),
               ...(status === MediaTaskStatus.Succeeded ? {
                 deliveryStatus: ready ? MediaDeliveryStatus.Saved : MediaDeliveryStatus.Retrying,
                 assets: tracker.savedAssets ?? [],
@@ -8717,7 +8784,7 @@ if (!gotTheLock) {
 
     try {
       const result = await persistGeneratedImageAssets({
-        cwd: edit?.operation === ImageEditOperation.RemoveBackground ? await imageEditing.downloadDirectory(edit) : cwd,
+        cwd: edit && composesImageEditLocally(edit.operation) ? await imageEditing.downloadDirectory(edit) : cwd,
         assets: pendingAssets,
         fetchAsset: url => session.defaultSession.fetch(url, { signal: AbortSignal.timeout(120_000) }),
       });
@@ -16841,6 +16908,16 @@ if (!gotTheLock) {
     profiler.measure('app.whenReady');
     console.log('[Main] initApp: app is ready');
 
+    // Immutable Vite deps cached before vite.config.ts switched them to no-cache
+    // can stop the dev renderer from mounting. One-time; awaited before any window.
+    const developmentHttpCacheCleared = isDev
+      ? clearLegacyDevelopmentServerHttpCache({
+        session: session.defaultSession,
+        serverUrl: DEV_SERVER_URL,
+        userDataPath: app.getPath('userData'),
+      })
+      : null;
+
     // Note: Calendar permission is checked on-demand when calendar operations are requested
     // We don't trigger permission dialogs at startup to avoid annoying users
 
@@ -17032,6 +17109,11 @@ if (!gotTheLock) {
         getServerBaseUrl: getServerApiBaseUrl,
         getAccountContextHeaders: getEnterpriseAccountHeaders,
         getSessionKey: getAuthSessionKey,
+        onRequestFinished: origin => {
+          void coworkTurnUsageService?.refreshExactTrace(origin).catch(error => {
+            console.warn('[TurnUsage] failed to refresh completed background request usage.', error);
+          });
+        },
         getClientVersion: () => app.getVersion(),
         getEnterpriseAuthSessionSnapshot: captureEnterpriseAuthSessionSnapshot,
         onEnterpriseMembershipRevoked: event => {
@@ -17191,6 +17273,7 @@ if (!gotTheLock) {
 
     // Agent model migration — runs after cache warmup so resolveMatchedProvider
     // can match lobsterai-server models without falling back.
+    profiler.mark('agentModelMigration');
     const defaultAgentModelRef = resolveDefaultAgentModelRef();
     const backfilledAgentModels = getCoworkStore().backfillEmptyAgentModels(defaultAgentModelRef);
     const qualifiedAgentModels = migrateAgentModelRefs({
@@ -17204,22 +17287,29 @@ if (!gotTheLock) {
         `[Main] migrated agent model bindings: backfilled=${backfilledAgentModels}, qualified=${qualifiedAgentModels}`,
       );
     }
+    profiler.measure('agentModelMigration');
 
     // One-time migration: move main agent workspace files from the user's
     // working directory to the fixed {STATE_DIR}/workspace-main/ path.
     try {
+      // The engine manager is first constructed here.
+      profiler.mark('openClawEngineManagerInit');
       const engineManager = getOpenClawEngineManager();
+      profiler.measure('openClawEngineManagerInit');
+      profiler.mark('mainWorkspaceMigration');
       migrateMainAgentWorkspace(
         engineManager.getStateDir(),
         getCoworkStore().getConfig().workingDirectory,
         getStore(),
       );
+      profiler.measure('mainWorkspaceMigration');
     } catch (err) {
       console.warn('[OpenClaw] main agent workspace migration failed (non-fatal):', err);
     }
 
     // One-time migration: existing installs switch to the in-app browser before
     // the first config sync renders OpenClaw's browser profile.
+    profiler.mark('browserDisplayModeMigration');
     try {
       if (migrateBrowserDisplayModeToInApp(getStore())) {
         console.log('[Browser] switched the browser display mode to in-app for an existing install.');
@@ -17227,6 +17317,7 @@ if (!gotTheLock) {
     } catch (err) {
       console.warn('[Browser] browser display mode migration failed (non-fatal):', err);
     }
+    profiler.measure('browserDisplayModeMigration');
 
     // An interrupted Windows installer can leave an empty resources/cfmind
     // directory plus win-resources.tar. Recover it before config sync because
@@ -17285,6 +17376,12 @@ if (!gotTheLock) {
       isDev,
       startUrl: process.env.ELECTRON_START_URL,
     });
+
+    if (developmentHttpCacheCleared) {
+      profiler.mark('developmentHttpCache');
+      await developmentHttpCacheCleared;
+      profiler.measure('developmentHttpCache');
+    }
 
     profiler.mark('createWindow');
     console.log('[Main] initApp: creating window');

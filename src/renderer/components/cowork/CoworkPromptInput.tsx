@@ -38,6 +38,12 @@ import {
   formatCoworkImageAttachmentLimit,
 } from '../../../shared/cowork/imageAttachments';
 import type { CoworkLocalInput } from '../../../shared/cowork/inputAttachments';
+import {
+  type CoworkPastedTextBlock,
+  createPastedTextAttachment,
+  isPastedTextAttachment,
+  shouldPasteAsTextCard,
+} from '../../../shared/cowork/pastedText';
 import { isPlanImplementationApproval } from '../../../shared/cowork/planMode';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import {
@@ -117,12 +123,6 @@ import { getCompactFolderName } from '../../utils/path';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
 import { ImageEditDraftCard } from '../artifacts/imageEditor/ImageEditDraftCard';
 import { useImageEditSubmission } from '../artifacts/imageEditor/useImageEditSubmission';
-import {
-  ACTIVE_CONTEXT_BADGE_BUTTON_CLASS,
-  ACTIVE_CONTEXT_BADGE_ICON_CLASS,
-  ACTIVE_CONTEXT_BADGE_ICON_WRAP_CLASS,
-  ACTIVE_CONTEXT_BADGE_REMOVE_ICON_CLASS,
-} from '../common/activeContextBadgeStyles';
 import Modal from '../common/Modal';
 import { PromptFoldedTool, PromptSubmenuSide, resolvePromptSubmenuSide } from '../common/promptSubmenu';
 import ExpertPickerMenuItem from '../experts/ExpertPickerMenuItem';
@@ -131,12 +131,13 @@ import GoalIcon from '../icons/GoalIcon';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import PlanModeIcon from '../icons/PlanModeIcon';
 import PromptAddIcon from '../icons/PromptAddIcon';
+import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 import SkillIcon from '../icons/SkillIcon';
 import TaskPauseIcon from '../icons/TaskPauseIcon';
 import TrashIcon from '../icons/TrashIcon';
 import WorkingDirectoryIcon from '../icons/WorkingDirectoryIcon';
 import XMarkIcon from '../icons/XMarkIcon';
-import { ActiveKitBadge, KitsButton } from '../kits';
+import { KitsButton } from '../kits';
 import ModelSelector, {
   isModelAgenticBlocked,
   ModelAccessPromptKind,
@@ -144,7 +145,7 @@ import ModelSelector, {
   type ModelSelectorChangeMeta,
   ModelSelectorGroup,
 } from '../ModelSelector';
-import { ActiveSkillBadge, SkillsPopover } from '../skills';
+import { SkillsPopover } from '../skills';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import {
   resolveAgentModelSelection,
@@ -159,8 +160,14 @@ import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge
 import ChatLoginExperienceModal from './ChatLoginExperienceModal';
 import { getClipboardAttachmentFiles } from './clipboardAttachments';
 import { CoworkUiEvent } from './constants';
+import { ContextChipTone } from './ContextChip';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import { getCaretPixelPosition } from './getCaretPosition';
+import {
+  type InlineContextChipItem,
+  InlineContextChipLayer,
+  useInlineContextChips,
+} from './InlineContextChips';
 import MediaMentionPicker from './MediaMentionPicker';
 import {
   buildMediaMentionSegments,
@@ -170,6 +177,7 @@ import {
   resolveMediaMentionTrigger,
 } from './mediaMentionUtils';
 import MediaModelPicker from './MediaModelPicker';
+import { PastedTextAttachmentCard } from './PastedTextCards';
 import {
   getAttachmentAnalyticsParams,
   getKitAnalyticsParams,
@@ -425,6 +433,8 @@ export interface CoworkPromptInputRef {
   setImageAttachments: (images: CoworkImageAttachment[]) => void;
   /** 设置选中的 assistant 文本片段（用于重新编辑消息时还原上下文） */
   setSelectedTextSnippets: (snippets: CoworkSelectedTextSnippet[]) => void;
+  /** 追加粘贴文本卡片（用于重新编辑消息时还原大段粘贴） */
+  addPastedTexts: (blocks: CoworkPastedTextBlock[]) => void;
   /** 聚焦输入框 */
   focus: () => void;
   /** 以当前草稿（文本/附件/浏览器注释）触发一次提交，等价于点击发送按钮 */
@@ -647,6 +657,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setSelectedTextSnippets: (snippets: CoworkSelectedTextSnippet[]) => {
       dispatch(setDraftSelectedTextSnippets({ draftKey, snippets }));
     },
+    addPastedTexts: (blocks: CoworkPastedTextBlock[]) => {
+      for (const block of blocks) {
+        dispatch(addDraftAttachment({ draftKey, attachment: createPastedTextAttachment(block.text) }));
+      }
+    },
     focus: () => {
       textareaRef.current?.focus();
     },
@@ -657,11 +672,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
-  const hasActiveSkills = activeSkillIds.some(id => skills.some(skill => skill.id === id));
   const activeKitIds = useSelector((state: RootState) => state.kit.activeKitIds);
   const installedKits = useSelector((state: RootState) => state.kit.installedKits);
   const marketplaceKits = useSelector((state: RootState) => state.kit.marketplaceKits);
-  const hasActiveKits = activeKitIds.length > 0;
   const draftKitIdsForKey = useSelector((state: RootState) => state.cowork.draftKitIds[draftKey]);
   const draftSkillIdsForKey = useSelector((state: RootState) => state.cowork.draftSkillIds[draftKey]);
   const draftCollaborationMode = useSelector(
@@ -709,17 +722,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const isLarge = size === 'large' || isCompact;
   const useHomeContextLayout = isLarge && showAgentSelector;
   const useCompactSendButton = isLarge && (useHomeContextLayout || showReadOnlyContext || isCompact);
-  const hasActiveContext = hasActiveSkills || hasActiveKits || isPlanMode || goalInputActive || steerInputActive;
   const hasAttachments = attachments.length > 0;
-  // Keep the floating card short until its content needs more room.
+  // Keep the floating card short until its content needs more room. Context
+  // chips flow inline with the text, so selecting one never changes the height.
   const minHeight = narrow
     ? 40
     : isCompact
-      ? hasAttachments ? 30 : hasActiveContext ? 30 : 28
+      ? hasAttachments ? 30 : 28
       : isLarge
         ? useHomeContextLayout
-          ? hasAttachments ? 34 : hasActiveContext ? 36 : 52
-          : hasAttachments ? 38 : hasActiveContext ? 44 : 60
+          ? hasAttachments ? 34 : 52
+          : hasAttachments ? 38 : 60
         : 24;
   const maxHeight = isCompact ? 96 : narrow ? 240 : 200;
 
@@ -1045,7 +1058,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   // Auto-resize textarea. Template-filled content is pinned to a fixed height
   // so picking a different template keeps the input (and the panel below it)
   // stable; height changes animate to avoid layout jumps.
-  useEffect(() => {
+  const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const previousHeight = textarea.getBoundingClientRect().height;
@@ -1066,7 +1079,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     void textarea.offsetHeight;
     textarea.style.transition = 'height 180ms ease-out';
     textarea.style.height = `${targetHeight}px`;
-  }, [value, minHeight, maxHeight, isTemplateHeightLocked]);
+  }, [minHeight, maxHeight, isTemplateHeightLocked]);
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [value, resizeTextarea]);
 
   useEffect(() => {
     const handleFocusInput = (event: Event) => {
@@ -1640,6 +1657,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         ...(attachment.path.startsWith('inline:') && attachment.dataUrl
           ? { dataUrl: attachment.dataUrl }
           : {}),
+        ...(attachment.pastedText !== undefined ? { pastedText: attachment.pastedText } : {}),
       }));
       const queuedCapabilities = buildCoworkCapabilitySelection(
         activeSkillIds,
@@ -2145,6 +2163,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
 
+    if (inlineContextChips.handleKeyDown(event, isComposing)) return;
+
     if (event.key === 'Backspace' && !isComposing) {
       const textarea = event.currentTarget;
       const cursorPos = textarea.selectionStart;
@@ -2272,12 +2292,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
 
   const textareaClass = isCompact
-    ? `w-full resize-none bg-transparent px-4 pb-1.5 text-sm leading-[var(--lobster-leading-sm)] text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/80 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${hasActiveContext ? 'pt-1.5' : 'pt-2'}`
+    ? `w-full resize-none bg-transparent px-4 pb-1.5 text-sm leading-[var(--lobster-leading-sm)] text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/80 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] pt-2`
     : isLarge
     ? `w-full resize-none bg-transparent px-4 pb-2 text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/80 focus:outline-none min-h-[${minHeight}px] max-h-[${maxHeight}px] ${
       useHomeContextLayout
-        ? `${narrow || hasActiveContext ? 'pt-2' : 'pt-3'} text-sm leading-[var(--lobster-leading-prompt)]`
-        : `${hasActiveContext ? 'pt-2' : 'pt-2.5'} text-[length:var(--lobster-text-promptLarge)] leading-[var(--lobster-leading-promptLarge)]`
+        ? `${narrow ? 'pt-2' : 'pt-3'} text-sm leading-[var(--lobster-leading-prompt)]`
+        : 'pt-2.5 text-[length:var(--lobster-text-promptLarge)] leading-[var(--lobster-leading-promptLarge)]'
     }`
     : 'flex-1 resize-none bg-transparent text-foreground placeholder:placeholder:text-secondary focus:outline-none text-sm leading-relaxed min-h-[24px] max-h-[200px]';
 
@@ -2946,10 +2966,46 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (disabled || voiceInputLocksEditing) return;
     const files = getClipboardAttachmentFiles(event.clipboardData);
-    if (files.length === 0) return;
+    if (files.length > 0) {
+      event.preventDefault();
+      void handleIncomingFiles(files, 'paste');
+      return;
+    }
+    // Steers and goal objectives are sent as plain text, so keep pastes inline there.
+    if (steerInputActive || goalInputActive) return;
+    const pastedText = event.clipboardData.getData('text/plain');
+    if (!shouldPasteAsTextCard(pastedText)) return;
     event.preventDefault();
-    void handleIncomingFiles(files, 'paste');
-  }, [disabled, handleIncomingFiles, voiceInputLocksEditing]);
+    const attachment = createPastedTextAttachment(pastedText);
+    dispatch(addDraftAttachment({ draftKey, attachment }));
+    reportPromptControl('pasted_text_card_create', {
+      pastedTextLength: attachment.pastedText.length,
+    });
+  }, [disabled, dispatch, draftKey, goalInputActive, handleIncomingFiles, reportPromptControl, steerInputActive, voiceInputLocksEditing]);
+
+  const handleInsertPastedTextAsText = useCallback((path: string) => {
+    const attachment = attachments.find(item => item.path === path);
+    if (!attachment || !isPastedTextAttachment(attachment)) return;
+    const textarea = textareaRef.current;
+    const selectionStart = textarea?.selectionStart ?? value.length;
+    const selectionEnd = textarea?.selectionEnd ?? value.length;
+    const nextValue = `${value.slice(0, selectionStart)}${attachment.pastedText}${value.slice(selectionEnd)}`;
+    const caret = selectionStart + attachment.pastedText.length;
+    setValue(nextValue);
+    dispatch(setDraftAttachments({
+      draftKey,
+      attachments: attachments.filter(item => item.path !== path),
+    }));
+    reportPromptControl('pasted_text_card_insert', {
+      pastedTextLength: attachment.pastedText.length,
+    });
+    requestAnimationFrame(() => {
+      const nextTextarea = textareaRef.current;
+      if (!nextTextarea) return;
+      nextTextarea.focus();
+      nextTextarea.setSelectionRange(caret, caret);
+    });
+  }, [attachments, dispatch, draftKey, reportPromptControl, value]);
 
   const canSubmit = !disabled
     && !submitDisabled
@@ -3162,7 +3218,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         ref={addMenuButtonRef}
         type="button"
         onClick={handleOpenAddMenu}
-        className="flex h-[34px] w-[34px] items-center justify-center rounded-lg text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+        className={`flex h-[34px] w-[34px] items-center justify-center rounded-lg transition-colors ${
+          showAddMenu ? 'bg-surface-raised text-foreground' : 'text-secondary hover:bg-surface-raised hover:text-foreground'
+        }`}
         title={i18nService.t('add')}
         aria-label={i18nService.t('add')}
         aria-haspopup="menu"
@@ -3176,7 +3234,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         <div
           ref={addMenuRef}
           hidden={!showAddMenu}
-          className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-xl border border-border bg-surface py-1 shadow-popover"
+          className="absolute bottom-full left-0 z-50 mb-2 w-48 origin-bottom-left animate-scale-in rounded-xl border border-border bg-surface py-1 shadow-popover"
           role="menu"
           onMouseEnter={cancelCloseSkillsPopover}
           onMouseLeave={scheduleCloseSkillsPopover}
@@ -3384,6 +3442,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       {attachments.map((attachment) => {
         if (attachment.imageEdit) return <ImageEditDraftCard key={attachment.path} request={attachment.imageEdit}
           onRemove={() => handleRemoveAttachment(attachment.path)} />;
+        if (isPastedTextAttachment(attachment)) {
+          return (
+            <PastedTextAttachmentCard
+              key={attachment.path}
+              path={attachment.path}
+              text={attachment.pastedText}
+              onRemove={handleRemoveAttachment}
+              onInsertAsText={handleInsertPastedTextAsText}
+            />
+          );
+        }
         const ml = mediaLabels.find(m => m.attachment.path === attachment.path);
         return (
           <AttachmentCard
@@ -3646,60 +3715,73 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       : shouldUseExternalGoalStatusBar ? null : sessionGoalStatusBarNode
     : null;
 
-  const planModeBadge = isPlanMode ? (
-    <button
-      type="button"
-      onClick={handleDisablePlanMode}
-      className={ACTIVE_CONTEXT_BADGE_BUTTON_CLASS}
-      title={i18nService.t('coworkClearPlanMode')}
-      aria-label={i18nService.t('coworkClearPlanMode')}
-    >
-      <span className={ACTIVE_CONTEXT_BADGE_ICON_WRAP_CLASS}>
-        <PlanModeIcon className={ACTIVE_CONTEXT_BADGE_ICON_CLASS} />
-        <XMarkIcon className={ACTIVE_CONTEXT_BADGE_REMOVE_ICON_CLASS} />
-      </span>
-      <span className="min-w-0 truncate">
-        {i18nService.t('coworkPlanMode')}
-      </span>
-    </button>
-  ) : null;
-
-  const steerModeBadge = steerInputActive ? (
-    <button
-      type="button"
-      onClick={handleToggleSteerInput}
-      className={ACTIVE_CONTEXT_BADGE_BUTTON_CLASS}
-      title={i18nService.t('coworkSteerExit')}
-      aria-label={i18nService.t('coworkSteerExit')}
-    >
-      <span className={ACTIVE_CONTEXT_BADGE_ICON_WRAP_CLASS}>
-        <ArrowTurnDownRightIcon className={ACTIVE_CONTEXT_BADGE_ICON_CLASS} />
-      </span>
-      <span className="max-w-[120px] truncate">{i18nService.t('coworkSteer')}</span>
-      <XMarkIcon className={ACTIVE_CONTEXT_BADGE_REMOVE_ICON_CLASS} />
-    </button>
-  ) : null;
-
-  const goalModeBadge = goalInputActive ? (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        resetGoalInput(true);
-      }}
-      className={ACTIVE_CONTEXT_BADGE_BUTTON_CLASS}
-      title={i18nService.t('coworkGoalClearInputMode')}
-      aria-label={i18nService.t('coworkGoalClearInputMode')}
-    >
-      <span className={ACTIVE_CONTEXT_BADGE_ICON_WRAP_CLASS}>
-        <GoalIcon className={ACTIVE_CONTEXT_BADGE_ICON_CLASS} />
-        <XMarkIcon className={ACTIVE_CONTEXT_BADGE_REMOVE_ICON_CLASS} />
-      </span>
-      <span className="min-w-0 truncate">
-        {i18nService.t('coworkGoal')}
-      </span>
-    </button>
-  ) : null;
+  // Modes lead because they change what the whole input means; skills and kits
+  // follow in selection order, so Backspace at the start removes the newest.
+  const inlineContextChipItems: InlineContextChipItem[] = [];
+  if (steerInputActive) {
+    inlineContextChipItems.push({
+      id: 'mode:steer',
+      label: i18nService.t('coworkSteer'),
+      icon: ArrowTurnDownRightIcon,
+      removeLabel: i18nService.t('coworkSteerExit'),
+      tone: ContextChipTone.Mode,
+      onRemove: handleToggleSteerInput,
+    });
+  }
+  if (goalInputActive) {
+    inlineContextChipItems.push({
+      id: 'mode:goal',
+      label: i18nService.t('coworkGoal'),
+      icon: GoalIcon,
+      removeLabel: i18nService.t('coworkGoalClearInputMode'),
+      tone: ContextChipTone.Mode,
+      onRemove: () => resetGoalInput(true),
+    });
+  }
+  if (isPlanMode) {
+    inlineContextChipItems.push({
+      id: 'mode:plan',
+      label: i18nService.t('coworkPlanMode'),
+      icon: PlanModeIcon,
+      removeLabel: i18nService.t('coworkClearPlanMode'),
+      tone: ContextChipTone.Mode,
+      onRemove: () => handleDisablePlanMode(),
+    });
+  }
+  activeSkillIds.forEach((skillId) => {
+    const skill = skills.find(item => item.id === skillId);
+    if (!skill) return;
+    inlineContextChipItems.push({
+      id: `skill:${skill.id}`,
+      label: skill.name,
+      icon: SkillIcon,
+      removeLabel: i18nService.t('clearSkill'),
+      tone: ContextChipTone.Reference,
+      onRemove: () => dispatch(toggleActiveSkill(skill.id)),
+    });
+  });
+  activeKitIds.forEach((kitId) => {
+    const kit = marketplaceKits.find(item => item.id === kitId);
+    if (!kit) return;
+    inlineContextChipItems.push({
+      id: `kit:${kit.id}`,
+      label: resolveLocalizedText(kit.name),
+      icon: SidebarKitsIcon,
+      removeLabel: i18nService.t('clearKit'),
+      tone: ContextChipTone.Reference,
+      onRemove: () => dispatch(toggleActiveKit(kit.id)),
+    });
+  });
+  const inlineContextChips = useInlineContextChips({
+    textareaRef,
+    items: inlineContextChipItems,
+    enabled: isLarge,
+  });
+  const inlineContextChipTextOffsetTop = inlineContextChips.textStyle?.paddingTop;
+  // Chip rows change the textarea's padding, which the value-driven resize misses.
+  useLayoutEffect(() => {
+    resizeTextarea();
+  }, [inlineContextChipTextOffsetTop, resizeTextarea]);
 
   const compactAttachmentPreview = hasAttachments ? (
     <div className="mb-2 max-h-[164px] overflow-y-auto rounded-xl bg-black/[0.035] p-2 dark:bg-white/[0.055]">
@@ -3707,20 +3789,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     </div>
   ) : null;
 
-  const activeSkillContextRow = isLarge && hasActiveContext ? (
-    <div
-      className={`flex cursor-text flex-wrap items-center gap-x-2 gap-y-1 px-4 ${isCompact ? 'pt-2' : 'pt-4'}`}
-      onClick={() => {
-        if (!disabled && !voiceInputLocksEditing) textareaRef.current?.focus();
-      }}
-    >
-      <ActiveSkillBadge />
-      <ActiveKitBadge />
-      {goalModeBadge}
-      {planModeBadge}
-      {steerModeBadge}
-    </div>
-  ) : null;
   const textareaPlaceholder = steerInputActive
     ? i18nService.t('coworkSteerPlaceholder')
     : goalInputActive
@@ -3730,14 +3798,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const renderMentionTextarea = ({
     rows,
     placeholder: textareaPlaceholderText,
-    style,
+    style: baseStyle,
     wrapperClassName = 'relative w-full',
   }: {
     rows: number;
     placeholder: string;
         style?: React.CSSProperties;
         wrapperClassName?: string;
-      }) => (
+      }) => {
+    const style = { ...baseStyle, ...inlineContextChips.textStyle };
+    return (
         <div className={wrapperClassName}>
       {activeTextareaValue && hasMediaMentionHighlight && (
         <div
@@ -3769,6 +3839,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           </div>
         </div>
       )}
+      <InlineContextChipLayer chips={inlineContextChips} scrollTop={textareaScrollTop} />
         <textarea
           ref={textareaRef}
           data-onboarding-target={isLarge && useHomeContextLayout ? 'home-prompt-textarea' : undefined}
@@ -3789,6 +3860,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         />
       </div>
     );
+  };
 
   const readOnlyContextRow = isLarge && showReadOnlyContext && !useHomeContextLayout ? (
     <div className="mt-2 grid min-h-7 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-4">
@@ -4113,7 +4185,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 {browserAnnotationPreview}
                 {steerPreview}
                 {sessionGoalStatusBar}
-                {activeSkillContextRow}
                 {renderMentionTextarea({
                   rows: narrow ? 1 : 2,
                   placeholder: textareaPlaceholder,
@@ -4160,7 +4231,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               {browserAnnotationPreview}
               {steerPreview}
               {sessionGoalStatusBar}
-              {activeSkillContextRow}
               {renderMentionTextarea({
                 rows: isCompact ? 1 : 2,
                 placeholder: textareaPlaceholder,

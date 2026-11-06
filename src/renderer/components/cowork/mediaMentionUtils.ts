@@ -97,6 +97,8 @@ const getFileExtension = (fileName: string): string => {
 
 export function getMediaMentionType(attachment: DraftAttachment): MediaMentionType | null {
   if (attachment.isImage) return MediaMentionType.Image;
+  // A pasted-text card's name is its first line, not a file name.
+  if (attachment.pastedText !== undefined) return null;
 
   const ext = getFileExtension(attachment.name);
   if (IMAGE_EXTENSIONS.has(ext)) return MediaMentionType.Image;

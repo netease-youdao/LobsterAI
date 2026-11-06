@@ -51,7 +51,7 @@ export default {
         usageUserMessage?: string; usageJobTitle?: string; jobId?: string;
       };
       if (!ctx.runId || !ctx.trace?.traceId || !ctx.sessionKey
-          || (ctx.messageProvider === 'webchat' && ctx.trigger !== 'cron')) return;
+          || (ctx.messageProvider === 'webchat' && ctx.trigger !== 'cron' && ctx.trigger !== 'heartbeat')) return;
       try {
         const response = await fetch(`${config.proxyUrl}${NATIVE_RUN_LLM_TRACE_PATH}`, {
           method: 'POST',

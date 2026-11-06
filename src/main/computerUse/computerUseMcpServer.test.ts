@@ -1,11 +1,14 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from 'child_process';
 import crypto from 'crypto';
 import { session } from 'electron';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import yazl from 'yazl';
+
+import { buildOpenClawMcpServers } from '../libs/openclawConfigSync';
 
 const TEST_USER_DATA = path.join(process.cwd(), '.test-computer-use-runtime');
 const originalPlatform = process.platform;
@@ -27,8 +30,8 @@ vi.mock('electron', () => ({
 }));
 
 import {
-  COMPUTER_USE_BRIDGE_SECRET_PLACEHOLDER,
   ComputerUseMcpEnv,
+  ComputerUseMcpServerName,
   ensureComputerUseMcpServerScript,
   resolveComputerUseMcpServer,
   resolveComputerUseRuntimePaths,
@@ -47,6 +50,7 @@ import {
   removeStaleComputerUseRuntimes,
 } from './computerUseRuntime';
 
+const HOST_INFO_URL = 'http://127.0.0.1:1234/host/info';
 const WINDOWS_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.WindowsX64];
 const MAC_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.MacArm64];
 const MAC_X64_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.MacX64];
@@ -294,6 +298,7 @@ describe('resolveComputerUseRuntimePaths', () => {
     const server = resolveComputerUseMcpServer({
       askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
       electronNodePath: process.execPath,
+      hostInfoUrl: HOST_INFO_URL,
     });
     const helperStateHome = getComputerUseHelperStateHome();
     const config = JSON.parse(fs.readFileSync(
@@ -315,7 +320,7 @@ describe('resolveComputerUseRuntimePaths', () => {
     expect(server?.env?.[ComputerUseMcpEnv.LogRetentionDays]).toBe('7');
     expect(server?.env?.[ComputerUseMcpEnv.Locale]).toBe('zh');
     expect(server?.env?.[ComputerUseMcpEnv.SelfAppName]).toBe('LobsterAI');
-    expect(server?.env?.[ComputerUseMcpEnv.SelfPid]).toBe(String(process.pid));
+    expect(server?.env?.[ComputerUseMcpEnv.HostInfoUrl]).toBe(HOST_INFO_URL);
     expect(config.strings?.usingComputer).toBe('LobsterAI正在使用你的电脑');
     expect(config.strings?.escToCancel).toBe('按 Esc 取消');
   });
@@ -363,16 +368,87 @@ describe('resolveComputerUseRuntimePaths', () => {
     ].sort());
   });
 
-  test('keeps the per-launch bridge secret out of openclaw.json', () => {
+  test('preserves the bridge secret reference through OpenClaw config serialization', () => {
     writeWindowsRuntimeFixture();
 
     const server = resolveComputerUseMcpServer({
       askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
       electronNodePath: process.execPath,
+      hostInfoUrl: HOST_INFO_URL,
     });
 
-    expect(server?.env?.[ComputerUseMcpEnv.BridgeSecret]).toBe(COMPUTER_USE_BRIDGE_SECRET_PLACEHOLDER);
-    expect(COMPUTER_USE_BRIDGE_SECRET_PLACEHOLDER).toBe('${LOBSTER_MCP_BRIDGE_SECRET}');
+    expect(server).not.toBeNull();
+    const config = buildOpenClawMcpServers([server!]);
+    expect(config[ComputerUseMcpServerName.BuiltIn].env).toMatchObject({
+      [ComputerUseMcpEnv.BridgeSecret]: '${LOBSTER_MCP_BRIDGE_SECRET}',
+    });
+  });
+
+  test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/dist/plugin-sdk/config-runtime.js')))(
+    'resolves the internal bridge secret with the pinned runtime while external MCP values stay literal',
+    () => {
+      writeWindowsRuntimeFixture();
+      const server = resolveComputerUseMcpServer({
+        askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
+        electronNodePath: process.execPath,
+        hostInfoUrl: HOST_INFO_URL,
+      });
+      expect(server).not.toBeNull();
+      const configPath = path.join(TEST_USER_DATA, 'openclaw.json');
+      fs.writeFileSync(configPath, JSON.stringify({
+        mcp: { servers: buildOpenClawMcpServers([server!, {
+          name: 'external',
+          transportType: 'stdio',
+          command: process.execPath,
+          env: { [ComputerUseMcpEnv.BridgeSecret]: '${LOBSTER_MCP_BRIDGE_SECRET}' },
+        }]) },
+      }));
+      const sdkUrl = pathToFileURL(path.resolve('vendor/openclaw-runtime/current/dist/plugin-sdk/config-runtime.js')).href;
+      const loaded = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { loadConfig } from ${JSON.stringify(sdkUrl)};
+        console.log(JSON.stringify(loadConfig().mcp.servers));
+      `], {
+        env: {
+          ...process.env,
+          OPENCLAW_HOME: TEST_USER_DATA,
+          OPENCLAW_STATE_DIR: path.join(TEST_USER_DATA, 'state'),
+          OPENCLAW_CONFIG_PATH: configPath,
+          [ComputerUseMcpEnv.BridgeSecret]: 'fixture-bridge-secret',
+        },
+        encoding: 'utf8',
+        timeout: 15000,
+      });
+
+      expect(loaded.status, loaded.stderr || loaded.error?.message).toBe(0);
+      const servers = JSON.parse(loaded.stdout);
+      expect(servers[ComputerUseMcpServerName.BuiltIn].env[ComputerUseMcpEnv.BridgeSecret]).toBe('fixture-bridge-secret');
+      expect(servers.external.env[ComputerUseMcpEnv.BridgeSecret]).toBe('${LOBSTER_MCP_BRIDGE_SECRET}');
+    },
+  );
+
+  test('renders the same launch spec on every app launch', () => {
+    writeWindowsRuntimeFixture();
+    const originalPid = process.pid;
+    const resolveInLaunch = (pid: number) => {
+      Object.defineProperty(process, 'pid', { configurable: true, value: pid });
+      return resolveComputerUseMcpServer({
+        askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
+        electronNodePath: process.execPath,
+        hostInfoUrl: HOST_INFO_URL,
+      });
+    };
+
+    try {
+      const firstLaunch = resolveInLaunch(41001);
+      const nextLaunch = resolveInLaunch(41002);
+
+      // OpenClaw keys its startup migration checkpoint on the whole config, so a
+      // value that differs per launch reruns those migrations on every gateway start.
+      expect(nextLaunch).toEqual(firstLaunch);
+      expect(JSON.stringify(firstLaunch)).not.toContain('41001');
+    } finally {
+      Object.defineProperty(process, 'pid', { configurable: true, value: originalPid });
+    }
   });
 
   test('resolves the macOS Computer Use helper runtime', () => {
@@ -383,6 +459,7 @@ describe('resolveComputerUseRuntimePaths', () => {
     const server = resolveComputerUseMcpServer({
       askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
       electronNodePath: process.execPath,
+      hostInfoUrl: HOST_INFO_URL,
     });
 
     expect(inspection.missing).toEqual([]);
@@ -587,6 +664,7 @@ describe('resolveComputerUseRuntimePaths', () => {
       const server = resolveComputerUseMcpServer({
         askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
         electronNodePath: process.execPath,
+        hostInfoUrl: HOST_INFO_URL,
       });
       expect(server?.env?.[ComputerUseMcpEnv.ClientModulePath]).toBe(paths?.clientModulePath);
       expect(server?.env?.[ComputerUseMcpEnv.ExePath]).toBe(paths?.helperExePath);
@@ -632,6 +710,8 @@ describe('resolveComputerUseRuntimePaths', () => {
       const server = resolveComputerUseMcpServer({
         askUserCallbackUrl: `http://127.0.0.1:${askPort}/ask-user`,
         electronNodePath: process.execPath,
+        // The ask server answers every POST as a prompt; skip the process id lookup.
+        hostInfoUrl: null,
       });
       expect(server?.command).toBeTruthy();
       expect(server?.args?.length).toBeGreaterThan(0);

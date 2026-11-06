@@ -28,6 +28,7 @@ const RETAINED_PATCHES = [
   'openclaw-exec-command-description.patch',
   'openclaw-gateway-client-request-traceparent.patch',
   'openclaw-gateway-fast-path-rejection-handler.patch',
+  'openclaw-heartbeat-cost-isolation.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
   'openclaw-inferred-plugin-install-allowlist.patch',
   'openclaw-lancedb-optional-transformers.patch',
@@ -35,6 +36,7 @@ const RETAINED_PATCHES = [
   'openclaw-lobsterai-model-compat-api.patch',
   'openclaw-lobsterai-provider-cooldown.patch',
   'openclaw-lobsterai-startup-recovery.patch',
+  'openclaw-low-level-dispatch-reply-reservation.patch',
   'openclaw-malformed-tool-call-continuation.patch',
   'openclaw-managed-image-replay.patch',
   'openclaw-managed-npm-junction-cleanup.patch',
@@ -47,6 +49,7 @@ const RETAINED_PATCHES = [
   'openclaw-openai-compatible-cache-control.patch',
   'openclaw-openai-completions-output-budget.patch',
   'openclaw-openai-completions-tool-call-repair.patch',
+  'openclaw-openai-oauth-token-proxy.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
   'openclaw-project-memory-negative-probe.patch',
   'openclaw-provider-auth-warm-cooperative-exit.patch',
@@ -82,6 +85,7 @@ const RETAINED_PATCHES = [
   'zz-openclaw-plan-completion-check.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
   'zzz-openclaw-plugin-degraded-startup.patch',
+  'zzz-openclaw-session-prefix-cache.patch',
 ] as const;
 
 const RETIRED_PATCHES = [
@@ -181,6 +185,14 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       'utf8',
     );
     expect(adapter).toContain('traceparent: createLlmTraceparent(llmTrace.traceId)');
+  });
+
+  test('routes ChatGPT OAuth token requests through the gateway proxy env', () => {
+    expectPatchContains('openclaw-openai-oauth-token-proxy.patch', [
+      '+    mode: "trusted_env_proxy",',
+      '+describe.each(["exchange", "refresh"] as const)("OpenAI token %s proxy routing", (operation) => {',
+      '+      name: "NO_PROXY bypass",',
+    ]);
   });
 
   test('uses native chat.send steering instead of the retired custom RPC', () => {

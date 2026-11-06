@@ -27,6 +27,7 @@ export const ComputerUseMcpEnv = {
   ClientModulePath: 'LOBSTER_COMPUTER_USE_CLIENT_MODULE',
   ExePath: 'LOBSTER_COMPUTER_USE_EXE',
   HelperStateHome: 'LOBSTER_COMPUTER_USE_HOME',
+  HostInfoUrl: 'LOBSTER_COMPUTER_USE_HOST_INFO_URL',
   Locale: 'LOBSTER_COMPUTER_USE_LOCALE',
   LogDir: 'LOBSTER_COMPUTER_USE_LOG_DIR',
   LogLevel: 'LOBSTER_COMPUTER_USE_LOG_LEVEL',
@@ -34,21 +35,16 @@ export const ComputerUseMcpEnv = {
   RuntimePackageRoot: 'LOBSTER_COMPUTER_USE_RUNTIME_PACKAGE_ROOT',
   SdkRoot: 'LOBSTER_COMPUTER_USE_MCP_SDK_ROOT',
   SelfAppName: 'LOBSTER_COMPUTER_USE_SELF_APP',
-  SelfPid: 'LOBSTER_COMPUTER_USE_SELF_PID',
   ZodRoot: 'LOBSTER_COMPUTER_USE_ZOD_ROOT',
 } as const;
 export type ComputerUseMcpEnv =
   typeof ComputerUseMcpEnv[keyof typeof ComputerUseMcpEnv];
 
-/**
- * OpenClaw substitutes ${VAR} placeholders from the gateway environment when it
- * loads openclaw.json, so the per-launch bridge secret never lands on disk.
- */
-export const COMPUTER_USE_BRIDGE_SECRET_PLACEHOLDER = '${LOBSTER_MCP_BRIDGE_SECRET}';
-
 type ResolveComputerUseMcpServerOptions = {
   askUserCallbackUrl: string | null;
   electronNodePath: string;
+  /** Bridge endpoint the server reads the app's process id from at startup. */
+  hostInfoUrl: string | null;
 };
 
 const SERVER_SCRIPT_NAME = 'computer-use-mcp-server.mjs';
@@ -143,7 +139,6 @@ export function resolveComputerUseMcpServer(
   const command = systemNodePath || options.electronNodePath;
   const env: Record<string, string> = {
     [ComputerUseMcpEnv.AskUserUrl]: options.askUserCallbackUrl,
-    [ComputerUseMcpEnv.BridgeSecret]: COMPUTER_USE_BRIDGE_SECRET_PLACEHOLDER,
     [ComputerUseMcpEnv.ClientModulePath]: runtimePaths.clientModulePath,
     [ComputerUseMcpEnv.ExePath]: runtimePaths.helperExePath,
     [ComputerUseMcpEnv.HelperStateHome]: ensureComputerUseHelperStateHome(),
@@ -154,9 +149,14 @@ export function resolveComputerUseMcpServer(
     [ComputerUseMcpEnv.RuntimePackageRoot]: runtimePaths.runtimePackageRoot,
     [ComputerUseMcpEnv.SdkRoot]: sdkRoot,
     [ComputerUseMcpEnv.SelfAppName]: app.getName(),
-    [ComputerUseMcpEnv.SelfPid]: String(process.pid),
     [ComputerUseMcpEnv.ZodRoot]: zodRoot,
   };
+  // The app's process id changes every launch, so the server asks the bridge
+  // for it: a value that differs per launch in openclaw.json makes OpenClaw
+  // rerun its startup migrations on every gateway start.
+  if (options.hostInfoUrl) {
+    env[ComputerUseMcpEnv.HostInfoUrl] = options.hostInfoUrl;
+  }
   if (!systemNodePath) {
     env.ELECTRON_RUN_AS_NODE = '1';
   }
@@ -167,6 +167,8 @@ export function resolveComputerUseMcpServer(
     command,
     args: [ensureComputerUseMcpServerScript()],
     env,
+    // Resolve the bridge secret from the gateway env without persisting its value.
+    gatewayEnvRefs: { [ComputerUseMcpEnv.BridgeSecret]: ComputerUseMcpEnv.BridgeSecret },
   };
 }
 
@@ -202,8 +204,35 @@ const askUserUrl = requireEnv('LOBSTER_COMPUTER_USE_ASKUSER_URL');
 const bridgeSecret = requireEnv('LOBSTER_MCP_BRIDGE_SECRET');
 const helperStateHome = requireEnv('LOBSTER_COMPUTER_USE_HOME');
 const locale = String(env.LOBSTER_COMPUTER_USE_LOCALE || 'zh').toLowerCase().startsWith('en') ? 'en' : 'zh';
-const selfPid = Number(env.LOBSTER_COMPUTER_USE_SELF_PID || 0) || null;
 const selfAppName = String(env.LOBSTER_COMPUTER_USE_SELF_APP || 'LobsterAI').trim();
+const hostInfoUrl = String(env.LOBSTER_COMPUTER_USE_HOST_INFO_URL || '').trim();
+const HOST_INFO_TIMEOUT_MS = 3000;
+
+// LobsterAI's process id changes every launch, so it comes from the bridge instead
+// of openclaw.json. Without it, LobsterAI windows are still matched by app name.
+async function readSelfPid() {
+  if (!hostInfoUrl) {
+    return null;
+  }
+  try {
+    const response = await fetch(hostInfoUrl, {
+      method: 'POST',
+      headers: { 'x-mcp-bridge-secret': bridgeSecret },
+      signal: AbortSignal.timeout(HOST_INFO_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status);
+    }
+    const pid = Number((await response.json())?.pid);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch (error) {
+    console.error('[computer-use] could not read the LobsterAI process id, matching LobsterAI by name only: '
+      + (error instanceof Error ? error.message : String(error)));
+    return null;
+  }
+}
+
+const selfPid = await readSelfPid();
 
 const { McpServer } = await import(moduleUrl(sdkRoot, 'dist', 'esm', 'server', 'mcp.js'));
 const { StdioServerTransport } = await import(moduleUrl(sdkRoot, 'dist', 'esm', 'server', 'stdio.js'));

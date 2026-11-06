@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { ModelPresetId, modelPresetModelId } from '../modelPresets/constants';
-import { formatModelDisplayName, getMessageModelLabel } from './messageModelLabel';
+import { formatModelDisplayName, getMessageModelLabel, getMessageModelLabelParts } from './messageModelLabel';
 
 const presetName = (presetId: ModelPresetId): string =>
   presetId === ModelPresetId.Balanced ? '快速' : '旗舰';
@@ -94,5 +94,19 @@ describe('formatModelDisplayName', () => {
     expect(formatModelDisplayName('deepseek-flash-youdaoinner')).toBe('deepseek-flash');
     expect(formatModelDisplayName('deepseek-YoudaoInner-flash')).toBe('deepseek-YoudaoInner-flash');
     expect(formatModelDisplayName('provider/model')).toBe('provider/model');
+  });
+});
+
+describe('getMessageModelLabelParts', () => {
+  test('separates the localized preset and resolved model for the renderer', () => {
+    expect(getMessageModelLabelParts({
+      modelPresetId: ModelPresetId.Balanced,
+      resolvedModelId: 'youdao/deepseek-flash-YoudaoInner',
+    }, presetName)).toEqual({ name: '快速', detail: 'deepseek-flash' });
+  });
+
+  test('uses a concrete model as the name without repeating it in the detail', () => {
+    expect(getMessageModelLabelParts({ model: 'provider/actual-model' }, presetName))
+      .toEqual({ name: 'actual-model', detail: null });
   });
 });

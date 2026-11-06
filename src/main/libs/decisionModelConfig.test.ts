@@ -24,12 +24,84 @@ describe('decision model config', () => {
   });
 
   test('keeps the saved key when an update omits it and clears it on an empty string', () => {
-    const current = { ...DEFAULT_DECISION_MODEL_CONFIG, enabled: true, apiKey: 'sk-or-saved-1234' };
+    const current = normalizeDecisionModelConfig({ enabled: true, apiKey: 'sk-or-saved-1234' });
 
     expect(applyDecisionModelConfigUpdate(current, { provider: DecisionModelProvider.TypeSafe }).apiKey)
       .toBe('sk-or-saved-1234');
     expect(applyDecisionModelConfigUpdate(current, { apiKey: '' }).apiKey).toBe('');
     expect(applyDecisionModelConfigUpdate(current, { apiKey: '  sk-new  ' }).apiKey).toBe('sk-new');
+  });
+
+  test('moves a key saved by older builds to the provider it was saved with', () => {
+    expect(normalizeDecisionModelConfig({
+      enabled: true,
+      provider: DecisionModelProvider.OpenRouter,
+      endpoint: '',
+      apiKey: '  sk-or-legacy  ',
+    })).toEqual({
+      enabled: true,
+      provider: DecisionModelProvider.OpenRouter,
+      endpoint: '',
+      apiKey: 'sk-or-legacy',
+      apiKeys: { [DecisionModelProvider.OpenRouter]: 'sk-or-legacy' },
+    });
+  });
+
+  test('keeps each provider key when switching providers', () => {
+    const legacy = normalizeDecisionModelConfig({
+      enabled: true,
+      provider: DecisionModelProvider.OpenRouter,
+      apiKey: 'sk-or-1',
+    });
+
+    const typeSafe = applyDecisionModelConfigUpdate(legacy, {
+      provider: DecisionModelProvider.TypeSafe,
+      apiKey: 'ts-1',
+    });
+    expect(typeSafe.apiKey).toBe('ts-1');
+    expect(typeSafe.apiKeys).toEqual({
+      [DecisionModelProvider.OpenRouter]: 'sk-or-1',
+      [DecisionModelProvider.TypeSafe]: 'ts-1',
+    });
+
+    // A saved config round-trips through the store, then switches back.
+    const reloaded = normalizeDecisionModelConfig(JSON.parse(JSON.stringify(typeSafe)));
+    expect(applyDecisionModelConfigUpdate(reloaded, { provider: DecisionModelProvider.OpenRouter }).apiKey)
+      .toBe('sk-or-1');
+    expect(applyDecisionModelConfigUpdate(reloaded, { provider: DecisionModelProvider.Compatible }).apiKey)
+      .toBe('');
+  });
+
+  test('sets and clears per-provider keys, ignoring unknown or malformed entries', () => {
+    const current = normalizeDecisionModelConfig({
+      provider: DecisionModelProvider.TypeSafe,
+      apiKeys: {
+        [DecisionModelProvider.TypeSafe]: 'ts-1',
+        [DecisionModelProvider.OpenRouter]: 'sk-or-1',
+      },
+    });
+
+    const next = applyDecisionModelConfigUpdate(current, {
+      apiKeys: {
+        [DecisionModelProvider.TypeSafe]: '  ts-2  ',
+        [DecisionModelProvider.OpenRouter]: '',
+        [DecisionModelProvider.Compatible]: 42,
+        bogus: 'x',
+      },
+    });
+    expect(next.apiKeys).toEqual({ [DecisionModelProvider.TypeSafe]: 'ts-2' });
+    expect(next.apiKey).toBe('ts-2');
+  });
+
+  test('prefers stored per-provider keys over the mirrored single key', () => {
+    const config = normalizeDecisionModelConfig({
+      provider: DecisionModelProvider.TypeSafe,
+      apiKey: 'stale',
+      apiKeys: { [DecisionModelProvider.OpenRouter]: 'sk-or-1' },
+    });
+
+    expect(config.apiKey).toBe('');
+    expect(config.apiKeys).toEqual({ [DecisionModelProvider.OpenRouter]: 'sk-or-1' });
   });
 
   test('ignores malformed update fields instead of resetting them', () => {
@@ -73,16 +145,22 @@ describe('decision model config', () => {
     expect(DEFAULT_DECISION_MODEL_CONFIG.provider).toBe(DecisionModelProvider.TypeSafe);
   });
 
-  test('returns the saved key for the settings field, like provider settings', () => {
-    expect(toDecisionModelConfigView({
-      ...DEFAULT_DECISION_MODEL_CONFIG,
+  test('returns the saved keys for the settings field, like provider settings', () => {
+    expect(toDecisionModelConfigView(normalizeDecisionModelConfig({
       enabled: true,
-      apiKey: 'ts-abcdef123456',
-    })).toEqual({
+      apiKeys: {
+        [DecisionModelProvider.TypeSafe]: 'ts-abcdef123456',
+        [DecisionModelProvider.OpenRouter]: 'sk-or-abcdef',
+      },
+    }))).toEqual({
       enabled: true,
       provider: DecisionModelProvider.TypeSafe,
       endpoint: '',
       apiKey: 'ts-abcdef123456',
+      apiKeys: {
+        [DecisionModelProvider.TypeSafe]: 'ts-abcdef123456',
+        [DecisionModelProvider.OpenRouter]: 'sk-or-abcdef',
+      },
       active: true,
     });
   });

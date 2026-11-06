@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 
 import type { Artifact } from '@/types/artifact';
 
+import { getImageArtifactSrc } from './imageArtifactSource';
 import { getZoomedSize } from './zoomPan';
 import { useZoomPan, ZoomPanViewport, ZoomResetBadge } from './ZoomPanViewport';
 
@@ -19,6 +20,7 @@ const ImageRenderer: React.FC<ImageRendererProps> = ({ artifact }) => {
   const zoomPan = useZoomPan();
   const [error, setError] = useState(false);
   const [naturalSize, setNaturalSize] = useState<NaturalSize | null>(null);
+  const src = getImageArtifactSrc(artifact);
 
   const handleLoad = useCallback((event: React.SyntheticEvent<HTMLImageElement>) => {
     const image = event.currentTarget;
@@ -27,7 +29,7 @@ const ImageRenderer: React.FC<ImageRendererProps> = ({ artifact }) => {
 
   // Only trust the size measured for the image currently shown, so a refreshed
   // image is never stretched to the previous version's aspect ratio.
-  const displaySize = naturalSize && naturalSize.src === artifact.content && naturalSize.width > 0 && naturalSize.height > 0
+  const displaySize = naturalSize && naturalSize.src === src && naturalSize.width > 0 && naturalSize.height > 0
     ? getZoomedSize({
       intrinsicWidth: naturalSize.width,
       aspectRatio: naturalSize.width / naturalSize.height,
@@ -36,7 +38,7 @@ const ImageRenderer: React.FC<ImageRendererProps> = ({ artifact }) => {
     })
     : null;
 
-  if (!artifact.content) {
+  if (!src) {
     return (
       <div className="flex items-center justify-center h-full text-muted text-sm">
         Loading image...
@@ -60,7 +62,7 @@ const ImageRenderer: React.FC<ImageRendererProps> = ({ artifact }) => {
     >
       <img
         ref={zoomPan.setContentElement}
-        src={artifact.content}
+        src={src}
         alt={artifact.title}
         draggable={false}
         className={`m-auto shrink-0 ${displaySize ? 'max-w-none' : 'max-w-full'}`}

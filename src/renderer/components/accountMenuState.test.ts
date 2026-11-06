@@ -12,6 +12,7 @@ import {
   getAccountPlanAnalyticsContext,
   getAccountPlanPresentation,
   getFinalRewards,
+  isPennyActivityMenuEntryVisible,
   maskPhoneLikeAccountName,
 } from './accountMenuState';
 
@@ -249,5 +250,32 @@ describe('accountMenuState', () => {
     } as CreditsResetCampaignStatus;
 
     expect(getFinalRewards(status)).toEqual([legacyReward]);
+  });
+});
+
+describe('isPennyActivityMenuEntryVisible', () => {
+  const loggedOut = { isLoggedIn: false, isEnterprise: false };
+  const loggedIn = { isLoggedIn: true, isEnterprise: false };
+
+  test('shows the entry to logged-out users whenever the server enables it', () => {
+    expect(isPennyActivityMenuEntryVisible({ clientMenuEntryVisible: true, eligible: false }, loggedOut)).toBe(true);
+  });
+
+  test('shows the entry to logged-in users only when they are eligible', () => {
+    expect(isPennyActivityMenuEntryVisible({ clientMenuEntryVisible: true, eligible: true }, loggedIn)).toBe(true);
+    expect(isPennyActivityMenuEntryVisible({ clientMenuEntryVisible: true, eligible: false }, loggedIn)).toBe(false);
+  });
+
+  test('hides the entry when the server disables it, omits the field, or the status is unavailable', () => {
+    expect(isPennyActivityMenuEntryVisible({ clientMenuEntryVisible: false, eligible: true }, loggedIn)).toBe(false);
+    expect(isPennyActivityMenuEntryVisible({ eligible: true }, loggedOut)).toBe(false);
+    expect(isPennyActivityMenuEntryVisible(null, loggedOut)).toBe(false);
+  });
+
+  test('never shows the entry for enterprise accounts', () => {
+    expect(isPennyActivityMenuEntryVisible(
+      { clientMenuEntryVisible: true, eligible: true },
+      { isLoggedIn: true, isEnterprise: true },
+    )).toBe(false);
   });
 });

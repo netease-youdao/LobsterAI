@@ -1,0 +1,36 @@
+/* Generation placeholder: a soft, slowly drifting glow in the result's own shape. */
+.media-task-aurora {
+  position: absolute;
+  inset: -25%;
+  background:
+    radial-gradient(38% 38% at 30% 32%, color-mix(in srgb, var(--lobster-primary) 46%, transparent), transparent 72%),
+    radial-gradient(34% 34% at 72% 58%, color-mix(in srgb, #f472b6 34%, transparent), transparent 72%),
+    radial-gradient(42% 42% at 46% 82%, color-mix(in srgb, var(--lobster-accent) 30%, transparent), transparent 72%);
+  filter: blur(28px);
+  animation: media-task-drift 9s ease-in-out infinite alternate;
+}
+.media-task-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: media-task-sweep 2.6s ease-in-out infinite;
+}
+.dark .media-task-sweep { background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.08) 50%, transparent 70%); }
+.media-task-icon { animation: media-task-twinkle 1.8s ease-in-out infinite; }
+@keyframes media-task-drift {
+  0% { transform: translate3d(-6%, -4%, 0) rotate(0deg) scale(1); }
+  50% { transform: translate3d(5%, 3%, 0) rotate(10deg) scale(1.08); }
+  100% { transform: translate3d(-3%, 6%, 0) rotate(-8deg) scale(1.02); }
+}
+@keyframes media-task-sweep {
+  0% { transform: translateX(-100%); }
+  60%, 100% { transform: translateX(100%); }
+}
+@keyframes media-task-twinkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.86); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .media-task-aurora, .media-task-sweep, .media-task-icon { animation: none; }
+}

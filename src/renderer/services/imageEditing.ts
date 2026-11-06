@@ -1,9 +1,9 @@
 import { ImageEditOperation, ImageEditorEvent, type ImageEditRequest, type ImageRegion, type ImageVersion } from '../../shared/imageEditing/types';
 import { store } from '../store';
-import { addArtifact, openArtifactPreviewTab } from '../store/slices/artifactSlice';
+import { addArtifact } from '../store/slices/artifactSlice';
 import { type DraftAttachment, setDraftAttachments } from '../store/slices/coworkSlice';
-import { requestImageEditorFocus, setImageRegions } from '../store/slices/imageEditorSlice';
-import { ArtifactTypeValue } from '../types/artifact';
+import { openImageStudio, requestImageEditorFocus, setImageRegions } from '../store/slices/imageEditorSlice';
+import { type Artifact, ArtifactTypeValue } from '../types/artifact';
 import { i18nService } from './i18n';
 import { mergeImageEditDraft } from './imageEditDrafts';
 
@@ -45,11 +45,13 @@ export function focusImageEdit(source: ImageVersion, regionId?: string, regions?
   if (regions) store.dispatch(setImageRegions({ key: `${source.sessionId}:${source.id}`, regions }));
   const artifacts = store.getState().artifact.artifactsBySession[source.sessionId] ?? [];
   const existing = artifacts.find(artifact => artifact.filePath === source.filePath || artifact.filePath === source.originalPath);
-  const artifactId = existing?.id ?? `image-edit-version-${source.id}`;
-  if (!existing) store.dispatch(addArtifact({ sessionId: source.sessionId, artifact: {
-    id: artifactId, sessionId: source.sessionId, messageId: '', type: ArtifactTypeValue.Image,
-    title: source.title, content: '', filePath: source.filePath, createdAt: source.createdAt,
-  } }));
-  store.dispatch(openArtifactPreviewTab({ sessionId: source.sessionId, artifactId }));
+  const artifact: Artifact = existing ?? { id: `image-edit-version-${source.id}`, sessionId: source.sessionId, messageId: '',
+    type: ArtifactTypeValue.Image, title: source.title, content: '', filePath: source.filePath, createdAt: source.createdAt };
+  if (!existing) store.dispatch(addArtifact({ sessionId: source.sessionId, artifact }));
+  store.dispatch(openImageStudio({ artifact }));
   store.dispatch(requestImageEditorFocus({ id: crypto.randomUUID(), source, regionId, operation }));
+}
+/** Opens an image in the full-screen studio, optionally straight into an editing tool or a specific version. */
+export function openImageInStudio(artifact: Artifact, operation?: ImageEditOperation, versionId?: string): void {
+  store.dispatch(openImageStudio({ artifact, operation, versionId }));
 }

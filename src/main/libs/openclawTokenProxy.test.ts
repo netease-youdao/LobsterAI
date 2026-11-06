@@ -17,7 +17,7 @@ vi.mock('electron', () => ({
 import { net } from 'electron';
 
 import { formatLlmTraceparent, NATIVE_RUN_LLM_TRACE_PROXY_PATH } from '../../shared/cowork/llmTurnUsage';
-import { registerLlmUsageContext } from './llmUsageContext';
+import { clearLlmUsageContexts, configureLlmUsageContextResolver, getLlmUsageHeaders, LlmUsageHeader, registerLlmUsageContext } from './llmUsageContext';
 import { claimNativeRunTurnUsage } from './nativeRunTurnUsage';
 import {
   __openClawTokenProxyTestUtils,
@@ -1014,6 +1014,59 @@ test('the running proxy records native run traces locally without a signed-in ac
     });
   } finally {
     stopOpenClawTokenProxy();
+  }
+});
+
+test.each([false, true])('recovers a causal heartbeat before native registration and guards completion after account switch=%s', async (switchAccount) => {
+  const token = 'f'.repeat(48);
+  const traceId = 'a'.repeat(32);
+  const traceparent = formatLlmTraceparent(traceId, 'b'.repeat(16));
+  let owner = 'account-a:1';
+  const onRequestFinished = vi.fn();
+  clearLlmUsageContexts();
+  configureLlmUsageContextResolver(id => id === traceId
+    ? { sessionId: 'original-session', userMessage: 'original prompt', owner: 'account-a:1' } : null);
+  let streamController!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({ start: controller => { streamController = controller; } });
+  vi.mocked(net.fetch).mockResolvedValueOnce(new Response(body, { headers: { 'content-type': 'text/event-stream' } }));
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'access', refreshToken: 'refresh' }),
+    refreshToken: vi.fn(), getServerBaseUrl: () => 'https://server.example', getClientVersion: () => 'test',
+    getInboundAuthToken: () => token, getSessionKey: () => owner, onRequestFinished,
+  });
+  const send = (requestPath: string, payload: unknown, onData?: () => void) => new Promise<void>((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1', port, method: 'POST', path: requestPath,
+      headers: { authorization: `Bearer ${token}`, traceparent },
+    }, res => {
+      res.on('data', () => onData?.());
+      res.on('end', resolve);
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(payload));
+  });
+  try {
+    await send(NATIVE_RUN_LLM_TRACE_PROXY_PATH, { runId: 'heartbeat-run', traceId, trigger: 'heartbeat', sessionKey: 'agent:main:session' });
+    expect(claimNativeRunTurnUsage(['heartbeat-run'])).toBeNull();
+    expect(getLlmUsageHeaders(traceparent, undefined, owner)[LlmUsageHeader.Session]).toBe('original-session');
+    streamController.enqueue(Buffer.from('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'));
+    let ended = false;
+    await send('/v1/chat/completions', { model: 'test-model' }, () => {
+      if (ended) return;
+      ended = true;
+      expect(onRequestFinished).not.toHaveBeenCalled();
+      // A newer turn may already exist when the background stream ends.
+      registerLlmUsageContext('c'.repeat(32), 'original-session', 'next prompt', { owner });
+      if (switchAccount) owner = 'account-b:2';
+      streamController.enqueue(Buffer.from('data: [DONE]\n\n'));
+      streamController.close();
+    });
+    expect(onRequestFinished).toHaveBeenCalledTimes(switchAccount ? 0 : 1);
+    if (!switchAccount) expect(onRequestFinished).toHaveBeenCalledWith({ traceId, sessionId: 'original-session', owner: 'account-a:1' });
+  } finally {
+    stopOpenClawTokenProxy();
+    configureLlmUsageContextResolver(undefined);
   }
 });
 

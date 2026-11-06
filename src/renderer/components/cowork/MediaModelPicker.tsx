@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, ChevronRightIcon, NoSymbolIcon, SparklesIcon } from '@heroicons/react/24/outline';
 import { catalogAnalyticsId, UsageAnalytics, UsageStage } from '@shared/analytics/usage';
 import {
   createAccountOwnerKey,
@@ -13,7 +13,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { MediaPreferenceMode, MediaSelectionSource } from '../../../shared/media/defaultPolicy';
+import { type MediaPreference, MediaPreferenceMode } from '../../../shared/media/defaultPolicy';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
 import {
   enterpriseMediaAccountSnapshotsMatch,
@@ -27,7 +27,6 @@ import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter'
 import {
   isMediaAccountScopeCurrent,
   setMediaPreference,
-  toggleMediaModelSelection,
 } from '../../services/mediaPreferences';
 import { getDraftAnalytics, getSessionUsageContext } from '../../services/usageAnalytics';
 import { type AppDispatch, RootState, store } from '../../store';
@@ -36,6 +35,8 @@ import type { MediaModel } from '../../types/mediaGeneration';
 import { PROMPT_MENU_ROW_CLASS, PROMPT_SUBMENU_POSITION_CLASS, type PromptMenuItemControl } from '../common/promptSubmenu';
 import MagicIcon from '../icons/MagicIcon';
 import mediaGenAnimation from '../icons/MediaGenIcon.json';
+import { resolveMediaModelListMinHeight } from './mediaModelListLayout';
+import { resolveMediaTypeChoice } from './mediaTypeChoice';
 import { resolvePopoverPlacement } from './popoverPlacement';
 
 export { type MediaSelectionScope, toggleMediaModelSelection } from '../../services/mediaPreferences';
@@ -772,17 +773,23 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
 
   const [preferenceError, setPreferenceError] = useState(false);
 
-  const handlePreferenceMode = async (mode: typeof MediaPreferenceMode.Off | typeof MediaPreferenceMode.Inherit) => {
+  const applyPreference = async (mode: 'image' | 'video', preference: MediaPreference) => {
     if (!ownerAccountKey) return;
-    const saved = await setMediaPreference(dispatch, { draftKey, ownerAccountKey, accountGeneration }, activeTab, { mode });
+    const saved = await setMediaPreference(dispatch, { draftKey, ownerAccountKey, accountGeneration }, mode, preference);
     if (isMediaAccountScopeCurrent(ownerAccountKey, accountGeneration)) setPreferenceError(!saved);
   };
 
+  // The rows act as one radio group, so picking the checked row again is a no-op.
+  const handlePreferenceMode = (mode: typeof MediaPreferenceMode.Off | typeof MediaPreferenceMode.Inherit) => {
+    if (resolveMediaTypeChoice(selection, activeTab).preference === mode) return;
+    void applyPreference(activeTab, { mode });
+  };
+
   const handleSelect = (mode: 'image' | 'video', model: MediaModel) => {
+    const choice = resolveMediaTypeChoice(selection, mode);
+    if (choice.preference === MediaPreferenceMode.Selected && choice.modelId === model.modelId) return;
     reportMedia(UsageStage.Select, { mediaType: mode, modelId: catalogAnalyticsId(model.modelId) });
-    if (!ownerAccountKey) return;
-    void toggleMediaModelSelection(dispatch, { draftKey, ownerAccountKey, accountGeneration }, selection, mode, model)
-      .then(saved => { if (isMediaAccountScopeCurrent(ownerAccountKey, accountGeneration)) setPreferenceError(!saved); });
+    void applyPreference(mode, { mode: MediaPreferenceMode.Selected, modelId: model.modelId, modelName: model.displayName });
   };
 
   const handleLogin = async () => {
@@ -1020,6 +1027,46 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
   };
 
   const currentModels = activeTab === 'image' ? mediaModels.image : mediaModels.video;
+  const modelListMinHeight = resolveMediaModelListMinHeight(
+    { image: mediaModels.image.length, video: mediaModels.video.length },
+    isLoading,
+  );
+  const activeChoice = resolveMediaTypeChoice(selection, activeTab);
+  const activeDefaultModelName = activeChoice.defaultModelName
+    ? currentModels.find(model => model.modelId === activeChoice.modelId)?.displayName ?? activeChoice.defaultModelName
+    : undefined;
+
+  // Same footprint as a model row, so the check column lines up across every choice.
+  const renderChoiceRow = ({ icon, label, trailing, isSelected, onClick }: {
+    icon: React.ReactNode;
+    label: string;
+    trailing?: string;
+    isSelected: boolean;
+    onClick: () => void;
+  }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+        isSelected ? 'bg-surface-raised' : 'hover:bg-surface-raised'
+      }`}
+    >
+      <span className={`flex h-5 w-5 shrink-0 items-center justify-center [&_svg]:h-[18px] [&_svg]:w-[18px] ${
+        isSelected ? 'text-foreground' : 'text-secondary'
+      }`}>
+        {icon}
+      </span>
+      <span className={`shrink-0 text-[13px] leading-5 ${isSelected ? 'font-medium' : 'font-normal'}`}>
+        {label}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-right text-[11px] leading-4 text-secondary">
+        {trailing}
+      </span>
+      <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+        {isSelected && <CheckIcon className="h-4 w-4 text-primary" strokeWidth={2.5} />}
+      </span>
+    </button>
+  );
 
   const triggerIcon = (
     <MagicIcon className="h-5 w-5" />
@@ -1033,7 +1080,8 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
           loop={false}
           autoplay={true}
           style={{ width: 80, height: 80 }}
-          key={Date.now()}
+          // Replays when the panel switches prompts, not on every re-render.
+          key={title}
         />
       </div>
       <div className="text-[13px] font-medium text-foreground text-center">{title}</div>
@@ -1138,36 +1186,38 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-          <button type="button" className="text-secondary hover:text-foreground"
-            onClick={() => { void handlePreferenceMode(MediaPreferenceMode.Off); }}>
-            {i18nService.t('mediaDisableType')}
-          </button>
-          <button type="button" className="text-primary hover:underline"
-            onClick={() => { void handlePreferenceMode(MediaPreferenceMode.Inherit); }}>
-            {i18nService.t('mediaRestoreDefaults')}
-          </button>
-        </div>
-        {preferenceError && <div role="alert" className="px-3 pb-2 text-xs text-red-500">
+        {preferenceError && <div role="alert" className="px-3 pt-2 text-xs text-red-500">
           {i18nService.t('mediaPreferencesUnavailable')}
         </div>}
+        {/* System default leads the choices; "no generation" closes them, outside the scrolling list. */}
+        <div className="px-1.5 pb-1 pt-1.5">
+          {renderChoiceRow({
+            icon: <SparklesIcon />,
+            label: i18nService.t('mediaSystemDefault'),
+            isSelected: activeChoice.preference === MediaPreferenceMode.Inherit,
+            onClick: () => handlePreferenceMode(MediaPreferenceMode.Inherit),
+            trailing: activeDefaultModelName,
+          })}
+        </div>
+        <div className="mx-3 border-t border-border/60" />
         {/* Model List: max-h-80 fits eight rows, so a typical list needs no scrollbar. */}
-        <div className="max-h-80 overflow-y-auto px-1.5 py-1">
+        <div
+          className="flex max-h-80 flex-col overflow-y-auto px-1.5 py-1"
+          style={{ minHeight: modelListMinHeight }}
+        >
           {isLoading ? (
-            <div className="px-2 py-3 text-center text-xs text-secondary">
+            <div className="my-auto px-2 py-3 text-center text-xs text-secondary">
               {i18nService.t('mediaLoadingModels')}
             </div>
           ) : currentModels.length === 0 ? (
-            <div className="px-2 py-3 text-center text-xs text-secondary">
+            <div className="my-auto px-2 py-3 text-center text-xs text-secondary">
               {i18nService.t('mediaNoModels')}
             </div>
           ) : (
             currentModels.map((model) => {
-              const isSelected = activeTab === 'image'
-                ? (canonicalizeMediaModelId(selection?.imageModelId) === model.modelId
-                  || (selection?.mode === 'image' && canonicalizeMediaModelId(selection?.modelId) === model.modelId))
-                : (canonicalizeMediaModelId(selection?.videoModelId) === model.modelId
-                  || (selection?.mode === 'video' && canonicalizeMediaModelId(selection?.modelId) === model.modelId));
+              // The system default is checked on its own row, not on the model it resolves to.
+              const isSelected = activeChoice.preference === MediaPreferenceMode.Selected
+                && activeChoice.modelId === model.modelId;
               const priceLabel = activeTab === 'image' ? getModelPriceLabel(model) : null;
               const discountLabel = activeTab === 'image' ? getModelDiscountLabel(model) : null;
               // Name and discount tag take the remaining width; the price sits in
@@ -1179,7 +1229,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
                   onClick={() => handleSelect(activeTab, model)}
                   onMouseEnter={(e) => handleModelHover(model, e)}
                   onMouseLeave={handleModelHoverEnd}
-                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+                  className={`flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
                     isSelected ? 'bg-surface-raised' : 'hover:bg-surface-raised'
                   }`}
                 >
@@ -1190,11 +1240,6 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
                     <span className={`min-w-0 truncate text-[13px] leading-5 ${isSelected ? 'font-medium' : 'font-normal'}`}>
                       {model.displayName}
                     </span>
-                    {isSelected && (activeTab === 'image' ? selection?.imageSource : selection?.videoSource) === MediaSelectionSource.Default && (
-                      <span className="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary">
-                        {i18nService.t('mediaSystemDefault')}
-                      </span>
-                    )}
                     {discountLabel && (
                       <span className="shrink-0 rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-medium leading-3 text-red-500">
                         {discountLabel}
@@ -1213,6 +1258,15 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
               );
             })
           )}
+        </div>
+        <div className="mx-3 border-t border-border/60" />
+        <div className="px-1.5 pb-1.5 pt-1">
+          {renderChoiceRow({
+            icon: <NoSymbolIcon />,
+            label: i18nService.t(activeTab === 'image' ? 'mediaDisableImage' : 'mediaDisableVideo'),
+            isSelected: activeChoice.preference === MediaPreferenceMode.Off,
+            onClick: () => handlePreferenceMode(MediaPreferenceMode.Off),
+          })}
         </div>
       </>
     );
@@ -1262,10 +1316,16 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
         disabled={disabled}
         onClick={() => setIsOpen(!isOpen)}
         className={`flex h-[34px] w-[34px] items-center justify-center rounded-lg transition-colors ${
-          selection && selection.mode !== 'none'
-            ? 'text-foreground hover:bg-surface-raised'
-            : 'text-secondary hover:bg-surface-raised hover:text-foreground/80'
+          isOpen
+            ? 'bg-surface-raised text-foreground'
+            : selection && selection.mode !== 'none'
+              ? 'text-foreground hover:bg-surface-raised'
+              : 'text-secondary hover:bg-surface-raised hover:text-foreground/80'
         } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+        title={i18nService.t('mediaGenerationMenuItem')}
+        aria-label={i18nService.t('mediaGenerationMenuItem')}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
       >
         {triggerIcon}
       </button>
@@ -1274,7 +1334,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
         <div
           ref={dropdownRef}
           style={{ width: panelPlacement.width }}
-          className={`absolute bottom-full ${panelPlacement.alignEnd ? 'right-0' : 'left-0'} z-50 mb-1 rounded-xl border border-border bg-surface shadow-popover overflow-hidden`}
+          className={`absolute bottom-full ${panelPlacement.alignEnd ? 'right-0 origin-bottom-right' : 'left-0 origin-bottom-left'} z-50 mb-2 animate-scale-in rounded-xl border border-border bg-surface shadow-popover overflow-hidden`}
         >
           {renderDropdownContent()}
         </div>

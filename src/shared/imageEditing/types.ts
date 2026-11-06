@@ -48,6 +48,15 @@ export interface ImageVersion {
   taskId?: string;
   outputIndex?: number;
 }
+/** A pixel rectangle of the source with private copies of the source and mask inside it. */
+export interface ImageEditCrop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  sourcePath: string;
+  maskPath: string;
+}
 export interface ImageEditRequest {
   id: string;
   sourceVersionNumber?: number;
@@ -55,6 +64,8 @@ export interface ImageEditRequest {
   operation: ImageEditOperation;
   regions: ImageRegion[];
   guidePath?: string;
+  /** Erase sends this close-up to the image model and blends the result back into the source. */
+  eraseCrop?: ImageEditCrop;
   aspectRatio?: string;
   instruction?: string;
   createdAt: number;
@@ -68,13 +79,18 @@ export interface ImageEditMessageSnapshot {
   regions: ImageRegion[];
   instruction?: string;
 }
+/** Encoded image bytes; the renderer shows them through object URLs instead of multi-MB data URLs. */
+export interface ImageEditSnapshotFile {
+  bytes: Uint8Array;
+  mime: string;
+}
 /** Images read from the immutable request, never from the current editor draft. */
 export interface ImageEditSnapshotImages {
-  dataUrl: string;
+  image: ImageEditSnapshotFile;
   /** Black preserves the source; white is the submitted removal area. */
-  maskDataUrl?: string;
+  mask?: ImageEditSnapshotFile;
   /** The original composited with the submitted drawing, including text and eraser results. */
-  markupDataUrl?: string;
+  markup?: ImageEditSnapshotFile;
 }
 export interface ImageEditStageInput {
   sessionId: string;

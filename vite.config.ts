@@ -196,6 +196,15 @@ export default defineConfig({
     port: devPort,
     strictPort: true,
     host: true,
+    // Vite marks pre-bundled deps `immutable` under a `?v=` hash that can repeat
+    // across re-optimizations with different chunk files. Electron's HTTP cache
+    // (shared by every checkout and launch) never revalidates those, so the
+    // renderer imports chunks this server no longer has (404) and never mounts.
+    // server.headers is applied after Vite's own Cache-Control; with no-cache
+    // each load revalidates against the ETag and gets a 304 when unchanged.
+    headers: {
+      'Cache-Control': 'no-cache',
+    },
     hmr: {
       port: devPort,
     },

@@ -11,7 +11,15 @@ describe('openclaw-im-bound-agent-run-cwd.patch', () => {
       'cwd: runCwd',
       'cwd?: string;',
       'normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??',
-      'resolveAgentRunCwd(cfg, agentId, optsWithCommandQueueOverride?.cwd)',
+    ]);
+  });
+
+  test('resolves IM run cwd from the hot-reloaded runtime snapshot', () => {
+    // Low-level channel dispatches pass the config captured at channel start.
+    expectPatchContains('openclaw-im-bound-agent-run-cwd.patch', [
+      'import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";',
+      'getRuntimeConfigSnapshot() ?? cfg,',
+      'resolves run cwd from the hot-reloaded runtime snapshot over a stale channel config',
     ]);
   });
 

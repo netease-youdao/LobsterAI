@@ -1,3 +1,5 @@
+import { expandPastedTextBlocks } from '../shared/cowork/pastedText';
+
 export const SESSION_TITLE_MAX_CHARS = 50;
 export const SESSION_TITLE_INPUT_MAX_CHARS = 1_000;
 
@@ -10,14 +12,18 @@ export interface GenerateSessionTitleRequest {
 /** Build from the draft before file paths, images or runtime instructions are attached. */
 export function buildSessionTitleInput(
   text: string,
-  attachments: ReadonlyArray<{ name: string; isImage?: boolean }> = [],
+  attachments: ReadonlyArray<{ name: string; isImage?: boolean; pastedText?: string }> = [],
 ): string {
   const names = attachments
+    .filter(file => file.pastedText === undefined)
     .filter(file => !file.isImage && !/\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i.test(file.name))
     .slice(0, 3)
     .map(file => Array.from(file.name.split(/[\\/]/).pop() ?? '').slice(0, 80).join(''))
     .filter(Boolean);
-  const input = [stripGoalCommandPrefixForDisplay(text).trim(), ...names].filter(Boolean).join('\n');
+  const pastedTexts = attachments
+    .map(file => file.pastedText?.trim() ?? '')
+    .filter(Boolean);
+  const input = [stripGoalCommandPrefixForDisplay(text).trim(), ...names, ...pastedTexts].filter(Boolean).join('\n');
   // Stop at the bound without allocating a code-point array for the entire prompt.
   let result = '';
   let count = 0;
@@ -39,7 +45,7 @@ export function buildSessionTitleFromInput(
   defaultTitle: string
 ): string {
   const normalizedInput = typeof input === 'string'
-    ? stripGoalCommandPrefixForDisplay(input).replace(/\s+/g, ' ').trim()
+    ? stripGoalCommandPrefixForDisplay(expandPastedTextBlocks(input)).replace(/\s+/g, ' ').trim()
     : '';
 
   if (!normalizedInput) {

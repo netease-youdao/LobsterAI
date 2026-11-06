@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import type { ImageEditMessageSnapshot, ImageEditSnapshotImages } from '../../shared/imageEditing/types';
+import type { ImageEditMessageSnapshot, ImageEditSnapshotFile } from '../../shared/imageEditing/types';
 import type { CoworkMessage } from '../types/cowork';
 
 /** Backfill only from the exact staged attachment; ordinary images remain ordinary attachments. */
@@ -20,24 +20,41 @@ export function useImageEditSnapshots(message: CoworkMessage, sessionId?: string
   return saved ?? (recovered?.key === key ? recovered.snapshots : []);
 }
 
+interface SnapshotImageUrls { src: string; maskSrc?: string; markupSrc?: string }
+
 export function useImageEditSnapshotImage(snapshot: ImageEditMessageSnapshot, fallback: string | undefined, preview: boolean) {
   const key = `${snapshot.source.sessionId}:${snapshot.requestId}:${preview}`;
-  const [loaded, setLoaded] = useState<{ key: string; images?: ImageEditSnapshotImages; failed: boolean }>();
+  const [loaded, setLoaded] = useState<{ key: string; images?: SnapshotImageUrls; failed: boolean }>();
   useEffect(() => {
     let cancelled = false;
+    const urls: string[] = [];
+    // Object URLs keep multi-MB images out of props and DOM attributes, so switching views stays cheap.
+    const objectUrl = (file: ImageEditSnapshotFile) => {
+      const url = URL.createObjectURL(new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: file.mime }));
+      urls.push(url);
+      return url;
+    };
     void window.electron.artifact.imageEditing.readSnapshot({
       sessionId: snapshot.source.sessionId, requestId: snapshot.requestId, preview,
     }).then(result => {
-      if (!cancelled) setLoaded({ key, images: result.success ? result.data : undefined, failed: !result.success });
+      if (cancelled) return;
+      setLoaded({ key, failed: !result.success, images: result.success ? {
+        src: objectUrl(result.data.image),
+        maskSrc: result.data.mask && objectUrl(result.data.mask),
+        markupSrc: result.data.markup && objectUrl(result.data.markup),
+      } : undefined });
     }).catch(() => {
       if (!cancelled) setLoaded({ key, failed: true });
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      urls.forEach(url => URL.revokeObjectURL(url));
+    };
   }, [key, snapshot.source.sessionId, snapshot.requestId, preview]);
   return {
-    src: loaded?.key === key ? loaded.images?.dataUrl ?? fallback : fallback,
-    maskSrc: loaded?.key === key ? loaded.images?.maskDataUrl : undefined,
-    markupSrc: loaded?.key === key ? loaded.images?.markupDataUrl : undefined,
+    src: loaded?.key === key ? loaded.images?.src ?? fallback : fallback,
+    maskSrc: loaded?.key === key ? loaded.images?.maskSrc : undefined,
+    markupSrc: loaded?.key === key ? loaded.images?.markupSrc : undefined,
     loading: loaded?.key !== key,
     failed: loaded?.key === key && loaded.failed,
   };

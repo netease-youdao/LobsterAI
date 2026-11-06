@@ -1,0 +1,408 @@
+diff --git a/src/agents/bash-process-registry.ts b/src/agents/bash-process-registry.ts
+index b57212ce5cb..3e89656a6b2 100644
+--- a/src/agents/bash-process-registry.ts
++++ b/src/agents/bash-process-registry.ts
+@@ -5,6 +5,7 @@
+  */
+ import type { ChildProcessWithoutNullStreams } from "node:child_process";
+ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
++import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+ import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+ import type { TerminationReason } from "../process/supervisor/types.js";
+ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+@@ -77,6 +78,8 @@ export interface ProcessSession {
+   sessionScope?: "per-sender" | "global";
+   /** Start-time routing policy for detached exec system events. */
+   eventRouting?: EventSessionRoutingPolicy;
++  /** Causal user turn captured at spawn, independent of the exit callback's ambient scope. */
++  originTrace?: DiagnosticTraceContext;
+   notifyDeliveryContext?: DeliveryContext;
+   notifyOnExit?: boolean;
+   notifyOnExitEmptySuccess?: boolean;
+diff --git a/src/agents/bash-tools.exec-runtime.ts b/src/agents/bash-tools.exec-runtime.ts
+index eb44643a424..bd351bc437a 100644
+--- a/src/agents/bash-tools.exec-runtime.ts
++++ b/src/agents/bash-tools.exec-runtime.ts
+@@ -3,6 +3,7 @@ import path from "node:path";
+ import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+ import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
++import { getActiveDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+ import { formatErrorMessage } from "../infra/errors.js";
+ import {
+   type EventSessionRoutingPolicy,
+@@ -395,6 +396,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
+     sessionKey: eventSessionKey,
+     contextKey: `exec:${session.id}`,
+     deliveryContext: session.notifyDeliveryContext,
++    originTrace: session.originTrace,
+   };
+   const remove = enqueueSystemEventWithReceipt(
+     eventText,
+@@ -721,6 +723,7 @@ export async function runExecProcess({
+     mainKey: opts.mainKey,
+     sessionScope: opts.sessionScope,
+     eventRouting: opts.eventRouting,
++    originTrace: getActiveDiagnosticTraceContext(),
+     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
+     notifyOnExit: opts.notifyOnExit,
+     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+diff --git a/src/infra/heartbeat-runner-delivery.ts b/src/infra/heartbeat-runner-delivery.ts
+index de74896a021..3631a92f8ce 100644
+--- a/src/infra/heartbeat-runner-delivery.ts
++++ b/src/infra/heartbeat-runner-delivery.ts
+@@ -32,7 +32,10 @@ import type {
+   PreparedHeartbeatRun,
+   ReadyHeartbeatWake,
+ } from "./heartbeat-runner-execution.js";
+-import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
++import {
++  requestPendingHeartbeatEventWake,
++  truncateHeartbeatPreview,
++} from "./heartbeat-runner-prompt.js";
+ import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
+ import {
+   HEARTBEAT_IDLE_RETRY_GRACE_MS,
+@@ -650,7 +653,11 @@ async function clearSatisfiedPendingFinalDelivery(
+ }
+ 
+ function consumeInspectedSystemEvents(wake: ReadyHeartbeatWake, prepared: PreparedHeartbeatRun) {
+-  if (wake.preflight.shouldInspectPendingEvents && prepared.inspectedSystemEventsToConsume.length) {
++  if (
++    wake.preflight.shouldInspectPendingEvents &&
++    (prepared.inspectedSystemEventsToConsume.length || wake.scheduledTasks.length)
++  ) {
+     consumeSelectedSystemEventEntries(prepared.sessionKey, prepared.inspectedSystemEventsToConsume);
++    requestPendingHeartbeatEventWake(prepared.sessionKey, wake.agentId);
+   }
+ }
+diff --git a/src/infra/heartbeat-runner-execution.ts b/src/infra/heartbeat-runner-execution.ts
+index 5e6ca88d7b6..d7004fabfbb 100644
+--- a/src/infra/heartbeat-runner-execution.ts
++++ b/src/infra/heartbeat-runner-execution.ts
+@@ -10,6 +10,7 @@ import {
+   resolveHeartbeatTerminalToolFailure,
+ } from "../auto-reply/heartbeat-reply-payload.js";
+ import {
++  HEARTBEAT_RESPONSE_TOOL_NAME,
+   resolveHeartbeatScratchProposalFromReplyResult,
+   resolveHeartbeatToolResponseFromReplyResult,
+ } from "../auto-reply/heartbeat-tool-response.js";
+@@ -64,6 +65,7 @@ import {
+   type HeartbeatConfig,
+ } from "./heartbeat-runner-config.js";
+ import {
++  recheckHeartbeatExecBatch,
+   resolveHeartbeatPreflight,
+   resolveHeartbeatRunPrompt,
+   selectSystemEventsConsumedByHeartbeat,
+@@ -622,6 +624,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
+       preflight,
+       hasExecCompletion,
+       hasCronEvents,
++      scheduledTaskCount: scheduledTasks.length,
+     }),
+   } as const;
+ }
+@@ -644,6 +647,31 @@ export async function invokeHeartbeatAgentRun(
+   const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
+   const getReplyFromConfig =
+     opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
++  const execEventOnly =
++    shouldPreflightExecEventWake(
++      wake.wakeSource,
++      opts.scheduledEveryMs,
++      wake.scheduledTasks.length,
++    ) && !preflight.hasTaggedCronEvents;
++  if (
++    hasExecCompletion &&
++    !recheckHeartbeatExecBatch(
++      preflight.session.sessionKey,
++      agentId,
++      prepared.inspectedSystemEventsToConsume,
++    )
++  ) {
++    return { kind: "no-pending-event" } as const;
++  }
++  // These isolated, non-delivering completions are acknowledgement-only. Keep
++  // full capabilities for scheduled work, reminders and actionable continuations.
++  const execTriageOnly =
++    execEventOnly &&
++    hasExecCompletion &&
++    !hasCronEvents &&
++    heartbeat?.isolatedSession === true &&
++    !preflight.heartbeatScratchContent?.trim() &&
++    !(delivery.channel !== "none" && delivery.to && prepared.visibility.showAlerts);
+   const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
+   const replyOpts = {
+     isHeartbeat: true,
+@@ -656,6 +684,13 @@ export async function invokeHeartbeatAgentRun(
+     // Heartbeat timeout is a per-run override so user turns keep the global default.
+     timeoutOverrideSeconds: resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
+     bootstrapContextMode: heartbeat?.lightContext === true ? ("lightweight" as const) : undefined,
++    ...(execTriageOnly
++      ? {
++          skillFilter: [],
++          toolsAllow: usesHeartbeatResponseTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : [],
++          bootstrapContextMode: "lightweight" as const,
++        }
++      : {}),
+     onModelSelected: replyPrefix.onModelSelected,
+   };
+   const replyResult = await getReplyFromConfig(
+diff --git a/src/infra/heartbeat-runner-prompt.ts b/src/infra/heartbeat-runner-prompt.ts
+index 70426867a19..7110222dea9 100644
+--- a/src/infra/heartbeat-runner-prompt.ts
++++ b/src/infra/heartbeat-runner-prompt.ts
+@@ -7,6 +7,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+ import type { OpenClawConfig } from "../config/types.openclaw.js";
+ import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
+ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
++import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
+ import { formatErrorMessage } from "./errors.js";
+ import {
+   buildCronEventPrompt,
+@@ -32,6 +33,7 @@ import {
+ } from "./heartbeat-wake-policy.js";
+ import {
+   HEARTBEAT_SKIP_NO_PENDING_EVENT,
++  requestHeartbeat,
+   type HeartbeatScheduledTask,
+   type HeartbeatWakeSource,
+ } from "./heartbeat-wake.js";
+@@ -53,6 +55,7 @@ type HeartbeatSkipReason = "empty-heartbeat-file" | typeof HEARTBEAT_SKIP_NO_PEN
+ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
+   session: ReturnType<typeof resolveHeartbeatSession>;
+   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
++  execOriginTrace?: DiagnosticTraceContext;
+   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
+   hasTaggedCronEvents: boolean;
+   shouldInspectPendingEvents: boolean;
+@@ -99,11 +102,10 @@ export async function resolveHeartbeatPreflight(params: {
+     params.heartbeat,
+     params.sessionKey,
+   );
+-  const pendingEventEntries = selectAgentSystemEvents(
++  let pendingEventEntries = selectAgentSystemEvents(
+     peekSystemEventEntries(session.sessionKey),
+     params.agentId,
+   ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
+-  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
+   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
+     event.contextKey?.startsWith("cron:"),
+   );
+@@ -130,6 +132,21 @@ export async function resolveHeartbeatPreflight(params: {
+     wakeFlags.isCronWake ||
+     shouldInspectWakePendingEvents ||
+     hasTaggedCronEvents;
++  // One model invocation can only belong to one originating turn. Other exec
++  // completions remain queued and get their own wake after this batch is consumed.
++  const firstExecEvent =
++    shouldInspectPendingEvents && !params.scheduledTasks?.length
++      ? pendingEventEntries.find((event) => isExecCompletionEvent(event.text))
++      : undefined;
++  const execOriginTrace = firstExecEvent?.originTrace;
++  if (firstExecEvent) {
++    pendingEventEntries = pendingEventEntries.filter(
++      (event) =>
++        isExecCompletionEvent(event.text) &&
++        event.originTrace?.traceId === execOriginTrace?.traceId,
++    );
++  }
++  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
+   const shouldBypassScratchGates =
+     wakeFlags.isExecEventWake ||
+     wakeFlags.isCronWake ||
+@@ -149,6 +166,7 @@ export async function resolveHeartbeatPreflight(params: {
+     ...wakeFlags,
+     session,
+     pendingEventEntries,
++    execOriginTrace,
+     turnSourceDeliveryContext,
+     hasTaggedCronEvents,
+     shouldInspectPendingEvents,
+@@ -306,8 +324,13 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
+   preflight: HeartbeatPreflight;
+   hasExecCompletion: boolean;
+   hasCronEvents: boolean;
++  scheduledTaskCount?: number;
+ }): SystemEvent[] {
+   const { preflight } = params;
++  // Task-only prompts do not inspect event payloads; leave their occurrences queued.
++  if (params.scheduledTaskCount) {
++    return [];
++  }
+   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+     return [];
+   }
+@@ -326,3 +349,41 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
+   }
+   return preflight.pendingEventEntries;
+ }
++
++/** Polling during async preparation may remove the selected event occurrences. */
++export function recheckHeartbeatExecBatch(
++  sessionKey: string,
++  agentId: string,
++  inspected: readonly SystemEvent[],
++): boolean {
++  const pendingIds = new Set(
++    selectAgentSystemEvents(peekSystemEventEntries(sessionKey), agentId).map((event) => event.id),
++  );
++  const pending = inspected.some((event) => event.id === undefined || pendingIds.has(event.id));
++  if (!pending) {
++    requestPendingHeartbeatEventWake(sessionKey, agentId);
++  }
++  return pending;
++}
++
++/** Continue coalesced work after consuming (or polling away) one causal batch. */
++export function requestPendingHeartbeatEventWake(sessionKey: string, agentId: string): void {
++  const pending = selectAgentSystemEvents(peekSystemEventEntries(sessionKey), agentId);
++  const source = pending.some((event) => isExecCompletionEvent(event.text))
++    ? "exec-event"
++    : pending.some(
++          (event) => event.contextKey?.startsWith("cron:") && isCronSystemEvent(event.text),
++        )
++      ? "cron"
++      : undefined;
++  if (source) {
++    requestHeartbeat({
++      source,
++      intent: "event",
++      reason: source,
++      sessionKey,
++      agentId,
++      coalesceMs: 0,
++    });
++  }
++}
+diff --git a/src/infra/heartbeat-runner-run.ts b/src/infra/heartbeat-runner-run.ts
+index dc13f2d0837..032a3e4a9f8 100644
+--- a/src/infra/heartbeat-runner-run.ts
++++ b/src/infra/heartbeat-runner-run.ts
+@@ -3,6 +3,11 @@ import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-pref
+ import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
+ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+ import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
++import {
++  createChildDiagnosticTraceContext,
++  createDiagnosticTraceContext,
++  runWithDiagnosticTraceContext,
++} from "./diagnostic-trace-context.js";
+ import { formatErrorMessage } from "./errors.js";
+ import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+ import {
+@@ -20,9 +25,11 @@ import {
+   prepareHeartbeatRunStage,
+   resolveHeartbeatWakeStage,
+   type HeartbeatRunOptions,
++  type ReadyHeartbeatWake,
+ } from "./heartbeat-runner-execution.js";
+ import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
+ import {
++  HEARTBEAT_SKIP_NO_PENDING_EVENT,
+   HEARTBEAT_SKIP_PREEMPTED,
+   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+   type HeartbeatRunResult,
+@@ -33,10 +40,30 @@ import { buildOutboundSessionContext } from "./outbound/session-context.js";
+ const log = heartbeatLog;
+ 
+ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
++  // Wake timers can inherit the trace of the user turn that armed them.
++  // Discard that ambient trace. Only explicit event provenance may reuse a root.
++  return runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
++    runHeartbeatOnceInTrace(opts),
++  );
++}
++
++async function runHeartbeatOnceInTrace(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
+   const wake = await resolveHeartbeatWakeStage(opts);
+   if (wake.kind === "skipped") {
+     return { status: "skipped", reason: wake.reason };
+   }
++  const originTrace = wake.preflight.execOriginTrace;
++  return originTrace
++    ? runWithDiagnosticTraceContext(createChildDiagnosticTraceContext(originTrace), () =>
++        runHeartbeatWakeInTrace(opts, wake),
++      )
++    : runHeartbeatWakeInTrace(opts, wake);
++}
++
++async function runHeartbeatWakeInTrace(
++  opts: HeartbeatRunOptions,
++  wake: ReadyHeartbeatWake,
++): Promise<HeartbeatRunResult> {
+   const prepared = await prepareHeartbeatRunStage(wake);
+   if (prepared.kind === "skipped") {
+     return { status: "skipped", reason: prepared.reason };
+@@ -149,7 +176,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
+           ? HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
+           : agentRun.kind === "preempted"
+             ? HEARTBEAT_SKIP_PREEMPTED
+-            : "agent-runner-cancelled";
++            : agentRun.kind === "no-pending-event"
++              ? HEARTBEAT_SKIP_NO_PENDING_EVENT
++              : "agent-runner-cancelled";
+       emitHeartbeatEvent({ status: "skipped", reason, durationMs: Date.now() - startedAt });
+       return { status: "skipped", reason };
+     }
+diff --git a/src/infra/heartbeat-wake-policy.ts b/src/infra/heartbeat-wake-policy.ts
+index f941998ea9b..5a544e0de7a 100644
+--- a/src/infra/heartbeat-wake-policy.ts
++++ b/src/infra/heartbeat-wake-policy.ts
+@@ -79,6 +79,9 @@ export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams)
+       return params.intent === "immediate" && (reason?.startsWith("hook:") ?? false);
+     case "exec-event":
+       return params.intent === "event" && reason === "exec-event";
++    case "cron":
++      // Continue already queued cron events after a different causal batch.
++      return params.intent === "event" && hasSessionTarget && reason === "cron";
+     case "background-task":
+     case "background-task-blocked":
+       return params.intent === "immediate";
+diff --git a/src/infra/system-events.ts b/src/infra/system-events.ts
+index 18a8be81037..ef71c5de452 100644
+--- a/src/infra/system-events.ts
++++ b/src/infra/system-events.ts
+@@ -14,6 +14,7 @@ import {
+   normalizeDeliveryContext,
+ } from "../utils/delivery-context.shared.js";
+ import type { DeliveryContext } from "../utils/delivery-context.types.js";
++import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
+ import { generateSecureUuid } from "./secure-random.js";
+ import {
+   cloneSystemEventOwner,
+@@ -33,6 +34,8 @@ export type SystemEvent = {
+   ts: number;
+   contextKey?: string | null;
+   deliveryContext?: DeliveryContext;
++  /** Internal causal provenance; never included in the model-facing event text. */
++  originTrace?: DiagnosticTraceContext;
+ };
+ 
+ const MAX_EVENTS = 20;
+@@ -50,6 +53,7 @@ type SystemEventOptions = {
+   sessionKey: string;
+   contextKey?: string | null;
+   deliveryContext?: DeliveryContext;
++  originTrace?: DiagnosticTraceContext;
+   /** Replace the pending event for this context and delivery route. Requires contextKey. */
+   replace?: boolean;
+ };
+@@ -164,6 +168,7 @@ function enqueueOwnedSystemEventEntry(
+     ts: Date.now(),
+     contextKey: normalizedContextKey,
+     deliveryContext: normalizedDeliveryContext,
++    originTrace: options.originTrace,
+   };
+   recordSystemEventOwner(event, normalizedOwnerAgentId);
+   entry.queue.push(event);
+@@ -251,6 +256,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
+     ts: Date.now(),
+     contextKey: normalizedContextKey,
+     deliveryContext: normalizedDeliveryContext,
++    originTrace: options.originTrace,
+   };
+   recordSystemEventOwner(event, normalizedOwnerAgentId);
+   entry.queue.push(event);

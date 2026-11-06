@@ -94,12 +94,16 @@ const ToolCallGroup: React.FC<{
 }) => {
   const { toolUse, toolResult } = group;
   const shouldExpandByDefault = isMediaStatusPoll(group) && !mediaTaskPresentation;
-  const mediaCallLabel = mediaTaskPresentation && !mediaTaskPresentation.showCard
-    ? i18nService.t('mediaTaskCallDetails').replace('{taskId}', String(mediaTaskPresentation.details.taskId))
-    : null;
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
   const isMediaTool = isMediaGenerationToolName(rawToolName);
+  // Later calls on a task whose card is already shown are progress checks.
+  const getMediaCallLabel = (live: boolean): string | null => {
+    if (!mediaTaskPresentation || mediaTaskPresentation.showCard) return null;
+    const isVideo = normalizeToolName(rawToolName) === 'lobsteraivideogenerate';
+    if (live) return i18nService.t(isVideo ? 'mediaTaskCheckingVideo' : 'mediaTaskCheckingImage');
+    return i18nService.t(isVideo ? 'mediaTaskCheckedVideo' : 'mediaTaskCheckedImage');
+  };
   const toolName = getToolDisplayName(rawToolName);
   const toolInput = toolUse.metadata?.toolInput;
   const isCronTool = isCronToolName(rawToolName);
@@ -349,7 +353,8 @@ const ToolCallGroup: React.FC<{
   );
 
   if (mediaTaskPresentation?.showCard) {
-    return <MediaTaskCard details={mediaTaskPresentation.details} startedAt={mediaTaskPresentation.startedAt} />;
+    return <MediaTaskCard details={mediaTaskPresentation.details} startedAt={mediaTaskPresentation.startedAt}
+      input={toolInput && typeof toolInput === 'object' ? toolInput as Record<string, unknown> : undefined} />;
   }
 
   if (variant === ActivityEntryVariant.Row) {
@@ -367,7 +372,7 @@ const ToolCallGroup: React.FC<{
       <div>
         <ActivityStepLine
           kind={stepKind}
-          label={mediaCallLabel ?? mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
+          label={getMediaCallLabel(isRowLive) ?? mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
           isLive={isRowLive}
           hasError={isToolError}
           isExpanded={isExpanded}
@@ -425,7 +430,7 @@ const ToolCallGroup: React.FC<{
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-sm font-medium text-secondary ${isRunning ? 'shimmer-text' : ''}`}>
-              {mediaCallLabel ?? toolName}
+              {getMediaCallLabel(isRunning) ?? toolName}
             </span>
             {toolInputSummary && (
               <code className="text-code text-muted font-mono truncate max-w-full">

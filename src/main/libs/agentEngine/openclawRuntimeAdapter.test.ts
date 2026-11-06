@@ -2808,6 +2808,106 @@ test('pollChannelSessions clears stale override when channel row matches the age
   ]);
 });
 
+const removedProviderCatalog = { qwen: { models: [{ id: 'qwen3.6-plus' }] } };
+
+test('pollChannelSessions resets an IM session pinned to a removed provider instead of mirroring it', async () => {
+  const sessionKey = 'agent:agent-1:moltbot-popo:bot-1:direct:user@example.com';
+  const { session, store } = createReconcileStore([], {
+    agentModel: 'qwen/qwen3.6-plus',
+    sessionId: 'session-1',
+  });
+  session.modelOverride = 'deepseek/deepseek-v4-flash';
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const adapter = new OpenClawRuntimeAdapter(store, {}, { getModelCatalog: () => removedProviderCatalog });
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string, params?: Record<string, unknown>) => {
+      requests.push({ method, params: params ?? {} });
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            key: sessionKey,
+            providerOverride: 'deepseek',
+            modelOverride: 'deepseek-v4-flash',
+            modelOverrideSource: 'user',
+          }],
+        };
+      }
+      return {};
+    },
+  };
+  adapter.channelSessionSync = {
+    isChannelSessionKey: (key: string) => key === sessionKey,
+    isCurrentBindingKey: () => true,
+    resolveOrCreateSession: () => session.id,
+  };
+  adapter.knownChannelSessionIds.add(session.id);
+  adapter.fullySyncedSessions.add(session.id);
+  adapter.sessionIdBySessionKey.set(sessionKey, session.id);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-active'));
+
+  await adapter.pollChannelSessions();
+  await vi.waitFor(() => expect(session.modelOverride).toBe(''));
+
+  expect(requests.filter(request => request.method === 'sessions.patch').map(request => request.params))
+    .toEqual([{ key: sessionKey, model: null }]);
+  expect(session.messages).toContainEqual(expect.objectContaining({
+    type: 'system',
+    content: t('coworkSessionModelOverrideUnavailable', { model: 'deepseek/deepseek-v4-flash' }),
+  }));
+});
+
+test('channel history never mirrors a removed model into the local session', () => {
+  const sessionKey = 'agent:main:feishu:dm:ou_123';
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    agentModel: 'qwen/qwen3.6-plus',
+    sessionId: 'session-1',
+  });
+  const request = vi.fn();
+  const adapter = new OpenClawRuntimeAdapter(store, {}, { getModelCatalog: () => removedProviderCatalog });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+
+  const changed = adapter.syncChannelSessionModelOverride({
+    coworkSessionId: session.id,
+    openClawSessionKey: sessionKey,
+    state: { modelRef: 'deepseek/deepseek-v4-flash', explicitOverride: true, source: 'session-status' },
+  });
+
+  expect(changed).toBe(false);
+  expect(session.modelOverride).toBe('');
+  expect(getUpdateSessionCalls()).toEqual([]);
+  expect(request).not.toHaveBeenCalled();
+});
+
+test('reconcileStaleSessionModelOverrides resets an idle IM session before its next message', async () => {
+  const sessionKey = 'agent:agent-1:moltbot-popo:bot-1:direct:user@example.com';
+  const { session, store: baseStore } = createReconcileStore([], {
+    agentModel: 'qwen/qwen3.6-plus',
+    sessionId: 'session-1',
+  });
+  session.modelOverride = 'deepseek/deepseek-v4-flash';
+  const store = {
+    ...baseStore,
+    listChannelSessionModelOverrides: () => [{ sessionId: session.id, modelOverride: session.modelOverride, sessionKey }],
+  };
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const adapter = new OpenClawRuntimeAdapter(store, {}, { getModelCatalog: () => removedProviderCatalog });
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string, params?: Record<string, unknown>) => {
+      requests.push({ method, params: params ?? {} });
+      return {};
+    },
+  };
+
+  await adapter.reconcileStaleSessionModelOverrides('test');
+
+  expect(requests).toEqual([{ method: 'sessions.patch', params: { key: sessionKey, model: null } }]);
+  expect(session.modelOverride).toBe('');
+});
+
 test('pollChannelSessions marks a channel session running when sessions.list reports an active run', async () => {
   const sessionKey = 'agent:main:feishu:dm:ou_123';
   const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
@@ -3484,6 +3584,7 @@ function createRunTurnAdapter(options: {
   holdChatSend?: boolean;
   stateDir?: string;
   defaultSystemPrompt?: string;
+  modelCatalog?: Record<string, { models: Array<{ id: string }> }>;
 } = {}) {
   const session = {
     id: 'session-1',
@@ -3567,7 +3668,14 @@ function createRunTurnAdapter(options: {
       clientEntryPath: '/tmp/openclaw-gateway-client.js',
     }),
   };
-  const adapter = new OpenClawRuntimeAdapter(store as never, engineManager as never, { beforeExecutionDispatch: options.beforeExecutionDispatch });
+  const adapter = new OpenClawRuntimeAdapter(
+    store as never,
+    engineManager as never,
+    {
+      beforeExecutionDispatch: options.beforeExecutionDispatch,
+      ...(options.modelCatalog ? { getModelCatalog: () => options.modelCatalog! } : {}),
+    },
+  );
   adapter.gatewayClient = {
     start: () => {},
     stop: () => {},
@@ -4175,7 +4283,8 @@ test('an erase turn explains the prepared mask and preserves long source paths f
   expect(chatSend?.params.message).toContain(imageEdit.guidePath);
   expect(chatSend?.params.message).toContain('2048 x 1024 removal mask');
   expect(chatSend?.params.message).toContain('WHITE marks the removal area; BLACK marks the area to preserve');
-  expect(chatSend?.params.message).toContain('source FIRST and this mask SECOND');
+  expect(chatSend?.params.message).toContain('sends a close-up of the marked area with this mask');
+  expect(chatSend?.params.message).toContain('do not describe or guess the marked object');
   expect(session.messages.find(message => message.type === 'user')?.metadata).toMatchObject({
     imageEdits: [{ requestId: 'erase-1', sourceVersionNumber: 15, operation: ImageEditOperation.Erase }],
   });
@@ -4449,6 +4558,50 @@ test('continueSession patches a session override before chat.send even when the 
     model,
     reasoningLevel: 'stream',
   });
+});
+
+test('continueSession falls back to the agent model when the session model was removed', async () => {
+  const { adapter, requests, session } = createRunTurnAdapter({
+    sessionModelOverride: 'deepseek/deepseek-v4-flash',
+    agentModel: 'qwen/qwen3.6-plus',
+    modelCatalog: { qwen: { models: [{ id: 'qwen3.6-plus' }] } },
+  });
+  const overrideChanges: string[] = [];
+  const notifySessionModelOverrideChanged = adapter.notifySessionModelOverrideChanged.bind(adapter);
+  adapter.notifySessionModelOverrideChanged = (sessionId: string, modelOverride: string) => {
+    overrideChanges.push(modelOverride);
+    notifySessionModelOverrideChanged(sessionId, modelOverride);
+  };
+
+  await adapter.continueSession('session-1', 'hello');
+
+  const patches = requests.filter(request => request.method === 'sessions.patch').map(request => request.params);
+  expect(patches).toEqual([
+    { key: 'agent:main:lobsterai:session-1', model: null },
+    { key: 'agent:main:lobsterai:session-1', model: 'qwen/qwen3.6-plus', reasoningLevel: 'stream' },
+  ]);
+  expect(requests.some(request => request.method === 'chat.send')).toBe(true);
+  expect(session.modelOverride).toBe('');
+  expect(overrideChanges).toEqual(['']);
+  expect(session.messages).toContainEqual(expect.objectContaining({
+    type: 'system',
+    content: t('coworkSessionModelOverrideUnavailable', { model: 'deepseek/deepseek-v4-flash' }),
+  }));
+});
+
+test('continueSession keeps a session model that is still configured', async () => {
+  const { adapter, requests, session } = createRunTurnAdapter({
+    sessionModelOverride: 'qwen/qwen3.8-max',
+    agentModel: 'qwen/qwen3.6-plus',
+    modelCatalog: { qwen: { models: [{ id: 'qwen3.6-plus' }, { id: 'qwen3.8-max' }] } },
+  });
+
+  await adapter.continueSession('session-1', 'hello');
+
+  expect(requests.filter(request => request.method === 'sessions.patch').map(request => request.params.model))
+    .toEqual(['qwen/qwen3.8-max']);
+  expect(session.modelOverride).toBe('qwen/qwen3.8-max');
+  expect(session.messages.some(message => message.type === 'system')).toBe(false);
 });
 
 const planResolvedPatchResult = {
@@ -5899,7 +6052,7 @@ test('reconcileWithHistory: content mismatch — triggers replace', async () => 
   expect((args.authoritative[1] as Record<string, unknown>).text).toBe('Full complete response from the model.');
 });
 
-test('subagent history sync preserves visible local user text instead of raw outbound prompt', async () => {
+test('subagent history sync preserves existing local user text without rewriting outbound-style content', async () => {
   const rawOutboundPrompt = `[LobsterAI system instructions]
 hidden setup
 
@@ -5928,9 +6081,81 @@ previous context
   await adapter.syncSessionHistoryFromGateway(session.id, 'agent:writer:subagent:abc');
 
   expect(getLastReplaceArgs()?.authoritative).toEqual([
-    { role: 'user', text: '换一颗树再来一次', timestamp: 1, metadata: {} },
+    { role: 'user', text: rawOutboundPrompt, timestamp: 1, metadata: {} },
     { role: 'assistant', text: '新的作文内容', timestamp: 20 },
   ]);
+});
+
+test('visible subagent child with a dashboard key syncs its full transcript, not channel text', async () => {
+  const childKey = 'agent:blog:dashboard:visible-child';
+  const { session, store, getReplaceCallCount, getLastReplaceSessionArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: '发布这篇文章', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: '先检查仓库结构', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'assistant', content: '已发布', timestamp: 3, metadata: {} },
+  ]);
+  const subagentRunStore = {
+    hasChildSession: (childSessionId: string) => childSessionId === session.id,
+  };
+
+  const adapter = new OpenClawRuntimeAdapter(store, {}, {}, subagentRunStore as never);
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: '发布这篇文章', timestamp: 10 },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '先检查仓库结构' },
+            { type: 'toolCall', id: 'call-1', name: 'exec', arguments: { command: 'git status' } },
+          ],
+          timestamp: 20,
+        },
+        { role: 'toolResult', toolCallId: 'call-1', toolName: 'exec', content: 'clean', timestamp: 30 },
+        { role: 'assistant', content: '已发布', timestamp: 40 },
+      ],
+    }),
+  };
+
+  await adapter.syncSessionHistoryFromGateway(session.id, childKey);
+
+  expect(getReplaceCallCount()).toBe(0);
+  expect(getLastReplaceSessionArgs()?.messages.map(message => message.type)).toEqual([
+    'user',
+    'assistant',
+    'tool_use',
+    'tool_result',
+    'assistant',
+  ]);
+});
+
+test('subagent history sync keeps the local transcript when the gateway window starts mid-run', async () => {
+  const { session, store, getReplaceCallCount, getReplaceSessionCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: '发布这篇文章', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: '先检查仓库结构', timestamp: 2, metadata: {} },
+  ]);
+  const historyParams: unknown[] = [];
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (_method: string, params?: unknown) => {
+      historyParams.push(params);
+      return {
+        hasMore: true,
+        messages: [{ role: 'assistant', content: '发布完成', timestamp: 30 }],
+      };
+    },
+  };
+
+  await adapter.syncSessionHistoryFromGateway(session.id, 'agent:blog:subagent:abc');
+
+  expect(historyParams).toEqual([{ sessionKey: 'agent:blog:subagent:abc', limit: 1000 }]);
+  expect(getReplaceSessionCallCount()).toBe(0);
+  expect(getReplaceCallCount()).toBe(0);
+  expect(session.messages.map(message => message.content)).toEqual(['发布这篇文章', '先检查仓库结构']);
 });
 
 test('lifecycle fallback repairs managed session assistant text from history', async () => {
@@ -12179,6 +12404,7 @@ test('account recovery lets configuration connect while business callers wait ou
   const gate = Promise.withResolvers<void>();
   const waitForAccountRecovery = vi.fn(() => gate.promise);
   const h = createAccountRecoveryAdapter({ waitForAccountRecovery });
+  const reconcileModels = vi.spyOn(h.adapter, 'reconcileStaleSessionModelOverrides').mockResolvedValue();
   const token = h.adapter.prepareForAccountTransition();
   const external = h.adapter.ensureReady();
   await Promise.resolve();
@@ -12191,6 +12417,7 @@ test('account recovery lets configuration connect while business callers wait ou
   expect(h.adapter.getGatewayClient()).toBeNull();
   expect(h.request).not.toHaveBeenCalled();
   expect(h.startPolling).not.toHaveBeenCalled();
+  expect(reconcileModels).not.toHaveBeenCalled();
   h.callbacks[0].onEvent({ event: 'sessions.changed' } as never);
   expect(h.handleEvent).not.toHaveBeenCalled();
   expect(waitForAccountRecovery).toHaveBeenCalledTimes(1);
@@ -12199,6 +12426,7 @@ test('account recovery lets configuration connect while business callers wait ou
   h.adapter.finishAccountGatewayRecovery(token);
   expect(h.adapter.getGatewayClient()).toBe(h.clients[0]);
   expect(h.startPolling).toHaveBeenCalledTimes(1);
+  expect(reconcileModels).toHaveBeenCalledExactlyOnceWith('gateway ready');
   expect(h.request).toHaveBeenCalledWith(OpenClawGatewayMethod.SessionsSubscribe, {}, expect.any(Object));
   expect(h.onGatewayClientReady).not.toHaveBeenCalled();
   h.callbacks[0].onEvent({ event: 'sessions.changed' } as never);

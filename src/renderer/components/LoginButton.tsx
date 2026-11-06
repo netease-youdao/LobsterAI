@@ -1,4 +1,4 @@
-import { ArrowPathIcon, ChevronRightIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ChevronRightIcon, GiftIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline';
 import { getAppleSubscriptionManagementUrl, hasAppleSubscription } from '@shared/auth/subscription';
 import React, {
   useCallback,
@@ -11,6 +11,7 @@ import React, {
 import { useSelector } from 'react-redux';
 
 import { FeedbackUiEvent } from '../../shared/feedback/constants';
+import type { SubscriptionTrialState } from '../../shared/subscriptionTrial/constants';
 import inviteCreditsIconUrl from '../assets/icons/invite-credits.svg';
 import logoutIconUrl from '../assets/icons/logout.svg';
 import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
@@ -24,6 +25,7 @@ import {
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
+  getPortalPennyActivityUrl,
   getPortalPricingUrl,
   getPortalProfileUrl,
   getPortalRechargeUrl,
@@ -40,6 +42,7 @@ import {
   getAccountPlanAnalyticsContext,
   getAccountPlanPresentation,
   getFinalRewards,
+  isPennyActivityMenuEntryVisible,
 } from './accountMenuState';
 import { ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME } from './accountMenuStyles';
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
@@ -100,6 +103,16 @@ const writeAccountMenuRendererLog = (
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.debug(`[LoginButton] renderer log unavailable: ${errorMessage}`);
+  }
+};
+
+const loadSubscriptionTrialState = async (): Promise<SubscriptionTrialState | null> => {
+  try {
+    return await window.electron.subscriptionTrial.status();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.debug(`[LoginButton] subscription trial status unavailable: ${errorMessage}`);
+    return null;
   }
 };
 
@@ -284,10 +297,55 @@ const PointsStackIcon: React.FC = () => (
   </svg>
 );
 
+const PennyActivityIcon: React.FC = () => (
+  <GiftIcon className="h-4 w-4 shrink-0 text-[#111111] dark:text-white" aria-hidden="true" />
+);
+
+interface LoggedOutMenuProps {
+  onClose: () => void;
+  onLogin: () => Promise<void>;
+}
+
+const LoggedOutMenu: React.FC<LoggedOutMenuProps> = ({ onClose, onLogin }) => {
+  const handleLogin = async () => {
+    onClose();
+    await onLogin();
+  };
+
+  const handlePennyActivity = async () => {
+    try {
+      await window.electron.shell.openExternal(getPortalPennyActivityUrl());
+      onClose();
+      reportAccountMenuAction('open_penny_activity', { isLoggedIn: false, result: 'success' });
+    } catch (error) {
+      reportAccountMenuAction('open_penny_activity', { isLoggedIn: false, result: 'failed' });
+      throw error;
+    }
+  };
+
+  return (
+    <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 w-[14.5rem] overflow-hidden rounded-xl border border-border bg-surface shadow-popover popover-enter">
+      <div className="py-1">
+        <AccountMenuAction
+          icon={<UserAvatarIcon className="h-4 w-4 shrink-0" />}
+          label={i18nService.t('login')}
+          onClick={handleLogin}
+        />
+        <AccountMenuAction
+          icon={<PennyActivityIcon />}
+          label={i18nService.t('authPennyActivityEntry')}
+          onClick={handlePennyActivity}
+        />
+      </div>
+    </div>
+  );
+};
+
 interface UserMenuProps {
   dailyCheckInSnapshot: DailyCheckInSnapshot | null;
   onClose: () => void;
   onOpenFinalReward: (campaignCode: string) => void;
+  pennyActivityEntryVisible: boolean;
   startupCreditEntry: StartupCreditCampaignEntry;
 }
 
@@ -295,6 +353,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
   dailyCheckInSnapshot,
   onClose,
   onOpenFinalReward,
+  pennyActivityEntryVisible,
   startupCreditEntry,
 }) => {
   const user = useSelector((state: RootState) => state.auth.user);
@@ -512,6 +571,24 @@ const UserMenu: React.FC<UserMenuProps> = ({
     }
   };
 
+  const handlePennyActivity = async () => {
+    try {
+      await openPortalUrl(getPortalPennyActivityUrl());
+      reportAccountMenuAction('open_penny_activity', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('open_penny_activity', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
+  };
+
   const handleCreditsResetActivity = async () => {
     try {
       await openPortalUrl(getPortalCreditsResetActivityUrl());
@@ -669,6 +746,13 @@ const UserMenu: React.FC<UserMenuProps> = ({
             />
           );
         })}
+        {pennyActivityEntryVisible && (
+          <AccountMenuAction
+            icon={<PennyActivityIcon />}
+            label={i18nService.t('authPennyActivityEntry')}
+            onClick={handlePennyActivity}
+          />
+        )}
         <AccountMenuAction
           icon={<PortalMenuIcon src={inviteCreditsIconUrl} darkInvert />}
           label={i18nService.t('authInviteFriendsForCredits')}
@@ -734,6 +818,8 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     startupCreditEntry,
   );
   const [menuDailyCheckInSnapshot, setMenuDailyCheckInSnapshot] = useState<DailyCheckInSnapshot | null>(null);
+  const [menuPennyActivityEntryVisible, setMenuPennyActivityEntryVisible] = useState(false);
+  const [loggedOutPennyActivityEntryVisible, setLoggedOutPennyActivityEntryVisible] = useState(false);
   const [selectedFinalRewardCode, setSelectedFinalRewardCode] = useState<string | null>(null);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -802,6 +888,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     setMenuOpening(false);
     setShowMenu(false);
     setMenuDailyCheckInSnapshot(null);
+    setMenuPennyActivityEntryVisible(false);
   }, [authAccountScope, isLoggedIn]);
 
   useEffect(() => {
@@ -810,7 +897,43 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     setMenuOpening(false);
     setShowMenu(false);
     setMenuDailyCheckInSnapshot(null);
+    setMenuPennyActivityEntryVisible(false);
   }, [isLoggedIn]);
+
+  // Logged-out clicks must not wait on the network before logging in, so the
+  // entry state is fetched ahead of time instead of when the popover opens.
+  useEffect(() => {
+    setLoggedOutPennyActivityEntryVisible(false);
+    if (isLoggedIn || connectionState) return;
+    let cancelled = false;
+    void loadSubscriptionTrialState().then(state => {
+      if (cancelled) return;
+      setLoggedOutPennyActivityEntryVisible(isPennyActivityMenuEntryVisible(state, {
+        isLoggedIn: false,
+        isEnterprise: false,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionState, isLoggedIn]);
+
+  // The optional campaign loads after the menu opens and must never delay it.
+  useEffect(() => {
+    setMenuPennyActivityEntryVisible(false);
+    if (!showMenu || !isLoggedIn || enterpriseAccountContext || user?.accountMode === 'enterprise') return;
+    let cancelled = false;
+    void loadSubscriptionTrialState().then(state => {
+      if (cancelled) return;
+      setMenuPennyActivityEntryVisible(isPennyActivityMenuEntryVisible(state, {
+        isLoggedIn: true,
+        isEnterprise: false,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authAccountScope, enterpriseAccountContext, isLoggedIn, showMenu, user?.accountMode]);
 
   const handleClick = async () => {
     if (isLoading) return;
@@ -843,6 +966,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       setMenuOpening(true);
       setMenuStartupCreditEntry(selectedStartupCreditEntry);
       setMenuDailyCheckInSnapshot(null);
+      setMenuPennyActivityEntryVisible(false);
       reportAccountMenuAction('open_menu', {
         creditItemCount,
         hasCredits: creditItemCount > 0,
@@ -880,6 +1004,18 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       }
       return;
     }
+    if (showMenu) {
+      setShowMenu(false);
+      return;
+    }
+    if (loggedOutPennyActivityEntryVisible) {
+      setShowMenu(true);
+      return;
+    }
+    await handleLogin();
+  };
+
+  const handleLogin = async () => {
     const loginVariant = useSidebarPromoLogin ? 'sidebar_promo' : 'default';
     writeAccountMenuRendererLog('debug', `login requested variant=${loginVariant}`);
     try {
@@ -968,6 +1104,12 @@ const LoginButton: React.FC<LoginButtonProps> = ({
           <AccountConnectionNotice state={connectionState} className="w-full text-xs" />
         </div>
       )}
+      {showMenu && !isLoggedIn && !connectionState && loggedOutPennyActivityEntryVisible && (
+        <LoggedOutMenu
+          onClose={() => setShowMenu(false)}
+          onLogin={handleLogin}
+        />
+      )}
       {showMenu && isLoggedIn && (
         enterpriseAccountContext
           ? (
@@ -981,6 +1123,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
               dailyCheckInSnapshot={menuDailyCheckInSnapshot}
               onClose={() => setShowMenu(false)}
               onOpenFinalReward={setSelectedFinalRewardCode}
+              pennyActivityEntryVisible={menuPennyActivityEntryVisible}
               startupCreditEntry={menuStartupCreditEntry}
             />
           )

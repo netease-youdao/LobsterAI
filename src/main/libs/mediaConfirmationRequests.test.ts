@@ -88,60 +88,69 @@ describe('recoverable video confirmation', () => {
     } finally { warn.mockRestore(); }
   });
 
-  test('waits for actual display, retains expired input, refreshes cost and requires a fresh explicit approval', async () => {
+  test('a fresh quote submits on the first confirmation without re-reading prices', async () => {
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(Policy.QuoteFreshMs * 3);
+    expect(s.manager.list()[0].mediaConfirmation?.status).toBe(Status.Waiting);
+    expect(await s.approve()).toBe(false);
+    await s.act(Action.Shown);
+    await s.act(Action.Shown);
+    vi.setSystemTime(1_000_000 + Policy.QuoteFreshMs - 1);
+    expect(await s.approve()).toBe(true);
+    expect(s.refresh).not.toHaveBeenCalled();
+    expect(await s.promise).toMatchObject({ behavior: ConfirmationBehavior.Allow });
+    expect(s.events.map(event => event.outcome)).toEqual([Outcome.Requested, Outcome.Shown, Outcome.Allowed]);
+  });
+
+  test('a stale quote with an unchanged price submits after the re-check', async () => {
+    const s = setup();
+    s.refresh.mockResolvedValueOnce(questions);
+    await s.act(Action.Shown);
+    await vi.advanceTimersByTimeAsync(Policy.QuoteFreshMs * 5);
+    expect(s.manager.list()[0].mediaConfirmation?.status).toBe(Status.Visible);
+    expect(await s.approve()).toBe(true);
+    expect(s.refresh).toHaveBeenCalledTimes(1);
+    expect(await s.promise).toMatchObject({ behavior: ConfirmationBehavior.Allow });
+    expect(s.publish.mock.calls.at(-1)?.[0].mediaConfirmation.status).toBe(Status.Refreshing);
+  });
+
+  test('a changed price needs a fresh answer on the new revision', async () => {
     const s = setup();
     const resolved = vi.fn();
     void s.promise.then(resolved);
-    await vi.advanceTimersByTimeAsync(Policy.ReviewMs + 1);
-    expect(s.manager.list()[0].mediaConfirmation?.status).toBe(Status.Waiting);
-    expect(s.events.map(event => event.outcome)).toEqual([Outcome.Requested]);
     await s.act(Action.Shown);
-    await s.act(Action.Shown);
-    await vi.advanceTimersByTimeAsync(Policy.ReviewMs);
-    expect(s.manager.list()[0].mediaConfirmation?.status).toBe(Status.Expired);
-    expect(s.manager.list()[0].questions).toEqual(questions);
+    vi.setSystemTime(Date.now() + Policy.QuoteFreshMs);
+    expect(await s.approve()).toBe(true);
     expect(resolved).not.toHaveBeenCalled();
+    const [request] = s.manager.list();
+    expect(request.questions[0].subtitle).toBe('Updated cost');
+    expect(request.mediaConfirmation).toMatchObject({ revision: 1, status: Status.Visible, repriced: {} });
     expect(await s.approve()).toBe(false);
-    expect(await s.act(Action.Renew)).toBe(true);
-    expect(s.refresh).toHaveBeenCalledTimes(1);
-    expect(s.manager.list()[0].questions[0].subtitle).toBe('Updated cost');
-    expect(await s.approve()).toBe(false);
-    expect(await s.approve(1)).toBe(false);
-    await s.act(Action.Shown, 1);
     expect(await s.approve(1)).toBe(true);
-    expect(await s.approve(1)).toBe(false);
+    expect(s.refresh).toHaveBeenCalledTimes(1);
     expect(await s.promise).toMatchObject({ behavior: ConfirmationBehavior.Allow });
     expect(s.events.map(event => event.outcome)).toEqual([
       Outcome.Requested,
       Outcome.Shown,
-      Outcome.Expired,
       Outcome.Renewed,
-      Outcome.Shown,
       Outcome.Allowed,
     ]);
-    const sequences = s.publish.mock.calls.map(([request]) => request.mediaConfirmation.sequence);
-    expect(sequences.every((value, index) => index === 0 || value > sequences[index - 1])).toBe(
-      true,
-    );
+    const sequences = s.publish.mock.calls.map(([item]) => item.mediaConfirmation.sequence);
+    expect(sequences.every((value, index) => index === 0 || value > sequences[index - 1])).toBe(true);
   });
 
-  test('checks the deadline on answer even if the timer has not run yet', async () => {
+  test('cancellation works while the price is being re-checked', async () => {
     const s = setup();
     await s.act(Action.Shown);
-    vi.setSystemTime(Date.now() + Policy.ReviewMs);
+    vi.setSystemTime(Date.now() + Policy.QuoteFreshMs);
+    let finish!: (value: typeof questions) => void;
+    s.refresh.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const confirming = s.approve();
     expect(await s.approve()).toBe(false);
-    expect(s.manager.list()[0].mediaConfirmation?.status).toBe(Status.Expired);
-  });
-
-  test('explicit cancellation still works after soft expiry', async () => {
-    const s = setup();
-    await s.act(Action.Shown);
-    await vi.advanceTimersByTimeAsync(Policy.ReviewMs);
     expect(await s.act(Action.Respond, 0, { behavior: ConfirmationBehavior.Deny })).toBe(true);
-    expect(await s.promise).toEqual({
-      behavior: ConfirmationBehavior.Deny,
-      reason: Reason.UserCancelled,
-    });
+    finish(questions);
+    expect(await confirming).toBe(false);
+    expect(await s.promise).toEqual({ behavior: ConfirmationBehavior.Deny, reason: Reason.UserCancelled });
   });
 
   test.each([false, true])(
@@ -168,23 +177,24 @@ describe('recoverable video confirmation', () => {
     expect(s.manager.list()).toEqual([]);
   });
 
-  test('refresh failure remains retryable; overlapping renewals only refresh once', async () => {
+  test('a failed price check keeps the request and can be confirmed again', async () => {
     const s = setup();
     await s.act(Action.Shown);
-    await vi.advanceTimersByTimeAsync(Policy.ReviewMs);
+    vi.setSystemTime(Date.now() + Policy.QuoteFreshMs);
     s.refresh.mockRejectedValueOnce(new Error('private upstream error'));
-    expect(await s.act(Action.Renew)).toBe(false);
-    expect(s.manager.list()[0].mediaConfirmation?.status).toBe(Status.Expired);
-    const next = s.act(Action.Renew);
-    expect(await s.act(Action.Renew)).toBe(false);
-    expect(await next).toBe(true);
+    expect(await s.approve()).toBe(false);
+    expect(s.manager.list()[0].mediaConfirmation?.status).toBe(Status.Visible);
+    s.refresh.mockResolvedValueOnce(questions);
+    expect(await s.approve()).toBe(true);
+    expect(await s.promise).toMatchObject({ behavior: ConfirmationBehavior.Allow });
+    expect(s.events.map(event => event.outcome)).toContain(Outcome.RefreshFailed);
     expect(JSON.stringify(s.events)).not.toContain('private');
   });
 
-  test('a stopped tool cannot be revived by an in-flight refresh', async () => {
+  test('a stopped tool cannot be revived by an in-flight price check', async () => {
     const s = setup();
     await s.act(Action.Shown);
-    await vi.advanceTimersByTimeAsync(Policy.ReviewMs);
+    vi.setSystemTime(Date.now() + Policy.QuoteFreshMs);
     let finish!: (value: typeof questions) => void;
     s.refresh.mockImplementationOnce(
       () =>
@@ -192,10 +202,10 @@ describe('recoverable video confirmation', () => {
           finish = resolve;
         }),
     );
-    const renewal = s.act(Action.Renew);
+    const confirming = s.approve();
     s.controller.abort();
     finish(questions);
-    expect(await renewal).toBe(false);
+    expect(await confirming).toBe(false);
     expect(await s.promise).toMatchObject({ reason: Reason.Interrupted });
     expect(s.manager.list()).toEqual([]);
   });

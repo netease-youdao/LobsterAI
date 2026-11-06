@@ -1,7 +1,9 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
+import { nativeImage } from 'electron';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { imageEditMessageMetadata } from '../../shared/imageEditing/messageSnapshot';
@@ -9,21 +11,48 @@ import { type ImageEditMessageSnapshot,ImageEditOperation } from '../../shared/i
 import { ImageEditingService } from './imageEditing';
 
 vi.mock('electron', () => {
-  const createFromBuffer = (bytes: Buffer) => ({
+  const sized = (bytes: Buffer, width: number, height: number) => {
+    const resized = Buffer.from(bytes.subarray(0, 33)); resized.writeUInt32BE(width, 16); resized.writeUInt32BE(height, 20);
+    return createFromBuffer(resized);
+  };
+  // Fake PNGs may carry a white mask rectangle in a private chunk, decoded into a BGRA bitmap.
+  const toBitmap = (bytes: Buffer) => {
+    const width = bytes.readUInt32BE(16);
+    const pixels = Buffer.alloc(width * bytes.readUInt32BE(20) * 4);
+    if (bytes.toString('latin1', 37, 41) === 'mRKt') {
+      const [x, y, w, h] = [0, 1, 2, 3].map(i => bytes.readUInt32BE(41 + i * 4));
+      for (let row = y; row < y + h; row++) pixels.fill(255, (row * width + x) * 4, (row * width + x + w) * 4);
+    }
+    return pixels;
+  };
+  const createFromBuffer = (bytes: Buffer): unknown => ({
     getSize: () => ({ width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }), isEmpty: () => false, toPNG: () => bytes,
     resize: ({ width, height }: { width: number; height: number }) => {
       const resized = Buffer.from(bytes); resized.writeUInt32BE(width, 16); resized.writeUInt32BE(height, 20);
       return createFromBuffer(resized);
     },
+    crop: ({ width, height }: { width: number; height: number }) => sized(bytes, width, height),
+    toBitmap: () => toBitmap(bytes),
   });
-  return { nativeImage: { createFromBuffer } };
+  const createFromBitmap = (_bitmap: Buffer, { width, height }: { width: number; height: number }) => {
+    const header = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(header);
+    header.writeUInt32BE(13, 8); header.write('IHDR', 12);
+    return sized(header, width, height);
+  };
+  return { nativeImage: { createFromBuffer, createFromBitmap } };
 });
 
-function fixture(width = 640, height = 480) {
+function fixture(width = 640, height = 480, mark?: { x: number; y: number; width: number; height: number }) {
   const data = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(data);
   data.writeUInt32BE(13, 8); data.write('IHDR', 12);
-  data.writeUInt32BE(width, 16); data.writeUInt32BE(height, 20); return data;
+  data.writeUInt32BE(width, 16); data.writeUInt32BE(height, 20);
+  if (!mark) return data;
+  const chunk = Buffer.alloc(28); chunk.writeUInt32BE(16, 0); chunk.write('mRKt', 4, 'latin1');
+  [mark.x, mark.y, mark.width, mark.height].forEach((value, i) => chunk.writeUInt32BE(value, 8 + i * 4));
+  return Buffer.concat([data, chunk]);
 }
+const marked = (width = 640, height = 480) => fixture(width, height, { x: 300, y: 200, width: 40, height: 30 });
+const dataUrl = (bytes: Buffer) => `data:image/png;base64,${bytes.toString('base64')}`;
 
 describe('immutable image versions and edit staging', () => {
   let directory: string;
@@ -95,8 +124,8 @@ describe('immutable image versions and edit staging', () => {
       sourceVersionNumber: 2, source: { width: 320, height: 240 },
       regions: [{ x: 0.2, text: 'Add a dog' }],
     });
-    expect((await restored.readSnapshot({ sessionId: 'session', requestId: request.id })).dataUrl)
-      .toBe(`data:image/png;base64,${fixture(320, 240).toString('base64')}`);
+    expect((await restored.readSnapshot({ sessionId: 'session', requestId: request.id })).image)
+      .toEqual({ bytes: fixture(320, 240), mime: 'image/png' });
     await expect(restored.readSnapshot({ sessionId: 'other', requestId: request.id })).rejects.toThrow();
   });
   test('historical messages recover only the request with their exact frozen attachment path', async () => {
@@ -133,29 +162,62 @@ describe('immutable image versions and edit staging', () => {
   test('erase generation and sent previews share the exact frozen mask despite later edits', async () => {
     const edit = service();
     const { version } = await edit.open({ sessionId: 'session', title: 'original.png', filePath: original });
-    const mask = Buffer.concat([fixture(), Buffer.from([1])]);
-    const maskDataUrl = `data:image/png;base64,${mask.toString('base64')}`;
-    const request = await edit.stage({ sessionId: 'session', sourceId: version.id, operation: ImageEditOperation.Erase, guideDataUrl: maskDataUrl });
-    const generation = edit.generation(request, { capabilities: 'image editing', parameterSpec: { images: { maxItems: 2 } } });
+    const mask = marked();
+    const request = await edit.stage({ sessionId: 'session', sourceId: version.id, operation: ImageEditOperation.Erase, guideDataUrl: dataUrl(mask) });
+    // A close-up of this small image would cover most of it, so the full frozen files are sent.
+    expect(request.eraseCrop).toEqual({ x: 0, y: 0, width: 640, height: 480, sourcePath: request.source.filePath, maskPath: request.guidePath });
+    const generation = edit.generation(request, { capabilities: 'image editing', parameterSpec: { images: { maxItems: 2 } } }, 'Remove the yellow flower');
     expect(generation.params.images).toEqual([request.source.filePath, request.guidePath]);
     expect(generation.prompt).toContain('WHITE marks the objects/area to remove; BLACK must be preserved');
+    expect(generation.prompt).not.toContain('yellow flower');
     expect(() => edit.generation(request, { capabilities: 'image editing', parameterSpec: { images: { maxItems: 1 } } })).toThrow();
     messages.set('erase', { type: 'user', metadata: imageEditMessageMetadata([{ imageEdit: request }]) });
     await edit.stage({ sessionId: 'session', sourceId: version.id, operation: ImageEditOperation.Erase,
-      guideDataUrl: `data:image/png;base64,${fixture().toString('base64')}` });
+      guideDataUrl: dataUrl(fixture(640, 480, { x: 10, y: 10, width: 5, height: 5 })) });
     const snapshot = service().history({ sessionId: 'session', messageId: 'erase' })[0];
     expect(snapshot.requestId).toBe(request.id);
     const full = await service().readSnapshot({ sessionId: 'session', requestId: snapshot.requestId });
-    expect(full.maskDataUrl).toBe(maskDataUrl);
-    expect(full.dataUrl).toBe(`data:image/png;base64,${fixture().toString('base64')}`);
+    expect(full.mask).toEqual({ bytes: mask, mime: 'image/png' });
+    expect(full.image).toEqual({ bytes: fixture(), mime: 'image/png' });
     const preview = await service().readSnapshot({ sessionId: 'session', requestId: snapshot.requestId, preview: true });
-    for (const value of [preview.dataUrl, preview.maskDataUrl!]) {
-      const bytes = Buffer.from(value.split(',')[1], 'base64');
+    for (const value of [preview.image, preview.mask!]) {
+      const bytes = Buffer.from(value.bytes);
       expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([512, 384]);
     }
     await expect(edit.readSnapshot({ sessionId: 'other', requestId: request.id })).rejects.toThrow();
     await expect(edit.stage({ sessionId: 'session', sourceId: version.id, operation: ImageEditOperation.Erase,
       guideDataUrl: `data:image/png;base64,${fixture(400, 400).toString('base64')}` })).rejects.toThrow();
+    await expect(edit.stage({ sessionId: 'session', sourceId: version.id, operation: ImageEditOperation.Erase,
+      guideDataUrl: dataUrl(fixture()) })).rejects.toThrow();
+  });
+  test('erase sends a close-up of a small mark and blends the result back into a full-size version', async () => {
+    const large = path.join(directory, 'large.png'); await fs.writeFile(large, fixture(2496, 1664));
+    const edit = service();
+    const { version } = await edit.open({ sessionId: 'session', title: 'large.png', filePath: large });
+    const request = await edit.stage({ sessionId: 'session', sourceId: version.id, operation: ImageEditOperation.Erase,
+      guideDataUrl: dataUrl(fixture(2496, 1664, { x: 2252, y: 1403, width: 95, height: 75 })) });
+    expect(request.eraseCrop).toMatchObject({ x: 1984, y: 1152, width: 512, height: 512 });
+    for (const file of [request.eraseCrop!.sourcePath, request.eraseCrop!.maskPath]) {
+      expect(path.dirname(file)).toBe(path.dirname(request.guidePath!));
+      const bytes = await fs.readFile(file);
+      expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([512, 512]);
+    }
+    const generation = edit.generation(request, { capabilities: 'image editing', parameterSpec: { images: { maxItems: 2 } } }, 'Remove the yellow flower');
+    expect(generation.params).toMatchObject({ images: [request.eraseCrop!.sourcePath, request.eraseCrop!.maskPath], size: '2048x2048' });
+    expect(generation.prompt).not.toContain('yellow flower');
+
+    const raw = path.join(await edit.downloadDirectory(request), 'raw.png'); await fs.writeFile(raw, fixture(2048, 2048));
+    const asset = { type: 'image' as const, url: 'https://example.test/raw.png', originalUrl: 'https://example.test/raw.png',
+      mimeType: 'image/png', filename: 'raw.png', filePath: raw, localPath: raw, outputIndex: 0 };
+    const [saved] = await edit.finalize(request, 'task-1', [asset]);
+    expect(saved.filePath).toBe(path.join(directory, `image-erase-${request.id}-0.png`));
+    expect(saved.url).toBe(pathToFileURL(saved.filePath).href);
+    const bytes = await fs.readFile(saved.filePath);
+    expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([2496, 1664]);
+    expect(edit.list({ sessionId: 'session', rootId: version.id }).at(-1)).toMatchObject({
+      operation: ImageEditOperation.Erase, parentId: version.id, filePath: saved.filePath, width: 2496, height: 1664,
+    });
+    expect((await edit.finalize(request, 'task-1', [asset]))[0].filePath).toBe(saved.filePath);
   });
   test('markup previews recover the submitted drawing and instruction independently of later edits', async () => {
     const edit = service();
@@ -174,28 +236,31 @@ describe('immutable image versions and edit staging', () => {
       guideDataUrl: `data:image/png;base64,${fixture().toString('base64')}`, instruction: 'Later edit' });
     const snapshot = service().history({ sessionId: 'session', messageId: 'markup' })[0];
     expect(snapshot).toMatchObject({ requestId: request.id, operation: ImageEditOperation.Markup, instruction: 'Add a Christmas tree here' });
+    // Full-size reads stay off the native codec; decoding and re-encoding large PNGs stalls the main process.
+    const decode = vi.spyOn(nativeImage, 'createFromBuffer');
     const full = await service().readSnapshot({ sessionId: 'session', requestId: snapshot.requestId });
-    expect(full).toEqual({ dataUrl: `data:image/png;base64,${fixture().toString('base64')}`, markupDataUrl: guideDataUrl });
+    expect(decode).not.toHaveBeenCalled();
+    decode.mockRestore();
+    expect(full).toEqual({ image: { bytes: fixture(), mime: 'image/png' }, markup: { bytes: guide, mime: 'image/png' } });
     const preview = await service().readSnapshot({ sessionId: 'session', requestId: snapshot.requestId, preview: true });
-    const bytes = Buffer.from(preview.markupDataUrl!.split(',')[1], 'base64');
+    const bytes = Buffer.from(preview.markup!.bytes);
     expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([512, 384]);
     expect(bytes[bytes.length - 1]).toBe(2);
-    expect(preview.maskDataUrl).toBeUndefined();
+    expect(preview.mask).toBeUndefined();
   });
   test.each([ImageEditOperation.Erase, ImageEditOperation.Markup])('missing or mismatched historical %s guides explicitly fall back to the original', async operation => {
     const edit = service();
     const { version } = await edit.open({ sessionId: 'session', title: 'original.png', filePath: original });
-    const request = await edit.stage({ sessionId: 'session', sourceId: version.id, operation,
-      guideDataUrl: `data:image/png;base64,${fixture().toString('base64')}` });
+    const request = await edit.stage({ sessionId: 'session', sourceId: version.id, operation, guideDataUrl: dataUrl(marked()) });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       await fs.writeFile(request.guidePath!, fixture(400, 400));
       expect(await edit.readSnapshot({ sessionId: 'session', requestId: request.id })).toEqual({
-        dataUrl: `data:image/png;base64,${fixture().toString('base64')}`,
+        image: { bytes: fixture(), mime: 'image/png' },
       });
       await fs.unlink(request.guidePath!);
       expect(await edit.readSnapshot({ sessionId: 'session', requestId: request.id })).toEqual({
-        dataUrl: `data:image/png;base64,${fixture().toString('base64')}`,
+        image: { bytes: fixture(), mime: 'image/png' },
       });
       expect(warn).toHaveBeenCalledTimes(2);
     } finally { warn.mockRestore(); }

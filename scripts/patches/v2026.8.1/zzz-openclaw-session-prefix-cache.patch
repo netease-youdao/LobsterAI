@@ -1,0 +1,807 @@
+diff --git a/src/agents/embedded-agent-runner/run/attempt-prompt-phase.ts b/src/agents/embedded-agent-runner/run/attempt-prompt-phase.ts
+--- a/src/agents/embedded-agent-runner/run/attempt-prompt-phase.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-prompt-phase.ts
+@@ -4,6 +4,10 @@
+   buildHeartbeatOutcomeContext,
+   claimHeartbeatOutcomeForRun,
+ } from "../../../infra/heartbeat-outcome-store.js";
++import {
++  buildLobsterAiSessionSnapshotMessage,
++  type LobsterAiSessionSnapshot,
++} from "../../lobsterai-session-snapshot.js";
+ import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
+ import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
+ import { log } from "../logger.js";
+@@ -104,6 +108,10 @@
+   attempt: PromptAssemblyInput["attempt"];
+   activeSession: PromptAssemblyInput["activeSession"];
+   sessionManager: PromptAssemblyInput["sessionManager"];
++  sessionIdentitySnapshot?: LobsterAiSessionSnapshot;
++  acknowledgePersistedUserReplay?: Parameters<
++    typeof submitEmbeddedAttemptPrompt
++  >[0]["acknowledgePersistedUserReplay"];
+   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
+   getCompactionReserveTokens: () => number;
+   emptyExplicitToolAllowlistError?: Error;
+@@ -367,6 +375,10 @@
+ 
+     if (!state.skipPromptSubmission) {
+       await submitEmbeddedAttemptPrompt({
++        acknowledgePersistedUserReplay: input.acknowledgePersistedUserReplay,
++        persistentRuntimeContext: buildLobsterAiSessionSnapshotMessage(
++          input.sessionIdentitySnapshot,
++        ),
+         ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
+         attempt,
+         activeSession,
+diff --git a/src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts b/src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts
+--- a/src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts
+@@ -328,3 +328,22 @@
+     });
+   });
+ });
++
++it.each([false, true])(
++  "forwards replay acknowledgement for runtimeOnly=%s",
++  async (runtimeOnly) => {
++    const { activeSession } = createSession();
++    const acknowledgePersistedUserReplay = vi.fn(async () => true);
++    const promptActiveSession = vi.fn(async (_text: string, _options?: PromptOptions) => undefined);
++    await submitEmbeddedAttemptPrompt({
++      ...createBaseInput(),
++      activeSession,
++      promptActiveSession,
++      runtimeOnly,
++      acknowledgePersistedUserReplay,
++    });
++    expect(promptActiveSession.mock.calls[0]?.[1]?.acknowledgePersistedUserReplay).toBe(
++      acknowledgePersistedUserReplay,
++    );
++  },
++);
+diff --git a/src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts b/src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts
+--- a/src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts
+@@ -78,6 +78,12 @@
+   onSteeringAcknowledged: () => void;
+   prependContext?: string;
+   promptActiveSession: PromptActiveSession;
++  persistentRuntimeContext?: NonNullable<
++    Parameters<AgentSession["prompt"]>[1]
++  >["persistentRuntimeContext"];
++  acknowledgePersistedUserReplay?: NonNullable<
++    Parameters<AgentSession["prompt"]>[1]
++  >["acknowledgePersistedUserReplay"];
+   runtimeContextMessage?: RuntimeContextCustomMessage;
+   runtimeOnly: boolean;
+   sessionPromptState: ReturnType<typeof getEmbeddedSessionPromptState>;
+@@ -168,6 +174,8 @@
+   try {
+     if (input.runtimeOnly) {
+       await input.promptActiveSession(input.transcriptPrompt, {
++        persistentRuntimeContext: input.persistentRuntimeContext,
++        acknowledgePersistedUserReplay: input.acknowledgePersistedUserReplay,
+         ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
+         preflightResult: armModelPromptTransform,
+       });
+@@ -178,6 +186,8 @@
+       });
+       try {
+         await input.promptActiveSession(input.transcriptPrompt, {
++          persistentRuntimeContext: input.persistentRuntimeContext,
++          acknowledgePersistedUserReplay: input.acknowledgePersistedUserReplay,
+           ...(input.images.length > 0 ? { images: input.images } : {}),
+           ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
+           preflightResult: armModelPromptTransform,
+diff --git a/src/agents/embedded-agent-runner/run/attempt-settle.ts b/src/agents/embedded-agent-runner/run/attempt-settle.ts
+--- a/src/agents/embedded-agent-runner/run/attempt-settle.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-settle.ts
+@@ -223,6 +223,8 @@
+       attempt,
+       activeSession,
+       sessionManager,
++      sessionIdentitySnapshot: systemPrompt.sessionIdentitySnapshot,
++      acknowledgePersistedUserReplay: sessionManager.acknowledgeReplayedUserMessage,
+       withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
+       getCompactionReserveTokens: () => settingsManager.getCompactionReserveTokens(),
+       ...(emptyExplicitToolAllowlistError ? { emptyExplicitToolAllowlistError } : {}),
+diff --git a/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts b/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts
+--- a/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts
+@@ -11,6 +11,10 @@
+   buildBootstrapTruncationReportMeta,
+ } from "../../bootstrap-budget.js";
+ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
++import {
++  buildLobsterAiSessionSnapshot,
++  LOBSTERAI_RUNTIME_FACTS_INSTRUCTIONS,
++} from "../../lobsterai-session-snapshot.js";
+ import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
+ import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
+ import {
+@@ -197,11 +201,16 @@
+   const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(
+     attempt.preparedModelRuntime?.projectKey,
+   );
++  const sessionIdentitySnapshot =
++    !params.isRawModelRun && effectivePromptMode === "full"
++      ? buildLobsterAiSessionSnapshot(runtimeInfo)
++      : undefined;
+   const extraSystemPrompt =
+     [
+       attempt.extraSystemPrompt,
+       projectMemoryWriteInstruction,
+       buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
++      sessionIdentitySnapshot ? LOBSTERAI_RUNTIME_FACTS_INSTRUCTIONS : undefined,
+     ]
+       .filter((value): value is string => Boolean(value))
+       .join("\n\n") || undefined;
+@@ -244,13 +253,14 @@
+         surface: promptSurface,
+       }),
+       runtimeInfo,
++      omitRuntimeSessionIdentity: sessionIdentitySnapshot !== undefined,
+       messageToolHints,
+       toolSchemaDirectoryPrompt,
+       sandboxInfo,
+       capabilityToolNames: [...params.capabilityToolNames].toSorted(),
+       tools: params.effectiveTools,
+       userTimezone,
+-      userDate,
++      userDate: sessionIdentitySnapshot ? "" : userDate,
+       contextFiles: params.bootstrap.contextFiles,
+       bootstrapMode: params.bootstrap.bootstrapMode,
+       bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(
+@@ -312,6 +322,7 @@
+   return {
+     runtimeChannel,
+     runtimeInfo,
++    sessionIdentitySnapshot,
+     systemPromptReport,
+     systemPromptText: attemptSystemPrompt.systemPrompt,
+   };
+diff --git a/src/agents/embedded-agent-runner/run/attempt-system-prompt.session-cache.test.ts b/src/agents/embedded-agent-runner/run/attempt-system-prompt.session-cache.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/attempt-system-prompt.session-cache.test.ts
+@@ -0,0 +1,140 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import {
++  clearMemoryPluginState,
++  registerMemoryPromptPreparation,
++  type MemoryPromptSectionParams,
++} from "../../../plugins/memory-state.test-fixtures.js";
++import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
++import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
++import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
++import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
++
++vi.mock("../../docs-path.js", () => ({
++  resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
++}));
++vi.mock("../../runtime-prompt.js", () => ({
++  resolveAgentRuntimePrompt: async (params: {
++    agentId: string;
++    sessionKey: string;
++    sessionId: string;
++    model: string;
++  }) => ({
++    runtimeInfo: {
++      ...params,
++      host: "test-host",
++      os: "darwin",
++      arch: "arm64",
++      node: "24",
++      sessionUrl: "https://example.test/session/" + params.sessionId,
++    },
++    runtimeCapabilities: [],
++    userTimezone: "UTC",
++    userDate: "2026-10-27",
++  }),
++}));
++
++afterEach(() => clearMemoryPluginState());
++
++function prepare(sessionKey: string, sessionId: string, promptMode: "full" | "minimal" = "full") {
++  type Params = Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0];
++  return prepareEmbeddedAttemptSystemPrompt({
++    attempt: {
++      config: {},
++      agentDir: "/tmp/openclaw-cache-test",
++      sessionKey,
++      sessionId,
++      provider: "lobsterai-server",
++      modelId: "deepseek-flash",
++      model: { api: "openai-completions" },
++      promptMode,
++    } as Params["attempt"],
++    activeContextEngine: undefined,
++    bootstrap: {
++      ...buildBootstrapBudgetState({ files: [] }),
++      bootstrapMode: "full",
++      contextFiles: [],
++      bootstrapInjectionStats: [],
++      workspaceNotes: [],
++      shouldRecordCompletedBootstrapTurn: false,
++    },
++    capabilityToolNames: new Set(),
++    effectiveCwd: "/tmp/openclaw-cache-test",
++    effectiveWorkspace: "/tmp/openclaw-cache-test",
++    effectiveTools: [],
++    getProviderRuntimeHandle: () => undefined as never,
++    isRawModelRun: false,
++    markStage: () => {},
++    modelToolsEnabled: true,
++    proactiveSubagentOrchestration: false,
++    sandboxSessionKey: sessionKey,
++    sessionAgentId: "main",
++    skillsPrompt: "",
++    toolSearchRuntimeConfig: {},
++  });
++}
++
++describe("LobsterAI session cache prompt identity", () => {
++  it("preserves prepared memory ownership while keeping task identity out of system text", async () => {
++    const prepareMemory = vi.fn(async (_context: MemoryPromptSectionParams) => [
++      "## Prepared memory",
++      "Memory guidance stays available.",
++    ]);
++    registerMemoryPromptPreparation("cache-test-memory", prepareMemory);
++    const first = await prepare("agent:main:lobsterai:task-a", "session-a");
++    const second = await prepare("agent:main:lobsterai:task-b", "session-b");
++
++    expect(prepareMemory.mock.calls.map(([context]) => context.agentSessionKey)).toEqual([
++      "agent:main:lobsterai:task-a",
++      "agent:main:lobsterai:task-b",
++    ]);
++    expect(first.runtimeInfo.sessionKey).toBe("agent:main:lobsterai:task-a");
++    expect(first.runtimeInfo.sessionId).toBe("session-a");
++    expect(first.sessionIdentitySnapshot).toMatchObject({
++      sessionKey: first.runtimeInfo.sessionKey,
++      sessionId: "session-a",
++    });
++    expect(first.systemPromptText).toContain("Memory guidance stays available.");
++    expect(first.systemPromptText).not.toContain("task-a");
++    expect(first.systemPromptText).not.toContain("session-a");
++    expect(first.systemPromptText).toBe(second.systemPromptText);
++  });
++
++  it.each([
++    ["agent:main:telegram:direct:123", "full"],
++    ["agent:main:lobsterai:task-a", "minimal"],
++  ] as const)("preserves existing runtime rendering for %s (%s)", async (key, mode) => {
++    const result = await prepare(key, "session-a", mode);
++    expect(result.sessionIdentitySnapshot).toBeUndefined();
++    expect(result.systemPromptText).toContain(`session=${key}`);
++    expect(result.systemPromptText).toContain("sessionId=session-a");
++  });
++
++  it("continues to reject prepared memory belonging to another session", async () => {
++    const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
++      enabled: true,
++      toolNames: [],
++      agentId: "main",
++      agentSessionKey: "agent:main:lobsterai:task-a",
++    });
++    expect(() =>
++      buildEmbeddedSystemPrompt({
++        workspaceDir: "/tmp/openclaw-cache-test",
++        reasoningTagHint: false,
++        runtimeInfo: {
++          agentId: "main",
++          sessionKey: "agent:main:lobsterai:task-b",
++          host: "test",
++          os: "darwin",
++          arch: "arm64",
++          node: "24",
++          model: "test",
++        },
++        tools: [],
++        userTimezone: "UTC",
++        userDate: "",
++        preparedMemoryPrompt,
++        omitRuntimeSessionIdentity: true,
++      }),
++    ).toThrow("prepared memory prompt section does not match the current run");
++  });
++});
+diff --git a/src/agents/embedded-agent-runner/system-prompt.ts b/src/agents/embedded-agent-runner/system-prompt.ts
+--- a/src/agents/embedded-agent-runner/system-prompt.ts
++++ b/src/agents/embedded-agent-runner/system-prompt.ts
+@@ -70,6 +70,8 @@
+     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
+     channelActions?: string[];
+   };
++  /** Hide session fields only in Runtime text; preserve the run context for memory/policy. */
++  omitRuntimeSessionIdentity?: boolean;
+   messageToolHints?: string[];
+   toolSchemaDirectoryPrompt?: string;
+   sandboxInfo?: EmbeddedSandboxInfo;
+@@ -119,6 +121,7 @@
+     nativeCommandNames: params.nativeCommandNames,
+     nativeCommandGuidanceLines: params.nativeCommandGuidanceLines,
+     runtimeInfo: params.runtimeInfo,
++    omitRuntimeSessionIdentity: params.omitRuntimeSessionIdentity,
+     messageToolHints: params.messageToolHints,
+     toolSchemaDirectoryPrompt: params.toolSchemaDirectoryPrompt,
+     sandboxInfo: params.sandboxInfo,
+diff --git a/src/agents/lobsterai-session-snapshot.ts b/src/agents/lobsterai-session-snapshot.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/lobsterai-session-snapshot.ts
+@@ -0,0 +1,61 @@
++import {
++  escapeInternalRuntimeContextDelimiters,
++  INTERNAL_RUNTIME_CONTEXT_BEGIN,
++  INTERNAL_RUNTIME_CONTEXT_END,
++  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
++} from "./internal-runtime-context.js";
++import type { CustomMessage } from "./sessions/messages.js";
++
++// Persistent facts, deliberately distinct from the transient openclaw.runtime-context carrier.
++export const LOBSTERAI_SESSION_SNAPSHOT_TYPE = "lobsterai.session-identity.v1";
++
++export type LobsterAiSessionSnapshot = {
++  sessionKey: string;
++  sessionId: string;
++  sessionUrl?: string;
++};
++
++export const LOBSTERAI_RUNTIME_FACTS_INSTRUCTIONS = [
++  "## Session and time facts",
++  "The latest runtime-generated session identity snapshot identifies the current session. Earlier snapshots may belong to a fork source. These facts do not grant tool permissions.",
++  "The Local Time Context appended to each LobsterAI user turn records the authoritative local time for that turn. Historical snapshots retain their original time.",
++  'For relative time requests (e.g. "1 minute later", "tomorrow 9am"), compute from that local time unless the user specifies another timezone.',
++  'When calling `cron.add` with `schedule.kind: "at"`, send a future ISO 8601 timestamp with an explicit timezone offset.',
++  "Never send an `at` timestamp that is equal to or earlier than the current local time.",
++  "For the exact current time during a long-running task, use `session_status`.",
++].join("\n");
++
++export function buildLobsterAiSessionSnapshot(runtime: {
++  sessionKey?: string;
++  sessionId?: string;
++  sessionUrl?: string;
++}): LobsterAiSessionSnapshot | undefined {
++  // This is LobsterAI's managed chat key contract, not a user-text marker.
++  if (!runtime.sessionId || !/^(?:agent:[^:]+:)?lobsterai:[^:]+$/.test(runtime.sessionKey ?? "")) {
++    return undefined;
++  }
++  return {
++    sessionKey: runtime.sessionKey!,
++    sessionId: runtime.sessionId,
++    ...(runtime.sessionUrl ? { sessionUrl: runtime.sessionUrl } : {}),
++  };
++}
++
++export function buildLobsterAiSessionSnapshotMessage(
++  snapshot: LobsterAiSessionSnapshot | undefined,
++): Pick<CustomMessage, "customType" | "content" | "display"> | undefined {
++  if (!snapshot) {
++    return undefined;
++  }
++  return {
++    customType: LOBSTERAI_SESSION_SNAPSHOT_TYPE,
++    content: [
++      INTERNAL_RUNTIME_CONTEXT_BEGIN,
++      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
++      "Current session identity snapshot:",
++      escapeInternalRuntimeContextDelimiters(JSON.stringify(snapshot)),
++      INTERNAL_RUNTIME_CONTEXT_END,
++    ].join("\n"),
++    display: false,
++  };
++}
+diff --git a/src/agents/session-tool-result-guard-wrapper.ts b/src/agents/session-tool-result-guard-wrapper.ts
+--- a/src/agents/session-tool-result-guard-wrapper.ts
++++ b/src/agents/session-tool-result-guard-wrapper.ts
+@@ -42,6 +42,10 @@
+   clearPendingToolResults?: () => void;
+   /** Persist the next user message when an earlier canonical entry was removed. */
+   clearNextUserMessagePersistenceSuppression?: () => void;
++  /** Acknowledge an admitted user retained in replay, without changing its durable row. */
++  acknowledgeReplayedUserMessage?: (
++    message: Extract<AgentMessage, { role: "user" }>,
++  ) => Promise<boolean>;
+   /** Refresh the exact owning run when a caller reuses this guarded manager. */
+   setTranscriptRunContext?: (
+     runId: string | undefined,
+@@ -279,6 +283,17 @@
+   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
+   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
+     guard.clearNextUserMessagePersistenceSuppression;
++  guardedSessionManager.acknowledgeReplayedUserMessage = async (message) => {
++    const key = (message as PersistedUserTurnMessage).idempotencyKey;
++    if (!key || key !== pendingPreparedUserTurnMessage?.idempotencyKey) {
++      return false;
++    }
++    try {
++      return await guard.acknowledgeReplayedUserMessage(message);
++    } finally {
++      queuedUserTurnTranscriptRecorder = undefined;
++    }
++  };
+   guardedSessionManager.setTranscriptRunContext = (runId, prepare, skipHooks) => {
+     guard.setTranscriptRunId(runId);
+     prepareAssistantTranscriptMessage = prepare;
+diff --git a/src/agents/session-tool-result-guard.ts b/src/agents/session-tool-result-guard.ts
+--- a/src/agents/session-tool-result-guard.ts
++++ b/src/agents/session-tool-result-guard.ts
+@@ -611,6 +611,7 @@
+   flushPendingToolResults: () => void;
+   clearPendingToolResults: () => void;
+   clearNextUserMessagePersistenceSuppression: () => void;
++  acknowledgeReplayedUserMessage: (message: UserAgentMessage) => Promise<boolean>;
+   getPendingIds: () => string[];
+   setTranscriptRunId: (runId: string | undefined) => void;
+ } {
+@@ -964,6 +965,17 @@
+   return {
+     flushPendingToolResults,
+     clearPendingToolResults,
++    acknowledgeReplayedUserMessage: async (message: UserAgentMessage): Promise<boolean> => {
++      if (!suppressNextUserMessagePersistence) {
++        return false;
++      }
++      // This turn is already durable. Consume its preparation/correlation state
++      // without appending a duplicate or flushing unrelated pending tool results.
++      const prepared = persistMessage(message) as UserAgentMessage;
++      suppressNextUserMessagePersistence = false;
++      await opts?.onUserMessagePersistenceSuppressed?.(prepared);
++      return true;
++    },
+     clearNextUserMessagePersistenceSuppression: () => {
+       suppressNextUserMessagePersistence = false;
+     },
+diff --git a/src/agents/sessions/agent-session-lobster-cache-replay.test.ts b/src/agents/sessions/agent-session-lobster-cache-replay.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/sessions/agent-session-lobster-cache-replay.test.ts
+@@ -0,0 +1,189 @@
++import path from "node:path";
++import type { Context, Model } from "openclaw/plugin-sdk/llm";
++import { afterEach, expect, it, vi } from "vitest";
++import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
++import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
++import { buildLobsterAiSessionSnapshotMessage } from "../lobsterai-session-snapshot.js";
++import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
++import {
++  createAssistant,
++  createAssistantResultStream,
++  createTestSession,
++  registerAgentSessionLoopTestLifecycle,
++  streamMocks,
++} from "./agent-session-loop-correctness.test-support.js";
++import { SessionManager } from "./session-manager.js";
++
++registerAgentSessionLoopTestLifecycle();
++const tempDirs = useAutoCleanupTempDirTracker(afterEach);
++const canonical = {
++  role: "user" as const,
++  content: "original request with frozen local time",
++  idempotencyKey: "retry:user",
++  timestamp: 1,
++};
++const snapshot = buildLobsterAiSessionSnapshotMessage({
++  sessionKey: "agent:main:lobsterai:retry",
++  sessionId: "retry",
++})!;
++
++it.each(["steer", "followUp"] as const)(
++  "persists %s after retry without duplicating or rewriting the original user or snapshot",
++  async (queueMethod) => {
++    const dir = tempDirs.make("lobster-cache-retry-");
++    const scope = {
++      agentId: "main",
++      sessionId: "retry",
++      sessionKey: "agent:main:lobsterai:retry",
++      storePath: path.join(dir, "sessions.json"),
++    };
++    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
++    const manager = SessionManager.open(scope, dir);
++    manager.appendMessage(canonical);
++    manager.appendCustomMessageEntry(snapshot.customType, snapshot.content, snapshot.display);
++    const originalEntries = structuredClone(manager.getEntries());
++    const preparing = vi.fn();
++    const suppressed = vi.fn();
++    const guarded = guardSessionManager(manager, {
++      preparedUserTurnMessage: canonical,
++      suppressNextUserMessagePersistence: true,
++      onUserMessagePreparingForPersistence: preparing,
++      onUserMessagePersistenceSuppressed: suppressed,
++    });
++    const { session } = await createTestSession({ sessionManager: manager });
++    let calls = 0;
++    let queued: Promise<void> | undefined;
++    const contexts: Context[] = [];
++    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
++      contexts.push(structuredClone(context));
++      if (++calls === 1) {
++        queued = session[queueMethod]("new correction after retry");
++      }
++      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "ok" }]));
++    });
++    await session.prompt(canonical.content, {
++      persistedUserIdempotencyKey: canonical.idempotencyKey,
++      persistentRuntimeContext: snapshot,
++      acknowledgePersistedUserReplay: guarded.acknowledgeReplayedUserMessage,
++    });
++    await queued;
++    expect(calls).toBe(2);
++    expect(suppressed).toHaveBeenCalledExactlyOnceWith(
++      expect.objectContaining(canonical),
++      expect.objectContaining(canonical),
++    );
++    expect(preparing).toHaveBeenCalled();
++    const restored = SessionManager.open(scope, dir);
++    const entries = restored.getEntries();
++    for (const old of originalEntries) {
++      expect(entries.find((entry) => entry.id === old.id)).toEqual(old);
++    }
++    const users = entries.flatMap((entry) =>
++      entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
++    );
++    expect(users).toHaveLength(2);
++    expect(users[0]).toEqual(canonical);
++    expect(JSON.stringify(users[1].content)).toContain("new correction after retry");
++    expect(users[1]).not.toHaveProperty("idempotencyKey", canonical.idempotencyKey);
++    expect(
++      entries.filter(
++        (entry) => entry.type === "custom_message" && entry.customType === snapshot.customType,
++      ),
++    ).toHaveLength(1);
++    const first = contexts[0].messages.filter((message) => message.role === "user");
++    expect(JSON.stringify(first).split(canonical.content)).toHaveLength(2);
++    expect(JSON.stringify(contexts[1])).toContain("new correction after retry");
++    // A subsequent ordinary turn also persists; the pending prepared user was consumed.
++    await session.prompt("ordinary next turn", { persistentRuntimeContext: snapshot });
++    const after = SessionManager.open(scope, dir).buildSessionContext().messages;
++    expect(after.filter((message) => message.role === "user")).toHaveLength(3);
++    for (const old of originalEntries) {
++      expect(manager.getEntries().find((entry) => entry.id === old.id)).toEqual(old);
++    }
++  },
++);
++
++it("only acknowledges the exact pending user once without modifying history", async () => {
++  const manager = SessionManager.inMemory();
++  manager.appendMessage(canonical);
++  const old = structuredClone(manager.getEntries());
++  const suppressed = vi.fn();
++  const guarded = guardSessionManager(manager, {
++    preparedUserTurnMessage: canonical,
++    suppressNextUserMessagePersistence: true,
++    onUserMessagePersistenceSuppressed: suppressed,
++  });
++  await expect(
++    guarded.acknowledgeReplayedUserMessage!({
++      ...canonical,
++      idempotencyKey: "other",
++    } as typeof canonical),
++  ).resolves.toBe(false);
++  expect(suppressed).not.toHaveBeenCalled();
++  await expect(guarded.acknowledgeReplayedUserMessage!(canonical)).resolves.toBe(true);
++  await expect(guarded.acknowledgeReplayedUserMessage!(canonical)).resolves.toBe(false);
++  expect(suppressed).toHaveBeenCalledOnce();
++  expect(manager.getEntries()).toEqual(old);
++  manager.appendMessage({ role: "user", content: "next user", timestamp: 2 });
++  expect(manager.getEntries()).toHaveLength(old.length + 1);
++});
++
++it("settles replay acknowledgement before invoking the provider and propagates failures", async () => {
++  const manager = SessionManager.inMemory();
++  manager.appendMessage(canonical);
++  manager.appendCustomMessageEntry(snapshot.customType, snapshot.content, snapshot.display);
++  const old = structuredClone(manager.getEntries());
++  const guarded = guardSessionManager(manager, {
++    preparedUserTurnMessage: canonical,
++    suppressNextUserMessagePersistence: true,
++    onUserMessagePersistenceSuppressed: async () => {
++      throw new Error("acknowledgement failed");
++    },
++  });
++  const { session } = await createTestSession({ sessionManager: manager });
++  await expect(
++    session.prompt(canonical.content, {
++      persistedUserIdempotencyKey: canonical.idempotencyKey,
++      persistentRuntimeContext: snapshot,
++      acknowledgePersistedUserReplay: guarded.acknowledgeReplayedUserMessage,
++    }),
++  ).rejects.toThrow("acknowledgement failed");
++  expect(streamMocks.streamSimple).not.toHaveBeenCalled();
++  for (const entry of old) {
++    expect(manager.getEntries().find((candidate) => candidate.id === entry.id)).toEqual(entry);
++  }
++});
++
++it("retains normal tail-user reconciliation when retry has no snapshot yet", async () => {
++  const manager = SessionManager.inMemory();
++  manager.appendMessage(canonical);
++  const original = structuredClone(manager.getEntries());
++  const suppressed = vi.fn();
++  const guarded = guardSessionManager(manager, {
++    preparedUserTurnMessage: canonical,
++    suppressNextUserMessagePersistence: true,
++    onUserMessagePersistenceSuppressed: suppressed,
++  });
++  const acknowledge = vi.fn(guarded.acknowledgeReplayedUserMessage!);
++  const { session } = await createTestSession({ sessionManager: manager });
++  let calls = 0;
++  streamMocks.streamSimple.mockImplementation((model: Model) => {
++    if (++calls === 1) {
++      void session.steer("correction");
++    }
++    return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "ok" }]));
++  });
++  await session.prompt(canonical.content, {
++    persistedUserIdempotencyKey: canonical.idempotencyKey,
++    persistentRuntimeContext: snapshot,
++    acknowledgePersistedUserReplay: acknowledge,
++  });
++  expect(acknowledge).not.toHaveBeenCalled();
++  expect(suppressed).toHaveBeenCalledOnce();
++  const users = manager.buildSessionContext().messages.filter((message) => message.role === "user");
++  expect(users).toHaveLength(2);
++  expect(JSON.stringify(users[1].content)).toContain("correction");
++  for (const entry of original) {
++    expect(manager.getEntries().find((candidate) => candidate.id === entry.id)).toEqual(entry);
++  }
++});
+diff --git a/src/agents/sessions/agent-session-prompting.ts b/src/agents/sessions/agent-session-prompting.ts
+--- a/src/agents/sessions/agent-session-prompting.ts
++++ b/src/agents/sessions/agent-session-prompting.ts
+@@ -28,12 +28,31 @@
+ 
+ export abstract class AgentSessionPrompting extends AgentSessionBase {
+   private logicalPromptActive = false;
++  private persistentRuntimeContext: PromptOptions["persistentRuntimeContext"];
++
++  private missingRuntimeContext(
++    context: PromptOptions["persistentRuntimeContext"],
++  ): CustomMessage | undefined {
++    if (!context) {
++      return undefined;
++    }
++    const latest = this.agent.state.messages.findLast(
++      (message) => message.role === "custom" && message.customType === context.customType,
++    );
++    if (latest && "content" in latest && latest.content === context.content) {
++      return undefined;
++    }
++    return { ...context, role: "custom", timestamp: Date.now() };
++  }
+ 
+   // =========================================================================
+   // Prompting
+   // =========================================================================
+ 
+-  private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
++  private async runAgentPrompt(
++    messages: AgentMessage | AgentMessage[],
++    persistentRuntimeContext?: PromptOptions["persistentRuntimeContext"],
++  ): Promise<void> {
+     if (this.logicalPromptActive) {
+       throw new Error(
+         "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+@@ -42,6 +61,7 @@
+     // Retry and compaction gaps briefly make the core idle, but the logical prompt
+     // still owns continuation and its one terminal fact until this scope closes.
+     this.logicalPromptActive = true;
++    this.persistentRuntimeContext = persistentRuntimeContext;
+     let endedForTurnHandoff = false;
+     try {
+       await this.agent.prompt(messages);
+@@ -54,6 +74,7 @@
+         await this.agent.continue();
+       }
+     } finally {
++      this.persistentRuntimeContext = undefined;
+       this.systemPromptOverride = undefined;
+       let flushFailed = false;
+       let flushError: unknown;
+@@ -114,6 +135,10 @@
+     }
+ 
+     if (await this.checkCompaction(msg)) {
++      const context = this.missingRuntimeContext(this.persistentRuntimeContext);
++      if (context) {
++        await this.sendCustomMessage(context);
++      }
+       return "continue";
+     }
+ 
+@@ -254,8 +279,31 @@
+       // Build messages array (custom message if any, then user message)
+       messages = [];
+ 
+-      // Add user message
+-      messages.push(this.createUserMessage(expandedText, currentImages));
++      // A snapshot can follow the durable current user. Keep that slot unchanged,
++      // but consume its pending persistence state before any steering can arrive.
++      const replayedUser =
++        options?.persistentRuntimeContext && persistedUserIdempotencyKey
++          ? this.agent.state.messages.find(
++              (message): message is Extract<AgentMessage, { role: "user" }> =>
++                message.role === "user" &&
++                "idempotencyKey" in message &&
++                message.idempotencyKey === persistedUserIdempotencyKey,
++            )
++          : undefined;
++      const acknowledgeReplay = options?.acknowledgePersistedUserReplay;
++      const acknowledgedReplay =
++        replayedUser && acknowledgeReplay
++          ? await this.runWithSessionWriteSettlement(() => acknowledgeReplay(replayedUser))
++          : false;
++      if (!acknowledgedReplay) {
++        messages.push(this.createUserMessage(expandedText, currentImages));
++      }
++      // Append after the user only after compaction and current-user reconciliation.
++      // The normal message_end writer persists this exact order for later replay.
++      const runtimeContext = this.missingRuntimeContext(options?.persistentRuntimeContext);
++      if (runtimeContext) {
++        messages.push(runtimeContext);
++      }
+ 
+       // Inject any pending "nextTurn" messages as context alongside the user message
+       for (const msg of this.pendingNextTurnMessages) {
+@@ -302,7 +350,7 @@
+     }
+ 
+     preflightResult?.(true);
+-    await this.runAgentPrompt(messages);
++    await this.runAgentPrompt(messages, options?.persistentRuntimeContext);
+   }
+ 
+   /**
+diff --git a/src/agents/sessions/agent-session-types.ts b/src/agents/sessions/agent-session-types.ts
+--- a/src/agents/sessions/agent-session-types.ts
++++ b/src/agents/sessions/agent-session-types.ts
+@@ -17,6 +17,7 @@
+   ShutdownHandler,
+   ToolDefinition,
+ } from "./extensions/index.js";
++import type { CustomMessage } from "./messages.js";
+ import type { ModelRegistry } from "./model-registry.js";
+ import type { ResourceLoader } from "./resource-loader.js";
+ import type { SessionManager } from "./session-manager.js";
+@@ -115,6 +116,12 @@
+   preflightResult?: (success: boolean) => void;
+   /** Internal identity for a current user turn that is already durable. */
+   persistedUserIdempotencyKey?: string;
++  /** Internal runtime facts, persisted once per value and restored after compaction. */
++  persistentRuntimeContext?: Pick<CustomMessage, "customType" | "content" | "display">;
++  /** Consume the current durable turn's one-shot persistence state before replaying it. */
++  acknowledgePersistedUserReplay?: (
++    message: Extract<AgentMessage, { role: "user" }>,
++  ) => Promise<boolean>;
+ }
+ 
+ /** Result from cycling the active model. */
+diff --git a/src/agents/system-prompt.ts b/src/agents/system-prompt.ts
+--- a/src/agents/system-prompt.ts
++++ b/src/agents/system-prompt.ts
+@@ -824,6 +824,8 @@
+   /** Plugin-owned prompt guidance for registered native slash commands. */
+   nativeCommandGuidanceLines?: string[];
+   runtimeInfo?: SystemPromptRuntimeInfo;
++  /** Rendering-only: memory ownership and config resolution still use the real session. */
++  omitRuntimeSessionIdentity?: boolean;
+   messageToolHints?: string[];
+   toolSchemaDirectoryPrompt?: string;
+   sandboxInfo?: EmbeddedSandboxInfo;
+@@ -1553,7 +1555,14 @@
+ 
+   lines.push(
+     "## Runtime",
+-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
++    buildRuntimeLine(
++      params.omitRuntimeSessionIdentity
++        ? { ...runtimeInfo, sessionKey: undefined, sessionId: undefined, sessionUrl: undefined }
++        : runtimeInfo,
++      runtimeChannel,
++      runtimeCapabilities,
++      params.defaultThinkLevel,
++    ),
+     ...(modelIdentityLine ? [modelIdentityLine] : []),
+     // Background process snapshots change between turns, so they travel in the
+     // per-turn runtime-context carrier; only the stable guidance stays in this prefix.

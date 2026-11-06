@@ -11,7 +11,7 @@ import reducer, { enqueuePendingPermission } from './coworkSlice';
 
 const request = (
   sequence: number,
-  status = MediaConfirmationStatus.Expired,
+  status = MediaConfirmationStatus.Visible,
 ): CoworkPermissionRequest => ({
   requestId: 'request',
   sessionId: 'session',

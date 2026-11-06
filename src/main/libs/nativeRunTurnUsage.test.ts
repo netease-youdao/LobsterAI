@@ -95,14 +95,30 @@ describe('nativeRunTurnUsage', () => {
     expect(getNativeRunMediaUsageContext('second')?.turnId).toBe(TRACE_B);
   });
 
-  test('preserves empty input and excludes desktop continuations and heartbeat runs', () => {
+  test('preserves empty input and excludes desktop continuations', () => {
     const report = { sessionKey: 'agent:main:telegram:direct:123', sessionId: 'runtime', trigger: 'user' };
     recordNativeRunLlmTrace({ ...report, runId: 'attachment', traceId: TRACE_A });
     expect(getLlmUsageHeaders(`00-${TRACE_A}-1111111111111111-01`)[LlmUsageHeader.UserMessage]).toBe('');
     recordNativeRunLlmTrace({ ...report, runId: 'desktop', traceId: TRACE_B, messageProvider: 'webchat' });
     expect(getNativeRunMediaUsageContext('desktop')).toBeUndefined();
-    recordNativeRunLlmTrace({ ...report, runId: 'heartbeat', traceId: TRACE_B, trigger: 'heartbeat' });
-    expect(getNativeRunMediaUsageContext('heartbeat')).toBeUndefined();
+  });
+
+  test('attributes background heartbeats independently without borrowing the desktop task', () => {
+    registerLlmUsageContext(TRACE_A, 'desktop-session', '制作 PPT');
+    const titles: string[] = [];
+    configureUsageTitleReporter((_id, title) => { if (title) titles.push(title); });
+    const report = {
+      runId: 'heartbeat', trigger: 'heartbeat', messageProvider: 'webchat',
+      sessionKey: 'agent:main:lobsterai:desktop-session:heartbeat',
+    };
+    // An older runtime must not overwrite the parent task's attribution.
+    expect(recordNativeRunLlmTrace({ ...report, traceId: TRACE_A })).toBe(false);
+    expect(recordNativeRunLlmTrace({ ...report, traceId: TRACE_B, userMessage: '制作 PPT' })).toBe(true);
+    const headers = getLlmUsageHeaders(`00-${TRACE_B}-1111111111111111-01`);
+    expect(headers[LlmUsageHeader.Session]).toMatch(/^heartbeat:[a-f0-9]{64}$/);
+    expect(decodeURIComponent(headers[LlmUsageHeader.UserMessage])).toBe('检查后台事件和异步任务完成状态');
+    expect(titles).toEqual(['后台心跳检查']);
+    expect(getLlmUsageHeaders(`00-${TRACE_A}-1111111111111111-01`)[LlmUsageHeader.Session]).toBe('desktop-session');
   });
 
   test('ignores invalid reports and traces of desktop turns', () => {
