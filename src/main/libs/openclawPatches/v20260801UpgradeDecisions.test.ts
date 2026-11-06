@@ -64,6 +64,7 @@ const RETAINED_PATCHES = [
   'openclaw-safe-error-metadata.patch',
   'openclaw-session-goal-rpc.patch',
   'openclaw-session-migration-duplicate-headers.patch',
+  'openclaw-session-window-preflight-compaction.patch',
   'openclaw-sessions-spawn-agent-id-schema.patch',
   'openclaw-shell-snapshot-electron-node-env.patch',
   'openclaw-skip-disabled-web-search-discovery.patch',
@@ -290,6 +291,14 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+export function resolveEmbeddedSessionContextLimits(',
       '+function shouldCompactByModelContextBytes(',
       '+  const compactionOptional = compactionTrigger === "model_context_bytes";',
+    ]);
+  });
+
+  test('preflight compaction budgets against the session-selected context window', () => {
+    expectPatchContains('openclaw-session-window-preflight-compaction.patch', [
+      '+function resolveSelectedContextWindowTokens(params: {',
+      '+    contextWindow: entry.contextWindow,',
+      '+    contextWindow: entry?.contextWindow,',
     ]);
   });
 
