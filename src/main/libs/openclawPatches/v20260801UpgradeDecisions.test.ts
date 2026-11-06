@@ -23,6 +23,7 @@ const RETAINED_PATCHES = [
   'openclaw-cli-startup-metadata-windows-timeout.patch',
   'openclaw-compaction-summary-format.patch',
   'openclaw-compaction-summary-section-order.patch',
+  'openclaw-config-apply-size-drop-allowance.patch',
   'openclaw-config-candidate-cache-invalidation.patch',
   'openclaw-cron-preparation-failure-state.patch',
   'openclaw-cron-run-trace-isolation.patch',
@@ -125,6 +126,17 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
 
   test.each(RETIRED_PATCHES)('retires %s', (patchFile) => {
     expectCurrentOpenClawPatchMissing(patchFile);
+  });
+
+  test('lets config.apply opt out of only the size-drop guard and skips identical-backup restores', () => {
+    expectPatchContains('openclaw-config-apply-size-drop-allowance.patch', [
+      '+  allowConfigSizeDrop: Type.Optional(Type.Boolean()),',
+      '+        params.allowConfigSizeDrop === true',
+      '+          ? { ...writeOptions, allowConfigSizeDrop: true }',
+      '+  if (!backupRaw || backupRaw === raw) {',
+      'keeps the size-drop check for writers that do not opt in',
+      'recovery leaves a size drop alone when the backup already holds the current bytes',
+    ]);
   });
 
   test('lets an unchanged cleanly closed agent database skip its whole-file integrity check', () => {
