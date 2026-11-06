@@ -75,6 +75,7 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
   const [input, setInput] = useState('');
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState('');
+  const [minimumCardHeight, setMinimumCardHeight] = useState<number>();
   const streamRef = useRef<Streaming | null>(null);
   const selectionRef = useRef<DesktopCompanionSelection | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -104,6 +105,7 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
       setInput('');
       setCopied(false);
       setCopyError('');
+      setMinimumCardHeight(undefined);
     }
   }), [api]);
 
@@ -254,6 +256,9 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
   const regenerate = () => {
     const current = selectionRef.current;
     if (!current?.action || streamRef.current || turns[turns.length - 1]?.role !== 'assistant') return;
+    // Keep the old button position inside the card when a second click follows
+    // regeneration; shrinking the window would turn it into an outside dismiss.
+    setMinimumCardHeight(rootRef.current?.getBoundingClientRect().height);
     const history = turns.slice(0, -1);
     setTurns(history);
     ask(current.action, history[history.length - 1]?.role === 'user' ? history : [], question || undefined);
@@ -357,7 +362,10 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
 
   return (
     <div className="sel-surface">
-      <div className="sel-card" ref={rootRef} style={{ maxHeight: selection.cardMaxHeight }}>
+      <div className="sel-card" ref={rootRef} style={{
+        maxHeight: selection.cardMaxHeight,
+        minHeight: minimumCardHeight === undefined ? undefined : Math.min(minimumCardHeight, selection.cardMaxHeight ?? minimumCardHeight),
+      }}>
         <SelectionCardHeader
           title={actionLabel(action)}
           pinned={selection.pinned}
