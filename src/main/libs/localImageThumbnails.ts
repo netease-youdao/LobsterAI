@@ -14,12 +14,19 @@ const RESOLVED_CACHE_LIMIT = 2000;
 const JPEG_QUALITY = 88;
 /** Native thumbnailers may round the requested size by a pixel; anything further off is not a plain resize. */
 const SIZE_TOLERANCE_PX = 2;
+/**
+ * Part of every cache key, raised when thumbnails already on disk must not be served again.
+ * 2: thumbnails made before it may be QuickLook's file-type icon instead of the image.
+ */
+const THUMBNAIL_CACHE_VERSION = 2;
+
+interface PixelSize { width: number; height: number }
 
 export interface ThumbnailImage {
   isEmpty(): boolean;
-  getSize(): { width: number; height: number };
-  resize(options: { width: number; height: number; quality: 'good' }): ThumbnailImage;
-  toBitmap(): Buffer;
+  getSize(): PixelSize;
+  resize(options: PixelSize & { quality: 'good' }): ThumbnailImage;
+  toBitmap(options?: { scaleFactor?: number }): Buffer;
   toPNG(): Buffer;
   toJPEG(quality: number): Buffer;
 }
@@ -30,7 +37,39 @@ export interface LocalImageThumbnailDeps {
    * Builds a thumbnail of exactly the requested size, decoding outside the main thread
    * (QuickLook on macOS, the shell on Windows). Undefined where the platform has none.
    */
-  createThumbnail?: (filePath: string, size: { width: number; height: number }) => Promise<ThumbnailImage>;
+  createThumbnail?: (filePath: string, size: PixelSize) => Promise<ThumbnailImage>;
+}
+
+export interface ScreenScaleThumbnailDeps {
+  /** Scale of the screen QuickLook renders for, the primary one. */
+  scaleFactor: number;
+  createThumbnailFromPath: (filePath: string, points: PixelSize) => Promise<ThumbnailImage>;
+  createFromBitmap: (bitmap: Buffer, pixels: PixelSize) => ThumbnailImage;
+}
+
+/**
+ * A macOS thumbnail of `size` device pixels. `nativeImage.createThumbnailFromPath` takes points that
+ * QuickLook renders at the screen's scale: asked for device pixels it renders twice as many on Retina,
+ * and past the size it renders for a large image it returns the file-type icon instead. So it is asked
+ * for points, and the screen-scale pixels are read back, not the 1x copy Electron downsamples from them.
+ */
+export async function createScreenScaleThumbnail(
+  filePath: string,
+  size: PixelSize,
+  deps: ScreenScaleThumbnailDeps,
+): Promise<ThumbnailImage> {
+  const scale = Number.isFinite(deps.scaleFactor) && deps.scaleFactor > 1 ? deps.scaleFactor : 1;
+  if (scale === 1) return deps.createThumbnailFromPath(filePath, size);
+  const image = await deps.createThumbnailFromPath(filePath, {
+    width: Math.max(1, Math.round(size.width / scale)),
+    height: Math.max(1, Math.round(size.height / scale)),
+  });
+  if (image.isEmpty()) return image;
+  const points = image.getSize();
+  const pixels = { width: Math.round(points.width * scale), height: Math.round(points.height * scale) };
+  const bitmap = image.toBitmap({ scaleFactor: scale });
+  // Anything but a bitmap of that size is returned as it is, for the caller's size check to turn down.
+  return bitmap.length === pixels.width * pixels.height * 4 ? deps.createFromBitmap(bitmap, pixels) : image;
 }
 
 const hasTransparentPixels = (bitmap: Buffer): boolean => {
@@ -39,6 +78,14 @@ const hasTransparentPixels = (bitmap: Buffer): boolean => {
   }
   return false;
 };
+
+/**
+ * Whether all four corners are fully transparent. When QuickLook cannot thumbnail an image it returns the
+ * file-type icon padded to the requested box, which always leaves the corners clear.
+ */
+const hasClearCorners = (bitmap: Buffer, { width, height }: PixelSize): boolean => (
+  [0, width - 1, (height - 1) * width, height * width - 1].every(pixel => bitmap[pixel * 4 + 3] === 0)
+);
 
 const fileExists = (filePath: string) => fs.promises.access(filePath).then(() => true, () => false);
 
@@ -69,7 +116,7 @@ export class LocalImageThumbnails {
       || !THUMBNAIL_SOURCE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return null;
 
     const key = crypto.createHash('sha256')
-      .update(`${path.resolve(filePath)}\0${stat.size}\0${stat.mtimeMs}\0${edge}\0${fit}`)
+      .update(`${THUMBNAIL_CACHE_VERSION}\0${path.resolve(filePath)}\0${stat.size}\0${stat.mtimeMs}\0${edge}\0${fit}`)
       .digest('hex');
     if (this.resolved.has(key)) {
       const known = this.resolved.get(key) ?? null;
@@ -153,11 +200,16 @@ export class LocalImageThumbnails {
         || Math.abs(actual.height - size.height) > SIZE_TOLERANCE_PX) {
         return this.remember(key, null);
       }
-      // QuickLook renders for the screen's scale factor, and encoding picks the largest
-      // representation (twice the size on Retina); the renderer already asked in device pixels.
+      // Takes out the pixel a native thumbnailer may be off by; the renderer already asked in device pixels.
       const image = native.resize({ ...size, quality: 'good' });
+      const bitmap = image.toBitmap();
+      // Most likely the file-type icon. An image whose own corners are clear is served as it is too.
+      if (hasClearCorners(bitmap, size)) {
+        console.warn('[LocalImageThumbnails] thumbnail has clear corners, likely the file-type icon; serving the original.');
+        return this.remember(key, null);
+      }
 
-      const transparent = header.mime !== 'image/jpeg' && hasTransparentPixels(image.toBitmap());
+      const transparent = header.mime !== 'image/jpeg' && hasTransparentPixels(bitmap);
       const target = this.cachePath(key, transparent ? '.png' : '.jpg');
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       const tempPath = `${target}.${process.pid}.tmp`;

@@ -15,6 +15,7 @@ import {
   powerSaveBlocker,
   protocol,
   safeStorage,
+  screen,
   session,
   shell,
   type WebContents,
@@ -469,7 +470,7 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
-import { LocalImageThumbnails } from './libs/localImageThumbnails';
+import { createScreenScaleThumbnail, LocalImageThumbnails } from './libs/localImageThumbnails';
 import { exportLogsZip } from './libs/logExport';
 import { getLogExportEntries } from './libs/logExportEntries';
 import { MainLogReporter } from './libs/mainLogReporter';
@@ -15834,9 +15835,15 @@ if (!gotTheLock) {
     // build them without decoding on the main thread, elsewhere the original is served.
     const localImageThumbnails = new LocalImageThumbnails({
       cacheDirectory: path.join(app.getPath('userData'), 'image-thumbnails'),
-      createThumbnail: isMac || isWindows
-        ? (filePath, size) => nativeImage.createThumbnailFromPath(filePath, size)
-        : undefined,
+      createThumbnail: isMac
+        ? (filePath, size) => createScreenScaleThumbnail(filePath, size, {
+          scaleFactor: screen.getPrimaryDisplay().scaleFactor,
+          createThumbnailFromPath: (file, points) => nativeImage.createThumbnailFromPath(file, points),
+          createFromBitmap: (bitmap, pixels) => nativeImage.createFromBitmap(bitmap, pixels),
+        })
+        : isWindows
+          ? (filePath, size) => nativeImage.createThumbnailFromPath(filePath, size)
+          : undefined,
     });
     protocol.handle(ArtifactPreviewProtocol.LocalFile, request => createLocalFileProtocolResponse(request, {
       resolveThumbnail: (filePath, stat, edge, fit) => localImageThumbnails.resolve(filePath, stat, edge, fit),
