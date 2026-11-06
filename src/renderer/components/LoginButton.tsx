@@ -48,6 +48,7 @@ import { DailyCheckInAccountMenuEntry } from './DailyCheckInActivity';
 import { getDailyCheckInAuthScopeKey } from './dailyCheckInActivityState';
 import { waitForDailyCheckInRefresh } from './dailyCheckInSnapshotStore';
 import UserAvatarIcon from './icons/UserAvatarIcon';
+import SidebarLoginPromoBubble, { SIDEBAR_LOGIN_PROMO_BUBBLE_ID } from './SidebarLoginPromoBubble';
 import {
   type StartupCreditCampaignEntry,
   useStartupCreditCampaignEntry,
@@ -320,46 +321,6 @@ const PointsStackIcon: React.FC = () => (
 const PennyActivityIcon: React.FC = () => (
   <GiftIcon className="h-4 w-4 shrink-0 text-[#111111] dark:text-white" aria-hidden="true" />
 );
-
-interface LoggedOutMenuProps {
-  onClose: () => void;
-  onLogin: () => Promise<void>;
-}
-
-const LoggedOutMenu: React.FC<LoggedOutMenuProps> = ({ onClose, onLogin }) => {
-  const handleLogin = async () => {
-    onClose();
-    await onLogin();
-  };
-
-  const handlePennyActivity = async () => {
-    try {
-      await window.electron.shell.openExternal(getPortalPennyActivityUrl());
-      onClose();
-      reportAccountMenuAction('open_penny_activity', { isLoggedIn: false, result: 'success' });
-    } catch (error) {
-      reportAccountMenuAction('open_penny_activity', { isLoggedIn: false, result: 'failed' });
-      throw error;
-    }
-  };
-
-  return (
-    <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 w-[14.5rem] overflow-hidden rounded-xl border border-border bg-surface shadow-popover popover-enter">
-      <div className="py-1">
-        <AccountMenuAction
-          icon={<UserAvatarIcon className="h-4 w-4 shrink-0" />}
-          label={i18nService.t('login')}
-          onClick={handleLogin}
-        />
-        <AccountMenuAction
-          icon={<PennyActivityIcon />}
-          label={i18nService.t('authPennyActivityEntry')}
-          onClick={handlePennyActivity}
-        />
-      </div>
-    </div>
-  );
-};
 
 interface UserMenuProps {
   dailyCheckInSnapshot: DailyCheckInSnapshot | null;
@@ -784,11 +745,13 @@ const formatRewardExpiry = (expiresAt: string): string => {
 interface LoginButtonProps {
   contentLeftOffset?: number;
   loggedOutVariant?: 'default' | 'sidebarPromo';
+  loginPromoTipVisible?: boolean;
 }
 
 const LoginButton: React.FC<LoginButtonProps> = ({
   contentLeftOffset = 0,
   loggedOutVariant = 'default',
+  loginPromoTipVisible = false,
 }) => {
   const {
     accountGeneration,
@@ -901,8 +864,8 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     setMenuPennyActivityEntryVisible(false);
   }, [isLoggedIn]);
 
-  // Logged-out clicks must not wait on the network before logging in, so the
-  // entry state is fetched ahead of time instead of when the popover opens.
+  // The login promo bubble can appear on hover at any time, so the optional
+  // offer row is resolved ahead of time instead of when the bubble is shown.
   useEffect(() => {
     setLoggedOutPennyActivityEntryVisible(false);
     if (isLoggedIn || connectionState) return;
@@ -1010,14 +973,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       if (earlyResult === null) void refreshRequest.then(showLatestDailyCheckIn);
       return;
     }
-    if (showMenu) {
-      setShowMenu(false);
-      return;
-    }
-    if (loggedOutPennyActivityEntryVisible) {
-      setShowMenu(true);
-      return;
-    }
+    setShowMenu(false);
     await handleLogin();
   };
 
@@ -1077,10 +1033,11 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         onPointerEnter={prefetchMenuDailyCheckIn}
         disabled={isLoading}
         aria-busy={isLoading}
+        aria-describedby={useSidebarPromoLogin ? SIDEBAR_LOGIN_PROMO_BUBBLE_ID : undefined}
         title={connectionState ? i18nService.t(isLoading ? 'authRestoringSession' : 'authConnectionUnavailable') : undefined}
         className={
           useSidebarPromoLogin
-            ? 'sidebar-login-rainbow inline-flex h-7 w-[5.75rem] shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform]'
+            ? 'peer sidebar-login-rainbow inline-flex h-7 w-[5.75rem] shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform]'
             : 'inline-flex h-7 items-center justify-start gap-2 rounded-md px-1.5 text-sm font-normal text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] cursor-pointer'
         }
       >
@@ -1107,16 +1064,16 @@ const LoginButton: React.FC<LoginButtonProps> = ({
           )
         )}
       </button>
+      {useSidebarPromoLogin && (
+        <SidebarLoginPromoBubble
+          autoVisible={loginPromoTipVisible}
+          pennyOfferVisible={loggedOutPennyActivityEntryVisible}
+        />
+      )}
       {showMenu && !isLoggedIn && connectionState && (
         <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-xl border border-border bg-surface p-3 shadow-popover">
           <AccountConnectionNotice state={connectionState} className="w-full text-xs" />
         </div>
-      )}
-      {showMenu && !isLoggedIn && !connectionState && loggedOutPennyActivityEntryVisible && (
-        <LoggedOutMenu
-          onClose={() => setShowMenu(false)}
-          onLogin={handleLogin}
-        />
       )}
       {showMenu && isLoggedIn && (
         enterpriseAccountContext
