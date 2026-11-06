@@ -43,7 +43,8 @@ test('cold startup keeps My visible and describes session restoration instead of
   expect(accountHtml).toContain('我的');
   expect(accountHtml).toContain('正在恢复登录状态');
   expect(accountHtml).toContain('disabled=""');
-  expect(accountHtml).not.toContain('sidebar-login-rainbow');
+  expect(accountHtml).not.toContain('立即登录');
+  expect(accountHtml).not.toContain('登录免费领300积分');
   expect(pickerHtml).toContain('正在恢复登录状态');
   expect(pickerHtml).not.toContain('登录使用套餐模型');
   expect(pickerHtml).not.toContain('请先在设置中配置模型');
@@ -59,7 +60,7 @@ test.each([false, true])('temporary verification failure shows recovery even wit
   const accountHtml = render(state, account);
   const pickerHtml = render(state, picker);
   expect(accountHtml).toContain('我的');
-  expect(accountHtml).not.toContain('sidebar-login-rainbow');
+  expect(accountHtml).not.toContain('立即登录');
   expect(pickerHtml).toContain('账号连接暂不可用');
   expect(pickerHtml).toContain('重试');
   expect(pickerHtml).not.toContain('disabled=""');
@@ -82,7 +83,10 @@ test('confirmed logged out users still get the login entry', () => {
   const state = snapshot({ isLoading: false, isLoggedIn: false, sessionStatus: AuthSessionStatus.Unauthenticated }, {
     serverModelLoadStatus: ServerModelLoadStatus.Ready,
   });
-  expect(render(state, account)).toContain('sidebar-login-rainbow');
+  const accountHtml = render(state, account);
+  expect(accountHtml).toContain('立即登录');
+  expect(accountHtml).toContain('登录免费领300积分');
+  expect(accountHtml.indexOf('立即登录')).toBeLessThan(accountHtml.indexOf('登录免费领300积分'));
   expect(render(state, picker)).toContain('登录使用套餐模型');
 });
 
