@@ -8,7 +8,7 @@ describe('NetEase Mail integration boundary', () => {
     const integration = new NeteaseMailIntegration();
     expect(await integration.getAvailability()).toEqual({ authorization: false, confirmation: false });
     expect(await integration.authorize()).toEqual({ success: false, code: NeteaseMailFailure.NotReady });
-    expect(await integration.resolveConfirmation({ messageId: 'message', toolCallId: 'call', action: NeteaseMailAction.Confirm }))
+    expect(await integration.resolveConfirmation({ messageId: 'message', toolCallId: 'call', confirmationId: 'confirmation', action: NeteaseMailAction.Confirm }))
       .toEqual({ success: false, code: NeteaseMailFailure.NotReady });
   });
 
@@ -26,8 +26,8 @@ describe('NetEase Mail integration boundary', () => {
       resolveConfirmation,
     };
     const integration = new NeteaseMailIntegration(provider);
-    const request = { messageId: 'message', toolCallId: 'call', action: NeteaseMailAction.Confirm, body: 'changed by renderer', confirmation_token: 'untrusted' };
+    const request = { messageId: 'message', toolCallId: 'call', confirmationId: 'confirmation', action: NeteaseMailAction.Confirm, body: 'changed by renderer', confirmation_token: 'untrusted' };
     expect(await integration.resolveConfirmation(request)).toEqual({ success: false, code: NeteaseMailError.RateLimited });
-    expect(resolveConfirmation).toHaveBeenCalledExactlyOnceWith({ messageId: 'message', toolCallId: 'call', action: NeteaseMailAction.Confirm });
+    expect(resolveConfirmation).toHaveBeenCalledExactlyOnceWith({ messageId: 'message', toolCallId: 'call', confirmationId: 'confirmation', action: NeteaseMailAction.Confirm });
   });
 });

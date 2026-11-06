@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 
 import {
   NeteaseMailAction, NeteaseMailBodyFormat, NeteaseMailError, NeteaseMailFailure,
-  NeteaseMailLimits, NeteaseMailMessageMode, NeteaseMailOutcome, NeteaseMailTool, NeteaseMailView,
+  NeteaseMailForwardMode, NeteaseMailLimits, NeteaseMailMessageMode, NeteaseMailOperationStatus, NeteaseMailOutcome, NeteaseMailTool, NeteaseMailView,
 } from '../../../shared/neteaseMail/constants';
 import type {
   NeteaseMailActionResult, NeteaseMailAddress, NeteaseMailPresentation,
@@ -23,6 +23,15 @@ interface NeteaseMailCardProps {
 
 const frameClass = 'min-w-0 overflow-hidden rounded-2xl border border-border bg-surface text-foreground';
 const buttonClass = 'rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45';
+const operationStatusKeys: Record<NeteaseMailOperationStatus, string> = {
+  [NeteaseMailOperationStatus.Submitted]: 'neteaseMailServerSubmitted',
+  [NeteaseMailOperationStatus.Sent]: 'neteaseMailSent',
+  [NeteaseMailOperationStatus.Trashed]: 'neteaseMailTrashed',
+  [NeteaseMailOperationStatus.Cancelled]: 'neteaseMailCancelled',
+  [NeteaseMailOperationStatus.Expired]: 'neteaseMailExpired',
+  [NeteaseMailOperationStatus.Unknown]: 'neteaseMailUnknown',
+  [NeteaseMailOperationStatus.Failed]: 'neteaseMailFailed',
+};
 
 function formatMailDate(value: string): string {
   const date = new Date(value);
@@ -85,6 +94,7 @@ function MessageCard({ presentation, actionsAvailable = false, onAction }: Netea
   const limitKeys = getNeteaseMailLimitKeys(message);
   const incomplete = expiresAt === undefined || !message.from.length || (!deleting && !message.to.length);
   const disabled = busy || Boolean(outcome) || expired || incomplete || !actionsAvailable || !onAction || limitKeys.length > 0;
+  const cancelDisabled = busy || Boolean(outcome) || expired || !actionsAvailable || !onAction;
 
   useEffect(() => {
     if (!confirmation || expiresAt === undefined || expired) return;
@@ -105,7 +115,7 @@ function MessageCard({ presentation, actionsAvailable = false, onAction }: Netea
   }, [expanded, message.body, message.format]);
 
   const act = async (action: NeteaseMailAction) => {
-    if (disabled || busyRef.current || !onAction || (expiresAt !== undefined && Date.now() >= expiresAt)) return;
+    if ((action === NeteaseMailAction.Confirm ? disabled : cancelDisabled) || busyRef.current || !onAction || (expiresAt !== undefined && Date.now() >= expiresAt)) return;
     busyRef.current = true;
     setBusy(true);
     setFailure(null);
@@ -122,13 +132,16 @@ function MessageCard({ presentation, actionsAvailable = false, onAction }: Netea
     }
   };
 
-  const title = confirmation ? t(deleting ? 'neteaseMailDeleteTitle' : 'neteaseMailConfirmTitle')
+  const title = presentation.status ? t(operationStatusKeys[presentation.status])
+    : confirmation ? t(deleting ? 'neteaseMailDeleteTitle' : 'neteaseMailConfirmTitle')
     : t(mode === NeteaseMailMessageMode.Draft ? 'neteaseMailDraft' : 'neteaseMailRead');
   const sendLabel = t(deleting ? 'neteaseMailTrash' : tool === NeteaseMailTool.ReplyMessage ? 'neteaseMailReply'
     : tool === NeteaseMailTool.ForwardMessage ? 'neteaseMailForward' : 'neteaseMailSend');
 
   return <article className={frameClass} aria-label={title} data-netease-mail-card={mode}>
     <MailHeader label={title} />
+    {mode === NeteaseMailMessageMode.Draft && <p className="mx-5 mt-3 text-xs text-secondary">{t('neteaseMailDraftSaved')}</p>}
+    {presentation.status === NeteaseMailOperationStatus.Unknown && <p role="alert" className="mx-5 mt-3 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">{t('neteaseMailUnknownHelp')}</p>}
     <div className="px-5 pb-4 pt-3">
       <dl>
         <AddressRow label={t('neteaseMailFrom')} values={message.from} />
@@ -147,6 +160,13 @@ function MessageCard({ presentation, actionsAvailable = false, onAction }: Netea
       {(bodyOverflowing || message.body.length > 400) && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className="mt-3 flex items-center gap-1 text-xs text-secondary hover:text-foreground">
         {t(expanded ? 'neteaseMailCollapse' : 'neteaseMailExpand')}<ChevronDownIcon className={`h-3.5 w-3.5 ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
       </button>}
+      {presentation.sourceMessage && <div className="mt-4 rounded-lg border border-border bg-surface-raised/30 p-3">
+        <p className="mb-2 text-xs font-medium text-secondary">{t(presentation.forwardMode === NeteaseMailForwardMode.Attach ? 'neteaseMailForwardAttachSource' : 'neteaseMailForwardQuoteSource')}</p>
+        <p className="mb-1 break-words text-sm font-medium">{presentation.sourceMessage.subject || t('neteaseMailNoSubject')}</p>
+        <p className="mb-2 break-all text-xs text-secondary">{presentation.sourceMessage.from.map(address => address.email).join(', ')}</p>
+        <div className="max-h-48 overflow-y-auto"><MailBody content={presentation.sourceMessage.body} format={presentation.sourceMessage.format} /></div>
+        {presentation.sourceMessage.attachments.length > 0 && <p className="mt-2 break-words text-xs text-secondary">{t('neteaseMailAttachments')}: {presentation.sourceMessage.attachments.map(attachment => attachment.name).join(', ')}</p>}
+      </div>}
       {message.attachments.length > 0 && <div className="mt-5 border-t border-border pt-3">
         <div className="mb-2 text-xs font-medium text-secondary">{t('neteaseMailAttachments')} · {message.attachments.length}</div>
         <ul className="space-y-2">{message.attachments.map((attachment, index) => <li key={`${attachment.id ?? attachment.name}-${index}`} className="rounded-lg border border-border px-3 py-2.5">
@@ -169,7 +189,7 @@ function MessageCard({ presentation, actionsAvailable = false, onAction }: Netea
             <button type="button" onClick={() => void act(NeteaseMailAction.Confirm)} disabled={disabled} className={`${buttonClass} bg-primary text-white hover:brightness-95`}>
               {busy ? t('neteaseMailSubmitting') : sendLabel}
             </button>
-            <button type="button" onClick={() => void act(NeteaseMailAction.Cancel)} disabled={disabled} className={`${buttonClass} border border-border text-secondary hover:bg-surface-raised`}>{t('neteaseMailCancel')}</button>
+            <button type="button" onClick={() => void act(NeteaseMailAction.Cancel)} disabled={cancelDisabled} className={`${buttonClass} border border-border text-secondary hover:bg-surface-raised`}>{t('neteaseMailCancel')}</button>
           </div>
         </>}
       </div>

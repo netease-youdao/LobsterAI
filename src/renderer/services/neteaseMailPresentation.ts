@@ -1,6 +1,6 @@
 import {
-  NeteaseMailBodyFormat, NeteaseMailError, NeteaseMailFailure, NeteaseMailLimits,
-  NeteaseMailMessageMode, NeteaseMailTool, NeteaseMailView,
+  NeteaseMailBodyFormat, NeteaseMailError, NeteaseMailFailure, NeteaseMailForwardMode, NeteaseMailLimits,
+  NeteaseMailMessageMode, NeteaseMailOperationStatus, NeteaseMailTool, NeteaseMailView,
 } from '../../shared/neteaseMail/constants';
 import type {
   NeteaseMailAddress, NeteaseMailAttachment, NeteaseMailMessage, NeteaseMailPresentation,
@@ -37,13 +37,13 @@ function attachments(value: unknown): NeteaseMailAttachment[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap(item => {
     const attachment = record(item);
-    const name = string(attachment?.filename) ?? string(attachment?.name);
+    const name = string(attachment?.filename) ?? string(attachment?.file_name) ?? string(attachment?.name);
     if (!name) return [];
-    const size = attachment?.size;
+    const size = attachment?.size ?? attachment?.declared_size;
     return [{
       name,
       id: string(attachment?.part_id) ?? string(attachment?.att_id),
-      mimeType: string(attachment?.mime_type),
+      mimeType: string(attachment?.mime_type) ?? string(attachment?.content_type),
       size: typeof size === 'number' && Number.isSafeInteger(size) && size >= 0 ? size : undefined,
     }];
   });
@@ -67,8 +67,9 @@ function message(value: unknown): NeteaseMailMessage | undefined {
     from: addresses(header.from), to: addresses(header.to), cc: addresses(header.cc), bcc: addresses(header.bcc),
     subject: subject ?? '', body: body ?? '', format, attachments: attachments(data.attachments),
     date: mailDate(header.sent_date ?? data.received_date ?? data.date ?? data.sent_at),
-    // The service has not defined the flags schema yet; missing flags never mean read.
-    unread: typeof data.is_read === 'boolean' ? !data.is_read : undefined,
+    // Missing or unrecognized flags never imply that a message has been read.
+    unread: typeof data.is_read === 'boolean' ? !data.is_read
+      : typeof record(data.flags)?.read === 'boolean' ? !record(data.flags)!.read : undefined,
   };
 }
 
@@ -86,11 +87,22 @@ function expiry(value: unknown): number | undefined {
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
 }
 
+function forwardedSource(value: unknown) {
+  const data = record(value);
+  return {
+    sourceMessage: typeof data?.source_subject === 'string' ? message({
+      subject: data.source_subject, from: data.source_from, body: data.source_body, body_format: data.source_body_format,
+      attachments: Array.isArray(data.source_attachment_names) ? data.source_attachment_names.map(filename => ({ filename })) : [],
+    }) : undefined,
+    forwardMode: Object.values(NeteaseMailForwardMode).find(mode => mode === data?.forward_mode),
+  };
+}
+
 function payloadOf(details: unknown, text?: string): Record<string, unknown> | undefined {
   const data = record(details);
   const structured = record(data?.structuredContent);
   if (structured) return structured;
-  if (data && ('code' in data || 'data' in data || 'subject' in data || 'messages' in data || 'header' in data || 'drafts' in data || 'operation_summary' in data)) return data;
+  if (data && ('code' in data || 'data' in data || 'status' in data || 'subject' in data || 'message_id' in data || 'draft_message_id' in data || 'draft_id' in data || 'messages' in data || 'header' in data || 'drafts' in data || 'operation_summary' in data)) return data;
   // Tool text is a fallback for runtimes that do not forward structuredContent.
   if (!text || text.length > 2_000_000) return undefined;
   try {
@@ -103,7 +115,7 @@ function payloadOf(details: unknown, text?: string): Record<string, unknown> | u
 
 /** Normalize only recognized mail results; leave unknown payloads in the existing tool view. */
 export function getNeteaseMailPresentation(input: {
-  toolName: string; details?: unknown; text?: string; isError?: boolean;
+  toolName: string; details?: unknown; text?: string; isError?: boolean; args?: Record<string, unknown>;
 }): NeteaseMailPresentation | null {
   const tool = resolveNeteaseMailTool(input.toolName);
   if (!tool) return null;
@@ -116,6 +128,19 @@ export function getNeteaseMailPresentation(input: {
   const data = record(envelope.data) ?? envelope;
   const rawCode = envelope.code ?? record(envelope.error)?.code ?? data.code;
   const code = typeof rawCode === 'number' ? rawCode : typeof rawCode === 'string' ? Number(rawCode) : undefined;
+  // Streaming metadata is shallow-merged by the session layer. A final status
+  // must take precedence over a retained prepare code/data from an earlier update.
+  const resultData = envelope.status !== undefined ? envelope : data;
+  const status = Object.values(NeteaseMailOperationStatus).find(value => value === resultData.status);
+  if (status && CONFIRMATION_TOOLS.has(tool)) {
+    const summary = message(resultData.operation_summary);
+    if (summary && status !== NeteaseMailOperationStatus.Failed) return {
+      kind: NeteaseMailView.Message, mode: NeteaseMailMessageMode.Result, tool, message: summary, status,
+      ...forwardedSource(resultData.operation_summary),
+    };
+    return { kind: NeteaseMailView.Notice, code: code !== undefined && code !== NeteaseMailError.ConfirmationRequired && ERROR_CODES.has(code)
+      ? code as NeteaseMailError : NeteaseMailFailure.Failed };
+  }
   if (code === NeteaseMailError.ConfirmationRequired && CONFIRMATION_TOOLS.has(tool)) {
     const summary = message(data.operation_summary ?? envelope.operation_summary);
     if (!summary) return { kind: NeteaseMailView.Notice, code: NeteaseMailFailure.InvalidRequest };
@@ -123,6 +148,8 @@ export function getNeteaseMailPresentation(input: {
       kind: NeteaseMailView.Message, mode: NeteaseMailMessageMode.Confirmation, tool, message: summary,
       // Do not extend a historical confirmation by inventing a new deadline on render.
       expiresAt: expiry(data.expires_at ?? envelope.expires_at),
+      confirmationId: string(data.confirmation_id),
+      ...forwardedSource(data.operation_summary ?? envelope.operation_summary),
     };
   }
   if (code !== undefined && ERROR_CODES.has(code)) return { kind: NeteaseMailView.Notice, code: code as NeteaseMailError };
@@ -135,11 +162,15 @@ export function getNeteaseMailPresentation(input: {
     if (messages.length !== items.length) return null;
     return { kind: NeteaseMailView.List, messages, hasMore: Boolean(data.next_cursor), ...(data.truncated === true ? { truncated: true } : {}) };
   }
-  if (tool === NeteaseMailTool.GetMessage || tool === NeteaseMailTool.CreateDraft) {
-    const parsed = message(data.message ?? data.draft ?? data);
+  if (tool === NeteaseMailTool.GetMessage || tool === NeteaseMailTool.CreateDraft || tool === NeteaseMailTool.UpdateDraft) {
+    const draftId = string(data.draft_id) ?? string(data.draft_message_id) ?? string(data.message_id);
+    const savedDraft = tool !== NeteaseMailTool.GetMessage && draftId
+      && (code === undefined || code === 0 || code === 200);
+    const parsed = message(data.message ?? data.draft ?? data)
+      ?? (savedDraft && input.args ? message({ ...input.args, message_id: draftId }) : undefined);
     return parsed ? {
       kind: NeteaseMailView.Message, tool,
-      mode: tool === NeteaseMailTool.CreateDraft ? NeteaseMailMessageMode.Draft : NeteaseMailMessageMode.Read,
+      mode: tool === NeteaseMailTool.GetMessage ? NeteaseMailMessageMode.Read : NeteaseMailMessageMode.Draft,
       message: parsed,
     } : null;
   }
@@ -167,6 +198,7 @@ export function getNeteaseMailErrorKey(code: NeteaseMailError | NeteaseMailFailu
     case NeteaseMailError.Unauthorized: return 'neteaseMailUnauthorized';
     case NeteaseMailError.InsufficientScope: return 'neteaseMailInsufficientScope';
     case NeteaseMailError.RateLimited: return 'neteaseMailRateLimited';
+    case NeteaseMailError.OutcomeUnknown: return 'neteaseMailOperationUnknownHelp';
     case NeteaseMailFailure.NotReady: return 'neteaseMailSendPending';
     case NeteaseMailFailure.Unavailable: return 'neteaseMailUnavailable';
     case NeteaseMailFailure.PortBusy: return 'neteaseMailPortBusy';

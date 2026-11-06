@@ -1,7 +1,8 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 
 import { NeteaseMailAuth, NeteaseMailError, NeteaseMailFailure } from '../../shared/neteaseMail/constants';
+import { getNeteaseMailRequestedScopes, getNeteaseMailScopes } from '../../shared/neteaseMail/scopes';
 import type { NeteaseMailOAuthConfig } from './neteaseMailConfig';
 
 export interface NeteaseMailCredential {
@@ -11,6 +12,8 @@ export interface NeteaseMailCredential {
   refresh: string;
   expires: number;
   clientId: string;
+  scope?: string;
+  authorizationId?: string;
 }
 
 export class NeteaseMailOAuthError extends Error {
@@ -18,7 +21,7 @@ export class NeteaseMailOAuthError extends Error {
 }
 
 /** Tokens are main-process only. Never persist a response or include it in errors. */
-export function parseNeteaseMailToken(value: unknown, clientId: string, now = Date.now()): NeteaseMailCredential {
+export function parseNeteaseMailToken(value: unknown, clientId: string, now = Date.now(), requestedScopes: readonly string[] = [NeteaseMailAuth.Scope]): NeteaseMailCredential {
   const token = value as Record<string, unknown> | null;
   if (!token || typeof token.access_token !== 'string' || !token.access_token
     || typeof token.refresh_token !== 'string' || !token.refresh_token
@@ -27,13 +30,16 @@ export function parseNeteaseMailToken(value: unknown, clientId: string, now = Da
     throw new NeteaseMailOAuthError(NeteaseMailFailure.Failed);
   }
   // An omitted scope means the requested scope per OAuth. Never silently accept a broader grant.
-  if (token.scope !== undefined && (typeof token.scope !== 'string'
-    || token.scope.trim().split(/\s+/).length !== 1 || token.scope.trim() !== NeteaseMailAuth.Scope)) {
+  const granted = token.scope === undefined ? [...requestedScopes]
+    : typeof token.scope === 'string' ? [...new Set(token.scope.trim().split(/\s+/))] : [];
+  if (!granted.includes(NeteaseMailAuth.Scope) || granted.some(scope => !requestedScopes.includes(scope))
+    || getNeteaseMailScopes(granted.join(' ')).length !== granted.length) {
     throw new NeteaseMailOAuthError(NeteaseMailError.InsufficientScope);
   }
   return {
     type: NeteaseMailAuth.CredentialType, provider: NeteaseMailAuth.Provider, clientId,
     access: token.access_token, refresh: token.refresh_token, expires: now + token.expires_in * 1000,
+    scope: granted.join(' '), authorizationId: randomUUID(),
   };
 }
 
@@ -44,6 +50,7 @@ export async function authorizeNeteaseMail(options: {
   signal: AbortSignal;
   callbackText: string;
   timeoutMs?: number;
+  allowDelete?: boolean;
 }): Promise<NeteaseMailCredential> {
   const { config, signal } = options;
   const redirect = new URL(config.redirectUri);
@@ -59,9 +66,10 @@ export async function authorizeNeteaseMail(options: {
   if (signal.aborted) abort();
   const timeout = setTimeout(() => controller.abort(new NeteaseMailOAuthError(NeteaseMailFailure.TimedOut)), options.timeoutMs ?? NeteaseMailAuth.TimeoutMs);
   const callback = new URL(config.authorizeUrl);
+  const requestedScopes = getNeteaseMailRequestedScopes(options.allowDelete);
   callback.search = new URLSearchParams({
     response_type: 'code', client_id: config.clientId, redirect_uri: config.redirectUri,
-    scope: NeteaseMailAuth.Scope, state, code_challenge: challenge, code_challenge_method: 'S256',
+    scope: requestedScopes.join(' '), state, code_challenge: challenge, code_challenge_method: 'S256',
   }).toString();
   const servers: http.Server[] = [];
   try {
@@ -115,7 +123,7 @@ export async function authorizeNeteaseMail(options: {
       }),
     });
     if (!response.ok) throw new NeteaseMailOAuthError(response.status === 429 ? NeteaseMailError.RateLimited : NeteaseMailFailure.Failed);
-    return parseNeteaseMailToken(await response.json(), config.clientId);
+    return parseNeteaseMailToken(await response.json(), config.clientId, Date.now(), requestedScopes);
   } finally {
     clearTimeout(timeout);
     signal.removeEventListener('abort', abort);

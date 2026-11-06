@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
 import {
-  NeteaseMailBodyFormat, NeteaseMailError, NeteaseMailFailure, NeteaseMailLimits,
-  NeteaseMailMessageMode, NeteaseMailTool, NeteaseMailView,
+  NeteaseMailBodyFormat, NeteaseMailError, NeteaseMailFailure, NeteaseMailForwardMode, NeteaseMailLimits,
+  NeteaseMailMessageMode, NeteaseMailOperationStatus, NeteaseMailTool, NeteaseMailView,
 } from '../../shared/neteaseMail/constants';
 import type { NeteaseMailMessage } from '../../shared/neteaseMail/types';
 import { getNeteaseMailLimitKeys, getNeteaseMailPresentation, resolveNeteaseMailTool } from './neteaseMailPresentation';
@@ -65,6 +65,48 @@ describe('mail result presentation', () => {
     expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.ListMessages, details: { data: { messages: [summary], next_cursor: 'next' } } }))
       .toMatchObject({ kind: NeteaseMailView.List, hasMore: true, messages: [{ subject: 'Review' }] });
     expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.ListMessages, details: { messages: [summary, { unknown: true }] } })).toBeNull();
+  });
+
+  test('a successful draft receipt renders the submitted content without claiming a failed draft was saved', () => {
+    const args = { to: ['self@example.com'], subject: 'Draft', body: 'Not sent', attachments: [{ file_name: 'note.txt', declared_size: 3 }] };
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.UpdateDraft, details: { draft_message_id: 'draft-id' }, args }))
+      .toMatchObject({ mode: NeteaseMailMessageMode.Draft, message: { subject: 'Draft', body: 'Not sent', attachments: [{ name: 'note.txt', size: 3 }] } });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.CreateDraft, details: { structuredContent: { draft_id: 'draft-id', compose_id: 'compose-id', operation_id: 'operation-id' } }, args }))
+      .toMatchObject({ mode: NeteaseMailMessageMode.Draft, message: { id: 'draft-id', subject: 'Draft', body: 'Not sent' } });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.CreateDraft, details: { code: NeteaseMailError.RateLimited }, args }))
+      .toEqual({ kind: NeteaseMailView.Notice, code: NeteaseMailError.RateLimited });
+  });
+
+  test('unknown write outcomes remain distinct from failures and successful submission', () => {
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.SendMessage,
+      details: { code: NeteaseMailError.ConfirmationRequired, data: { operation_summary: summary, confirmation_id: 'old' },
+        status: NeteaseMailOperationStatus.Submitted, operation_summary: summary, saved_sent_mid: 'sent-copy-mid' } }))
+      .toMatchObject({ mode: NeteaseMailMessageMode.Result, status: NeteaseMailOperationStatus.Submitted });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.SendMessage, isError: true,
+      details: { status: NeteaseMailOperationStatus.Unknown, operation_summary: summary } }))
+      .toMatchObject({ mode: NeteaseMailMessageMode.Result, status: NeteaseMailOperationStatus.Unknown });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.SendMessage,
+      details: { code: NeteaseMailError.ConfirmationRequired, data: { operation_summary: summary, confirmation_id: 'old' },
+        status: NeteaseMailOperationStatus.Unknown, operation_summary: summary } }))
+      .toMatchObject({ mode: NeteaseMailMessageMode.Result, status: NeteaseMailOperationStatus.Unknown });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.SendMessage,
+      details: { code: NeteaseMailError.ConfirmationRequired, data: { operation_summary: summary }, status: NeteaseMailOperationStatus.Failed } }))
+      .toEqual({ kind: NeteaseMailView.Notice, code: NeteaseMailFailure.Failed });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.CreateDraft, isError: true,
+      details: { structuredContent: { error: { code: String(NeteaseMailError.OutcomeUnknown) } } } }))
+      .toEqual({ kind: NeteaseMailView.Notice, code: NeteaseMailError.OutcomeUnknown });
+  });
+
+  test('forward confirmations use shallow source fields that survive gateway metadata limits', () => {
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.ForwardMessage, details: {
+      code: NeteaseMailError.ConfirmationRequired, data: { operation_summary: { ...summary,
+        forward_mode: NeteaseMailForwardMode.Attach, source_subject: 'Source', source_from: ['self@example.com'], source_body: 'Original body',
+        source_body_format: NeteaseMailBodyFormat.Plain, source_attachment_names: ['notes.txt'],
+      } },
+    } })).toMatchObject({ mode: NeteaseMailMessageMode.Confirmation, forwardMode: NeteaseMailForwardMode.Attach,
+      sourceMessage: { subject: 'Source', body: 'Original body', attachments: [{ name: 'notes.txt' }] } });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.GetMessage, details: { ...summary, flags: { read: false } } }))
+      .toMatchObject({ message: { unread: true } });
   });
 });
 

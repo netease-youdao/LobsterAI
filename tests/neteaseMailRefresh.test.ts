@@ -1,6 +1,7 @@
 import { expect, test, vi } from 'vitest';
 
 import { MAIL_PROVIDER, MAIL_SCOPE, MailRefreshError, refreshMailCredential } from '../openclaw-extensions/netease-mail/refresh';
+import { NeteaseMailDefaultScopes, NeteaseMailScope } from '../src/shared/neteaseMail/constants';
 
 const credential = { type: 'oauth' as const, provider: MAIL_PROVIDER, clientId: 'client-test', access: 'old-access', refresh: 'old-refresh', expires: 1 };
 const config = { clientId: credential.clientId };
@@ -27,4 +28,14 @@ test('rejects broader scopes and a credential for a different client', async () 
   const exchange = vi.fn(async () => Response.json(token));
   await expect(refreshMailCredential(credential, { clientId: 'another-client' }, exchange)).rejects.toThrow(MailRefreshError.Unauthorized);
   expect(exchange).not.toHaveBeenCalled();
+});
+
+test('renews the persisted write grant without silently retaining revoked permissions', async () => {
+  const writeConfig = { ...config, scopes: NeteaseMailDefaultScopes };
+  const renewed = await refreshMailCredential(credential, writeConfig, async () => Response.json({ ...token, scope: undefined }));
+  expect(renewed.scope).toBe(NeteaseMailDefaultScopes.join(' '));
+  await expect(refreshMailCredential(credential, writeConfig, async () => Response.json(token)))
+    .rejects.toThrow(MailRefreshError.Unauthorized);
+  await expect(refreshMailCredential(credential, writeConfig, async () => Response.json({ ...token, scope: [...NeteaseMailDefaultScopes, NeteaseMailScope.Delete].join(' ') })))
+    .rejects.toThrow(MailRefreshError.Failed);
 });

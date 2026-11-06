@@ -2,12 +2,13 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { NeteaseMailAuth, NeteaseMailAuthStoreOperation, NeteaseMailFailure } from '../../shared/neteaseMail/constants';
+import { NeteaseMailAuth, NeteaseMailAuthStoreOperation, NeteaseMailFailure, type NeteaseMailScope } from '../../shared/neteaseMail/constants';
+import { getNeteaseMailScopes } from '../../shared/neteaseMail/scopes';
 import type { McpOAuthCliContext } from './mcpOAuthCli';
 import { getNeteaseMailOAuthConfig } from './neteaseMailConfig';
 import { type NeteaseMailCredential, NeteaseMailOAuthError } from './neteaseMailOAuth';
 
-export interface NeteaseMailAuthStatus { connected: boolean; expiresAt?: number }
+export interface NeteaseMailAuthStatus { connected: boolean; expiresAt?: number; scopes?: NeteaseMailScope[] }
 export interface NeteaseMailAuthStore {
   initialize(): Promise<void>;
   status(): Promise<NeteaseMailAuthStatus>;
@@ -39,7 +40,8 @@ export function createNeteaseMailAuthStore(context: McpOAuthCliContext): Netease
       if (code !== 0 || !line) { failed(); return; }
       try {
         const value = JSON.parse(line.slice('NETEASE_MAIL_STATUS:'.length)) as NeteaseMailAuthStatus;
-        resolve({ connected: value.connected === true, ...(typeof value.expiresAt === 'number' ? { expiresAt: value.expiresAt } : {}) });
+        resolve({ connected: value.connected === true, ...(typeof value.expiresAt === 'number' ? { expiresAt: value.expiresAt } : {}),
+          ...(value.connected ? { scopes: getNeteaseMailScopes(Array.isArray(value.scopes) ? value.scopes.join(' ') : undefined) } : {}) });
       } catch { failed(); }
     });
     child.stdin.end(JSON.stringify({ operation, credential }));

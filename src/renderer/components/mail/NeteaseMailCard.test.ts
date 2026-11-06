@@ -11,6 +11,7 @@ import type { CoworkMessage } from '../../types/cowork';
 import AssistantTurnBlock from '../cowork/AssistantTurnBlock';
 import { buildConversationTurns, buildDisplayItems } from '../cowork/messageDisplayUtils';
 import NeteaseMailCard from './NeteaseMailCard';
+import { buildNeteaseMailPresentations } from './NeteaseMailToolResult';
 
 const message: NeteaseMailMessage = {
   from: [{ email: 'sender@example.com' }], to: [{ email: 'reader@example.com' }],
@@ -78,4 +79,19 @@ test('mail results remain visible when a completed conversation folds its proces
   expect(html).toContain('Visible email body');
   expect(html).toContain('aria-expanded="false"');
   expect(html.match(/data-netease-mail-card="read"/g)).toHaveLength(1);
+});
+
+test('a streaming confirmation is visible while the tool waits, but incomplete ordinary results are not', () => {
+  const use: CoworkMessage = { id: 'use', type: 'tool_use', content: '', timestamp: 1,
+    metadata: { toolName: NeteaseMailTool.SendMessage, toolUseId: 'call' } };
+  const result: CoworkMessage = { id: 'result', type: 'tool_result', content: '', timestamp: 2,
+    metadata: { toolUseId: 'call', isFinal: false, isStreaming: true, toolResultDetails: {
+      code: NeteaseMailError.ConfirmationRequired, data: { confirmation_id: 'confirmation', expires_at: Date.now() + 300_000,
+        operation_summary: { from: ['self@example.com'], to: ['self@example.com'], subject: 'Review', body: 'Body' } },
+    } } };
+  const presentations = buildNeteaseMailPresentations([{ type: 'tool_group', group: { type: 'tool_group', toolUse: use, toolResult: result } }]);
+  expect(presentations.get('use')).toMatchObject({ mode: NeteaseMailMessageMode.Confirmation, confirmationId: 'confirmation' });
+  use.metadata!.toolName = NeteaseMailTool.GetMessage;
+  result.metadata!.toolResultDetails = { subject: 'partial body', body: 'in progress' };
+  expect(buildNeteaseMailPresentations([{ type: 'tool_group', group: { type: 'tool_group', toolUse: use, toolResult: result } }]).size).toBe(0);
 });

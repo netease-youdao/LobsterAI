@@ -5,14 +5,14 @@ const unavailable = (): NeteaseMailActionResult => ({ success: false, code: Nete
 
 /** Explicit user actions only. Rate limits are returned to the UI, never retried. */
 export const neteaseMailService: NeteaseMailBridge = {
-  async getAvailability() {
+  async getAvailability(reference) {
     if (typeof window === 'undefined' || !window.electron?.mcp?.neteaseMail) return { authorization: false, confirmation: false };
-    return window.electron.mcp.neteaseMail.getAvailability();
+    return window.electron.mcp.neteaseMail.getAvailability(reference);
   },
-  async authorize() {
+  async authorize(options) {
     try {
       if (typeof window === 'undefined') return unavailable();
-      return await window.electron?.mcp?.neteaseMail?.authorize() ?? unavailable();
+      return await window.electron?.mcp?.neteaseMail?.authorize(options) ?? unavailable();
     } catch {
       return unavailable();
     }

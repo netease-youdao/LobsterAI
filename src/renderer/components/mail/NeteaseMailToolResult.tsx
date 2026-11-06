@@ -12,13 +12,17 @@ export function buildNeteaseMailPresentations(items: ConsolidatedItem[]): Map<st
   for (const item of items) {
     if (item.type !== 'tool_group') continue;
     const { toolUse, toolResult } = item.group;
-    if (!toolResult || toolResult.metadata?.isFinal === false || toolResult.metadata?.isStreaming) continue;
+    if (!toolResult) continue;
     const presentation = getNeteaseMailPresentation({
       toolName: toolUse.metadata?.toolName ?? '',
       details: toolResult.metadata?.toolResultDetails,
       text: toolResult.metadata?.toolResult ?? toolResult.content,
       isError: Boolean(toolResult.metadata?.isError || toolResult.metadata?.error),
+      args: toolUse.metadata?.toolInput,
     });
+    if (toolResult.metadata?.isFinal === false || toolResult.metadata?.isStreaming) {
+      if (presentation?.kind !== NeteaseMailView.Message || presentation.mode !== NeteaseMailMessageMode.Confirmation) continue;
+    }
     if (presentation) presentations.set(toolUse.id, presentation);
   }
   return presentations;
@@ -29,17 +33,20 @@ export default function NeteaseMailToolResult({ group, presentation }: {
 }) {
   const [actionsAvailable, setActionsAvailable] = useState(false);
   const confirmation = presentation.kind === NeteaseMailView.Message && presentation.mode === NeteaseMailMessageMode.Confirmation;
+  const confirmationId = presentation.kind === NeteaseMailView.Message ? presentation.confirmationId : undefined;
+  const toolCallId = group.toolUse.metadata?.toolUseId ?? group.toolUse.id;
   useEffect(() => {
-    if (!confirmation) return;
+    setActionsAvailable(false);
+    if (!confirmation || !confirmationId) return;
     let active = true;
-    void neteaseMailService.getAvailability().then(value => {
+    void neteaseMailService.getAvailability({ confirmationId, toolCallId }).then(value => {
       if (active) setActionsAvailable(value.confirmation);
     }).catch(() => { if (active) setActionsAvailable(false); });
     return () => { active = false; };
-  }, [confirmation]);
+  }, [confirmation, confirmationId, toolCallId]);
   return <NeteaseMailCard presentation={presentation} actionsAvailable={actionsAvailable} onAction={action => neteaseMailService.resolveConfirmation({
     messageId: group.toolUse.id,
-    toolCallId: group.toolUse.metadata?.toolUseId ?? group.toolUse.id,
+    toolCallId, confirmationId: confirmationId ?? '',
     action,
   })} />;
 }

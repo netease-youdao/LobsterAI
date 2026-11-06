@@ -15,7 +15,7 @@ beforeEach(() => { handlers.clear(); registerNeteaseMailHandlers(() => window); 
 test('the real IPC reports unavailable capabilities until the provider is installed', async () => {
   expect(await handlers.get(NeteaseMailIpc.Availability)!(event)).toEqual({ authorization: false, confirmation: false });
   expect(await handlers.get(NeteaseMailIpc.Authorize)!(event)).toEqual({ success: false, code: NeteaseMailFailure.NotReady });
-  expect(await handlers.get(NeteaseMailIpc.ResolveConfirmation)!(event, { messageId: 'message', toolCallId: 'call', action: NeteaseMailAction.Confirm }))
+  expect(await handlers.get(NeteaseMailIpc.ResolveConfirmation)!(event, { messageId: 'message', toolCallId: 'call', confirmationId: 'confirmation', action: NeteaseMailAction.Confirm }))
     .toEqual({ success: false, code: NeteaseMailFailure.NotReady });
 });
 

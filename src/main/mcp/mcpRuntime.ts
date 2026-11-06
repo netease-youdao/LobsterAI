@@ -7,7 +7,8 @@ import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpIpcChannel } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
 import { type MediaConfirmationCommand, MediaConfirmationReason } from '../../shared/media/confirmation';
-import { NeteaseMail, NeteaseMailAuth, NeteaseMailReadTools } from '../../shared/neteaseMail/constants';
+import { NeteaseMail, NeteaseMailAuth, NeteaseMailReadTools, NeteaseMailScope } from '../../shared/neteaseMail/constants';
+import { getNeteaseMailNativeTools } from '../../shared/neteaseMail/scopes';
 import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
@@ -494,7 +495,8 @@ export class McpRuntime {
           if (mail) resolved.push({
             name: NeteaseMail.RegistryId, transportType: 'http', url: mail.mcpUrl,
             auth: McpAuthMode.OAuth, oauth: { authProfileId: NeteaseMailAuth.ProfileId },
-            toolFilter: { include: [...NeteaseMailReadTools] },
+            toolFilter: { include: getNeteaseMailNativeTools(Object.values(NeteaseMailScope))
+              .filter(tool => new Set<string>(server.toolFilter?.include ?? NeteaseMailReadTools).has(tool)) },
           });
           continue;
         }

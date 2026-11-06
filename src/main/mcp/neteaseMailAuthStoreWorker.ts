@@ -1,6 +1,8 @@
 import path from 'node:path';
 
 import { NeteaseMailAuth, NeteaseMailAuthStoreOperation } from '../../shared/neteaseMail/constants';
+import { getNeteaseMailScopes } from '../../shared/neteaseMail/scopes';
+import { clearNeteaseMailAuthorization, readNeteaseMailAuthorization, saveNeteaseMailAuthorization } from './neteaseMailAuthorizationState';
 import type { NeteaseMailCredential } from './neteaseMailOAuth';
 
 interface ProfileStore { profiles: Record<string, NeteaseMailCredential>; usageStats?: Record<string, unknown> }
@@ -32,9 +34,14 @@ async function run(): Promise<void> {
     const credential = request.credential;
     if (credential?.type !== NeteaseMailAuth.CredentialType || credential.provider !== NeteaseMailAuth.Provider
       || !credential.access || !credential.refresh || !Number.isFinite(credential.expires)) throw new Error('Invalid credential');
+    // Invalidate old confirmations before changing account credentials. A failed
+    // write must never leave an old grant attached to a new account.
+    clearNeteaseMailAuthorization(stateDir);
     const result = await sdk.upsertAuthProfileWithLock({ stateDir, profileId: NeteaseMailAuth.ProfileId, credential });
     if (!result) throw new Error('Auth store update failed');
+    saveNeteaseMailAuthorization(stateDir, credential);
   } else if (request.operation === NeteaseMailAuthStoreOperation.Remove) {
+    clearNeteaseMailAuthorization(stateDir);
     const result = await sdk.updateAuthProfileStoreWithLock({
       stateDir, sharedStoreWrite: true,
       updater: store => {
@@ -50,7 +57,9 @@ async function run(): Promise<void> {
   const connected = credential?.provider === NeteaseMailAuth.Provider && credential.type === NeteaseMailAuth.CredentialType
     && Boolean(credential.access && credential.refresh);
   // Only this deliberately small status crosses back to Electron. No tokens/logged errors.
-  process.stdout.write(`\nNETEASE_MAIL_STATUS:${JSON.stringify({ connected, ...(connected ? { expiresAt: credential.expires } : {}) })}\n`);
+  const authorization = credential && readNeteaseMailAuthorization(stateDir, credential.clientId);
+  process.stdout.write(`\nNETEASE_MAIL_STATUS:${JSON.stringify({ connected,
+    ...(connected ? { expiresAt: credential.expires, scopes: authorization?.scopes ?? getNeteaseMailScopes() } : {}) })}\n`);
 }
 
 if (require.main === module) {

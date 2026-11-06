@@ -224,6 +224,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   const { getMcpRuntime, syncOpenClawConfig, getOAuthCliContext } = deps;
   const mailConfig = getNeteaseMailOAuthConfig(app.isPackaged);
   mailConnection = new NeteaseMailConnection({
+    ensureRpcClient: deps.ensureGatewayRpcClient,
     config: mailConfig,
     getAuthStore: () => {
       const context = getOAuthCliContext();

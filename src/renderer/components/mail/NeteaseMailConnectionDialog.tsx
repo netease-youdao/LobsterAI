@@ -1,7 +1,7 @@
 import { EnvelopeIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useEffect, useRef, useState } from 'react';
 
-import { NeteaseMailFailure } from '../../../shared/neteaseMail/constants';
+import { NeteaseMailFailure, NeteaseMailScope } from '../../../shared/neteaseMail/constants';
 import type { NeteaseMailAvailability, NeteaseMailBridge } from '../../../shared/neteaseMail/types';
 import { i18nService } from '../../services/i18n';
 import { neteaseMailService } from '../../services/neteaseMail';
@@ -18,6 +18,7 @@ export function NeteaseMailConnectionPanel({ onClose, service = neteaseMailServi
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [allowDelete, setAllowDelete] = useState(false);
   const busyRef = useRef(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   useEffect(() => {
@@ -35,7 +36,7 @@ export function NeteaseMailConnectionPanel({ onClose, service = neteaseMailServi
     setBusy(true);
     setErrorKey(null);
     try {
-      const result = await service.authorize();
+      const result = await service.authorize({ allowDelete });
       if (!result.success) setErrorKey(result.code === NeteaseMailFailure.NotReady ? 'neteaseMailConnectionPending' : getNeteaseMailErrorKey(result.code));
       else setAvailability(await service.getAvailability());
     } catch {
@@ -68,13 +69,20 @@ export function NeteaseMailConnectionPanel({ onClose, service = neteaseMailServi
     <p className="mb-2 mt-5 text-xs font-medium text-secondary">{t('neteaseMailSupportedDomains')}</p>
     <div className="flex flex-wrap gap-2">{DOMAINS.map(domain => <span key={domain} className="rounded-md bg-surface-raised px-2 py-1 text-xs text-secondary">{domain}</span>)}</div>
     <div className="mt-5 space-y-1 rounded-xl border border-border p-3 text-xs leading-5 text-secondary">
-      <p>{t('neteaseMailAttachmentLimit')}</p><p>{t('neteaseMailReadQuota')}</p>
+      <p>{t('neteaseMailAttachmentLimit')}</p><p>{t('neteaseMailQuota')}</p>
     </div>
+    <label className="mt-4 flex cursor-pointer items-start gap-2 text-xs leading-5 text-secondary">
+      <input type="checkbox" className="mt-1" checked={allowDelete} disabled={busy} onChange={event => setAllowDelete(event.target.checked)} />
+      <span>{t('neteaseMailRequestDelete')}</span>
+    </label>
     <div className="mt-4 text-sm leading-6" aria-live="polite">
       {errorKey ? <p className="text-red-600 dark:text-red-400" role="alert">{t(errorKey)}</p>
         : loading ? <p className="text-secondary">{t('neteaseMailChecking')}</p>
           : busy ? <p className="text-secondary">{t(disconnecting ? 'neteaseMailDisconnecting' : 'neteaseMailWaitingAuthorization')}</p>
-          : availability.connected ? <p className="text-green-600 dark:text-green-400">{t('neteaseMailReadConnected')}</p>
+          : availability.connected ? <div className="text-green-600 dark:text-green-400">
+            <p>{t(availability.scopes?.includes(NeteaseMailScope.Send) ? 'neteaseMailWriteConnected' : 'neteaseMailReadConnected')}</p>
+            {availability.scopes?.includes(NeteaseMailScope.Delete) && <p className="text-xs">{t('neteaseMailDeleteGranted')}</p>}
+          </div>
             : availability.account ? <p>{t('neteaseMailConnected').replace('{account}', availability.account)}</p>
           : !availability.authorization && <p className="text-secondary">{t('neteaseMailConnectionPending')}</p>}
     </div>

@@ -3,7 +3,7 @@ import http from 'node:http';
 
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { NeteaseMail, NeteaseMailAuth, NeteaseMailError, NeteaseMailFailure } from '../../shared/neteaseMail/constants';
+import { NeteaseMail, NeteaseMailAuth, NeteaseMailDefaultScopes, NeteaseMailError, NeteaseMailFailure } from '../../shared/neteaseMail/constants';
 import { getNeteaseMailOAuthConfig } from './neteaseMailConfig';
 import { authorizeNeteaseMail, parseNeteaseMailToken } from './neteaseMailOAuth';
 
@@ -26,12 +26,12 @@ function callbackUrl(auth: URL, state = auth.searchParams.get('state')!) {
   return url;
 }
 
-test('PKCE callback rejects forged state, then exchanges once with read-only scope and no secret', async () => {
+test('PKCE callback rejects forged state, then exchanges once with default scopes and no secret', async () => {
   const opts = await options();
   let challenge = '';
   const result = await authorizeNeteaseMail({ ...opts, openExternal: async value => {
     const url = new URL(value);
-    expect(url.searchParams.get('scope')).toBe(NeteaseMailAuth.Scope);
+    expect(url.searchParams.get('scope')).toBe(NeteaseMailDefaultScopes.join(' '));
     expect(url.searchParams.get('client_id')).toBe(opts.config.clientId);
     challenge = url.searchParams.get('code_challenge')!;
     expect((await fetch(callbackUrl(url, 'wrong-state'))).status).toBe(400);

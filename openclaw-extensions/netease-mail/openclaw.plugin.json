@@ -1,8 +1,16 @@
 {
   "id": "netease-mail",
-  "name": "NetEase Mail OAuth",
-  "description": "Refreshes the desktop's read-only NetEase Mail auth profile.",
+  "name": "NetEase Mail",
+  "description": "Refreshes desktop authorization and requires trusted confirmation for mail writes.",
   "providers": ["netease-mail"],
+  "contracts": {
+    "tools": [
+      "netease_mail_send_message",
+      "netease_mail_reply_message",
+      "netease_mail_forward_message",
+      "netease_mail_trash_message"
+    ]
+  },
   "activation": { "onStartup": true, "onProviders": ["netease-mail"] },
   "configSchema": {
     "type": "object",
