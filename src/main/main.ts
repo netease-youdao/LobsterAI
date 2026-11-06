@@ -116,6 +116,7 @@ import {
   CoworkIpcChannel,
   CoworkOnboardingMessageKind,
 } from '../shared/cowork/constants';
+import { isEmbeddingProvider } from '../shared/cowork/embedding';
 import {
   buildCoworkImageAttachmentPreviews,
   type CoworkImageAttachmentPreview,
@@ -589,7 +590,7 @@ import {
 import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './libs/openclawUserConfigOverlay';
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
-import { collectOpenWithArgv, OpenWithPathQueue } from './libs/openWithPathQueue';
+import { collectOpenWithArgv, findBundledPathArg, OpenWithPathQueue } from './libs/openWithPathQueue';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { recordSessionModelChange } from './libs/sessionModelChange';
@@ -5400,6 +5401,18 @@ if (!gotTheLock) {
 
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
     console.debug('[Main] second-instance event', { commandLine, workingDirectory });
+    // An OpenClaw child that runs a bundled script through the app binary
+    // without ELECTRON_RUN_AS_NODE lands here; it must not attach the script
+    // to the prompt or pull the window to the front.
+    const bundledPathArg = findBundledPathArg(commandLine, {
+      cwd: workingDirectory,
+      bundledRoots: [process.resourcesPath, openClawEngineManager?.getRuntimeRoot()]
+        .filter((root): root is string => Boolean(root)),
+    });
+    if (bundledPathArg) {
+      console.warn(`[Main] ignored a second instance started with a bundled file: ${bundledPathArg}`);
+      return;
+    }
     if (isDataMigrationRestoreInProgress) {
       console.log('[DataMigration] ignored second-instance activation while restore is in progress.');
       return;
@@ -12402,15 +12415,6 @@ if (!gotTheLock) {
     }
   });
 
-  const VALID_EMBEDDING_PROVIDERS = [
-    'local',
-    'openai',
-    'gemini',
-    'voyage',
-    'mistral',
-    'ollama',
-  ] as const;
-
   function normalizeEmbeddingConfig(config: {
     embeddingEnabled?: boolean;
     embeddingProvider?: string;
@@ -12423,11 +12427,7 @@ if (!gotTheLock) {
     return {
       embeddingEnabled:
         typeof config.embeddingEnabled === 'boolean' ? config.embeddingEnabled : undefined,
-      embeddingProvider:
-        typeof config.embeddingProvider === 'string' &&
-        (VALID_EMBEDDING_PROVIDERS as readonly string[]).includes(config.embeddingProvider)
-          ? config.embeddingProvider
-          : undefined,
+      embeddingProvider: isEmbeddingProvider(config.embeddingProvider) ? config.embeddingProvider : undefined,
       embeddingModel:
         typeof config.embeddingModel === 'string' ? config.embeddingModel.trim() : undefined,
       embeddingLocalModelPath:

@@ -1257,6 +1257,15 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-memory-knn-child-electron-node-env.patch': [
+    {
+      file: 'extensions/memory-core/src/memory/manager-search-knn-subprocess.ts',
+      snippets: [
+        'if (typeof process.versions.electron === "string") {',
+        'childEnv.ELECTRON_RUN_AS_NODE = "1";',
+      ],
+    },
+  ],
   'openclaw-memory-sidecar-archive-generations.patch': [
     {
       file: 'extensions/memory-core/src/migration/doctor-memory-sidecar.ts',
