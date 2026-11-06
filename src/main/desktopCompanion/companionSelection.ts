@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { BrowserWindow, screen, shell, systemPreferences } from 'electron';
+import { BrowserWindow, screen, systemPreferences } from 'electron';
 import type { EventEmitter } from 'events';
 
 import { CompanionAnalyticsAction, CompanionAnalyticsInteraction as Interaction, CompanionAnalyticsSource, CompanionAnalyticsStage } from '../../shared/desktopCompanion/analytics';
@@ -41,7 +41,6 @@ const INVALID_COORDINATE = -99999;
 const PAUSE_MS = 60 * 60_000;
 const PERMISSION_POLL_MS = 2_000;
 const SHOW_FALLBACK_MS = 150;
-const MAC_ACCESSIBILITY_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn', 'AltGraph', 'OS']);
 const LEFT_BUTTON = 0;
 // Reads after a selection gesture that selection-hook reported nothing for, each timed from
@@ -300,14 +299,16 @@ export class CompanionSelectionController {
     if (previous !== this.status) this.host.publish();
   }
 
-  /** Prompts for macOS Accessibility and opens the matching System Settings pane. */
-  requestPermission(): void {
-    if (process.platform !== 'darwin') return;
-    if (!systemPreferences.isTrustedAccessibilityClient(true)) {
-      void shell.openExternal(MAC_ACCESSIBILITY_SETTINGS).catch((): void => undefined);
-      this.watchPermission();
-    }
+  /**
+   * Prompts for macOS Accessibility, which also lists the app in System Settings.
+   * True while it is still missing: the caller guides the user through System Settings.
+   */
+  requestPermission(): boolean {
+    if (process.platform !== 'darwin') return false;
+    const trusted = systemPreferences.isTrustedAccessibilityClient(true);
+    if (!trusted) this.watchPermission();
     this.sync();
+    return !trusted;
   }
 
   onForegroundChange(appId?: string): void {

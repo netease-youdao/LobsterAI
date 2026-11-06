@@ -73,6 +73,7 @@ import {
   type DesktopCompanionSelection,
   type DesktopCompanionState,
 } from '../shared/desktopCompanion/constants';
+import { CompanionPermissionGuideIpc } from '../shared/desktopCompanion/permissionGuide';
 import { CompanionResultIpc } from '../shared/desktopCompanion/results';
 import { CompanionScreenshotIpc } from '../shared/desktopCompanion/screenshot';
 import { DialogIpc } from '../shared/dialog/constants';
@@ -181,6 +182,11 @@ contextBridge.exposeInMainWorld('electron', {
     getScreenshotFrame: () => ipcRenderer.invoke(CompanionScreenshotIpc.GetFrame),
     screenshotReady: () => ipcRenderer.invoke(CompanionScreenshotIpc.Ready),
     finishScreenshot: rect => ipcRenderer.invoke(CompanionScreenshotIpc.Finish, rect),
+    getPermissionGuide: () => ipcRenderer.invoke(CompanionPermissionGuideIpc.Info),
+    proceedPermissionGuide: () => ipcRenderer.invoke(CompanionPermissionGuideIpc.Proceed),
+    closePermissionGuide: () => ipcRenderer.invoke(CompanionPermissionGuideIpc.Close),
+    dragPermissionGuideApp: () => ipcRenderer.send(CompanionPermissionGuideIpc.Drag),
+    relaunchForPermission: () => ipcRenderer.invoke(CompanionPermissionGuideIpc.Relaunch),
     getState: () => ipcRenderer.invoke(DesktopCompanionIpc.GetState),
     setPreferences: patch => ipcRenderer.invoke(DesktopCompanionIpc.SetPreferences, patch),
     getSelectionExcludedApps: () => ipcRenderer.invoke(DesktopCompanionIpc.GetSelectionExcludedApps),

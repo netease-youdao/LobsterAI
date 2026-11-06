@@ -16348,6 +16348,11 @@ if (!gotTheLock) {
         focusMainWindowForReason('desktop companion');
         flushOpenSessionFromNotification();
       },
+      relaunch: () => {
+        console.log('[Main] Desktop companion requested a relaunch to apply a permission');
+        relaunchApp();
+        quitAppWithoutConfirmation('desktop-companion:permission');
+      },
       openSettings: () => {
         focusMainWindowForReason('desktop companion settings');
         const request: OpenSettingsRequest = { tab: OpenSettingsTab.DesktopCompanion };
