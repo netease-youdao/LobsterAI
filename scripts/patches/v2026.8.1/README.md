@@ -1,5 +1,53 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Sign-out without a config clobber restart
+
+`openclaw-config-apply-size-drop-allowance.patch` lets the full-config owner
+declare an intended shrink. Signing out removes the `lobsterai-server` plan
+catalog (most of `openclaw.json`), so the file drops below half its size.
+OpenClaw treats that as a clobber (`size-drop:` in `io.write-safety.ts`) and
+rejects `config.apply`. LobsterAI then fell back to a gateway restart, and the
+restarted gateway "restored" the same bytes from `.bak`
+(`size-drop-vs-last-good:`). Each sign-out cost a 12–60 s restart on Windows.
+
+The patch makes two changes:
+
+- `config.apply` accepts an optional boolean `allowConfigSizeDrop`, passed
+  through as the existing `ConfigWriteOptions.allowConfigSizeDrop`. It waives
+  only the size check: `gateway-mode-removed` and unreadable-baseline writes
+  are still rejected. Writers that omit it (Control UI, CLI, doctor, agent
+  mutations) keep the full guard. The gateway promotes the accepted write to
+  last-known-good, so the next start does not flag it.
+- Read-time recovery skips a `.bak` byte-identical to the current file.
+  Restoring it would only rewrite the same bytes, record a `.clobbered.*` copy
+  and warn. OpenClaw's own writes rotate the previous file into `.bak`, so
+  clobbers by other writers still restore. LobsterAI aligns `.bak` with each
+  config it persists while the gateway is stopped (`alignOpenClawConfigBackup`).
+  A sign-out persisted that way now starts without a restore, and the startup
+  promotion updates last-known-good.
+
+LobsterAI claims the waiver only when the shrink would trip the guard and
+everything outside `models` still passes it
+(`src/main/libs/openclawConfigSizeDrop.ts`). Unexpected large drops elsewhere,
+including from LobsterAI bugs, still meet OpenClaw's protection. A gateway built
+without this patch rejects the unknown param, and LobsterAI then falls back to
+the restart path it used before.
+
+Regression coverage:
+
+```sh
+pnpm test src/gateway/server-methods/config.test.ts src/config/io.observe-recovery.test.ts
+```
+
+On Windows the four existing `config.openFile` cases in `config.test.ts` fail
+with or without this patch (POSIX path expectations). LobsterAI side:
+`npm test -- openclawConfigSizeDrop openclawConfigDelivery`. Rebuild the runtime
+(`npm run electron:dev:openclaw`) before checking a sign-out in the desktop app:
+the main log should show `claiming the size-drop waiver` with no
+`Config write rejected`, `.rejected.*` file or `config-delivery-fallback`
+restart. Remove the patch when upstream lets `config.apply` callers waive the
+size check and skips identical-backup restores.
+
 ## Recover compaction after context overflow
 
 `zzzz-openclaw-compaction-context-overflow-retry.patch` subdivides a failed
