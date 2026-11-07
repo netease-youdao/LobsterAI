@@ -997,6 +997,76 @@ confirm recovery on the next browser command without restarting the gateway.
 Remove when upstream preserves a verifiable cleanup handle across discovery
 failures and provides equivalent recovery coverage.
 
+## Native Chrome MCP process snapshots on Windows
+
+`openclaw-chrome-mcp-windows-native-snapshot.patch` stops the browser tool from
+depending on PowerShell to prove which processes a Chrome MCP session owns.
+Upstream lists every process with `powershell.exe Get-CimInstance Win32_Process`
+under a 2 s timeout. The in-app browser (the default display mode, an
+`existing-session` profile) runs that list twice during every attach and at
+least three times while closing a session. Loading CimCmdlets and enumerating
+about 420 processes took 1.65-2.3 s per call on an ordinary Windows 11 machine
+(up to 3.1 s while other work ran), against about 0.33 s for a bare PowerShell
+start, so most attaches failed with `Chrome MCP process inspection failed`. Each
+failure also left the session retained as `uncertain` by
+`openclaw-chrome-mcp-process-recovery.patch`. Every later browser command
+re-ran the same list before attaching and failed the same way, so the browser
+stayed unavailable until the gateway restarted.
+
+`chrome-mcp-windows-processes.ts` reads the table through koffi instead:
+`CreateToolhelp32Snapshot` gives pid and parent pid, and
+`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, `GetProcessTimes` and
+`QueryFullProcessImageNameW` give each row the identity
+`win32:<creation FILETIME ticks>|<image path>`. The same machine lists all
+processes in 12-19 ms. koffi is the package Windows runtimes already keep for
+`openclaw-windows-private-directory-native.patch`, and the bundled browser
+chunk resolves it through `createRequire` the way it loads `playwright-core`.
+
+Rows that cannot be opened are dropped, as the PowerShell list already dropped
+rows without an `ExecutablePath`. So are rows whose exit time is set. A Chrome
+MCP subtree belongs to the gateway's user, so it is always readable. A child is
+detached from its reported parent pid when that pid now belongs to a process
+created after the child. That keeps a recycled pid from pulling an unrelated
+tree into `taskkill /t`.
+
+The identity source never changes once native rows have been issued. A
+PowerShell row has a different identity string, so mixing the two would make a
+live owned process look exited (skipping its cleanup) or a tracked root look
+replaced. If koffi cannot load, or the first native read fails, the gateway
+uses PowerShell for its whole lifetime. A native failure after that throws the
+existing `ChromeMcpProcessSnapshotError`. The PowerShell fallback timeout rises
+from 2 s to 10 s, so two attach-time lists still fit the 30 s handshake budget.
+The `ps` path on macOS keeps 2 s.
+
+Verify in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run extensions/browser/src/browser/chrome-mcp-windows-processes.test.ts extensions/browser/src/browser/chrome-mcp.test.ts extensions/browser/src/browser/server-context.tab-ownership.test.ts extensions/browser/src/browser/server-context.list-profiles.test.ts
+```
+
+On Windows the suite reads this process, a spawned child and the child's exit
+through the real kernel32. The Windows e2e drives a real attach through a `.cmd`
+launcher (like LobsterAI's), a stdio MCP server and its long-lived grandchild:
+
+```sh
+node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts --silent=false extensions/browser/src/browser/chrome-mcp-windows-processes.e2e.test.ts
+```
+
+It runs five attach, list and close rounds with 2.5 s injected into every
+PowerShell list, and requires no PowerShell, one `taskkill` per root and the
+whole tree gone after each close. Measured: attach 0.40-0.52 s, close 1.0-1.8 s.
+It also forces the PowerShell fallback with the same latency. All five lists
+there took 4.7-5.2 s, every one over the former 2 s limit, and the browser still
+attached and cleaned up. Set back to 2 s, that case fails with the reported
+`Command timed out after 2000 milliseconds`. `OPENCLAW_E2E_SKIP_BUILD=1` skips
+the e2e build step when `dist` is current.
+
+Rebuild the runtime, then in the desktop app with the
+in-app browser use the browser tool once and close the session. The gateway log
+should have no `Chrome MCP process inspection failed`, the attach should start
+no `powershell.exe`, and the bridge subprocess should be gone after close.
+Remove when upstream enumerates Windows process trees without PowerShell.
+
 ## Native plugin loading on Windows
 
 `openclaw-windows-native-plugin-require.patch` makes Windows load compiled

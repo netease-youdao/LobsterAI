@@ -1742,6 +1742,28 @@ v20260801StrongPatchValidators['zz-openclaw-windows-process-start-native.patch']
     ],
   },
 ];
+v20260801StrongPatchValidators['openclaw-chrome-mcp-windows-native-snapshot.patch'] = [
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-windows-processes.ts',
+    snippets: [
+      'function loadNativeProcessTableReader(): ChromeMcpWindowsProcessTableReader | null {',
+      '"intptr_t __stdcall CreateToolhelp32Snapshot(uint32_t flags, uint32_t processId)"',
+      'export function listChromeMcpWindowsProcessesNative(): ChromeMcpProcessSnapshot[] | undefined {',
+    ],
+  },
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-process.ts',
+    snippets: [
+      'const CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS = 10_000;',
+      'timeoutMs: windows ? CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS : 2_000,',
+    ],
+    orderedSnippets: [
+      'const windows = platform === "win32";',
+      'const nativeSnapshots = listChromeMcpWindowsProcessesNative();',
+      'windows ? "powershell.exe" : "ps",',
+    ],
+  },
+];
 v20260801StrongPatchValidators['zz-openclaw-dreaming-cleanup-only-when-enabled.patch'] = [
   {
     file: 'extensions/memory-core/src/dreaming.ts',
