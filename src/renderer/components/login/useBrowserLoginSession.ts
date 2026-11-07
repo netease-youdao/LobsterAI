@@ -10,7 +10,8 @@ import { i18nService } from '../../services/i18n';
 const COPIED_FEEDBACK_MS = 2_000;
 
 export const useBrowserLoginSession = (): BrowserLoginSessionState | null => (
-  useSyncExternalStore(browserLoginSession.subscribe, browserLoginSession.getSnapshot)
+  // The third argument serves server rendering (used by component tests).
+  useSyncExternalStore(browserLoginSession.subscribe, browserLoginSession.getSnapshot, browserLoginSession.getSnapshot)
 );
 
 const writeLoginLinkLog = (level: 'info' | 'warn', message: string): void => {
