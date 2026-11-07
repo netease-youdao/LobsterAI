@@ -803,9 +803,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       'debug',
       `${source} primary action clicked; starting login handoff`,
     );
+    // With a login link, the login modal offers it inline instead of a toast.
+    let loginLinkOffered = false;
     try {
       const result = await authService.login();
       if (!result.success) {
+        loginLinkOffered = Boolean(result.redirectUrl);
         throw new Error(result.error || i18nService.t('welcomeLoginFailed'));
       }
       logPromptModelSelection(
@@ -832,7 +835,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           errorCode: getOnboardingErrorCode(error),
         });
       }
-      showToast(i18nService.t('welcomeLoginFailed'));
+      if (!loginLinkOffered) showToast(i18nService.t('welcomeLoginFailed'));
       setChatLoginExperiencePending(false);
     }
   }, [chatLoginExperiencePending]);

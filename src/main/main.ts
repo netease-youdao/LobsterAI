@@ -340,12 +340,9 @@ import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
 import { ArtifactFileWatcher } from './libs/artifactFileWatcher';
+import { openBrowserLogin } from './libs/authBrowserLogin';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
-import {
-  appendCallbackReturnTo,
-  appendLoginParams,
-  startAuthLocalCallback,
-} from './libs/authLocalCallbackServer';
+import { startAuthLocalCallback } from './libs/authLocalCallbackServer';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
@@ -8177,46 +8174,17 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
-    const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
-    const fallbackUrl = appendLoginParams(baseUrl, { source: 'electron' });
-    let localCallback: Awaited<ReturnType<typeof startAuthLocalCallback>> | null = null;
-
-    try {
-      console.log('[Auth] starting browser login with local callback server');
-      localCallback = await startAuthLocalCallback({
-        onCode: code => {
-          authCallbackRouter.handleAuthCode(code);
-          focusMainWindow('local auth callback');
-        },
-      });
-      const returnTo = appendLoginParams(baseUrl, {
-        source: 'electron',
-        electronLogin: 'success',
-      });
-      const finalUrl = appendLoginParams(baseUrl, {
-        source: 'electron',
-        redirect_uri: appendCallbackReturnTo(localCallback.redirectUri, returnTo),
-        state: localCallback.state,
-      });
-      console.log('[Auth] opening portal login with local callback redirect');
-      await shell.openExternal(finalUrl);
-      return { success: true, redirectUrl: finalUrl };
-    } catch (error) {
-      // The callback may be shared by another login page and will clean itself up on timeout.
-      console.warn('[Auth] local callback login failed, falling back to deep link login:', error);
-      try {
-        await shell.openExternal(fallbackUrl);
-        return { success: true, redirectUrl: fallbackUrl };
-      } catch (fallbackError) {
-        console.error('[Auth] login failed:', fallbackError);
-        return {
-          success: false,
-          error: fallbackError instanceof Error ? fallbackError.message : 'Failed to open login',
-        };
-      }
-    }
-  });
+  ipcMain.handle(AuthIpcChannel.Login, (_event, { loginUrl }: { loginUrl?: string } = {}) => openBrowserLogin({
+    baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
+    openExternal: url => shell.openExternal(url),
+    // The callback may be shared by another login page and cleans itself up on timeout.
+    startLocalCallback: () => startAuthLocalCallback({
+      onCode: code => {
+        authCallbackRouter.handleAuthCode(code);
+        focusMainWindow('local auth callback');
+      },
+    }),
+  }));
 
   registerFeedbackIpc({
     ipcMain,

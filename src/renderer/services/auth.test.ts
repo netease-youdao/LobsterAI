@@ -1,4 +1,5 @@
 import {
+  AuthLoginFailureReason,
   AuthSessionChangeReason,
   AuthSessionStatus,
 } from '@shared/auth/constants';
@@ -21,10 +22,13 @@ import {
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
 } from './auth';
+import { browserLoginSession, BrowserLoginStatus } from './browserLoginSession';
+import { getPortalLoginUrl } from './endpoints';
 import { i18nService } from './i18n';
 
 afterEach(() => {
   authService.destroy();
+  browserLoginSession.clear();
   store.dispatch(setLoggedOut());
   store.dispatch(clearServerModels());
   store.dispatch(setEnterpriseAccountContext(null));
@@ -328,8 +332,125 @@ describe('login diagnostics', () => {
     expect(fromRenderer).toHaveBeenCalledWith(
       'warn',
       'AuthService',
-      expect.stringMatching(/^login attempt \d+ could not open the system browser$/),
+      expect.stringMatching(/^login attempt \d+ could not open the system browser reason=unknown$/),
     );
+    // Nothing to offer without a link, so the login wait simply ends.
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('offers the login link when the browser could not be opened', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const manualUrl = 'https://lobsterai.youdao.com/portal#/login?source=electron&state=s';
+    vi.stubGlobal('window', {
+      electron: {
+        api: {
+          fetch: vi.fn().mockResolvedValue({
+            ok: true,
+            data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
+          }),
+        },
+        auth: {
+          login: vi.fn().mockResolvedValue({
+            success: false,
+            reason: AuthLoginFailureReason.OpenTimedOut,
+            redirectUrl: manualUrl,
+          }),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await authService.login();
+
+    expect(browserLoginSession.getSnapshot()).toEqual({
+      status: BrowserLoginStatus.OpenFailed,
+      url: manualUrl,
+    });
+  });
+
+  test('keeps the login wait visible until the account signs in', async () => {
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const loginUrl = 'https://lobsterai.youdao.com/portal#/login?source=electron&state=s';
+    let resolveLogin: (value: { success: boolean; redirectUrl: string }) => void = () => {};
+    vi.stubGlobal('window', {
+      electron: {
+        api: {
+          fetch: vi.fn().mockResolvedValue({
+            ok: true,
+            data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
+          }),
+        },
+        auth: { login: vi.fn(() => new Promise(resolve => { resolveLogin = resolve; })) },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    const pending = authService.login();
+    expect(browserLoginSession.getSnapshot()?.status).toBe(BrowserLoginStatus.Opening);
+    await vi.waitFor(() => expect(window.electron.auth.login).toHaveBeenCalled());
+    resolveLogin({ success: true, redirectUrl: loginUrl });
+    await pending;
+    expect(browserLoginSession.getSnapshot()).toEqual({ status: BrowserLoginStatus.Waiting, url: loginUrl });
+
+    store.dispatch(setLoggedIn({
+      user: { yid: 'signed-in-user', nickname: 'Signed In User', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'personal:signed-in-user',
+    }));
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('uses the portal login URL when the overmind lookup stalls', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const login = vi.fn().mockResolvedValue({ success: true });
+    vi.stubGlobal('window', {
+      electron: {
+        api: { fetch: vi.fn(() => new Promise(() => {})) },
+        auth: { login },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    const pending = authService.login();
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(login).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+
+    expect(login).toHaveBeenCalledWith(getPortalLoginUrl());
+  });
+
+  test('reuses the last resolved login URL when a later lookup stalls', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const resolvedUrl = 'https://lobsterai.youdao.com/portal#/login?from=overmind';
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, data: { data: { value: resolvedUrl } } })
+      .mockImplementation(() => new Promise(() => {}));
+    const login = vi.fn().mockResolvedValue({ success: true });
+    vi.stubGlobal('window', {
+      electron: {
+        api: { fetch },
+        auth: { login },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await authService.login();
+    const pending = authService.login();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await pending;
+
+    expect(login).toHaveBeenNthCalledWith(1, resolvedUrl);
+    expect(login).toHaveBeenNthCalledWith(2, resolvedUrl);
   });
 });
 
