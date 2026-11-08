@@ -1,8 +1,20 @@
 import { expect, test } from 'vitest';
 
 import { OpenClawEnginePhase } from '../openclawEngine/constants';
-import { CompanionAnalyticsAction, CompanionAnalyticsSource, CompanionTaskBlockedReason, companionTaskFailure,
+import { CompanionAnalyticsAction, CompanionAnalyticsInteraction, CompanionAnalyticsSource, CompanionSelectionMethod,
+  CompanionSelectionPosition, CompanionTaskBlockedReason, companionTaskFailure,
   CompanionTaskFailureCode, CompanionTaskFailureStage, normalizeCompanionAnalyticsEvent } from './analytics';
+import { CompanionAppCategory } from './appCategories';
+
+test('selection events keep bounded app, method and position fields and drop unknown apps', () => {
+  const base = { action: CompanionAnalyticsAction.Action, source: CompanionAnalyticsSource.Selection,
+    interactionType: CompanionAnalyticsInteraction.Miss, topic: CompanionAppCategory.Document };
+  expect(normalizeCompanionAnalyticsEvent({ ...base, app: 'WPS.EXE', selectionMethod: CompanionSelectionMethod.Clipboard,
+    positionLevel: CompanionSelectionPosition.MouseDual, textLength: 42 })).toEqual({ ...base, app: 'wps.exe',
+    selectionMethod: CompanionSelectionMethod.Clipboard, positionLevel: CompanionSelectionPosition.MouseDual, textLength: 42 });
+  expect(normalizeCompanionAnalyticsEvent({ ...base, app: 'acme-payroll.exe', selectionMethod: 'ocr', positionLevel: 7,
+    textLength: -1 })).toEqual(base);
+});
 
 test('structured readiness failures preserve phase without reporting the raw error', () => {
   const failure = companionTaskFailure({ code: 'ENGINE_NOT_READY', error: 'private response',
