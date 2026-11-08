@@ -98,6 +98,7 @@ import type { CompanionLanguageClient } from './languageToolClient';
 import { CompanionLanguageToolsController } from './languageToolsController';
 import { CompanionQuickAnswerService } from './quickAnswerService';
 import { getCompanionSelectionApps } from './selectionApps';
+import { readWindowsNative } from './windowsNative';
 
 const MAX_SNOOZE_TIMER_MS = 24 * 60 * 60_000;
 
@@ -310,6 +311,8 @@ export class DesktopCompanionManager {
       setPreferences: patch => { this.setPreferences(patch, AnalyticsSource.Selection); },
       publish: () => this.publish(),
       openSettings: () => this.options.openSettings?.(),
+      pointerKind: () => readWindowsNative(native => native.cursorKind()),
+      foregroundApp: () => readWindowsNative(native => native.foregroundProcessName()),
     }, this.quickAnswer, services.loadSelectionHook);
     this.permissionGuide = new CompanionPermissionGuideController({
       // Key-capable on macOS, like the orb: pressing a window that cannot become key half-activates the app.

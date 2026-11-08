@@ -9,6 +9,24 @@ const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 const VK_LBUTTON = 0x01;
 const KEY_DOWN_MASK = 0x8000;
 const MAX_PATH_CHARS = 1024;
+// IDC_* system cursor ids and CURSORINFO.flags from WinUser.h.
+const IDC_IBEAM = 32513;
+const IDC_NON_TEXT = [
+  32512, // IDC_ARROW
+  32514, // IDC_WAIT
+  32515, // IDC_CROSS
+  32516, // IDC_UPARROW
+  32642, 32643, 32644, 32645, 32646, // IDC_SIZENWSE, IDC_SIZENESW, IDC_SIZEWE, IDC_SIZENS, IDC_SIZEALL
+  32648, // IDC_NO
+  32649, // IDC_HAND
+  32650, // IDC_APPSTARTING
+  32651, // IDC_HELP
+];
+const CURSOR_SHOWING = 0x1;
+
+/** What the pointer looks like: the system I-beam, another system cursor, or one an app drew itself. */
+export const WindowsCursorKind = { Text: 'text', System: 'system', Custom: 'custom' } as const;
+export type WindowsCursorKind = typeof WindowsCursorKind[keyof typeof WindowsCursorKind];
 
 // SHQueryUserNotificationState results that mean "do not interrupt".
 const QUNS_BUSY = 2;
@@ -24,6 +42,8 @@ export interface WindowsNative {
   isShellDragVisible(): boolean;
   /** Fullscreen app, presentation mode, or Focus quiet hours. */
   isUserBusy(): boolean;
+  /** The pointer's current shape; null while it is hidden or cannot be read. */
+  cursorKind(): WindowsCursorKind | null;
 }
 
 type NativeFunction = (...args: unknown[]) => unknown;
@@ -58,6 +78,16 @@ export function loadWindowsNative(): WindowsNative | null {
     const queryFullProcessImageName: NativeFunction = kernel32.func(
       'int __stdcall QueryFullProcessImageNameW(LOBSTER_HANDLE hProcess, LOBSTER_DWORD dwFlags, _Out_ uint16_t *lpExeName, _Inout_ LOBSTER_DWORD *lpdwSize)',
     );
+    // CURSORINFO with its POINT flattened: the same layout, and the handle comes back as a plain integer.
+    const cursorInfo = koffi.struct('LOBSTER_CURSORINFO', {
+      cbSize: 'uint32_t', flags: 'uint32_t', hCursor: 'uintptr_t', x: 'int32_t', y: 'int32_t',
+    });
+    const getCursorInfo: NativeFunction = user32.func('int __stdcall GetCursorInfo(_Inout_ LOBSTER_CURSORINFO *pci)');
+    const loadCursor: NativeFunction = user32.func('uintptr_t __stdcall LoadCursorW(void *hInstance, uintptr_t lpCursorName)');
+    // Shared system cursors: every app that shows the standard I-beam shows this same handle.
+    const systemCursor = (id: number) => BigInt(loadCursor(null, id) as number | bigint);
+    const textCursor = systemCursor(IDC_IBEAM);
+    const nonTextCursors = new Set(IDC_NON_TEXT.map(systemCursor));
     const closeHandle: NativeFunction = kernel32.func('int __stdcall CloseHandle(LOBSTER_HANDLE hObject)');
     const queryNotificationState: NativeFunction = shell32.func(
       'int32_t __stdcall SHQueryUserNotificationState(_Out_ int *pquns)',
@@ -103,10 +133,30 @@ export function loadWindowsNative(): WindowsNative | null {
         if (queryNotificationState(state) !== 0) return false;
         return [QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE, QUNS_QUIET_TIME].includes(state[0]);
       },
+      cursorKind() {
+        if (!textCursor) return null;
+        const info = { cbSize: koffi.sizeof(cursorInfo), flags: 0, hCursor: 0, x: 0, y: 0 };
+        if (!getCursorInfo(info) || !(info.flags & CURSOR_SHOWING) || !info.hCursor) return null;
+        const cursor = BigInt(info.hCursor);
+        if (cursor === textCursor) return WindowsCursorKind.Text;
+        return nonTextCursors.has(cursor) ? WindowsCursorKind.System : WindowsCursorKind.Custom;
+      },
     };
   } catch (error) {
     console.warn('[DesktopCompanion] Windows native helpers are unavailable:', error);
     cached = null;
   }
   return cached;
+}
+
+/** A value from the native helpers; null off Windows, without koffi, or when the call fails. */
+export function readWindowsNative<T>(read: (native: WindowsNative) => T | null): T | null {
+  const native = loadWindowsNative();
+  if (!native) return null;
+  try {
+    return read(native);
+  } catch (error) {
+    console.debug('[DesktopCompanion] Windows native read failed:', error);
+    return null;
+  }
 }

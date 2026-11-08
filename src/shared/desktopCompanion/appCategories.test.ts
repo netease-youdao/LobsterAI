@@ -5,6 +5,8 @@ import {
   CompanionAppCategory,
   isCompanionQuietCategory,
   isCompanionSelectionBlocked,
+  knownCompanionAppId,
+  SELECTION_CLIPBOARD_APPS,
 } from './appCategories';
 
 describe('app categories', () => {
@@ -25,6 +27,32 @@ describe('app categories', () => {
   test('treats unknown or missing apps as other', () => {
     expect(categorizeCompanionApp('com.example.unknown')).toBe(CompanionAppCategory.Other);
     expect(categorizeCompanionApp(null)).toBe(CompanionAppCategory.Other);
+  });
+
+  test('names only apps from the built-in lists, normalized', () => {
+    expect(knownCompanionAppId('C:\\Program Files\\Kingsoft\\WPS.EXE')).toBe('wps.exe');
+    expect(knownCompanionAppId('com.microsoft.Word')).toBe('com.microsoft.word');
+    expect(knownCompanionAppId('msedge.exe')).toBe('msedge.exe');
+    expect(knownCompanionAppId('msedgewebview2.exe')).toBe('msedgewebview2.exe');
+    expect(knownCompanionAppId('acme-payroll.exe')).toBeNull();
+    // Prefix matches categorize an app without naming it.
+    expect(knownCompanionAppId('com.jetbrains.intellij')).toBeNull();
+    expect(knownCompanionAppId('constructor')).toBeNull();
+    expect(knownCompanionAppId(null)).toBeNull();
+  });
+
+  test('every app read through the clipboard on Windows is a known app, so analytics can name it', () => {
+    for (const app of SELECTION_CLIPBOARD_APPS) expect(knownCompanionAppId(app)).toBe(app);
+  });
+
+  // selection-hook compares its program lists by substring: a short name reaches other programs too.
+  test('no clipboard app name is part of another program name', () => {
+    for (const app of SELECTION_CLIPBOARD_APPS) {
+      for (const other of ['telnet.exe', 'pocket.exe', 'whatsapp.exe', 'msedge.exe', 'msedgewebview2.exe']) {
+        expect(other.includes(app), `${app} would match ${other}`).toBe(false);
+      }
+      expect(app.length, `${app} is too short to name one program`).toBeGreaterThanOrEqual('wps.exe'.length);
+    }
   });
 
   test('stays quiet in meetings', () => {

@@ -11,6 +11,8 @@ import {
   DesktopCompanionSize,
 } from '../../shared/desktopCompanion/constants';
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
+import { SELECTION_MISS_WAIT_MS } from './selectionMiss';
+import { WindowsCursorKind } from './windowsNative';
 
 const trusted = vi.hoisted(() => ({ value: true }));
 const focused = vi.hoisted(() => ({ value: null as unknown }));
@@ -29,9 +31,10 @@ vi.mock('electron', () => ({
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
 
 const { CompanionSelectionController, SelectionGestureFit, selectionGestureFit } = await import('./companionSelection');
+type SelectionHost = import('./companionSelection').SelectionHost;
 
 class FakeHook extends EventEmitter {
-  static FilterMode = { EXCLUDE_LIST: 2 };
+  static FilterMode = { INCLUDE_LIST: 1, EXCLUDE_LIST: 2 };
   static PositionLevel = { SEL_FULL: 3 };
   static last: FakeHook | null = null;
   config: Record<string, unknown> | undefined;
@@ -64,24 +67,29 @@ let preferences = { ...DEFAULT_DESKTOP_COMPANION_PREFERENCES, enabled: true };
 let win: FakeWindow;
 let quickAnswer: { abortOwnedBy: ReturnType<typeof vi.fn> };
 let openSettings: ReturnType<typeof vi.fn>;
+let report: ReturnType<typeof vi.fn>;
 
-function create() {
+function create(host: Partial<SelectionHost> = {}) {
   win = new FakeWindow();
   quickAnswer = { abortOwnedBy: vi.fn() };
   openSettings = vi.fn();
+  report = vi.fn();
   const controller = new CompanionSelectionController({
+    analytics: { report } as never,
     preferences: () => preferences,
     isAvailable: () => preferences.enabled,
     createWindow: () => win as never,
     setPreferences: patch => { preferences = { ...preferences, ...patch }; },
     publish: vi.fn(),
     openSettings,
+    ...host,
   }, quickAnswer as never, () => FakeHook as never);
   controller.sync();
   return controller;
 }
 
-function select(text = 'ambient co-worker', programName = 'com.microsoft.Word', lineTop = 200, lastLineTop = lineTop) {
+function select(text = 'ambient co-worker', programName = 'com.microsoft.Word', lineTop = 200, lastLineTop = lineTop,
+  extra: Record<string, unknown> = {}) {
   FakeHook.last!.emit('text-selection', {
     text,
     programName,
@@ -91,6 +99,7 @@ function select(text = 'ambient co-worker', programName = 'com.microsoft.Word', 
     endTop: { x: 500, y: lastLineTop },
     endBottom: { x: 500, y: lastLineTop + 20 },
     mousePosEnd: { x: 480, y: lastLineTop + 18 },
+    ...extra,
   });
 }
 
@@ -107,14 +116,18 @@ function sentSelection() {
   return calls[calls.length - 1]?.[1];
 }
 
-function onMac(run: () => void): void {
+function onPlatform(value: NodeJS.Platform, run: () => void): void {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
-  Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
+  Object.defineProperty(process, 'platform', { ...platform, value });
   try {
     run();
   } finally {
     Object.defineProperty(process, 'platform', platform);
   }
+}
+
+function onMac(run: () => void): void {
+  onPlatform('darwin', run);
 }
 
 function drag() {
@@ -464,12 +477,24 @@ describe('selection toolbar', () => {
     controller.dispose();
   }));
 
-  test('starts the hook without touching the clipboard and skips default-excluded apps natively', () => {
+  test('starts the hook without touching the clipboard on macOS and skips default-excluded apps natively', () => onMac(() => {
     const controller = create();
     expect(controller.capability).toBe(CompanionCapability.Ready);
     expect(FakeHook.last?.config).toMatchObject({ enableClipboard: false });
+    expect(FakeHook.last?.config).not.toHaveProperty('clipboardFilterList');
     expect(FakeHook.last?.config?.globalFilterList).toContain('com.apple.finder');
-  });
+    controller.dispose();
+  }));
+
+  test('on Windows reads through the clipboard only in WPS Office', () => onPlatform('win32', () => {
+    const controller = create();
+    expect(FakeHook.last?.config).toMatchObject({
+      enableClipboard: true,
+      clipboardMode: FakeHook.FilterMode.INCLUDE_LIST,
+      clipboardFilterList: ['wps.exe', 'wpp.exe', 'wpspdf.exe'],
+    });
+    controller.dispose();
+  }));
 
   test('waits for Accessibility on macOS before starting', () => {
     trusted.value = false;
@@ -877,4 +902,83 @@ describe('a selection the hook missed on macOS', () => {
     vi.advanceTimersByTime(100);
     expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
   }));
+});
+
+describe('selection analytics', () => {
+  const shown = (fields: Record<string, unknown>) => expect(report).toHaveBeenCalledWith(expect.objectContaining({
+    interactionType: 'open', stage: 'shown', surface: 'selection', ...fields,
+  }));
+  const misses = () => report.mock.calls.filter(([event]) => event.interactionType === 'miss');
+
+  test('reports how a shown selection was read, its app, and the wait from the gesture', () => {
+    const controller = create();
+    drag();
+    vi.advanceTimersByTime(120);
+    select('ambient co-worker', 'com.microsoft.Word', 200, 200, { method: 1 });
+    controller.setContentSize({ width: 450, height: 80 });
+    shown({ topic: 'document', app: 'com.microsoft.Word', selectionMethod: 'uia', positionLevel: 'full',
+      textLength: 17, durationMs: 120 });
+    controller.dispose();
+  });
+
+  test('a selection read without a gesture has no wait to report', () => {
+    const controller = create();
+    select('ambient co-worker', 'wps.exe', 200, 200, { method: 99, posLevel: 1 });
+    vi.advanceTimersByTime(200);
+    shown({ app: 'wps.exe', selectionMethod: 'clipboard', positionLevel: 'mouse_single' });
+    expect(report.mock.calls.at(-1)?.[0]).not.toHaveProperty('durationMs');
+    controller.dispose();
+  });
+
+  describe('on Windows', () => {
+    const run = (host: Partial<SelectionHost>, act: () => void) => onPlatform('win32', () => {
+      const controller = create({ pointerKind: () => WindowsCursorKind.Text, foregroundApp: () => 'wps.exe', ...host });
+      act();
+      vi.advanceTimersByTime(SELECTION_MISS_WAIT_MS);
+      controller.dispose();
+    });
+
+    test('reports an app that gave no text for a drag over it', () => {
+      run({}, drag);
+      expect(misses()).toEqual([[expect.objectContaining({ source: 'selection', surface: 'selection',
+        topic: 'document', app: 'wps.exe' })]]);
+    });
+
+    test('a selection that follows the drag is not a miss', () => {
+      run({}, () => {
+        drag();
+        vi.advanceTimersByTime(300);
+        select('ambient co-worker', 'wps.exe');
+      });
+      expect(misses()).toEqual([]);
+    });
+
+    test('drags with a system cursor, such as on a title or scroll bar, are left out', () => {
+      run({ pointerKind: () => WindowsCursorKind.System }, drag);
+      expect(misses()).toEqual([]);
+    });
+
+    test('an app-drawn cursor at the press counts, as an I-beam at either end does', () => {
+      const pointerKind = vi.fn().mockReturnValueOnce(WindowsCursorKind.Custom).mockReturnValue(WindowsCursorKind.System);
+      run({ pointerKind }, drag);
+      expect(misses()).toHaveLength(1);
+    });
+
+    test.each(['explorer.exe', 'lobsterai.exe', 'keepass.exe', 'snipaste.exe'])(
+      'never expects a selection from %s', app => {
+        run({ foregroundApp: () => app }, drag);
+        expect(misses()).toEqual([]);
+      },
+    );
+
+    test('a drag while the toolbar is up, such as moving it, is left out', () => {
+      run({}, () => {
+        select();
+        vi.advanceTimersByTime(200);
+        FakeHook.last!.emit('mouse-down', { x: win.bounds.x + PAD + 10, y: win.bounds.y + PAD + 10, button: 0 });
+        FakeHook.last!.emit('mouse-up', { x: win.bounds.x + PAD + 60, y: win.bounds.y + PAD + 10, button: 0 });
+      });
+      expect(misses()).toEqual([]);
+    });
+  });
 });
