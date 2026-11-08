@@ -18,8 +18,9 @@ import {
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
-import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
+import { ASK_USER_QUESTION_TOOL_NAME, COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
+import { OpenClawQuestion } from '../../shared/cowork/openclawQuestion';
 import { DECISION_MODEL_PLUGIN_ID } from '../../shared/decisionModel/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
@@ -28,7 +29,9 @@ import { OFFICE_EDITORS } from '../../shared/office/editors';
 import {
   OPENCLAW_MODEL_COMPAT_PLUGIN_ID,
   OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS,
+  OPENCLAW_PROGRESS_CARD_TOOL_NAME,
   OpenClawSkillReviewMode,
+  OpenClawToolSearchControlTool,
 } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import type {
@@ -364,7 +367,30 @@ const MANAGED_TOOL_DENY = [
   'computer',
   'nodes',
   'mobile_ui',
+  // OpenClaw Control UI surfaces (board widgets, portals, operator terminals)
+  // and its GitHub identity panel. LobsterAI renders none of them, so these
+  // tools only cost prompt space and point the model at screens that do not
+  // exist here.
+  'dashboard',
+  'portal',
+  'terminal',
+  'github_identity_status',
 ] as const;
+// Tool schemas were ~2/3 of every request (~106k characters for 68 tools).
+// Directory mode keeps core file/shell tools, lists the other OpenClaw and
+// plugin tools in one line each, and leaves MCP tools behind tool_search.
+// `direct` needs openclaw-tool-search-direct-tools.patch. It pins tools that
+// must not hide: the delete policy skips confirmation when AskUserQuestion is
+// missing from the toolset, and the UI renders ask_user and progress_card.
+const MANAGED_TOOL_SEARCH = {
+  enabled: true,
+  mode: 'directory',
+  direct: [
+    ASK_USER_QUESTION_TOOL_NAME,
+    OpenClawQuestion.ToolName,
+    OPENCLAW_PROGRESS_CARD_TOOL_NAME,
+  ],
+} as const;
 // OpenClaw 2026.8.1 owns detector selection and thresholds. Only the public
 // enable flag remains configurable; emitting the retired tuning keys makes
 // the complete config invalid and prevents gateway hot reloads.
@@ -408,6 +434,19 @@ const providerApiKeyEnvVar = (providerName: string): string => {
   const envName = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
   return `LOBSTER_APIKEY_${envName}`;
 };
+
+// Pairs with MANAGED_TOOL_SEARCH. Several sections below say "use X if it is
+// available"; without this, a deferred tool reads as missing.
+const MANAGED_DEFERRED_TOOLS_PROMPT = [
+  '## Deferred Tools',
+  '',
+  'Only core file/shell tools and a few interaction tools are loaded directly. Every other tool is still available:',
+  'the tool directory lists OpenClaw and plugin tools, and MCP tools (Office editors, saved logins, computer use,',
+  'user-installed servers) are found by search.',
+  `- Find a tool with \`${OpenClawToolSearchControlTool.Search}\` (English keywords or an MCP server name), load its schema with \`${OpenClawToolSearchControlTool.Describe}\` when needed, then run it with \`${OpenClawToolSearchControlTool.Call}\`.`,
+  `- When these instructions say to use a tool if it is available, a tool reachable through \`${OpenClawToolSearchControlTool.Search}\` counts as available.`,
+  `- Before telling the user a capability is missing, or replacing a named tool with a script workaround, check \`${OpenClawToolSearchControlTool.Search}\`.`,
+].join('\n');
 
 const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
   '## Web Search',
@@ -2199,6 +2238,7 @@ export class OpenClawConfigSync {
     return {
       deny: [...MANAGED_TOOL_DENY],
       loopDetection: MANAGED_TOOL_LOOP_DETECTION,
+      toolSearch: { ...MANAGED_TOOL_SEARCH, direct: [...MANAGED_TOOL_SEARCH.direct] },
       web: {
         search: {
           enabled: false,
@@ -4070,6 +4110,7 @@ export class OpenClawConfigSync {
       // Skills are now loaded by OpenClaw natively via skills.load.extraDirs
       // in openclaw.json, so we no longer embed the skills routing prompt here.
 
+      sections.push(MANAGED_DEFERRED_TOOLS_PROMPT);
       sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
       sections.push(MANAGED_BROWSER_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);

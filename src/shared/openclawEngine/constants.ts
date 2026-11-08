@@ -59,6 +59,30 @@ export const OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS = ['installs'] as const;
 /** Bundled plugin that owns model compatibility and thinking profiles. */
 export const OPENCLAW_MODEL_COMPAT_PLUGIN_ID = 'lobsterai-model-compat';
 
+/** OpenClaw's plan/progress tool, rendered as the task progress card. */
+export const OPENCLAW_PROGRESS_CARD_TOOL_NAME = 'progress_card';
+
+/**
+ * Tool Search control tools. A deferred tool invoked through them runs as a
+ * nested call that emits its own tool events under the real tool name.
+ */
+export const OpenClawToolSearchControlTool = {
+  Search: 'tool_search',
+  Describe: 'tool_describe',
+  Call: 'tool_call',
+  SearchCode: 'tool_search_code',
+} as const;
+export type OpenClawToolSearchControlTool =
+  typeof OpenClawToolSearchControlTool[keyof typeof OpenClawToolSearchControlTool];
+
+const OPENCLAW_TOOL_SEARCH_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set(
+  Object.values(OpenClawToolSearchControlTool),
+);
+
+export const isOpenClawToolSearchControlTool = (toolName: string): boolean => (
+  OPENCLAW_TOOL_SEARCH_CONTROL_TOOL_NAMES.has(toolName.trim())
+);
+
 /** Why a task was refused while a config change is still unapplied. */
 export const OpenClawConfigApplyPendingReason = {
   /** The change is still being applied, or its effect on the task is unknown. */

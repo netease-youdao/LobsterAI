@@ -4448,6 +4448,35 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
   });
 
+  test('defers large tool catalogs behind Tool Search and pins the interaction tools', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('tool-search');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.tools.toolSearch).toEqual({
+      enabled: true,
+      mode: 'directory',
+      direct: ['AskUserQuestion', 'ask_user', 'progress_card'],
+    });
+    // Control UI surfaces LobsterAI never renders.
+    expect(config.tools.deny).toEqual(expect.arrayContaining([
+      'dashboard',
+      'portal',
+      'terminal',
+      'github_identity_status',
+    ]));
+    // A user-enabled skill review still needs the workshop tool.
+    expect(config.tools.deny).not.toContain('skill_workshop');
+
+    const agentsMd = fs.readFileSync(path.join(stateDir, 'workspace-main', 'AGENTS.md'), 'utf8');
+    expect(agentsMd).toContain('## Deferred Tools');
+    expect(agentsMd).toContain('a tool reachable through `tool_search` counts as available');
+    // The deferred-tools rule comes before the sections that say "if it is available".
+    expect(agentsMd.indexOf('## Deferred Tools')).toBeLessThan(agentsMd.indexOf('## Command Execution & User Interaction Policy'));
+  });
+
   test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
     const { OpenClawConfigSync } = await import('./openclawConfigSync');
     const { OFFICE_EDITORS } = await import('../../shared/office/editors');

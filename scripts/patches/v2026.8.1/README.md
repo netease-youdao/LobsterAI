@@ -1276,6 +1276,55 @@ web-fetch tests, and `src/infra/net/fetch-guard.test.ts`; then rebuild and test 
 real HTTPS tunnel with the generated desktop config. Remove when upstream
 supports an equivalent proxy transport with validated, pinned destination IPs.
 
+## Tool Search keeps named tools direct
+
+`openclaw-tool-search-direct-tools.patch` adds `tools.toolSearch.direct`, a list
+of exact tool names that stay in the model's tool array while Tool Search defers
+the rest. LobsterAI enables Tool Search in `directory` mode to cut the ~106k
+characters of tool schemas it used to send on every request, and pins the tools
+that must not hide behind `tool_search`:
+
+- `AskUserQuestion`: the managed delete policy tells the model to delete without
+  confirmation when that tool is not in its toolset, so a deferred copy would
+  silently drop the confirmation.
+- `ask_user` and `progress_card`: user-facing interaction and plan tools the
+  desktop UI renders on almost every multi-step turn.
+
+Upstream only keeps core file/shell tools direct (plus `message` when it is the
+sole reply path) and offers no configuration hook. A plugin tool's
+`catalogMode: "direct-only"` is not enough either: plugin tool descriptors are
+cached without that field. The pinned names go through the existing
+`isDirectVisibleCatalogTool` gate, so only trusted OpenClaw and plugin tools are
+promoted; MCP and client tools stay deferred. Code Mode ignores the list.
+
+Verify `src/agents/tool-surface-plan.test.ts` and `src/config/schema.test.ts`,
+then rebuild the runtime and check a desktop session's `systemPromptReport`: the
+tool schema total should drop sharply while `AskUserQuestion`, `ask_user` and
+`progress_card` keep their schemas. A runtime built without this patch rejects
+the unknown `direct` key, so rebuild before running the desktop app. Remove when
+upstream offers an equivalent operator-pinned direct tool list.
+
+## Tool Search calls return only the tool identity
+
+`openclaw-tool-call-slim-envelope.patch` trims the model-visible result of the
+structured `tool_call` control. Upstream returns `{ tool, result }` where `tool`
+is the full catalog entry, so every call repeats the deferred tool's
+description and input hint even though the model just read them from the
+directory, a search hit or `tool_describe`. Desktop end-to-end runs measured
+1.1k–5.2k characters of that echo per call (5.2k for one `automations` call,
+~2.5k per `browser` call), which a long browser session multiplies by dozens.
+
+The model now sees `{ tool: { id, name }, result }`. The result itself, the
+untrusted-content wrapper for network and MCP results, and failure `details`
+(which keep the full entry) are unchanged. Code Mode's `openclaw.tools.call`
+keeps its documented `{ tool, result }` shape.
+
+Verify `src/agents/tool-search.test.ts` and
+`src/agents/tool-search.mcp-error.test.ts`. On Windows,
+`code-mode.bridge.host-denial.test.ts` and
+`attempt.code-mode-reconciliation.test.ts` fail with or without this patch.
+Remove when upstream stops echoing the catalog entry in `tool_call` results.
+
 ## ChatGPT OAuth token requests honor the gateway proxy (upstream backport)
 
 `openclaw-openai-oauth-token-proxy.patch` backports the production change from

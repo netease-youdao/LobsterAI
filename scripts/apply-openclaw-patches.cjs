@@ -1040,6 +1040,34 @@ const v20260801StrongPatchValidators = {
       snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
     },
   ],
+  'openclaw-tool-call-slim-envelope.patch': [
+    {
+      file: 'src/agents/tool-search.ts',
+      snippets: ['{ tool: { id: callResult.tool.id, name: callResult.tool.name }, result: callResult.result },'],
+    },
+    {
+      file: 'src/agents/tool-search.mcp-error.test.ts',
+      snippets: ['The model sees only the tool identity; details keep the full catalog entry.'],
+    },
+  ],
+  'openclaw-tool-search-direct-tools.patch': [
+    {
+      file: 'src/agents/tool-search-config.ts',
+      snippets: ['function readDirectToolNames(value: unknown)', '...readDirectToolNames(raw.direct),'],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.ts',
+      snippets: ['directToolNames: [...(toolSearchConfig.directToolNames ?? []), ...directToolNames],'],
+    },
+    {
+      file: 'src/config/zod-schema.agent-runtime.ts',
+      snippets: ['direct: z.array(z.string()).optional(),'],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.test.ts',
+      snippets: ['never promotes MCP tools through the direct list'],
+    },
+  ],
   'openclaw-tool-payload-transcript-fidelity.patch': [
     {
       file: 'src/agents/transcript-redact.ts',

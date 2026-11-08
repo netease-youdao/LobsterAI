@@ -92,7 +92,10 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../../../shared/kit/constants';
-import { OpenClawGatewayFailureKind } from '../../../shared/openclawEngine/constants';
+import {
+  isOpenClawToolSearchControlTool,
+  OpenClawGatewayFailureKind,
+} from '../../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyStatus } from '../../../shared/openclawTranscript/constants';
 import { ProviderName } from '../../../shared/providers';
 import type { Agent, CoworkExecutionMode, CoworkMessage, CoworkMessageMetadata, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
@@ -135,6 +138,7 @@ import {
   isPreCompactionMemoryFlushPromptText,
   isSilentReplyPrefixText,
   isSilentReplyText,
+  resolveHistoryToolCallInvocation,
   shouldSuppressHeartbeatText,
   stripTrailingSilentReplyTail,
   stripTrailingSilentReplyToken,
@@ -2113,11 +2117,11 @@ const extractSentFilePathsFromHistory = (messages: unknown[]): string[] => {
     const role = typeof msg.role === 'string' ? msg.role.trim().toLowerCase() : '';
     if (role !== 'assistant') continue;
     if (!Array.isArray(msg.content)) continue;
-    for (const block of msg.content as Array<Record<string, unknown>>) {
-      if (!isRecord(block)) continue;
-      if (block.type !== 'toolCall' || block.name !== 'message') continue;
-      const args = block.arguments;
-      if (!isRecord(args)) continue;
+    for (const block of msg.content as unknown[]) {
+      // Tool Search may defer `message`, so it can arrive wrapped in tool_call.
+      const invocation = resolveHistoryToolCallInvocation(block);
+      if (invocation?.name !== 'message') continue;
+      const args = invocation.arguments;
       const filePath = typeof args.filePath === 'string' ? args.filePath.trim() : '';
       if (filePath && !seen.has(filePath)) {
         seen.add(filePath);
@@ -9345,6 +9349,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!toolCallId) return;
 
     const toolNameRaw = typeof data.name === 'string' ? data.name.trim() : '';
+    // Tool Search plumbing (search/describe/call) is not a step the user took:
+    // the deferred tool it runs emits its own events under the real name, and
+    // plan mode checks that nested event.
+    if (isOpenClawToolSearchControlTool(toolNameRaw)) return;
     const toolName = toolNameRaw || 'Tool';
     const latestRunId = [...turn.knownRunIds].at(-1) ?? turn.runId;
     const isCurrentRun = !eventRunId || eventRunId === latestRunId;
