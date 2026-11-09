@@ -248,19 +248,14 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       const a = await window.electron?.agents?.get(agentId);
       if (!a || cancelled) return;
 
-      let nextSystemPrompt = a.systemPrompt;
-      let nextIdentity = a.identity;
-      const nextUserInfo = await coworkService.readBootstrapFile('USER.md', { agentId });
+      // The workspace files are what the agent runs with (and may edit itself),
+      // so every agent shows them rather than the stored snapshot.
+      const [nextIdentity, nextSystemPrompt, nextUserInfo] = await Promise.all([
+        coworkService.readBootstrapFile('IDENTITY.md', { agentId }),
+        coworkService.readBootstrapFile('SOUL.md', { agentId }),
+        coworkService.readBootstrapFile('USER.md', { agentId }),
+      ]);
       if (cancelled) return;
-      if (isDefaultAgentId(agentId)) {
-        const [mainIdentity, mainSoul] = await Promise.all([
-          coworkService.readBootstrapFile('IDENTITY.md', { agentId }),
-          coworkService.readBootstrapFile('SOUL.md', { agentId }),
-        ]);
-        if (cancelled) return;
-        nextSystemPrompt = mainSoul;
-        nextIdentity = mainIdentity;
-      }
 
       setAgent(a);
       setName(a.name);
@@ -404,27 +399,20 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
         return;
       }
-      const bootstrapWrites = isMainAgent
-        ? [
-            coworkService.writeBootstrapFile('IDENTITY.md', identity, { agentId }),
-            coworkService.writeBootstrapFile('SOUL.md', systemPrompt, { agentId }),
-            coworkService.writeBootstrapFile('USER.md', userInfo, { agentId }),
-          ]
-        : [
-            coworkService.writeBootstrapFile('USER.md', userInfo, { agentId }),
-          ];
-      if (bootstrapWrites.length > 0) {
-        const bootstrapSaved = await Promise.all(bootstrapWrites);
-        if (bootstrapSaved.some((saved) => !saved)) {
-          reportAgentSettingsAction('save_failed', {
-            changedFields,
-            includeConfigDetails: true,
-            isDirty: changedFields.length > 0,
-            result: 'failed',
-          });
-          window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
-          return;
-        }
+      const bootstrapSaved = await Promise.all([
+        coworkService.writeBootstrapFile('IDENTITY.md', identity, { agentId }),
+        coworkService.writeBootstrapFile('SOUL.md', systemPrompt, { agentId }),
+        coworkService.writeBootstrapFile('USER.md', userInfo, { agentId }),
+      ]);
+      if (bootstrapSaved.some((saved) => !saved)) {
+        reportAgentSettingsAction('save_failed', {
+          changedFields,
+          includeConfigDetails: true,
+          isDirty: changedFields.length > 0,
+          result: 'failed',
+        });
+        window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
+        return;
       }
       if (changedFields.includes('identity')) {
         const cleanupResult = await agentService.cleanupLegacyIdentityBlock(agentId);

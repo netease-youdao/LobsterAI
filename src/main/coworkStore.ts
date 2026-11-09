@@ -3838,7 +3838,9 @@ export class CoworkStore {
     const createdAt = options.createdAt ?? existing?.createdAt ?? now;
     const title = options.title.trim() || agent?.name || options.agentId;
     const cwd = parent?.cwd || agent?.workingDirectory || '';
-    const systemPrompt = agent?.systemPrompt || '';
+    // OpenClaw gives the child run its agent's persona from the workspace SOUL.md.
+    // The stored value may be stale and would be injected again on continuation.
+    const systemPrompt = '';
     const modelOverride = existing?.modelOverride || '';
     const executionMode = parent?.executionMode || 'local';
     const activeSkillIds = agent?.skillIds ?? [];

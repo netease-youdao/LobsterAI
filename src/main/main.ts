@@ -330,6 +330,7 @@ import {
   OpenClawRuntimeAdapter,
   type PermissionResult,
 } from './libs/agentEngine';
+import { pickChangedAgentPersona, seedAgentPersonaFiles, writeAgentPersonaFiles } from './libs/agentPersonaFiles';
 import {
   APP_QUIT_CONFIRMATION_STORE_KEY,
   appQuitConfirmationGate,
@@ -12385,6 +12386,12 @@ if (!gotTheLock) {
   ) => {
     try {
       const workspace = resolveExistingAgentWorkspacePath(options?.agentId);
+      const agentId = options?.agentId?.trim() || AgentId.Main;
+      const agent = agentId === AgentId.Main ? null : getAgentManager().getAgent(agentId);
+      if (agent) {
+        // Settings can open before config sync has seeded a new or disabled agent's workspace.
+        seedAgentPersonaFiles(workspace, agent);
+      }
       const content = readBootstrapFile(workspace, filename);
       return { success: true, content };
     } catch (error) {
@@ -16147,6 +16154,18 @@ if (!gotTheLock) {
                 source: 'custom',
               });
               cs.updateAgent(agent.id, { enabled: agent.enabled });
+            }
+            // Config sync never overwrites persona files, so a changed package value is written here.
+            // Unchanged values leave the agent's own edits to SOUL.md / IDENTITY.md in place.
+            if (agent.id !== AgentId.Main) {
+              try {
+                writeAgentPersonaFiles(
+                  resolveAgentWorkspacePath(agent.id),
+                  pickChangedAgentPersona(existing, agent),
+                );
+              } catch (error) {
+                console.warn(`[Enterprise] failed to write persona files for agent ${agent.id}:`, error);
+              }
             }
           },
         );
