@@ -23,6 +23,7 @@ export {
   parseLobsterAIRequestCapabilities,
   supportsLobsterAIRequestOptionsV1,
 } from './lobsterAIRequestOptions';
+export { buildModelCapabilityOverrides } from './modelCapabilityOverrides';
 export type {
   ModelRuntimeProfileDefinition,
   ModelRuntimeProfileMetadata,
@@ -66,4 +67,4 @@ export {
   resolveProviderOpenAIApiMode,
   supportsOpenAIApiModeSelection,
 } from './openaiApiMode';
-export type { ProviderConfig } from './types';
+export type { ModelCapabilityOverrides, ProviderConfig } from './types';

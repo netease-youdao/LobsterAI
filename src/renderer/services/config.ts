@@ -121,6 +121,7 @@ const normalizeProviderModels = (
     providerKey,
     canonicalModelId,
     model.supportsThinking,
+    model.capabilityOverrides?.thinking,
   );
   const supportsVideo = ProviderRegistry.resolveModelSupportsVideo(
     providerKey,
@@ -147,6 +148,7 @@ const normalizeProviderModels = (
       providerKey,
       canonicalModelId,
       model.supportsImage,
+      model.capabilityOverrides?.image,
     ),
     supportsVideo,
     supportsThinking,

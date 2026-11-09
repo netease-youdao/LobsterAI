@@ -1,6 +1,7 @@
 import type { ModelPresetId } from '../../shared/modelPresets/constants';
 import {
   type ApiFormat,
+  type ModelCapabilityOverrides,
   normalizeGeminiApiBaseUrl,
   type OpenAIApiMode,
   type ProviderConfig,
@@ -71,6 +72,7 @@ type ProviderModelConfig = {
   contextWindow?: number;
   maxTokens?: number;
   customParams?: Record<string, unknown>;
+  capabilityOverrides?: ModelCapabilityOverrides;
 };
 
 type ProviderModelInputConfig = {
@@ -82,6 +84,7 @@ type ProviderModelInputConfig = {
   contextWindow?: number;
   maxTokens?: number;
   customParams?: Record<string, unknown>;
+  capabilityOverrides?: ModelCapabilityOverrides;
 };
 
 export type ServerModelMetadata = {
@@ -157,6 +160,7 @@ export type ApiConfigResolution = {
     supportsImage?: boolean;
     supportsVideo?: boolean;
     supportsThinking?: boolean;
+    capabilityOverrides?: ModelCapabilityOverrides;
     thinkingConfig?: ModelThinkingConfig;
     requestCapabilities?: LobsterAIRequestCapability[];
     modelName?: string;
@@ -458,6 +462,7 @@ function normalizeProviderModels(providerName: string, models?: ProviderModelInp
         providerName,
         model.id,
         model.supportsThinking,
+        model.capabilityOverrides?.thinking,
       );
       const supportsVideo = ProviderRegistry.resolveModelSupportsVideo(
         providerName,
@@ -476,6 +481,7 @@ function normalizeProviderModels(providerName: string, models?: ProviderModelInp
           providerName,
           model.id,
           model.supportsImage,
+          model.capabilityOverrides?.image,
         ),
         ...(supportsVideo ? { supportsVideo } : {}),
         ...(supportsThinking ? { supportsThinking } : {}),
@@ -502,6 +508,7 @@ type MatchedProvider = {
   supportsImage?: boolean;
   supportsVideo?: boolean;
   supportsThinking?: boolean;
+  capabilityOverrides?: ModelCapabilityOverrides;
   thinkingConfig?: ModelThinkingConfig;
   requestCapabilities?: LobsterAIRequestCapability[];
   modelName?: string;
@@ -736,6 +743,9 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       supportsImage: matchedModel?.supportsImage,
       supportsVideo: matchedModel?.supportsVideo,
       supportsThinking: matchedModel?.supportsThinking,
+      ...(matchedModel?.capabilityOverrides
+        ? { capabilityOverrides: matchedModel.capabilityOverrides }
+        : {}),
       modelName: matchedModel?.name,
       contextWindow: matchedModel?.contextWindow,
       maxTokens: matchedModel?.maxTokens,
@@ -821,6 +831,7 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       supportsImage: matched.supportsImage,
       supportsVideo: matched.supportsVideo,
       supportsThinking: matched.supportsThinking,
+      ...(matched.capabilityOverrides ? { capabilityOverrides: matched.capabilityOverrides } : {}),
       thinkingConfig: matched.thinkingConfig,
       requestCapabilities: matched.requestCapabilities,
       modelName: matched.modelName,
