@@ -3671,6 +3671,33 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(customSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
   });
 
+  test('lets model editor overrides beat the provider preset when writing OpenClaw input', async () => {
+    const { ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+    const baseOptions = {
+      apiKey: 'sk-test',
+      baseURL: 'https://api.xiaomimimo.com/v1/chat/completions',
+      modelId: 'mimo-v2.5-pro',
+      apiType: 'openai' as const,
+      providerName: ProviderName.Xiaomi,
+      supportsImage: true,
+      supportsThinking: true,
+      modelName: 'MiMo V2.5 Pro',
+    };
+
+    // Without an override the text-only preset still wins over a stale snapshot.
+    const presetSelection = buildProviderSelection(baseOptions);
+    expect(presetSelection.providerConfig.models[0].input).toEqual(['text']);
+    expect(presetSelection.providerConfig.models[0].reasoning).toBe(true);
+
+    const overriddenSelection = buildProviderSelection({
+      ...baseOptions,
+      capabilityOverrides: { image: true, thinking: false },
+    });
+    expect(overriddenSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
+    expect(overriddenSelection.providerConfig.models[0].reasoning).toBe(false);
+  });
+
   test('marks DeepSeek, Xiaomi, and known GLM models as reasoning-capable', async () => {
     const { OpenClawApi, ProviderName } = await import('../../shared/providers');
     const { buildProviderSelection } = await import('./openclawConfigSync');

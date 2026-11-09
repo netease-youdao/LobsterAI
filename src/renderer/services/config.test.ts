@@ -668,6 +668,42 @@ describe('configService provider migrations', () => {
     });
   });
 
+  test('keeps model editor capability overrides while repairing stale preset snapshots', async () => {
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      providers: {
+        ...defaultConfig.providers,
+        [ProviderName.Xiaomi]: {
+          ...defaultConfig.providers![ProviderName.Xiaomi],
+          enabled: true,
+          apiKey: 'sk-xiaomi',
+          models: [
+            { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: false, supportsThinking: true },
+            {
+              id: 'mimo-v2.5-pro',
+              name: 'MiMo V2.5 Pro',
+              supportsImage: true,
+              capabilityOverrides: { image: true, thinking: false },
+            },
+          ],
+        },
+      },
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+
+    await configService.init();
+
+    const models = (storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig)
+      .providers?.[ProviderName.Xiaomi].models ?? [];
+    expect(models.find(model => model.id === 'mimo-v2.6-pro')?.supportsImage).toBe(true);
+    const overridden = models.find(model => model.id === 'mimo-v2.5-pro');
+    expect(overridden).toMatchObject({
+      supportsImage: true,
+      capabilityOverrides: { image: true, thinking: false },
+    });
+    expect(overridden?.supportsThinking).toBeFalsy();
+  });
+
   test('drops legacy compatibility modes and resolves only the exact Kimi K3 ID', async () => {
     const storedConfig = {
       ...defaultConfig,

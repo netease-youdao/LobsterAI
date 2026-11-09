@@ -104,7 +104,7 @@ test('defaultConfig puts Kimi K3 first for Moonshot', () => {
 
 test('defaultConfig puts MiMo V2.6 Pro first for Xiaomi with 1M context', () => {
   expect(defaultConfig.providers?.[ProviderName.Xiaomi]?.models).toEqual([
-    { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+    { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
   ]);
 });

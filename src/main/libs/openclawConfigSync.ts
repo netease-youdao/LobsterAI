@@ -32,6 +32,7 @@ import {
 } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import type {
+  ModelCapabilityOverrides,
   ModelRuntimeProfile as ModelRuntimeProfileType,
 } from '../../shared/providers';
 import {
@@ -1199,6 +1200,8 @@ export const buildProviderSelection = (options: {
   supportsImage?: boolean;
   supportsVideo?: boolean;
   supportsThinking?: boolean;
+  /** Choices made in the model editor; they beat the provider registry. */
+  capabilityOverrides?: ModelCapabilityOverrides;
   modelName?: string;
   contextWindow?: number;
   maxTokens?: number;
@@ -1268,6 +1271,7 @@ export const buildProviderSelection = (options: {
     providerName,
     options.modelId,
     options.supportsImage,
+    options.capabilityOverrides?.image,
   );
   const resolvedSupportsVideo = ProviderRegistry.resolveModelSupportsVideo(
     providerName,
@@ -1278,6 +1282,7 @@ export const buildProviderSelection = (options: {
     providerName,
     options.modelId,
     options.supportsThinking,
+    options.capabilityOverrides?.thinking,
   );
   const modelInput: string[] = runtimeProfileDefinition
     ? [...runtimeProfileDefinition.input]
@@ -1301,7 +1306,9 @@ export const buildProviderSelection = (options: {
   const descriptorReasoning = descriptor.resolveModelReasoning
     ? descriptor.resolveModelReasoning(options.modelId, !!options.codingPlanEnabled)
     : descriptor.modelDefaults?.reasoning;
+  // Turning thinking off in the model editor also beats the descriptor.
   const reasoning = runtimeProfileDefinition?.reasoning
+    ?? (options.capabilityOverrides?.thinking === false ? false : undefined)
     ?? (resolvedSupportsThinking ? true : descriptorReasoning);
   const contextWindow = runtimeProfileDefinition?.contextWindow
     ?? ProviderRegistry.resolveModelContextWindow(
@@ -2334,6 +2341,7 @@ export class OpenClawConfigSync {
         supportsImage: apiResolution.providerMetadata?.supportsImage,
         supportsVideo: apiResolution.providerMetadata?.supportsVideo,
         supportsThinking: apiResolution.providerMetadata?.supportsThinking,
+        capabilityOverrides: apiResolution.providerMetadata?.capabilityOverrides,
         modelName: apiResolution.providerMetadata?.modelName,
         contextWindow: apiResolution.providerMetadata?.contextWindow,
         maxTokens: apiResolution.providerMetadata?.maxTokens,
@@ -2369,6 +2377,7 @@ export class OpenClawConfigSync {
             supportsImage: m.supportsImage,
             supportsVideo: m.supportsVideo,
             supportsThinking: m.supportsThinking,
+            capabilityOverrides: m.capabilityOverrides,
             modelName: m.name,
             contextWindow: m.contextWindow,
             maxTokens: m.maxTokens,
