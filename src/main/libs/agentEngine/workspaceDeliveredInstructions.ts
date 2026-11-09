@@ -7,11 +7,12 @@ import { getMainAgentWorkspacePath } from '../openclawMemoryFile';
 
 /**
  * OpenClaw truncates any workspace bootstrap file longer than this before
- * injecting it into the system prompt (`DEFAULT_BOOTSTRAP_MAX_CHARS` in
- * OpenClaw). LobsterAI does not set `agents.defaults.bootstrapMaxChars`, so the
- * default applies; update this if the config sync ever starts overriding it.
+ * injecting it into the system prompt. Config sync writes it as
+ * `agents.defaults.bootstrapMaxChars` (OpenClaw's own default is 20,000), so
+ * the managed AGENTS.md section can carry static, cacheable policy that would
+ * otherwise travel uncached in every session's first message.
  */
-export const OPENCLAW_BOOTSTRAP_MAX_CHARS = 20_000;
+export const OPENCLAW_BOOTSTRAP_MAX_CHARS = 32_000;
 
 const AGENTS_MD_FILENAME = 'AGENTS.md';
 

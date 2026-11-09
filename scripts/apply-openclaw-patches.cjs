@@ -1040,14 +1040,20 @@ const v20260801StrongPatchValidators = {
       snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
     },
   ],
-  'openclaw-tool-call-slim-envelope.patch': [
+  'openclaw-tool-call-result-projection.patch': [
     {
       file: 'src/agents/tool-search.ts',
-      snippets: ['{ tool: { id: callResult.tool.id, name: callResult.tool.name }, result: callResult.result },'],
+      snippets: [
+        '{ tool: { id: callResult.tool.id, name: callResult.tool.name }, result: textOnlyResult },',
+        'function splitToolCallResultImages(result: AgentToolResult<unknown>)',
+      ],
     },
     {
       file: 'src/agents/tool-search.mcp-error.test.ts',
-      snippets: ['The model sees only the tool identity; details keep the full catalog entry.'],
+      snippets: [
+        'The model sees only the tool identity; details keep the full catalog entry.',
+        'returns native image blocks from a deferred MCP tool behind the untrusted wrapper',
+      ],
     },
   ],
   'openclaw-tool-search-direct-tools.patch': [
@@ -1056,16 +1062,29 @@ const v20260801StrongPatchValidators = {
       snippets: ['function readDirectToolNames(value: unknown)', '...readDirectToolNames(raw.direct),'],
     },
     {
+      file: 'src/agents/tool-search-catalog.ts',
+      snippets: [
+        'export function createOperatorPinnedToolMatcher(',
+        'if (params.minDeferredChars && deferredChars < params.minDeferredChars) {',
+      ],
+    },
+    {
       file: 'src/agents/tool-surface-plan.ts',
-      snippets: ['directToolNames: [...(toolSearchConfig.directToolNames ?? []), ...directToolNames],'],
+      snippets: ['operatorDirectToolNames: toolSearchConfig.directToolNames,'],
     },
     {
       file: 'src/config/zod-schema.agent-runtime.ts',
-      snippets: ['direct: z.array(z.string()).optional(),'],
+      snippets: [
+        'direct: z.array(z.string()).optional(),',
+        'minDeferredChars: z.number().int().nonnegative().optional(),',
+      ],
     },
     {
       file: 'src/agents/tool-surface-plan.test.ts',
-      snippets: ['never promotes MCP tools through the direct list'],
+      snippets: [
+        'does not pin a duplicated name, so a lookalike cannot take its place',
+        'skips compaction when the deferred schemas fall below minDeferredChars',
+      ],
     },
   ],
   'openclaw-tool-payload-transcript-fidelity.patch': [

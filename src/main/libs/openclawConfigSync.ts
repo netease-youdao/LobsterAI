@@ -18,6 +18,7 @@ import {
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
+import { ComputerUseMcpServerName } from '../../shared/computerUse/constants';
 import { ASK_USER_QUESTION_TOOL_NAME, COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
 import { OpenClawQuestion } from '../../shared/cowork/openclawQuestion';
@@ -27,9 +28,10 @@ import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { OFFICE_EDITORS } from '../../shared/office/editors';
 import {
+  OPENCLAW_AUTOMATIONS_TOOL_NAME,
+  OPENCLAW_MCP_TOOL_NAME_SEPARATOR,
   OPENCLAW_MODEL_COMPAT_PLUGIN_ID,
   OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS,
-  OPENCLAW_PROGRESS_CARD_TOOL_NAME,
   OpenClawSkillReviewMode,
   OpenClawToolSearchControlTool,
 } from '../../shared/openclawEngine/constants';
@@ -66,6 +68,8 @@ import { DiscordDmPolicy } from '../im/types';
 import type { OfficeMcpStdioLaunch } from '../office/core/officeMcpServer';
 import { OpenClawSessionKeepAlive } from '../openclawSessionPolicy/constants';
 import { buildOpenClawSessionConfig } from '../openclawSessionPolicy/store';
+import { MANAGED_MEDIA_GENERATION_POLICY_PROMPT } from './agentEngine/mediaGenerationTurnInstruction';
+import { OPENCLAW_BOOTSTRAP_MAX_CHARS } from './agentEngine/workspaceDeliveredInstructions';
 import {
   getAllServerModelMetadata,
   listProviderSourceEntries,
@@ -97,6 +101,7 @@ import { OpenClawEmbeddingPluginId, resolveOpenClawEmbeddingProvider } from './o
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { escapeOpenClawEnvTemplate, escapeOpenClawEnvTemplateRecord } from './openclawEnvTemplate';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
+import { MANAGED_LOCAL_TIME_POLICY_PROMPT } from './openclawLocalTimeContextPrompt';
 import {
   withManagedOpenClawModelPolicy,
   withoutOpenClawWriteMetadata,
@@ -375,21 +380,50 @@ const MANAGED_TOOL_DENY = [
   'portal',
   'terminal',
   'github_identity_status',
+  // OpenClaw's native question tool duplicates the AskUserQuestion plugin,
+  // which the managed delete and choice policy is written around. Desktop
+  // sessions keep one question tool; IM sessions, which cannot answer either,
+  // ask in plain text.
+  OpenClawQuestion.ToolName,
 ] as const;
+// progress_card feeds OpenClaw's session progress card, which LobsterAI does not
+// render (the desktop card was removed). Its description tells the model the
+// user watches that card instead of the transcript, and most calls took a model
+// request of their own (62 of 84 locally), so it stays off.
+const MANAGED_TOOL_UPDATE_PLAN = false;
 // Tool schemas were ~2/3 of every request (~106k characters for 68 tools).
 // Directory mode keeps core file/shell tools, lists the other OpenClaw and
 // plugin tools in one line each, and leaves MCP tools behind tool_search.
-// `direct` needs openclaw-tool-search-direct-tools.patch. It pins tools that
-// must not hide: the delete policy skips confirmation when AskUserQuestion is
-// missing from the toolset, and the UI renders ask_user and progress_card.
+//
+// Cached input costs 1/50 of uncached input: pinning a tool adds ~0.002
+// credits per 1k schema tokens to a warm request, while discovering a deferred
+// one costs one or two extra model requests (0.15-0.5 credits). A/B runs showed
+// every deferred high-frequency scenario costing more than baseline, so
+// `direct` (needs openclaw-tool-search-direct-tools.patch) pins:
+// - AskUserQuestion: the delete policy skips confirmation when it is missing
+//   from the toolset;
+// - the product's frequent scenarios: browser (also returns screenshots),
+//   web_fetch, memory, scheduled tasks (automations), the Word/Excel/PowerPoint
+//   editors and computer use, the MCP servers by prefix.
+// Only the long tail (sessions, media generation, skill workshop, secrets,
+// user MCP servers) stays deferred. `minDeferredChars` turns Tool Search off
+// when that tail shrinks below ~5k tokens, where saving it on a cold start no
+// longer pays for the extra round trips.
+const MANAGED_TOOL_SEARCH_DIRECT_TOOLS = [
+  ASK_USER_QUESTION_TOOL_NAME,
+  'browser',
+  'web_fetch',
+  'memory_search',
+  'memory_get',
+  OPENCLAW_AUTOMATIONS_TOOL_NAME,
+  ...[...OFFICE_EDITORS.map(editor => editor.agent.serverName), ComputerUseMcpServerName.BuiltIn]
+    .map(serverName => `${serverName}${OPENCLAW_MCP_TOOL_NAME_SEPARATOR}*`),
+] as const;
 const MANAGED_TOOL_SEARCH = {
   enabled: true,
   mode: 'directory',
-  direct: [
-    ASK_USER_QUESTION_TOOL_NAME,
-    OpenClawQuestion.ToolName,
-    OPENCLAW_PROGRESS_CARD_TOOL_NAME,
-  ],
+  direct: MANAGED_TOOL_SEARCH_DIRECT_TOOLS,
+  minDeferredChars: 20_000,
 } as const;
 // OpenClaw 2026.8.1 owns detector selection and thresholds. Only the public
 // enable flag remains configurable; emitting the retired tuning keys makes
@@ -440,9 +474,9 @@ const providerApiKeyEnvVar = (providerName: string): string => {
 const MANAGED_DEFERRED_TOOLS_PROMPT = [
   '## Deferred Tools',
   '',
-  'Only core file/shell tools and a few interaction tools are loaded directly. Every other tool is still available:',
-  'the tool directory lists OpenClaw and plugin tools, and MCP tools (Office editors, saved logins, computer use,',
-  'user-installed servers) are found by search.',
+  'Frequently used tools (files, shell, browser, web fetch, memory, scheduled tasks, Word/Excel/PowerPoint editors,',
+  'computer use) are loaded directly. Every other tool is still available: the tool directory lists OpenClaw and',
+  'plugin tools (media generation, sessions), and other MCP tools (saved logins, user-installed servers) are found by search.',
   `- Find a tool with \`${OpenClawToolSearchControlTool.Search}\` (English keywords or an MCP server name), load its schema with \`${OpenClawToolSearchControlTool.Describe}\` when needed, then run it with \`${OpenClawToolSearchControlTool.Call}\`.`,
   `- When these instructions say to use a tool if it is available, a tool reachable through \`${OpenClawToolSearchControlTool.Search}\` counts as available.`,
   `- Before telling the user a capability is missing, or replacing a named tool with a script workaround, check \`${OpenClawToolSearchControlTool.Search}\`.`,
@@ -2237,6 +2271,7 @@ export class OpenClawConfigSync {
 
     return {
       deny: [...MANAGED_TOOL_DENY],
+      updatePlan: MANAGED_TOOL_UPDATE_PLAN,
       loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       toolSearch: { ...MANAGED_TOOL_SEARCH, direct: [...MANAGED_TOOL_SEARCH.direct] },
       web: {
@@ -2759,6 +2794,7 @@ export class OpenClawConfigSync {
             mode: sandboxMode,
           },
           workspace: path.resolve(mainWorkspacePath),
+          bootstrapMaxChars: OPENCLAW_BOOTSTRAP_MAX_CHARS,
           mediaMaxMb: 30,
           compaction: {
             maxActiveTranscriptBytes: OpenClawTranscriptSafetyLimit.SoftConfigValue,
@@ -4118,8 +4154,12 @@ export class OpenClawConfigSync {
       for (const editor of OFFICE_EDITORS) {
         if (editor.agent.prompt) sections.push(editor.agent.prompt);
       }
+      // Static policies that used to ride uncached in each session's first
+      // message or each turn; here they sit in the cached prefix.
+      sections.push(MANAGED_MEDIA_GENERATION_POLICY_PROMPT);
       sections.push(MANAGED_MATH_FORMAT_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
+      sections.push(MANAGED_LOCAL_TIME_POLICY_PROMPT);
       sections.push(MANAGED_HEARTBEAT_POLICY_PROMPT);
       sections.push(buildManagedSkillCreationPrompt(resolveSkillCreationPath()));
 

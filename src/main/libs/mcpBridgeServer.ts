@@ -9,6 +9,7 @@
 import crypto from 'crypto';
 import http from 'http';
 
+import { ASK_USER_QUESTION_TIMEOUT_MS } from '../../shared/cowork/constants';
 import type {
   MediaConfirmationCommand, MediaConfirmationResponse, MediaConfirmationState, VideoConfirmationDetails,
 } from '../../shared/media/confirmation';
@@ -16,6 +17,9 @@ import { MediaConfirmationReason } from '../../shared/media/confirmation';
 import { listenOnLoopback } from './loopbackListen';
 import { MediaConfirmationRequests, type RecoverableMediaConfirmation } from './mediaConfirmationRequests';
 import { serializeForLog } from './sanitizeForLog';
+
+/** Whitespace keepalive while an AskUser request waits; well under undici's 5-minute body timeout. */
+const ASK_USER_KEEPALIVE_MS = 30_000;
 
 const log = (level: string, msg: string) => {
   const formatted = `[McpBridge:HTTP][${level}] ${msg}`;
@@ -380,7 +384,8 @@ export class McpBridgeServer {
   }
 
   private async handleAskUser(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const ASKUSER_TIMEOUT_MS = 120_000;
+    const ASKUSER_TIMEOUT_MS = ASK_USER_QUESTION_TIMEOUT_MS;
+    let keepalive: ReturnType<typeof setInterval> | undefined;
 
     try {
       const body = await this.readBody(req);
@@ -399,6 +404,13 @@ export class McpBridgeServer {
       const requestId = crypto.randomUUID();
       log('INFO', `AskUser waiting for user response, requestId=${requestId}`);
 
+      // The wait can outlast the caller's fetch header/body timeouts (5 min in
+      // undici), so send the headers now and keep the body alive with
+      // whitespace, which JSON.parse ignores, until the answer arrives.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.flushHeaders();
+      keepalive = setInterval(() => res.write(' '), ASK_USER_KEEPALIVE_MS);
+
       // Create a Promise that resolves when the user responds or timeout
       const userResponse = await new Promise<AskUserResponse>((resolve) => {
         const timer = setTimeout(() => {
@@ -409,6 +421,17 @@ export class McpBridgeServer {
         }, ASKUSER_TIMEOUT_MS);
 
         this.pendingAskUser.set(requestId, { requestId, resolve, timer });
+
+        // The asker gave up (its MCP call timed out, the run was stopped):
+        // close the dialog now instead of leaving it up until the timeout.
+        res.once('close', () => {
+          if (!this.pendingAskUser.has(requestId)) return;
+          log('INFO', `AskUser caller disconnected, requestId=${requestId}`);
+          clearTimeout(timer);
+          this.pendingAskUser.delete(requestId);
+          this.onAskUserDismissCallback?.(requestId);
+          resolve({ behavior: 'deny' });
+        });
 
         // Notify LobsterAI to show the modal
         if (this.onAskUserCallback) {
@@ -426,13 +449,14 @@ export class McpBridgeServer {
       });
 
       log('INFO', `AskUser resolved, requestId=${requestId} behavior=${userResponse.behavior}`);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(userResponse));
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       log('ERROR', `AskUser request error: ${errMsg}`);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ behavior: 'deny' }));
+    } finally {
+      if (keepalive) clearInterval(keepalive);
     }
   }
 

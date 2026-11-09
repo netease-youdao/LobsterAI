@@ -4448,7 +4448,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
   });
 
-  test('defers large tool catalogs behind Tool Search and pins the interaction tools', async () => {
+  test('defers only the long tail behind Tool Search and pins interaction and frequent-scenario tools', async () => {
     const sync = await createSync();
 
     const result = sync.sync('tool-search');
@@ -4458,23 +4458,47 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.tools.toolSearch).toEqual({
       enabled: true,
       mode: 'directory',
-      direct: ['AskUserQuestion', 'ask_user', 'progress_card'],
+      direct: [
+        'AskUserQuestion',
+        'browser',
+        'web_fetch',
+        'memory_search',
+        'memory_get',
+        'automations',
+        // Office editor and computer-use MCP servers, by prefix.
+        'lobster-word__*',
+        'lobster-excel__*',
+        'lobster-ppt__*',
+        'computer-use__*',
+      ],
+      minDeferredChars: 20000,
     });
-    // Control UI surfaces LobsterAI never renders.
+    // Room for the static policies moved out of uncached per-session messages.
+    expect(config.agents.defaults.bootstrapMaxChars).toBe(32000);
+    // Control UI surfaces LobsterAI never renders, and the native question tool
+    // that duplicates AskUserQuestion.
     expect(config.tools.deny).toEqual(expect.arrayContaining([
       'dashboard',
       'portal',
       'terminal',
       'github_identity_status',
+      'ask_user',
     ]));
     // A user-enabled skill review still needs the workshop tool.
     expect(config.tools.deny).not.toContain('skill_workshop');
+    // The progress card has no desktop surface.
+    expect(config.tools.updatePlan).toBe(false);
 
     const agentsMd = fs.readFileSync(path.join(stateDir, 'workspace-main', 'AGENTS.md'), 'utf8');
     expect(agentsMd).toContain('## Deferred Tools');
     expect(agentsMd).toContain('a tool reachable through `tool_search` counts as available');
     // The deferred-tools rule comes before the sections that say "if it is available".
     expect(agentsMd.indexOf('## Deferred Tools')).toBeLessThan(agentsMd.indexOf('## Command Execution & User Interaction Policy'));
+    // Static policies now cached in AGENTS.md instead of each session's first message or turn.
+    expect(agentsMd).toContain('## Media Generation Policy');
+    expect(agentsMd).toContain('NOT user authorization to generate or spend credits');
+    expect(agentsMd).toContain('## Local Time');
+    expect(agentsMd).toContain('"Local time:" line');
   });
 
   test('registers the LobsterAI Office editor tools as native MCP servers', async () => {

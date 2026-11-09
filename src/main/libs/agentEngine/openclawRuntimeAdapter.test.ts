@@ -79,6 +79,7 @@ import {
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
 import { SubagentYield } from './subagent/yield';
+import { OPENCLAW_BOOTSTRAP_MAX_CHARS } from './workspaceDeliveredInstructions';
 
 test('only a live-child native shutdown announcement parks config recovery for self-restart', () => {
   const noteGatewaySelfRestart = vi.fn();
@@ -4455,7 +4456,7 @@ test('system prompt injection keeps AGENTS.md sections when OpenClaw would trunc
   const defaultSystemPrompt = '# Style\n- Keep replies concise and direct.';
   const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
   await withAgentsMdStateDir(
-    `${'Long user notes. '.repeat(1_500)}\n\n## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
+    `${'Long user notes. '.repeat(Math.ceil(OPENCLAW_BOOTSTRAP_MAX_CHARS / 'Long user notes. '.length) + 100)}\n\n## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
     async (stateDir) => {
       const { adapter, requests } = createRunTurnAdapter({ stateDir, defaultSystemPrompt });
 

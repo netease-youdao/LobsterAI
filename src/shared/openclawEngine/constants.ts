@@ -59,8 +59,11 @@ export const OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS = ['installs'] as const;
 /** Bundled plugin that owns model compatibility and thinking profiles. */
 export const OPENCLAW_MODEL_COMPAT_PLUGIN_ID = 'lobsterai-model-compat';
 
-/** OpenClaw's plan/progress tool, rendered as the task progress card. */
-export const OPENCLAW_PROGRESS_CARD_TOOL_NAME = 'progress_card';
+/** OpenClaw's scheduled-task tool (gateway `cron.*` methods). */
+export const OPENCLAW_AUTOMATIONS_TOOL_NAME = 'automations';
+
+/** OpenClaw names an MCP tool `<server>__<tool>`, e.g. `lobster-excel__excel_edit`. */
+export const OPENCLAW_MCP_TOOL_NAME_SEPARATOR = '__';
 
 /**
  * Tool Search control tools. A deferred tool invoked through them runs as a

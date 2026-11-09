@@ -1,12 +1,108 @@
+diff --git a/src/agents/tool-search-catalog.ts b/src/agents/tool-search-catalog.ts
+index 7c36164c..2dedb4d7 100644
+--- a/src/agents/tool-search-catalog.ts
++++ b/src/agents/tool-search-catalog.ts
+@@ -270,6 +270,52 @@ export function registerHeadlessToolSearchCatalog(params: {
+   registerToolSearchCatalog({ catalogRef, entries });
+ }
+ 
++/** Model-facing size of a tool the catalog would hide; unmeasurable schemas count as large. */
++function estimateDeferredToolChars(tool: AnyAgentTool): number {
++  try {
++    return (
++      tool.name.length +
++      (tool.description?.length ?? 0) +
++      (JSON.stringify(tool.parameters ?? {})?.length ?? 0)
++    );
++  } catch {
++    return Number.POSITIVE_INFINITY;
++  }
++}
++
++/**
++ * Operator-pinned names from tools.toolSearch.direct: exact names, or a
++ * trailing `*` prefix such as `lobster-word__*` for one MCP server. Unlike the
++ * implicit required names above, an explicit pin may name an MCP tool, but only
++ * when that name is unique in the run so a lookalike cannot take its place.
++ */
++export function createOperatorPinnedToolMatcher(
++  names: Iterable<string> | undefined,
++): ((tool: AnyAgentTool, uniqueNames: ReadonlySet<string>) => boolean) | undefined {
++  const exact = new Set<string>();
++  const prefixes: string[] = [];
++  for (const raw of names ?? []) {
++    const name = raw.trim();
++    if (!name) {
++      continue;
++    }
++    if (name.endsWith("*")) {
++      const prefix = name.slice(0, -1);
++      if (prefix) {
++        prefixes.push(prefix);
++      }
++    } else {
++      exact.add(name);
++    }
++  }
++  if (exact.size === 0 && prefixes.length === 0) {
++    return undefined;
++  }
++  return (tool, uniqueNames) =>
++    uniqueNames.has(tool.name) &&
++    (exact.has(tool.name) || prefixes.some((prefix) => tool.name.startsWith(prefix)));
++}
++
+ export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {
+   const nameCounts = new Map<string, number>();
+   for (const tool of tools) {
+@@ -474,6 +520,7 @@ export function applyToolCatalogCompaction(
+   const visible: AnyAgentTool[] = [];
+   const catalog: ToolSearchCatalogEntry[] = [];
+   let hasPrewrappedInput = false;
++  let deferredChars = 0;
+   const shouldCatalog = (tool: AnyAgentTool) =>
+     shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true);
+   for (const tool of params.tools) {
+@@ -488,11 +535,27 @@ export function applyToolCatalogCompaction(
+       hasPrewrappedInput ||= isToolWrappedWithBeforeToolCallHook(tool);
+       catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
+       if (!params.isVisibleCatalogTool?.(tool)) {
++        // Measure only while under the threshold: once it is reached the
++        // answer is known, and without a threshold nothing is serialized.
++        if (params.minDeferredChars && deferredChars < params.minDeferredChars) {
++          deferredChars += estimateDeferredToolChars(tool);
++        }
+         continue;
+       }
+     }
+     visible.push(tool);
+   }
++  // Every deferred tool costs search/describe round trips when used, while a
++  // cached prefix is cheap; hiding only a small remainder does not pay off.
++  if (params.minDeferredChars && deferredChars < params.minDeferredChars) {
++    return {
++      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
++      compacted: false,
++      catalogToolCount: 0,
++      catalogRegistered: false,
++      catalogReused: false,
++    };
++  }
+   // Prewrapped inputs already close over a run's hook and abort state. Only
+   // wrappers created during cataloging are safe to reuse through executor rebinding.
+   const reusableKey = hasPrewrappedInput ? undefined : reusableCatalogKey(params);
 diff --git a/src/agents/tool-search-config.ts b/src/agents/tool-search-config.ts
-index 77ffaab1..faa9bdb7 100644
+index 77ffaab1..767a3de3 100644
 --- a/src/agents/tool-search-config.ts
 +++ b/src/agents/tool-search-config.ts
-@@ -73,9 +73,25 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
+@@ -73,9 +73,28 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
        Math.min(maxSearchLimit, readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT)),
      ),
      maxSearchLimit,
 +    ...readDirectToolNames(raw.direct),
++    ...(readInteger(raw.minDeferredChars, 0) > 0
++      ? { minDeferredChars: readInteger(raw.minDeferredChars, 0) }
++      : {}),
    };
  }
  
@@ -28,21 +124,110 @@ index 77ffaab1..faa9bdb7 100644
  export function setToolSearchCodeModeSupportedForTest(value: boolean | undefined): void {
    toolSearchCodeModeSupportedForTest = value;
  }
+diff --git a/src/agents/tool-search-directory.ts b/src/agents/tool-search-directory.ts
+index 80cb9d6f..61fcd50f 100644
+--- a/src/agents/tool-search-directory.ts
++++ b/src/agents/tool-search-directory.ts
+@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+ import {
+   applyToolCatalogCompaction,
+   collectUniqueCatalogToolNames,
++  createOperatorPinnedToolMatcher,
+   isDirectVisibleCatalogTool,
+   resolveCatalog,
+   visibleCatalogEntries,
+@@ -36,6 +37,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
+   catalogRef?: ToolSearchCatalogRef;
+   toolHookContext?: Parameters<typeof applyToolCatalogCompaction>[0]["toolHookContext"];
+   directToolNames?: Iterable<string>;
++  operatorDirectToolNames?: Iterable<string>;
+ }) {
+   const config = resolveToolSearchConfig(params.config);
+   if (!config.enabled) {
+@@ -57,15 +59,19 @@ export function applyToolSchemaDirectoryCatalog(params: {
+     };
+   }
+   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
++  const isOperatorPinned = createOperatorPinnedToolMatcher(params.operatorDirectToolNames);
+   const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
+   return applyToolCatalogCompaction({
+     ...params,
+     enabled: config.enabled,
++    minDeferredChars: config.minDeferredChars,
+     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
+     // The unique-name gate defers any cross-source name collision before the
+     // shared trust check runs.
+     isVisibleCatalogTool: (tool) =>
+-      uniqueCatalogToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
++      uniqueCatalogToolNames.has(tool.name) &&
++      (isDirectVisibleCatalogTool(tool, directToolNames) ||
++        isOperatorPinned?.(tool, uniqueCatalogToolNames) === true),
+   });
+ }
+ 
 diff --git a/src/agents/tool-search-types.ts b/src/agents/tool-search-types.ts
-index 35af3672..8d2f9152 100644
+index 35af3672..4ff5e53b 100644
 --- a/src/agents/tool-search-types.ts
 +++ b/src/agents/tool-search-types.ts
-@@ -79,6 +79,8 @@ export type ToolSearchConfig = {
+@@ -79,6 +79,10 @@ export type ToolSearchConfig = {
    codeTimeoutMs: number;
    searchDefaultLimit: number;
    maxSearchLimit: number;
-+  /** Configured OpenClaw/plugin tool names kept directly visible (tools.toolSearch.direct). */
++  /** Operator-pinned names or `prefix*` patterns kept directly visible (tools.toolSearch.direct). */
 +  directToolNames?: readonly string[];
++  /** Skip compaction when the hidden schemas would total fewer characters (tools.toolSearch.minDeferredChars). */
++  minDeferredChars?: number;
  };
  
  /** Per-run/session context used by Tool Search control tools. */
+@@ -166,4 +170,6 @@ export type ToolSearchCatalogCompactionParams = {
+   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
+   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
+   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
++  /** Skip compaction when the schemas it would hide total fewer characters. */
++  minDeferredChars?: number;
+ };
+diff --git a/src/agents/tool-search.ts b/src/agents/tool-search.ts
+index fc287867..80469f7b 100644
+--- a/src/agents/tool-search.ts
++++ b/src/agents/tool-search.ts
+@@ -10,6 +10,8 @@ import { resolveToolResultFailureKind } from "./tool-result-error.js";
+ import {
+   addClientToolsToToolCatalog,
+   applyToolCatalogCompaction,
++  collectUniqueCatalogToolNames,
++  createOperatorPinnedToolMatcher,
+   isDirectVisibleCatalogTool,
+   resolveCatalog,
+ } from "./tool-search-catalog.js";
+@@ -221,16 +223,24 @@ export function applyToolSearchCatalog(params: {
+   toolHookContext?: HookContext;
+   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+   directToolNames?: Iterable<string>;
++  operatorDirectToolNames?: Iterable<string>;
+ }) {
+   const config = resolveToolSearchConfig(params.config);
+   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
++  const isOperatorPinned = createOperatorPinnedToolMatcher(params.operatorDirectToolNames);
++  const uniqueCatalogToolNames = isOperatorPinned
++    ? collectUniqueCatalogToolNames(params.tools)
++    : new Set<string>();
+   return applyToolCatalogCompaction({
+     ...params,
+     enabled: config.enabled,
++    minDeferredChars: config.minDeferredChars,
+     isVisibleControlTool: (tool) =>
+       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
+       shouldExposeControlTool(tool.name, config.mode),
+-    isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
++    isVisibleCatalogTool: (tool) =>
++      isDirectVisibleCatalogTool(tool, directToolNames) ||
++      isOperatorPinned?.(tool, uniqueCatalogToolNames) === true,
+   });
+ }
+ 
 diff --git a/src/agents/tool-surface-plan.test.ts b/src/agents/tool-surface-plan.test.ts
-index 22233f08..3a5d6348 100644
+index 22233f08..0080db0d 100644
 --- a/src/agents/tool-surface-plan.test.ts
 +++ b/src/agents/tool-surface-plan.test.ts
 @@ -1,6 +1,7 @@
@@ -53,7 +238,7 @@ index 22233f08..3a5d6348 100644
  import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
  import { createCodeModeTools } from "./code-mode.js";
  import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-@@ -326,4 +327,74 @@ describe("applyAgentToolSurfaceCatalog", () => {
+@@ -326,4 +327,121 @@ describe("applyAgentToolSurfaceCatalog", () => {
      expect(result.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_RAW_TOOL_NAME]);
      expect(result.catalogToolCount).toBe(1);
    });
@@ -95,124 +280,181 @@ index 22233f08..3a5d6348 100644
 +    },
 +  );
 +
-+  it("never promotes MCP tools through the direct list", () => {
-+    const config: OpenClawConfig = {
-+      tools: {
-+        codeMode: false,
-+        toolSearch: { enabled: true, mode: "directory", direct: ["remote_echo"] },
-+      },
-+    };
-+    const mcpTool = createStubTool("remote_echo");
-+    setPluginToolMeta(mcpTool, {
++  const mcpStub = (name: string) => {
++    const tool = createStubTool(name);
++    setPluginToolMeta(tool, {
 +      pluginId: "fake-plugin",
 +      optional: true,
 +      mcp: {
 +        serverName: "remote-demo",
 +        safeServerName: "remoteDemo",
-+        toolName: "echo",
++        toolName: name,
 +        operation: "tool",
 +      },
 +    });
-+    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
-+    const result = applyAgentToolSurfaceCatalog({
-+      tools: [createStubTool(TOOL_SEARCH_RAW_TOOL_NAME), mcpTool],
++    return tool;
++  };
++
++  const applyWithToolSearch = (
++    toolSearch: NonNullable<NonNullable<OpenClawConfig["tools"]>["toolSearch"]>,
++    tools: ReturnType<typeof createStubTool>[],
++    forceDirectMessageTool = false,
++  ) => {
++    const config: OpenClawConfig = { tools: { codeMode: false, toolSearch } };
++    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config, forceDirectMessageTool });
++    return applyAgentToolSurfaceCatalog({
++      tools: [createStubTool(TOOL_SEARCH_RAW_TOOL_NAME), ...tools],
 +      config,
 +      toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
 +      codeModeControlsEnabled: plan.codeModeControlsEnabled,
 +      toolSearchConfig: plan.toolSearchConfig,
-+      forceDirectMessageTool: false,
++      forceDirectMessageTool,
 +      catalogRef: createToolSearchCatalogRef(),
 +    });
++  };
++
++  it.each(["tools", "directory"] as const)(
++    "pins MCP tools named exactly or by server prefix in %s mode",
++    (mode) => {
++      const result = applyWithToolSearch(
++        { enabled: true, mode, direct: ["remoteDemo__edit", "docs__*"] },
++        [mcpStub("remoteDemo__edit"), mcpStub("remoteDemo__other"), mcpStub("docs__read")],
++      );
++
++      expect(result.tools.map((tool) => tool.name)).toEqual([
++        TOOL_SEARCH_RAW_TOOL_NAME,
++        "remoteDemo__edit",
++        "docs__read",
++      ]);
++      expect(result.catalogToolCount).toBe(3);
++    },
++  );
++
++  it("does not pin a duplicated name, so a lookalike cannot take its place", () => {
++    const result = applyWithToolSearch({ enabled: true, mode: "tools", direct: ["dup_tool"] }, [
++      createStubTool("dup_tool"),
++      mcpStub("dup_tool"),
++    ]);
 +
 +    expect(result.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_RAW_TOOL_NAME]);
-+    expect(result.catalogToolCount).toBe(1);
++  });
++
++  it("keeps implicitly required names OpenClaw-only", () => {
++    const result = applyWithToolSearch({ enabled: true, mode: "tools" }, [mcpStub("message")], true);
++
++    expect(result.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_RAW_TOOL_NAME]);
++  });
++
++  it("skips compaction when the deferred schemas fall below minDeferredChars", () => {
++    const tools = [createStubTool("small_a"), createStubTool("small_b")];
++    const below = applyWithToolSearch(
++      { enabled: true, mode: "directory", minDeferredChars: 1_000_000 },
++      tools,
++    );
++    expect(below.tools.map((tool) => tool.name)).toEqual(["small_a", "small_b"]);
++    expect(below.compacted).toBe(false);
++    expect(below.catalogRegistered).toBe(false);
++
++    const above = applyWithToolSearch({ enabled: true, mode: "directory", minDeferredChars: 1 }, tools);
++    expect(above.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_RAW_TOOL_NAME]);
++    expect(above.catalogRegistered).toBe(true);
 +  });
  });
 diff --git a/src/agents/tool-surface-plan.ts b/src/agents/tool-surface-plan.ts
-index b7f711e4..5205107a 100644
+index b7f711e4..59f7b8df 100644
 --- a/src/agents/tool-surface-plan.ts
 +++ b/src/agents/tool-surface-plan.ts
-@@ -115,6 +115,8 @@ export function applyAgentToolSurfaceCatalog({
-   return applyCatalog({
+@@ -116,5 +116,8 @@ export function applyAgentToolSurfaceCatalog({
      ...catalogParams,
      config: toolSearchRuntimeConfig,
--    directToolNames,
-+    // Operator-pinned names (tools.toolSearch.direct) stay visible; the catalog
-+    // still admits only trusted OpenClaw/plugin tools as direct.
-+    directToolNames: [...(toolSearchConfig.directToolNames ?? []), ...directToolNames],
+     directToolNames,
++    // Operator pins (tools.toolSearch.direct) may name MCP tools exactly or by
++    // `server__*` prefix; the catalog admits them only when the name is unique.
++    operatorDirectToolNames: toolSearchConfig.directToolNames,
    });
  }
 diff --git a/src/config/schema.help.runtime.ts b/src/config/schema.help.runtime.ts
-index 890c6250..61a95f6f 100644
+index 890c6250..67b47419 100644
 --- a/src/config/schema.help.runtime.ts
 +++ b/src/config/schema.help.runtime.ts
-@@ -129,6 +129,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
+@@ -129,6 +129,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
      "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
    "tools.toolSearch.maxSearchLimit":
      "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
 +  "tools.toolSearch.direct":
-+    "Exact OpenClaw or plugin tool names that stay directly visible while Tool Search defers the rest. Use for safety or high-frequency tools; MCP and client tools are never promoted.",
++    "Tool names that stay directly visible while Tool Search defers the rest: exact names or a trailing `*` prefix such as `lobster-word__*`. Use for safety, image-returning or high-frequency tools. MCP tools are promoted only when their name is unique in the run; client tools never.",
++  "tools.toolSearch.minDeferredChars":
++    "Skip Tool Search for a run when the schemas it would defer total fewer characters than this. Deferred tools cost search/describe round trips when used, so hiding a small remainder rarely pays off. Default: no threshold.",
    "tools.codeMode":
      "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
    "tools.codeMode.enabled":
 diff --git a/src/config/schema.labels.ts b/src/config/schema.labels.ts
-index 85f4dc1a..9abef52c 100644
+index 85f4dc1a..77c9a8d4 100644
 --- a/src/config/schema.labels.ts
 +++ b/src/config/schema.labels.ts
-@@ -278,6 +278,7 @@ export const FIELD_LABELS: Record<string, string> = {
+@@ -278,6 +278,8 @@ export const FIELD_LABELS: Record<string, string> = {
    "tools.toolSearch.codeTimeoutMs": "Tool Search Code Timeout",
    "tools.toolSearch.searchDefaultLimit": "Tool Search Default Results",
    "tools.toolSearch.maxSearchLimit": "Tool Search Max Results",
 +  "tools.toolSearch.direct": "Tool Search Direct Tools",
++  "tools.toolSearch.minDeferredChars": "Tool Search Minimum Deferred Characters",
    "tools.codeMode": "Code Mode",
    "tools.codeMode.enabled": "Enable Code Mode",
    "tools.codeMode.runtime": "Code Mode Runtime",
 diff --git a/src/config/schema.test.ts b/src/config/schema.test.ts
-index 09c8ed65..b197ba84 100644
+index 09c8ed65..45712294 100644
 --- a/src/config/schema.test.ts
 +++ b/src/config/schema.test.ts
-@@ -1039,6 +1039,7 @@ describe("config schema", () => {
+@@ -1039,6 +1039,8 @@ describe("config schema", () => {
            codeTimeoutMs: 5000,
            searchDefaultLimit: 4,
            maxSearchLimit: 12,
-+          direct: ["ask_user"],
++          direct: ["ask_user", "lobster-word__*"],
++          minDeferredChars: 20000,
          },
        })?.toolSearch,
      ).toEqual({
-@@ -1047,7 +1048,11 @@ describe("config schema", () => {
+@@ -1047,7 +1049,15 @@ describe("config schema", () => {
        codeTimeoutMs: 5000,
        searchDefaultLimit: 4,
        maxSearchLimit: 12,
-+      direct: ["ask_user"],
++      direct: ["ask_user", "lobster-word__*"],
++      minDeferredChars: 20000,
      });
 +    expect(
 +      ToolsSchema.safeParse({ toolSearch: { enabled: true, direct: "ask_user" } }).success,
++    ).toBe(false);
++    expect(
++      ToolsSchema.safeParse({ toolSearch: { enabled: true, minDeferredChars: -1 } }).success,
 +    ).toBe(false);
      expect(
        ToolsSchema.safeParse({
          toolSearch: {
 diff --git a/src/config/types.tools.ts b/src/config/types.tools.ts
-index 26126f85..cc4aac6c 100644
+index 26126f85..fcabe5a8 100644
 --- a/src/config/types.tools.ts
 +++ b/src/config/types.tools.ts
-@@ -176,6 +176,8 @@ export type ToolSearchConfig =
+@@ -176,6 +176,10 @@ export type ToolSearchConfig =
        searchDefaultLimit?: number;
        /** Maximum search result count. Runtime clamps to 1..50. */
        maxSearchLimit?: number;
-+      /** Exact OpenClaw or plugin tool names kept directly visible instead of deferred. MCP and client tools are never promoted. */
++      /** Tool names kept directly visible instead of deferred: exact names or a trailing `*` prefix (e.g. `lobster-word__*`). MCP tools are promoted only when their name is unique; client tools never. */
 +      direct?: string[];
++      /** Skip compaction when the schemas it would defer total fewer characters than this. Default: no threshold. */
++      minDeferredChars?: number;
      };
  
  export type CodeModeConfig =
 diff --git a/src/config/zod-schema.agent-runtime.ts b/src/config/zod-schema.agent-runtime.ts
-index 44bf38b0..de320292 100644
+index 44bf38b0..acccfc37 100644
 --- a/src/config/zod-schema.agent-runtime.ts
 +++ b/src/config/zod-schema.agent-runtime.ts
-@@ -583,6 +583,7 @@ const ToolSearchSchema = z
+@@ -583,6 +583,8 @@ const ToolSearchSchema = z
          codeTimeoutMs: z.number().int().positive().optional(),
          searchDefaultLimit: z.number().int().positive().optional(),
          maxSearchLimit: z.number().int().positive().optional(),
 +        direct: z.array(z.string()).optional(),
++        minDeferredChars: z.number().int().nonnegative().optional(),
        })
        .strict(),
    ])

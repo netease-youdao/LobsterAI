@@ -47,6 +47,60 @@ describe('McpBridgeServer AskUser session attribution', () => {
     }
   });
 
+  test('sends headers at once and keeps a slow answer alive with whitespace', async () => {
+    const secret = 'test-secret';
+    const server = new McpBridgeServer(secret);
+    try {
+      await server.start();
+      let pendingId = '';
+      server.onAskUser(request => { pendingId = request.requestId; });
+
+      const response = await fetch(server.askUserCallbackUrl!, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-ask-user-secret': secret },
+        body: JSON.stringify({ questions: makeQuestions() }),
+      });
+      // Headers arrive before the user answers, so a caller's header timeout cannot fire.
+      expect(response.status).toBe(200);
+      expect(pendingId).not.toBe('');
+
+      server.resolveAskUser(pendingId, { behavior: 'allow', answers: { q: 'a' } });
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({ behavior: 'allow', answers: { q: 'a' } });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('dismisses the dialog as soon as the asker disconnects', async () => {
+    const secret = 'test-secret';
+    const server = new McpBridgeServer(secret);
+    try {
+      await server.start();
+      const dismissed: string[] = [];
+      let pendingId = '';
+      server.onAskUser(request => { pendingId = request.requestId; });
+      server.onAskUserDismiss(requestId => { dismissed.push(requestId); });
+
+      const controller = new AbortController();
+      const response = await fetch(server.askUserCallbackUrl!, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-ask-user-secret': secret },
+        body: JSON.stringify({ questions: makeQuestions() }),
+        signal: controller.signal,
+      });
+      expect(response.status).toBe(200);
+      controller.abort();
+
+      await expect.poll(() => dismissed, { timeout: 5_000 }).toEqual([pendingId]);
+      // A late answer for the abandoned request is ignored.
+      server.resolveAskUser(pendingId, { behavior: 'allow' });
+      expect(dismissed).toEqual([pendingId]);
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('passes sessionKey from internal AskUser requests', async () => {
     const server = new McpBridgeServer('test-secret');
     const received: AskUserRequest[] = [];

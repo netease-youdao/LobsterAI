@@ -1,0 +1,161 @@
+diff --git a/src/agents/tool-search.mcp-error.test.ts b/src/agents/tool-search.mcp-error.test.ts
+index 055c5cb8..ec792dad 100644
+--- a/src/agents/tool-search.mcp-error.test.ts
++++ b/src/agents/tool-search.mcp-error.test.ts
+@@ -142,18 +142,29 @@ describe("Tool Search MCP failures", () => {
+       status: "failed",
+     });
+     const wrappedDetails = wrappedResult.details as {
+-      tool: unknown;
++      tool: { id: string; name: string; description: string };
+       result: unknown;
+       status: unknown;
+     };
++    // The model sees only the tool identity; details keep the full catalog entry.
+     expect(wrappedResult.content).toEqual([
+       {
+         type: "text",
+         text: expect.stringContaining(
+-          JSON.stringify({ tool: wrappedDetails.tool, result: wrappedDetails.result }, null, 2),
++          JSON.stringify(
++            {
++              tool: { id: wrappedDetails.tool.id, name: wrappedDetails.tool.name },
++              result: wrappedDetails.result,
++            },
++            null,
++            2,
++          ),
+         ),
+       },
+     ]);
++    expect(wrappedResult.content[0]).not.toMatchObject({
++      text: expect.stringContaining(wrappedDetails.tool.description),
++    });
+     expect(wrappedResult.content[0]).toMatchObject({
+       text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+     });
+@@ -284,6 +295,64 @@ describe("Tool Search MCP failures", () => {
+     expect(isToolResultError(wrappedNativeResult)).toBe(false);
+   });
+ 
++  it.each([
++    {
++      name: "text and image",
++      content: [
++        { type: "text" as const, text: "Screenshot captured" },
++        { type: "image" as const, data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
++      ],
++    },
++    {
++      name: "image only",
++      content: [{ type: "image" as const, data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/jpeg" }],
++    },
++  ])("returns native image blocks from a deferred native tool ($name)", async ({ content }) => {
++    const nativeTarget: AnyAgentTool = {
++      name: "native_screenshot",
++      label: "Native screenshot",
++      description: "Return a screenshot",
++      parameters: Type.Object({}, { additionalProperties: false }),
++      execute: async () => ({ content, details: {} }),
++    };
++    const result = await createDeferredCall(nativeTarget).execute("deferred-image-call", {
++      id: nativeTarget.name,
++      args: {},
++    });
++
++    const images = result.content.filter((block) => block.type === "image");
++    expect(images).toEqual(content.filter((block) => block.type === "image"));
++    const text = result.content
++      .filter((block) => block.type === "text")
++      .map((block) => (block as { text: string }).text)
++      .join("\n");
++    expect(text).toContain("is attached after this result");
++    expect(text).not.toContain("aW1hZ2UtYnl0ZXM=");
++    expect(isToolResultError(result)).toBe(false);
++  });
++
++  it("returns native image blocks from a deferred MCP tool behind the untrusted wrapper", async () => {
++    const { callTool, target } = await createDeferredMcpCall({
++      content: [
++        { type: "text", text: "Window captured" },
++        { type: "image", data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
++      ],
++      isError: false,
++    });
++    const result = await callTool.execute("deferred-mcp-image-call", { id: target.name, args: {} });
++
++    expect(result.content[0]).toMatchObject({
++      type: "text",
++      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
++    });
++    expect(result.content[0]).not.toMatchObject({
++      text: expect.stringContaining("aW1hZ2UtYnl0ZXM="),
++    });
++    expect(result.content.filter((block) => block.type === "image")).toEqual([
++      { type: "image", data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
++    ]);
++  });
++
+   it("lets tool_search_code recover from a nested MCP failure", async () => {
+     const { target } = await createDeferredMcpCall({
+       content: [{ type: "text", text: "Backend request failed" }],
+diff --git a/src/agents/tool-search.ts b/src/agents/tool-search.ts
+index c9d3c248..fc287867 100644
+--- a/src/agents/tool-search.ts
++++ b/src/agents/tool-search.ts
+@@ -389,7 +389,22 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
+             signal,
+             onUpdate,
+           });
+-          const wrappedResult = formatToolSearchControlResult(callResult, runtime, toolCallId);
++          // The model already saw this tool's description and input in the
++          // directory, search hit or tool_describe; echoing them on every call
++          // only grows the transcript. Keep the identity, drop the rest.
++          const { result: textOnlyResult, images } = splitToolCallResultImages(callResult.result);
++          const projectedResult = formatToolSearchControlResult(
++            { tool: { id: callResult.tool.id, name: callResult.tool.name }, result: textOnlyResult },
++            runtime,
++            toolCallId,
++          );
++          // Images stay native blocks after the (possibly untrusted-wrapped) JSON
++          // text, as a direct call returns them; serializing them would hand the
++          // model truncated base64 text instead of a picture.
++          const wrappedResult =
++            images.length > 0
++              ? { ...projectedResult, content: [...projectedResult.content, ...images] }
++              : projectedResult;
+           const failureKind = resolveToolResultFailureKind(callResult.result);
+           if (!failureKind) {
+             return wrappedResult;
+@@ -405,6 +420,31 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
+   ];
+ }
+ 
++type ToolCallResultBlock = AgentToolResult<unknown>["content"][number];
++type ToolCallImageBlock = Extract<ToolCallResultBlock, { type: "image" }>;
++
++/** Replace image blocks with short placeholders and return the images separately. */
++function splitToolCallResultImages(result: AgentToolResult<unknown>): {
++  result: AgentToolResult<unknown>;
++  images: ToolCallImageBlock[];
++} {
++  if (!Array.isArray(result.content)) {
++    return { result, images: [] };
++  }
++  const images: ToolCallImageBlock[] = [];
++  const content = result.content.map((block): ToolCallResultBlock => {
++    if (block?.type !== "image") {
++      return block;
++    }
++    images.push(block);
++    return {
++      type: "text",
++      text: `[image ${images.length} (${block.mimeType}) is attached after this result]`,
++    };
++  });
++  return images.length > 0 ? { result: { ...result, content }, images } : { result, images };
++}
++
+ const testing = {
+   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
+   resolveToolSearchConfig,
