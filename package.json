@@ -485,7 +485,7 @@
     "eslint-plugin-react-refresh": "^0.4.26",
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "extract-zip": "^2.0.1",
-    "fast-xml-parser": "5.11.1",
+    "fast-xml-parser": "5.12.0",
     "fflate": "0.8.3",
     "globals": "^17.4.0",
     "husky": "^9.1.7",
