@@ -4,6 +4,7 @@ import http from 'http';
 import { beforeEach, expect, test, vi } from 'vitest';
 
 import { AuthRefreshOutcome } from '../../shared/auth/constants';
+import { DSH_INSTANCE_HEADER } from '../../shared/dshEngine/analytics';
 import {
   LOBSTERAI_CLIENT_CAPABILITIES,
   LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
@@ -23,11 +24,91 @@ import {
   __openClawTokenProxyTestUtils,
   consumeRecentOpenClawTokenProxyQuotaError,
   getOpenClawTokenProxyTraceStats,
+  type ProxyRequestObservation,
   startOpenClawTokenProxy,
   stopOpenClawTokenProxy,
 } from './openclawTokenProxy';
 
 const testUtils = __openClawTokenProxyTestUtils;
+
+test.each([undefined, 'live-instance', 'stale-instance'])('observation leaves authentication/forwarding unchanged for marker=%s', async marker => {
+  vi.mocked(net.fetch).mockReset();
+  vi.mocked(net.fetch).mockImplementation(async () => new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }));
+  const finished = vi.fn();
+  const observeRequest = vi.fn((_request: ProxyRequestObservation) => finished);
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'account-access', refreshToken: 'account-refresh' }),
+    refreshToken: vi.fn(), getServerBaseUrl: () => 'https://server.example', getClientVersion: () => 'test',
+    getInboundAuthToken: () => 'shared-token', observeRequest,
+  });
+  const send = (authorization: string) => new Promise<number>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/chat/completions', headers: {
+      authorization, ...(marker ? { [DSH_INSTANCE_HEADER]: marker } : {}),
+    } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)); });
+    req.on('error', reject);
+    req.end('{"model":"test-model","messages":[]}');
+  });
+  try {
+    expect(await send('Bearer invalid')).toBe(401);
+    expect(observeRequest).not.toHaveBeenCalled();
+    expect(await send('Bearer shared-token')).toBe(200);
+    expect(observeRequest).toHaveBeenCalledOnce();
+    expect(finished).toHaveBeenCalledOnce();
+    const observed = observeRequest.mock.calls[0][0];
+    expect(observed).toMatchObject({ dshInstanceId: marker, model: 'test-model' });
+    expect(observed.traceId).toMatch(/^[a-f0-9]{32}$/);
+    expect(observed.spanId).toMatch(/^[a-f0-9]{16}$/);
+    const upstream = vi.mocked(net.fetch).mock.calls[0][1]!;
+    expect(new Headers(upstream.headers).get('authorization')).toBe('Bearer account-access');
+    expect(new Headers(upstream.headers).get(DSH_INSTANCE_HEADER)).toBeNull();
+    expect(new Headers(upstream.headers).get('traceparent')).toBe(formatLlmTraceparent(observed.traceId, observed.spanId));
+    expect(new TextDecoder().decode(upstream.body as Uint8Array)).toBe('{"model":"test-model","messages":[]}');
+    expect(finished.mock.calls[0][0]).toMatchObject({ outcome: 'completed', status: 200 });
+  } finally { stopOpenClawTokenProxy(); }
+});
+
+test.each([true, false])('observer exceptions do not change the request result (start=%s)', async throwOnStart => {
+  vi.mocked(net.fetch).mockReset();
+  vi.mocked(net.fetch).mockResolvedValueOnce(new Response('denied', { status: 403 }));
+  const observeRequest = () => {
+    if (throwOnStart) throw new Error('observer setup');
+    return () => { throw new Error('observer completion'); };
+  };
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'access', refreshToken: 'refresh' }), refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example', getClientVersion: () => 'test', observeRequest,
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: 'POST', body: '{}' });
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('denied');
+  } finally { stopOpenClawTokenProxy(); }
+});
+
+test('401 refresh remains one observed logical request with the same generated trace', async () => {
+  vi.mocked(net.fetch).mockReset();
+  vi.mocked(net.fetch)
+    .mockResolvedValueOnce(new Response('expired', { status: 401 }))
+    .mockResolvedValueOnce(new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+  const finished = vi.fn();
+  const observeRequest = vi.fn((_request: ProxyRequestObservation) => finished);
+  const refreshToken = vi.fn(async () => ({ outcome: AuthRefreshOutcome.Success, accessToken: 'new-access' }));
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'old-access', refreshToken: 'refresh' }), refreshToken,
+    getServerBaseUrl: () => 'https://server.example', getClientVersion: () => 'test', observeRequest,
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: '{}' });
+    expect(await response.text()).toBe('data: [DONE]\n\n');
+    expect(refreshToken).toHaveBeenCalledOnce();
+    expect(observeRequest).toHaveBeenCalledOnce();
+    expect(finished).toHaveBeenCalledOnce();
+    expect(finished.mock.calls[0][0]).toMatchObject({ outcome: 'completed', status: 200 });
+    const headers = vi.mocked(net.fetch).mock.calls.map(([, init]) => new Headers(init?.headers));
+    expect(headers[1].get('traceparent')).toBe(headers[0].get('traceparent'));
+    expect(headers.map(h => h.get('authorization'))).toEqual(['Bearer old-access', 'Bearer new-access']);
+  } finally { stopOpenClawTokenProxy(); }
+});
 
 beforeEach(() => {
   consumeRecentOpenClawTokenProxyQuotaError();

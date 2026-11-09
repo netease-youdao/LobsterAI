@@ -53,6 +53,8 @@ export const LogReporterAction = {
   DesktopCompanionFileDrop: 'lobsterai_desktop_companion_file_drop',
   DreamingSettingChanged: 'lobsterai_dreaming_setting_changed',
   DshAction: 'lobsterai_dsh_action',
+  DshRuntimeLifecycle: 'lobsterai_dsh_runtime_lifecycle',
+  DshModelRequest: 'lobsterai_dsh_model_request',
   EmailSkillConnectionTested: 'lobsterai_email_skill_connection_tested',
   EmailSkillSettingsSaved: 'lobsterai_email_skill_settings_saved',
   ExpertKitAction: 'lobsterai_expert_kit_action',

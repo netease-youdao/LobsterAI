@@ -26,6 +26,7 @@ import {
   resolveSharedDataHome,
   writeWriterLock,
 } from '../../libs/dshSharedHome';
+import type { DshUsageTelemetry } from '../../libs/dshUsageTelemetry';
 
 export interface DshStoreLike {
   get<T>(key: string): T | undefined;
@@ -33,6 +34,7 @@ export interface DshStoreLike {
 }
 
 export interface DshHandlerDeps {
+  usageTelemetry?: DshUsageTelemetry;
   getStore: () => DshStoreLike;
   getProviders: () => Record<string, ProviderConfig>;
   /** The billed plan routed through the token proxy; null when unavailable. */
@@ -229,6 +231,7 @@ export async function stopDshFeatureRuntimes(): Promise<void> {
 
 export function registerDshHandlers(deps: DshHandlerDeps): void {
   moduleDeps = deps;
+  getDshEngineManager().setUsageTelemetry(deps.usageTelemetry ?? null);
 
   ipcMain.handle(DshIpcChannel.GetState, () => getDshEngineManager().getState());
 

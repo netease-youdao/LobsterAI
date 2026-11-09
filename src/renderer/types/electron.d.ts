@@ -890,6 +890,7 @@ interface IElectronAPI {
   getRecentCwds: (limit?: number) => Promise<string[]>;
   dsh: {
     getState: () => Promise<{
+      dshInstanceId?: string;
       phase: string;
       port: number | null;
       version: string | null;
