@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { BrowserWindow, ipcMain } from 'electron';
-import { beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { AgentIpcChannel } from '../../../shared/agent/constants';
 import { ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
@@ -10,9 +14,29 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }));
 
-beforeEach(() => vi.clearAllMocks());
+let stateDir: string;
+const resolveAgentWorkspacePath = (agentId: string) => path.join(stateDir, `workspace-${agentId}`);
+const readPersonaFile = (agentId: string, filename: string) =>
+  fs.readFileSync(path.join(resolveAgentWorkspacePath(agentId), filename), 'utf8');
+const writePersonaFile = (agentId: string, filename: string, content: string) => {
+  fs.mkdirSync(resolveAgentWorkspacePath(agentId), { recursive: true });
+  fs.writeFileSync(path.join(resolveAgentWorkspacePath(agentId), filename), content, 'utf8');
+};
 
-function setup(syncOpenClawConfig: AgentHandlerDeps['syncOpenClawConfig'], agent: unknown = { id: ExpertFixtureId.Data }) {
+beforeEach(() => {
+  vi.clearAllMocks();
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-agent-handlers-'));
+});
+
+afterEach(() => {
+  fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+function setup(
+  syncOpenClawConfig: AgentHandlerDeps['syncOpenClawConfig'],
+  agent: unknown = { id: ExpertFixtureId.Data },
+  existingAgents: unknown[] = [],
+) {
   const addPresetAgent = vi.fn().mockResolvedValue(agent);
   const sender = { id: 1, send: vi.fn() };
   const otherWindowSend = vi.fn();
@@ -21,7 +45,8 @@ function setup(syncOpenClawConfig: AgentHandlerDeps['syncOpenClawConfig'], agent
     { isDestroyed: () => false, webContents: { id: 2, send: otherWindowSend } },
   ] as unknown as BrowserWindow[]);
   registerAgentHandlers({
-    getAgentManager: () => ({ addPresetAgent, listAgents: () => [] }),
+    getAgentManager: () => ({ addPresetAgent, listAgents: () => existingAgents }),
+    resolveAgentWorkspacePath,
     resolveDefaultAgentModelRef: () => 'provider/model',
     syncOpenClawConfig,
   } as unknown as AgentHandlerDeps);
@@ -67,6 +92,54 @@ test('unknown presets do not trigger synchronization or claim success', async ()
   expect(await invoke()).toMatchObject({ success: false });
   expect(sync).not.toHaveBeenCalled();
   expect(otherWindowSend).not.toHaveBeenCalled();
+});
+
+test('installing a preset writes its persona over files left by a deleted agent with the same ID', async () => {
+  writePersonaFile(ExpertFixtureId.Data, 'SOUL.md', 'deleted agent soul\n');
+  const sync = vi.fn().mockResolvedValue({ success: true, changed: true });
+  const { invoke } = setup(sync, { id: ExpertFixtureId.Data, systemPrompt: 'Preset soul', identity: 'Preset identity' });
+
+  expect(await invoke()).toMatchObject({ success: true });
+  expect(readPersonaFile(ExpertFixtureId.Data, 'SOUL.md')).toBe('Preset soul\n');
+  expect(readPersonaFile(ExpertFixtureId.Data, 'IDENTITY.md')).toBe('Preset identity\n');
+});
+
+test('summoning an existing preset keeps the persona its workspace already has', async () => {
+  writePersonaFile(ExpertFixtureId.Data, 'SOUL.md', 'soul edited by the agent\n');
+  const existing = {
+    id: ExpertFixtureId.Data,
+    source: 'preset',
+    presetId: ExpertFixtureId.Data,
+    enabled: true,
+    systemPrompt: 'Preset soul',
+    identity: '',
+  };
+  const sync = vi.fn().mockResolvedValue({ success: true, changed: true });
+  const { invoke } = setup(sync, existing, [existing]);
+
+  expect(await invoke()).toMatchObject({ success: true });
+  expect(readPersonaFile(ExpertFixtureId.Data, 'SOUL.md')).toBe('soul edited by the agent\n');
+});
+
+test('creating an agent writes its persona over files left by a deleted agent with the same ID', async () => {
+  writePersonaFile('writer', 'SOUL.md', 'deleted agent soul\n');
+  const sync = vi.fn().mockResolvedValue({ success: true, changed: true });
+  const createAgent = vi.fn(() => ({ id: 'writer', systemPrompt: 'Writer soul', identity: '' }));
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+  registerAgentHandlers({
+    getAgentManager: () => ({ createAgent }),
+    resolveAgentWorkspacePath,
+    resolveDefaultAgentModelRef: () => 'provider/model',
+    syncOpenClawConfig: sync,
+  } as unknown as AgentHandlerDeps);
+  const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.Create)![1];
+
+  const result = await handler({ sender: { id: 1 } } as unknown as Electron.IpcMainInvokeEvent, { name: 'Writer' });
+
+  expect(result).toMatchObject({ success: true });
+  expect(readPersonaFile('writer', 'SOUL.md')).toBe('Writer soul\n');
+  expect(readPersonaFile('writer', 'IDENTITY.md')).toBe('');
+  expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: 'agent-created' });
 });
 
 test.each([

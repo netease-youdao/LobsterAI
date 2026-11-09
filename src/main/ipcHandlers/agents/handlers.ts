@@ -8,9 +8,10 @@ import {
 } from '../../../shared/agent/constants';
 import { usageFailureCode, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
-import type { CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
+import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
 import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
+import { pickChangedAgentPersona, writeAgentPersonaFiles } from '../../libs/agentPersonaFiles';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
 
 type SyncOpenClawConfig = (options: {
@@ -71,6 +72,22 @@ async function cleanupLegacyIdentityBlockForAgent(
   return result;
 }
 
+/**
+ * Config sync only seeds missing persona files, so a new agent writes its own:
+ * a workspace left behind by a deleted agent with the same ID must not supply
+ * the new agent's persona.
+ */
+function writeNewAgentPersonaFiles(
+  agent: Agent,
+  resolveAgentWorkspacePath: AgentHandlerDeps['resolveAgentWorkspacePath'],
+): void {
+  try {
+    writeAgentPersonaFiles(resolveAgentWorkspacePath(agent.id), pickChangedAgentPersona(null, agent));
+  } catch (error) {
+    console.warn(`[Agents] Failed to write persona files for new agent ${agent.id}:`, error);
+  }
+}
+
 /** Lets other windows (e.g. the desktop companion's composer) reload agents after a change. */
 function notifyAgentsChanged(sender: WebContents): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -86,6 +103,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     getCoworkEngineRouter,
     getIMGatewayManager,
     refreshImSessionWorkingDirectoriesForAgent,
+    resolveAgentWorkspacePath,
     resolveDefaultAgentModelRef,
     syncOpenClawConfig,
   } = deps;
@@ -119,6 +137,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     async (event, request: CreateAgentRequest) => {
       try {
         const agent = getAgentManager().createAgent(request, resolveDefaultAgentModelRef());
+        writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);
         syncOpenClawConfig({ reason: 'agent-created' }).catch(err => {
           console.error('[OpenClaw] config sync after agent-created failed:', err);
         });
@@ -303,6 +322,8 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       prepareMode = existing ? existing.enabled ? PresetPreparationMode.Reuse : PresetPreparationMode.Reenable : PresetPreparationMode.Install;
       const agent = await getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
       if (!agent) { report('failed', 'preset_not_found'); return { success: false, error: 'Preset agent not found' }; }
+      // A reused or re-enabled instance keeps the persona its workspace already has.
+      if (prepareMode === PresetPreparationMode.Install) writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);
       // The composer must not become ready before OpenClaw knows this agent.
       // If sync fails, a retry reuses the saved instance instead of duplicating it.
       failureStage = PresetPreparationStage.ConfigSync;

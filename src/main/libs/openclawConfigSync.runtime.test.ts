@@ -2012,6 +2012,57 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(fs.existsSync(path.join(writerWorkspace, 'USER.md'))).toBe(false);
   });
 
+  test('keeps existing persona files and leaves the persona out of a non-main AGENTS.md', async () => {
+    const writerWorkspace = path.join(stateDir, 'workspace-writer');
+    fs.mkdirSync(writerWorkspace, { recursive: true });
+    fs.writeFileSync(path.join(writerWorkspace, 'SOUL.md'), 'soul edited by the agent\n', 'utf8');
+    fs.writeFileSync(path.join(writerWorkspace, 'IDENTITY.md'), '', 'utf8');
+
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: 'Default app style.',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getAgents: () => [
+        {
+          id: 'writer',
+          name: 'Writer',
+          description: '',
+          systemPrompt: 'stored soul',
+          identity: 'stored identity',
+          model: '',
+          workingDirectory: '',
+          icon: '',
+          skillIds: [],
+          subagentAllowAgentIds: [],
+          enabled: true,
+          pinned: false,
+          isDefault: false,
+          source: 'custom',
+          presetId: '',
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ],
+    });
+
+    expect(sync.sync('agent-updated').ok).toBe(true);
+
+    expect(fs.readFileSync(path.join(writerWorkspace, 'SOUL.md'), 'utf8')).toBe('soul edited by the agent\n');
+    expect(fs.readFileSync(path.join(writerWorkspace, 'IDENTITY.md'), 'utf8')).toBe('');
+    const agentsMd = fs.readFileSync(path.join(writerWorkspace, 'AGENTS.md'), 'utf8');
+    expect(agentsMd).not.toContain('stored soul');
+    expect(agentsMd).toContain('## System Prompt\n\nDefault app style.');
+  });
+
   test('merges all server models into existing lobsterai provider and updates image input', async () => {
     mockRuntimeState.proxyPort = 56646;
     mockRuntimeState.serverModels = [

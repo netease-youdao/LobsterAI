@@ -71,6 +71,7 @@ import { OpenClawSessionKeepAlive } from '../openclawSessionPolicy/constants';
 import { buildOpenClawSessionConfig } from '../openclawSessionPolicy/store';
 import { MANAGED_MEDIA_GENERATION_POLICY_PROMPT } from './agentEngine/mediaGenerationTurnInstruction';
 import { OPENCLAW_BOOTSTRAP_MAX_CHARS } from './agentEngine/workspaceDeliveredInstructions';
+import { seedAgentPersonaFiles } from './agentPersonaFiles';
 import {
   getAllServerModelMetadata,
   listProviderSourceEntries,
@@ -4371,6 +4372,9 @@ export class OpenClawConfigSync {
    * Sync workspace files (SOUL.md, IDENTITY.md, AGENTS.md) for each non-main agent.
    * The main agent's workspace is synced by `syncAgentsMd`. Non-main agents
    * get their own workspace directories under the openclaw state directory.
+   *
+   * SOUL.md and IDENTITY.md are only seeded when missing: the agent may edit
+   * them at runtime, and explicit saves write them directly.
    */
   private syncPerAgentWorkspaces(mainWorkspaceDir: string, coworkConfig: CoworkConfig): void {
     const agents = this.getAgents?.() ?? [];
@@ -4399,21 +4403,16 @@ export class OpenClawConfigSync {
           console.log(`[OpenClawConfigSync] Repaired legacy HEARTBEAT.md for agent ${agent.id}`);
         }
 
-        // Sync SOUL.md — agent's system prompt
-        const soulPath = path.join(agentWorkspace, 'SOUL.md');
-        const soulContent = (agent.systemPrompt || '').trim();
-        this.syncFileIfChanged(soulPath, soulContent ? `${soulContent}\n` : '');
+        const seededPersonaFiles = seedAgentPersonaFiles(agentWorkspace, agent);
+        if (seededPersonaFiles.length > 0) {
+          console.log(
+            `[OpenClawConfigSync] Seeded ${seededPersonaFiles.join(', ')} for agent ${agent.id}`,
+          );
+        }
 
-        // Sync IDENTITY.md — agent's identity description
-        const identityPath = path.join(agentWorkspace, 'IDENTITY.md');
-        const identityContent = (agent.identity || '').trim();
-        this.syncFileIfChanged(identityPath, identityContent ? `${identityContent}\n` : '');
-
-        // Sync AGENTS.md for this agent (reuse same logic as main agent)
-        this.syncAgentsMd(agentWorkspace, {
-          ...coworkConfig,
-          systemPrompt: agent.systemPrompt || '',
-        });
+        // Same managed section as the main agent. The persona is delivered by
+        // SOUL.md, so repeating it here would inject it twice.
+        this.syncAgentsMd(agentWorkspace, coworkConfig);
 
         // Ensure memory directory exists
         const memoryDir = path.join(agentWorkspace, 'memory');
@@ -4429,24 +4428,6 @@ export class OpenClawConfigSync {
           `[OpenClawConfigSync] Failed to sync workspace for agent ${agent.id}:`,
           error instanceof Error ? error.message : String(error),
         );
-      }
-    }
-  }
-
-  /** Write a file only if its content has changed. */
-  private syncFileIfChanged(filePath: string, content: string): void {
-    try {
-      const existing = fs.readFileSync(filePath, 'utf8');
-      if (existing === content) return;
-    } catch {
-      // File doesn't exist yet
-    }
-    if (content) {
-      this.atomicWriteFile(filePath, content);
-    } else {
-      // Empty content — create empty file if it doesn't exist
-      if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, '', 'utf8');
       }
     }
   }
