@@ -130,6 +130,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     feishuVerifyCredentialsFailed: '凭证验证失败，请检查 App ID 和 App Secret 是否正确',
     feishuVerifyFailed: '验证失败',
 
+    // Cowork working directory checks
+    coworkWorkingDirectoryMissing:
+      '工作目录不可用：{path}。外接磁盘可能未连接，或文件夹已被移动、重命名或删除。请重新连接磁盘或恢复该文件夹，或改用其他文件夹。',
+    coworkWorkingDirectoryNotFolder: '所选工作目录是文件而不是文件夹：{path}。请选择其他文件夹。',
+    coworkWorkingDirectoryDriveRoot: '不能将磁盘根目录用作工作目录（{path}）。请选择其中的子文件夹，例如：{example}',
+
     // Cowork error messages (shared with renderer via classifyErrorKey)
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请检查配置。',
     coworkErrorSubagentSummaryFailed: '子任务已完成，但主 Agent 未能恢复汇总。请继续对话以重试汇总。',
@@ -556,6 +562,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     feishuVerifyCredentialsFailed:
       'Credential validation failed. Please check your App ID and App Secret.',
     feishuVerifyFailed: 'Verification failed',
+
+    // Cowork working directory checks
+    coworkWorkingDirectoryMissing:
+      'The working folder is unavailable: {path}. An external drive may be disconnected, or the folder was moved, renamed or deleted. Reconnect the drive or restore the folder, or use a different folder.',
+    coworkWorkingDirectoryNotFolder: 'The selected working folder is a file, not a folder: {path}. Choose another folder.',
+    coworkWorkingDirectoryDriveRoot:
+      'A drive root cannot be used as the working folder ({path}). Choose a subfolder instead, for example: {example}',
 
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check your configuration.',

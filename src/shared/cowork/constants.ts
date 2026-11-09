@@ -20,6 +20,15 @@ export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
  */
 export const COWORK_TEMP_SESSION_ID_PREFIX = 'temp-';
 
+/**
+ * Machine-readable codes on failed session start/continue IPC results. The
+ * paired `error` text is already localized and must be shown as-is.
+ */
+export const CoworkSessionErrorCode = {
+  WorkingDirectoryUnavailable: 'WORKING_DIRECTORY_UNAVAILABLE',
+} as const;
+export type CoworkSessionErrorCode = typeof CoworkSessionErrorCode[keyof typeof CoworkSessionErrorCode];
+
 /** Default page size for session list pagination. */
 export const COWORK_SESSION_PAGE_SIZE = 50;
 

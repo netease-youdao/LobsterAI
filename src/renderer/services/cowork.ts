@@ -19,6 +19,7 @@ import {
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
   CoworkOnboardingMessageKind,
+  CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
 import { normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
@@ -116,6 +117,17 @@ interface LoadMessageWindowAroundIndexOptions {
 const classifyError = (error: string): string => {
   const key = classifyErrorKey(error);
   return key ? i18nService.t(key) : error;
+};
+
+const resolveSessionRequestErrorMessage = (
+  error: string,
+  code: string | undefined,
+  engineStatus: OpenClawEngineStatus | undefined,
+): string => {
+  if (code === 'ENGINE_NOT_READY') return resolveEngineNotReadyMessage(engineStatus);
+  // Main already localized this message; classifying it would hide the folder path.
+  if (code === CoworkSessionErrorCode.WorkingDirectoryUnavailable) return error;
+  return classifyError(error);
 };
 
 const normalizeErrorText = (text: string): string => text.trim();
@@ -1113,9 +1125,7 @@ class CoworkService {
 
     // Show a user-visible error when session start fails
     if (result.error) {
-      const errorContent = result.code === 'ENGINE_NOT_READY'
-        ? resolveEngineNotReadyMessage(result.engineStatus)
-        : classifyError(result.error);
+      const errorContent = resolveSessionRequestErrorMessage(result.error, result.code, result.engineStatus);
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
     }
 
@@ -1186,10 +1196,11 @@ class CoworkService {
         }
       }
       // Show a user-visible error message in the session
-      if (result.error) {
-        const errorContent = result.code === 'ENGINE_NOT_READY'
-          ? resolveEngineNotReadyMessage(result.engineStatus)
-          : classifyError(result.error);
+      const errorContent = result.error
+        ? resolveSessionRequestErrorMessage(result.error, result.code, result.engineStatus)
+        : '';
+      // An unclassified error already appears verbatim in the "continue failed" message above.
+      if (errorContent && (result.code === 'ENGINE_NOT_READY' || errorContent !== result.error)) {
         store.dispatch(addMessage({
           sessionId: options.sessionId,
           message: {
