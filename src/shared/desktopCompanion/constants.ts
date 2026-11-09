@@ -319,6 +319,7 @@ export interface DesktopCompanionLoginStart {
   tool: NonNullable<CompanionAnalyticsEvent['tool']>;
   /** Connects the prompt's shown, click and success events. */
   journeyId?: string;
+  reason?: NonNullable<CompanionAnalyticsEvent['reason']>;
   /** What a language tools card picks up again once the sign-in succeeds. */
   resume?: LanguageToolResume;
 }

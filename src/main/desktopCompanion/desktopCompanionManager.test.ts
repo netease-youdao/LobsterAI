@@ -29,7 +29,7 @@ import {
 } from '../../shared/desktopCompanion/constants';
 import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
-import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus } from '../../shared/desktopCompanion/languageTools';
+import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
 import {
   COMPANION_PERMISSION_GUIDE_SIZE,
   COMPANION_PERMISSION_INTRO_SIZE,
@@ -2207,7 +2207,8 @@ describe('sign-in from a companion card', () => {
     const window = openTranslation();
     const firstInput = invoke(LanguageToolsIpc.GetInput, undefined, window.webContents);
     reportAnalytics.mockClear();
-    invoke(DesktopCompanionIpc.LoginStart, { tool: 'ask', journeyId, resume: { question: '  Which tense is this?  ' } }, window.webContents);
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'ask', journeyId,
+      resume: { question: '  Which tense is this?  ', targetLanguage: TranslationTarget.English } }, window.webContents);
     expect(window.webContents.send).toHaveBeenCalledWith(LanguageToolsIpc.Pinned, true);
     expect(events(Interaction.LoginClick)).toEqual([expect.objectContaining({
       action: AnalyticsAction.Action, source: AnalyticsSource.LanguageTools, tool: 'ask', journeyId,
@@ -2224,11 +2225,12 @@ describe('sign-in from a companion card', () => {
     const sent = window.webContents.send.mock.calls.filter(([channel]: [string]) => channel === LanguageToolsIpc.Input).at(-1)[1];
     expect(sent).toMatchObject({
       tool: LanguageTool.Translate, text: 'Selected words', pinned: true, resume: { question: 'Which tense is this?' },
+      targetLanguage: TranslationTarget.English,
     });
     expect(sent.id).not.toBe(firstInput.id);
     // The question is delivered once; a renderer that reloads reads the card without it.
     const input = invoke(LanguageToolsIpc.GetInput, undefined, window.webContents);
-    expect(input).toMatchObject({ id: sent.id, pinned: true });
+    expect(input).toMatchObject({ id: sent.id, pinned: true, targetLanguage: TranslationTarget.English });
     expect(input.resume).toBeUndefined();
     expect(events(Interaction.LoginSuccess)).toEqual([expect.objectContaining({
       source: AnalyticsSource.LanguageTools, tool: 'ask', journeyId, durationMs: expect.any(Number),

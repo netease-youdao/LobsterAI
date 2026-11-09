@@ -163,14 +163,15 @@ export class CompanionLanguageToolsController {
     const win = this.window;
     if (!pending?.input.text || !win || win.isDestroyed() || !this.anchor) return;
     const { resume, ...input } = pending.input;
-    this.input = { ...input, id: randomUUID(), cardMaxHeight: this.cardHeight - DesktopCompanionSize.SurfacePad * 2, pinned: true };
+    this.input = { ...input, ...(resume?.targetLanguage ? { targetLanguage: resume.targetLanguage } : {}),
+      id: randomUUID(), cardMaxHeight: this.cardHeight - DesktopCompanionSize.SurfacePad * 2, pinned: true };
     this.pinned = true;
     this.moved = pending.moved;
     this.size = this.openingSize(pending.input.tool);
     this.place();
     win.setIgnoreMouseEvents(true, { forward: true });
     // The waiting question goes out once: a renderer that reloads later reads the card without it.
-    win.webContents.send(LanguageToolsIpc.Input, resume ? { ...this.input, resume } : this.input);
+    win.webContents.send(LanguageToolsIpc.Input, resume?.question ? { ...this.input, resume: { question: resume.question } } : this.input);
     // Focus stays with the browser or main window the sign-in ended in.
     win.showInactive();
   }
