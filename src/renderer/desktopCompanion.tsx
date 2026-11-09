@@ -8,6 +8,7 @@ import CompanionOrb from './components/desktopCompanion/CompanionOrb';
 import CompanionResultSurface from './components/desktopCompanion/CompanionResultSurface';
 import CompanionStage from './components/desktopCompanion/CompanionStage';
 import LanguageToolsSurface from './components/desktopCompanion/LanguageToolsSurface';
+import PermissionGuideSurface from './components/desktopCompanion/PermissionGuideSurface';
 import SelectionSurface from './components/desktopCompanion/SelectionSurface';
 import { useDesktopCompanionState } from './components/desktopCompanion/useDesktopCompanionState';
 import { i18nService } from './services/i18n';
@@ -46,6 +47,7 @@ function DesktopCompanion() {
     case DesktopCompanionSurface.Result: return <CompanionResultSurface state={state} />;
     case DesktopCompanionSurface.Selection: return <SelectionSurface state={state} />;
     case DesktopCompanionSurface.LanguageTools: return <LanguageToolsSurface state={state} />;
+    case DesktopCompanionSurface.PermissionGuide: return <PermissionGuideSurface />;
     // The quick panel loads companion-composer.html instead.
     default: return null;
   }

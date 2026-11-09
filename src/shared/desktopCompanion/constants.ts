@@ -3,6 +3,7 @@ import type { CompanionAppCategory } from './appCategories';
 import type { CompanionFileKind } from './fileKinds';
 import type { CompanionHintTopic } from './hintPolicy';
 import type { LanguageToolResume, LanguageToolsBridge, SpeechStatus } from './languageTools';
+import type { CompanionPermissionGuideBridge } from './permissionGuide';
 import type { CompanionResultsBridge, CompanionResultState } from './results';
 import type { CompanionScreenshotBridge } from './screenshot';
 import type { CompanionSelectionAction } from './selectionActions';
@@ -65,6 +66,8 @@ export const DesktopCompanionSurface = {
   LanguageTools: 'language-tools',
   Screenshot: 'screenshot',
   Result: 'result',
+  /** Floats beside System Settings while the user grants a permission there. */
+  PermissionGuide: 'permission-guide',
 } as const;
 export type DesktopCompanionSurface = typeof DesktopCompanionSurface[keyof typeof DesktopCompanionSurface];
 
@@ -103,7 +106,7 @@ export const CompanionCapability = {
 } as const;
 export type CompanionCapability = typeof CompanionCapability[keyof typeof CompanionCapability];
 
-export const CompanionPermission = { Accessibility: 'accessibility' } as const;
+export const CompanionPermission = { Accessibility: 'accessibility', ScreenRecording: 'screen-recording' } as const;
 export type CompanionPermission = typeof CompanionPermission[keyof typeof CompanionPermission];
 
 export const DEFAULT_COMPANION_SKIN = 'lobster';
@@ -321,7 +324,8 @@ export interface DesktopCompanionLoginStart {
   resume?: LanguageToolResume;
 }
 
-export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge {
+export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge,
+  CompanionPermissionGuideBridge {
   reportAnalytics(event: CompanionAnalyticsEvent): Promise<void>;
   /** Keeps the card open through the browser sign-in so it can continue afterwards. */
   startLogin(request: DesktopCompanionLoginStart): Promise<void>;

@@ -20,6 +20,7 @@ const RETAINED_PATCHES = [
   'openclaw-browser-navigation-error-containment.patch',
   'openclaw-chat-send-cwd-decoupling.patch',
   'openclaw-chrome-mcp-process-recovery.patch',
+  'openclaw-chrome-mcp-windows-native-snapshot.patch',
   'openclaw-cli-startup-metadata-windows-timeout.patch',
   'openclaw-compaction-summary-format.patch',
   'openclaw-compaction-summary-section-order.patch',
@@ -190,6 +191,20 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+        return getLastError() === ERROR_INVALID_PARAMETER ? null : undefined;',
       '+  const nativeStartTime = readNativeStartTime(pid);',
       '+    "matches .NET Process.StartTime for live processes and rejects gone ones",',
+    ]);
+  });
+
+  test('snapshots Chrome MCP Windows process trees natively before PowerShell', () => {
+    expectPatchContains('openclaw-chrome-mcp-windows-native-snapshot.patch', [
+      '+function loadNativeProcessTableReader(): ChromeMcpWindowsProcessTableReader | null {',
+      '+      "intptr_t __stdcall CreateToolhelp32Snapshot(uint32_t flags, uint32_t processId)",',
+      '+    const ppid = parentCreated !== undefined && parentCreated > entry.createdTicks ? 0 : entry.ppid;',
+      '+    if (nativeReaderProven) {',
+      '+      const nativeSnapshots = listChromeMcpWindowsProcessesNative();',
+      '+        timeoutMs: windows ? CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS : 2_000,',
+      '+    "reads this process, a live child, and the child\'s exit through kernel32",',
+      '+  it("attaches, lists pages, and reaps the launcher tree repeatedly without PowerShell", async () => {',
+      '+  it("survives a PowerShell list slower than the old 2 s limit when koffi is unavailable", async () => {',
     ]);
   });
 

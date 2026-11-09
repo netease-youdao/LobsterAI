@@ -15,6 +15,7 @@ import {
   powerSaveBlocker,
   protocol,
   safeStorage,
+  screen,
   session,
   shell,
   type WebContents,
@@ -339,12 +340,9 @@ import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
 import { ArtifactFileWatcher } from './libs/artifactFileWatcher';
+import { openBrowserLogin } from './libs/authBrowserLogin';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
-import {
-  appendCallbackReturnTo,
-  appendLoginParams,
-  startAuthLocalCallback,
-} from './libs/authLocalCallbackServer';
+import { startAuthLocalCallback } from './libs/authLocalCallbackServer';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
@@ -469,7 +467,7 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './libs/lobsterBrowserMcpServer';
-import { LocalImageThumbnails } from './libs/localImageThumbnails';
+import { createScreenScaleThumbnail, LocalImageThumbnails } from './libs/localImageThumbnails';
 import { exportLogsZip } from './libs/logExport';
 import { getLogExportEntries } from './libs/logExportEntries';
 import { MainLogReporter } from './libs/mainLogReporter';
@@ -8176,46 +8174,17 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
-    const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
-    const fallbackUrl = appendLoginParams(baseUrl, { source: 'electron' });
-    let localCallback: Awaited<ReturnType<typeof startAuthLocalCallback>> | null = null;
-
-    try {
-      console.log('[Auth] starting browser login with local callback server');
-      localCallback = await startAuthLocalCallback({
-        onCode: code => {
-          authCallbackRouter.handleAuthCode(code);
-          focusMainWindow('local auth callback');
-        },
-      });
-      const returnTo = appendLoginParams(baseUrl, {
-        source: 'electron',
-        electronLogin: 'success',
-      });
-      const finalUrl = appendLoginParams(baseUrl, {
-        source: 'electron',
-        redirect_uri: appendCallbackReturnTo(localCallback.redirectUri, returnTo),
-        state: localCallback.state,
-      });
-      console.log('[Auth] opening portal login with local callback redirect');
-      await shell.openExternal(finalUrl);
-      return { success: true, redirectUrl: finalUrl };
-    } catch (error) {
-      // The callback may be shared by another login page and will clean itself up on timeout.
-      console.warn('[Auth] local callback login failed, falling back to deep link login:', error);
-      try {
-        await shell.openExternal(fallbackUrl);
-        return { success: true, redirectUrl: fallbackUrl };
-      } catch (fallbackError) {
-        console.error('[Auth] login failed:', fallbackError);
-        return {
-          success: false,
-          error: fallbackError instanceof Error ? fallbackError.message : 'Failed to open login',
-        };
-      }
-    }
-  });
+  ipcMain.handle(AuthIpcChannel.Login, (_event, { loginUrl }: { loginUrl?: string } = {}) => openBrowserLogin({
+    baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
+    openExternal: url => shell.openExternal(url),
+    // The callback may be shared by another login page and cleans itself up on timeout.
+    startLocalCallback: () => startAuthLocalCallback({
+      onCode: code => {
+        authCallbackRouter.handleAuthCode(code);
+        focusMainWindow('local auth callback');
+      },
+    }),
+  }));
 
   registerFeedbackIpc({
     ipcMain,
@@ -8366,7 +8335,11 @@ if (!gotTheLock) {
       ) {
         return { success: false, error: t('authAccountChanged') };
       }
-      syncOpenClawConfigIfAuthQuotaGateChanged(startingQuotaGateState);
+      // No quota-gate config sync here even when the entitlement changed: the
+      // server model metadata was just cleared, so a sync now renders a config
+      // without the plan catalog or the model-compat plugin and restarts the
+      // gateway, and the renderer's post-login model load then restarts it
+      // again to restore them. That load syncs once and reads the new gate.
       // The initiating renderer applies the exchange result; other windows
       // must refresh their own auth stores without consuming the OAuth code.
       emitAuthSessionChanged({
@@ -15834,9 +15807,15 @@ if (!gotTheLock) {
     // build them without decoding on the main thread, elsewhere the original is served.
     const localImageThumbnails = new LocalImageThumbnails({
       cacheDirectory: path.join(app.getPath('userData'), 'image-thumbnails'),
-      createThumbnail: isMac || isWindows
-        ? (filePath, size) => nativeImage.createThumbnailFromPath(filePath, size)
-        : undefined,
+      createThumbnail: isMac
+        ? (filePath, size) => createScreenScaleThumbnail(filePath, size, {
+          scaleFactor: screen.getPrimaryDisplay().scaleFactor,
+          createThumbnailFromPath: (file, points) => nativeImage.createThumbnailFromPath(file, points),
+          createFromBitmap: (bitmap, pixels) => nativeImage.createFromBitmap(bitmap, pixels),
+        })
+        : isWindows
+          ? (filePath, size) => nativeImage.createThumbnailFromPath(filePath, size)
+          : undefined,
     });
     protocol.handle(ArtifactPreviewProtocol.LocalFile, request => createLocalFileProtocolResponse(request, {
       resolveThumbnail: (filePath, stat, edge, fit) => localImageThumbnails.resolve(filePath, stat, edge, fit),
@@ -16340,6 +16319,11 @@ if (!gotTheLock) {
         if (sessionId) pendingOpenSessionFromNotificationId = sessionId;
         focusMainWindowForReason('desktop companion');
         flushOpenSessionFromNotification();
+      },
+      relaunch: () => {
+        console.log('[Main] Desktop companion requested a relaunch to apply a permission');
+        relaunchApp();
+        quitAppWithoutConfirmation('desktop-companion:permission');
       },
       openSettings: () => {
         focusMainWindowForReason('desktop companion settings');

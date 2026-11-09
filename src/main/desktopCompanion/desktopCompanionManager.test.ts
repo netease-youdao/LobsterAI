@@ -1,4 +1,4 @@
-import { BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, type MenuItemConstructorOptions, screen } from 'electron';
+import { BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, type MenuItemConstructorOptions, screen, systemPreferences } from 'electron';
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -9,6 +9,7 @@ import { CompanionAnalyticsAction as AnalyticsAction, CompanionAnalyticsInteract
 import {
   COMPANION_COPY_MAX_BYTES,
   CompanionCapability,
+  CompanionPermission,
   DEFAULT_COMPANION_SKIN,
   DEFAULT_DESKTOP_COMPANION_PREFERENCES,
   DesktopCompanionDragPhase,
@@ -29,11 +30,16 @@ import {
 import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
+import {
+  COMPANION_PERMISSION_GUIDE_SIZE,
+  COMPANION_PERMISSION_INTRO_SIZE,
+  CompanionPermissionGuideIpc,
+} from '../../shared/desktopCompanion/permissionGuide';
 import { COMPANION_RECENT_TASK_LIMIT, COMPANION_RECENT_TASKS_KEY, CompanionResultIpc, type CompanionTaskInfo } from '../../shared/desktopCompanion/results';
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
 import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../shared/desktopCompanion/selectionToolbar';
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
-import { CompanionScreenshotController } from './companionScreenshot';
+import { CompanionScreenPermissionError, CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { DesktopCompanionManager } from './desktopCompanionManager';
 import { FileDragEvent } from './fileDragMonitor';
@@ -73,6 +79,7 @@ vi.mock('electron', async () => {
     setBounds(value: any) { this.bounds = value; }
     setFocusable(value: boolean) { this.focusable = value; }
     setIgnoreMouseEvents(value: boolean) { this.ignoreMouse = value; }
+    setOpacity() {}
     show() { if (!this.visible) { this.visible = true; this.emit('show'); } }
     showInactive() { this.show(); }
     hide() { this.visible = false; this.focused = false; this.emit('hide'); }
@@ -87,6 +94,10 @@ vi.mock('electron', async () => {
   }
   const workArea = { x: 0, y: 0, width: 1280, height: 900 };
   return {
+    app: Object.assign(new EventEmitter(), {
+      getName: () => 'LobsterAI',
+      getPath: () => '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+    }),
     BrowserWindow: Window,
     ipcMain: Object.assign(new EventEmitter(), {
       handle: (channel: string, handler: any) => mocks.handlers.set(channel, handler),
@@ -103,7 +114,8 @@ vi.mock('electron', async () => {
     dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
     clipboard: { writeText: vi.fn() },
     shell: { openExternal: vi.fn(() => Promise.resolve()) },
-    systemPreferences: { isTrustedAccessibilityClient: vi.fn(() => true) },
+    systemPreferences: { isTrustedAccessibilityClient: vi.fn(() => true), getMediaAccessStatus: vi.fn(() => 'granted') },
+    nativeImage: { createFromDataURL: vi.fn() },
   };
 });
 vi.mock('../i18n', () => ({ t: (key: string) => key, getLanguage: () => 'zh' }));
@@ -145,10 +157,14 @@ let foreground: FakeMonitor;
 let fileDrag: FakeMonitor;
 let getTaskInfo: ReturnType<typeof vi.fn<(id: string) => CompanionTaskInfo | null>>;
 let reportAnalytics: ReturnType<typeof vi.fn>;
+let guideOpenSettings: ReturnType<typeof vi.fn>;
+let requestScreenAccess: ReturnType<typeof vi.fn>;
 
 function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running,
   loadSelectionHook: () => SelectionHookModule | null = () => null) {
   reportAnalytics = vi.fn();
+  guideOpenSettings = vi.fn(() => Promise.resolve());
+  requestScreenAccess = vi.fn();
   main = new BrowserWindow();
   openMain = vi.fn();
   openSettings = vi.fn();
@@ -169,7 +185,13 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
     onPreferencesChanged: vi.fn(),
     openMain,
     openSettings,
-    services: { foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook, languageClient },
+    services: {
+      foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook, languageClient, requestScreenAccess,
+      permissionGuide: {
+        openSettings: guideOpenSettings, locateAppWindow: async () => ({ x: 400, y: 143, width: 715, height: 625 }),
+        loadApp: async () => null, focusedWindow: () => null, onAppTerminated: () => () => undefined,
+      },
+    },
   });
 }
 
@@ -1014,6 +1036,46 @@ describe('desktop companion lifecycle', () => {
     await clickMenu('desktopCompanionScreenshot');
     expect(manager.getState().panelVisible).toBe(true);
     expect(dialog.showMessageBox).toHaveBeenCalledWith({ type: 'error', message: 'desktopCompanionScreenshotFailed' });
+  });
+
+  test('explains Screen Recording before capturing; 去开启 lists LobsterAI and guides the user in System Settings', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValueOnce('denied');
+    const capture = vi.spyOn(CompanionScreenshotController.prototype, 'capture');
+    create();
+    await clickMenu('desktopCompanionScreenshot');
+    expect(capture).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    const card = mocks.windows.at(-1);
+    expect(card.isVisible()).toBe(true);
+    expect(card.getBounds()).toMatchObject(COMPANION_PERMISSION_INTRO_SIZE);
+    expect(guideOpenSettings).not.toHaveBeenCalled();
+
+    await invoke(CompanionPermissionGuideIpc.Proceed, undefined, card.webContents);
+    expect(requestScreenAccess).toHaveBeenCalledOnce();
+    expect(guideOpenSettings).toHaveBeenCalledWith(expect.stringContaining('Privacy_ScreenCapture'));
+  });
+
+  test('closing the Screen Recording explanation leaves System Settings alone', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValueOnce('denied');
+    create();
+    await clickMenu('desktopCompanionScreenshot');
+    const card = mocks.windows.at(-1);
+    await invoke(CompanionPermissionGuideIpc.Close, undefined, card.webContents);
+    expect(card.isDestroyed()).toBe(true);
+    expect(requestScreenAccess).not.toHaveBeenCalled();
+    expect(guideOpenSettings).not.toHaveBeenCalled();
+  });
+
+  test('a capture refused for Screen Recording explains the permission instead of a generic failure', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockRejectedValue(new CompanionScreenPermissionError());
+    create();
+    await clickMenu('desktopCompanionScreenshot');
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.windows.at(-1).getBounds()).toMatchObject(COMPANION_PERMISSION_INTRO_SIZE);
   });
 
   test('a full draft does not start a screenshot that would silently lose an attachment', async () => {
@@ -2233,5 +2295,48 @@ describe('sign-in from a companion card', () => {
       selectionId.mockRestore();
       hold.mockRestore();
     }
+  });
+});
+
+describe('accessibility permission', () => {
+  test('asks for Accessibility, guides the user through System Settings, and starts the toolbar once granted', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    const trusted = vi.mocked(systemPreferences.isTrustedAccessibilityClient);
+    trusted.mockReturnValue(false);
+    try {
+      values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+      create(undefined, OpenClawEnginePhase.Running, () => FakeSelectionHook);
+      expect(manager.getState().capabilities.selection).toBe(CompanionCapability.NeedsPermission);
+      const windowCount = mocks.windows.length;
+
+      invoke(DesktopCompanionIpc.RequestPermission, CompanionPermission.Accessibility);
+      expect(trusted).toHaveBeenCalledWith(true);
+      expect(guideOpenSettings).toHaveBeenCalledWith(expect.stringContaining('Privacy_Accessibility'));
+
+      foreground.emit('change', 'com.apple.systempreferences');
+      await vi.advanceTimersByTimeAsync(0);
+      const guide = mocks.windows.at(-1);
+      expect(mocks.windows).toHaveLength(windowCount + 1);
+      expect(guide.isVisible()).toBe(true);
+      expect(guide.getBounds()).toMatchObject(COMPANION_PERMISSION_GUIDE_SIZE);
+      // The guide renders from the same state and is a known sender.
+      expect(() => invoke(DesktopCompanionIpc.GetState, undefined, guide.webContents)).not.toThrow();
+
+      trusted.mockReturnValue(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(guide.isDestroyed()).toBe(true);
+      expect(manager.getState().capabilities.selection).toBe(CompanionCapability.Ready);
+    } finally {
+      trusted.mockReturnValue(true);
+    }
+  });
+
+  test('does not guide when Accessibility is already granted', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create(undefined, OpenClawEnginePhase.Running, () => FakeSelectionHook);
+    invoke(DesktopCompanionIpc.RequestPermission, CompanionPermission.Accessibility);
+    expect(guideOpenSettings).not.toHaveBeenCalled();
   });
 });

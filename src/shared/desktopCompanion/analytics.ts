@@ -1,7 +1,7 @@
 import { LogReporterAction } from '../analytics/constants';
 import { isUsageId, UsageFailureCode, usageFailureCode } from '../analytics/usage';
 import { OpenClawEnginePhase } from '../openclawEngine/constants';
-import { CompanionAppCategory } from './appCategories';
+import { CompanionAppCategory, knownCompanionAppId } from './appCategories';
 import { DesktopCompanionSnoozeMode, DesktopCompanionSurface } from './constants';
 import { CompanionDropAction, CompanionFileKind } from './fileKinds';
 import { COMPANION_WELCOME_TOPIC, CompanionHintOutcome, type CompanionHintTopic } from './hintPolicy';
@@ -31,7 +31,21 @@ export const CompanionAnalyticsInteraction = {
   Pause: 'pause', Resume: 'resume', Stop: 'stop', Dismiss: 'dismiss', ExcludeApp: 'exclude_app',
   More: 'more', Permission: 'permission', LoginShown: 'login_shown', Run: 'run',
   LoginClick: 'login_click', LoginSuccess: 'login_success',
+  /** A selecting gesture over text that no readable selection followed. */
+  Miss: 'miss',
 } as const;
+
+/** How selection-hook read a shown selection. */
+export const CompanionSelectionMethod = {
+  Uia: 'uia', Accessible: 'accessible', AxApi: 'axapi', Primary: 'primary', Clipboard: 'clipboard', Unknown: 'unknown',
+} as const;
+export type CompanionSelectionMethod = typeof CompanionSelectionMethod[keyof typeof CompanionSelectionMethod];
+
+/** How precisely the hook placed a shown selection: from the pointer only, up to the text's own bounds. */
+export const CompanionSelectionPosition = {
+  None: 'none', MouseSingle: 'mouse_single', MouseDual: 'mouse_dual', Full: 'full', Detailed: 'detailed',
+} as const;
+export type CompanionSelectionPosition = typeof CompanionSelectionPosition[keyof typeof CompanionSelectionPosition];
 
 export const CompanionAnalyticsStage = { Shown: 'shown', Submit: 'submit', Result: 'result' } as const;
 export const CompanionAnalyticsOutcome = {
@@ -99,7 +113,13 @@ export interface CompanionAnalyticsEvent {
   failureCode?: CompanionTaskFailure['failureCode'];
   failureStage?: CompanionTaskFailureStage;
   blockedReason?: CompanionTaskFailure['blockedReason'];
+  /** A hint topic, or the category of the app a selection came from. */
   topic?: CompanionHintTopic;
+  /** The app a selection came from, only when it is a well-known app (see knownCompanionAppId). */
+  app?: string;
+  selectionMethod?: CompanionSelectionMethod;
+  positionLevel?: CompanionSelectionPosition;
+  textLength?: number;
   dropAction?: CompanionDropAction;
   snoozeMode?: DesktopCompanionSnoozeMode;
   skin?: string;
@@ -129,6 +149,7 @@ const enumFields = {
   blockedReason: Object.values(CompanionTaskBlockedReason),
   topic: [COMPANION_WELCOME_TOPIC, ...Object.values(CompanionAppCategory)], dropAction: Object.values(CompanionDropAction),
   snoozeMode: Object.values(DesktopCompanionSnoozeMode), skin: COMPANION_SKINS.map(skin => skin.id),
+  selectionMethod: Object.values(CompanionSelectionMethod), positionLevel: Object.values(CompanionSelectionPosition),
 };
 
 /** One allowlist for native events and renderer IPC: never forward business payloads. */
@@ -146,9 +167,12 @@ export function normalizeCompanionAnalyticsEvent(input: unknown): CompanionAnaly
   for (const key of ['enabled', 'hasShortcut', 'hasSession', 'isFollowUp', 'pinned']) {
     if (typeof value[key] === 'boolean') event[key] = value[key];
   }
-  for (const key of ['attachmentCount', 'excludedAppCount', 'recentTaskCount', 'durationMs']) {
+  for (const key of ['attachmentCount', 'excludedAppCount', 'recentTaskCount', 'durationMs', 'textLength']) {
     if (typeof value[key] === 'number' && Number.isSafeInteger(value[key]) && value[key] >= 0) event[key] = value[key];
   }
+  // Only apps from the built-in list: an arbitrary executable name could identify a person or employer.
+  const app = typeof value.app === 'string' ? knownCompanionAppId(value.app) : null;
+  if (app) event.app = app;
   if (typeof value.fileKinds === 'string') {
     const kinds = [...new Set(value.fileKinds.split(',').filter(kind => Object.values(CompanionFileKind).includes(kind as CompanionFileKind)))];
     if (kinds.length) event.fileKinds = kinds.join(',');

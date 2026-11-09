@@ -1437,7 +1437,8 @@ const App: React.FC = () => {
             errorCode: result.error ? 'login_redirect_failed' : 'unknown',
           });
           consumeNewUserWelcomeAfterLoginPending();
-          showToast(i18nService.t('welcomeLoginFailed'));
+          // With a login link, the introduction offers it inline instead.
+          if (!result.redirectUrl) showToast(i18nService.t('welcomeLoginFailed'));
           return;
         }
         console.log('[Onboarding] login handoff from new user onboarding succeeded');

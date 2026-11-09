@@ -1,0 +1,72 @@
+/* The window is sized for this card (COMPANION_PERMISSION_GUIDE_SIZE) plus --surface-pad on each side. */
+.permission-guide { width: 100%; height: 100%; padding: var(--surface-pad); }
+.permission-guide-card {
+  height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 12px;
+  padding: 12px 12px 12px 14px; border: 1px solid var(--c-line); border-radius: 16px;
+  background: var(--c-surface); box-shadow: var(--c-shadow);
+  cursor: default; user-select: none; -webkit-user-select: none;
+}
+.permission-guide-head { display: flex; align-items: center; gap: 10px; }
+.permission-guide-arrow {
+  width: 18px; height: 18px; margin-top: 1px; color: var(--c-accent);
+  animation: permission-guide-point 1.6s ease-in-out infinite;
+}
+.permission-guide-message {
+  flex: 1; min-width: 0; margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: var(--c-ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* A round, high-contrast close button that reads at a glance, like the system's own panels. */
+.permission-guide-close {
+  width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center;
+  border: 1px solid var(--c-line-strong); border-radius: 50%;
+  background: var(--c-surface-3); color: var(--c-ink);
+  transition: background-color 0.12s, transform 0.12s;
+}
+.permission-guide-close:hover { background: color-mix(in srgb, var(--c-ink) 16%, var(--c-surface-3)); }
+.permission-guide-close:active { transform: scale(0.94); }
+.permission-guide-close svg { width: 16px; height: 16px; stroke-width: 2.6; }
+.permission-guide-app {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 10px;
+  border: 1px solid var(--c-line); border-radius: 12px; background: var(--c-surface-2);
+  cursor: grab;
+  transition: border-color 0.12s, background-color 0.12s;
+}
+.permission-guide-app:hover { border-color: var(--c-line-strong); background: var(--c-surface-3); }
+.permission-guide-app:active { cursor: grabbing; }
+.permission-guide-app-icon { width: 36px; height: 36px; object-fit: contain; pointer-events: none; }
+.permission-guide-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.permission-guide-app-hint { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--c-ink-3); }
+
+@keyframes permission-guide-point {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .permission-guide-arrow { animation: none; }
+}
+
+/* Screen Recording applies only after LobsterAI restarts; macOS offers to quit and reopen too, so this stays quiet. */
+.permission-guide-relaunch {
+  margin: 0; padding: 0 2px 0 4px; font-size: 12px; line-height: 18px; color: var(--c-ink-3);
+}
+.permission-guide-relaunch-button {
+  margin-left: 6px; color: var(--c-accent-ink); font-size: 12px; font-weight: 600;
+}
+.permission-guide-relaunch-button:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 2px; }
+
+/* The explanation shown where a feature needed the permission (COMPANION_PERMISSION_INTRO_SIZE). */
+.permission-intro { position: relative; gap: 0; padding: 16px 18px 16px 20px; }
+.permission-intro .permission-guide-close { position: absolute; top: 12px; right: 12px; }
+.permission-intro-head { padding-right: 36px; }
+.permission-intro-title { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; color: var(--c-ink); }
+.permission-intro-detail { margin: 6px 0 14px; font-size: 13px; line-height: 20px; color: var(--c-ink-2); }
+.permission-intro-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px 10px 12px;
+  border: 1px solid var(--c-line); border-radius: 12px; background: var(--c-surface-2); text-align: left;
+  transition: border-color 0.12s, background-color 0.12s;
+}
+.permission-intro-row:hover { border-color: var(--c-line-strong); background: var(--c-surface-3); }
+.permission-intro-icon { width: 32px; height: 32px; flex-shrink: 0; }
+.permission-intro-pane { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--c-ink); }
+.permission-intro-action { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; font-size: 13px; color: var(--c-accent-ink); }
+.permission-intro-action svg { width: 16px; height: 16px; }

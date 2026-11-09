@@ -1,11 +1,13 @@
 import '../login/loginIntroduction.css';
 
-import { XMarkIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useId, useRef } from 'react';
 
+import { BrowserLoginStatus } from '../../services/browserLoginSession';
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
 import LoginShowcase from '../login/LoginShowcase';
+import { useBrowserLoginSession, useCopyLoginLink } from '../login/useBrowserLoginSession';
 
 interface ChatLoginExperienceModalProps {
   loginPending: boolean;
@@ -20,6 +22,10 @@ const ChatLoginExperienceModal: React.FC<ChatLoginExperienceModalProps> = ({
 }) => {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const loginSession = useBrowserLoginSession();
+  const { copied, copy } = useCopyLoginLink('login_introduction');
+  // A successful handoff closes this modal; only a failed one stays here.
+  const openFailedUrl = loginSession?.status === BrowserLoginStatus.OpenFailed ? loginSession.url : null;
 
   useEffect(() => {
     const previousFocus = document.activeElement;
@@ -91,6 +97,21 @@ const ChatLoginExperienceModal: React.FC<ChatLoginExperienceModalProps> = ({
             >
               {i18nService.t(loginPending ? 'chatLoginExperienceStarting' : 'sidebarLoginNow')}
             </button>
+            {openFailedUrl && !loginPending && (
+              <p role="status" className="absolute inset-x-0 top-full mt-3 flex items-center justify-center gap-1.5 text-[13px] leading-5 text-[#777469]">
+                <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-[#d97706]" aria-hidden="true" />
+                <span>
+                  {i18nService.t('browserLoginOpenFailedInline')}
+                  <button
+                    type="button"
+                    onClick={() => void copy(openFailedUrl)}
+                    className="font-medium text-[#1c1b19] underline decoration-[#1c1b19]/30 underline-offset-[3px] transition-colors hover:decoration-[#1c1b19]"
+                  >
+                    {i18nService.t(copied ? 'copied' : 'browserLoginCopyLoginLink')}
+                  </button>
+                </span>
+              </p>
+            )}
           </div>
         </div>
         <button

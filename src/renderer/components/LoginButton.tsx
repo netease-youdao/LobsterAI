@@ -19,6 +19,7 @@ import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
 import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
 import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
+import { browserLoginSession, BrowserLoginStatus } from '../services/browserLoginSession';
 import {
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
@@ -48,6 +49,8 @@ import { DailyCheckInAccountMenuEntry } from './DailyCheckInActivity';
 import { getDailyCheckInAuthScopeKey } from './dailyCheckInActivityState';
 import { waitForDailyCheckInRefresh } from './dailyCheckInSnapshotStore';
 import UserAvatarIcon from './icons/UserAvatarIcon';
+import BrowserLoginStatusCard from './login/BrowserLoginStatusCard';
+import { useBrowserLoginSession } from './login/useBrowserLoginSession';
 import SidebarLoginPromoBubble, { SIDEBAR_LOGIN_PROMO_BUBBLE_ID } from './SidebarLoginPromoBubble';
 import {
   type StartupCreditCampaignEntry,
@@ -775,6 +778,9 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   const [loggedOutPennyActivityEntryVisible, setLoggedOutPennyActivityEntryVisible] = useState(false);
   const [selectedFinalRewardCode, setSelectedFinalRewardCode] = useState<string | null>(null);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
+  const [loginStarting, setLoginStarting] = useState(false);
+  const loginStartingRef = useRef(false);
+  const loginSession = useBrowserLoginSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const menuOpenRequestRef = useRef(0);
   const mountedRef = useRef(true);
@@ -978,13 +984,26 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   };
 
   const handleLogin = async () => {
+    // The browser handoff can take a few seconds; repeat clicks would only
+    // open extra login tabs.
+    // The ref also catches clicks that land before the disabled state renders.
+    if (loginStartingRef.current) return;
+    loginStartingRef.current = true;
     const loginVariant = useSidebarPromoLogin ? 'sidebar_promo' : 'default';
     writeAccountMenuRendererLog('debug', `login requested variant=${loginVariant}`);
+    setLoginStarting(true);
     try {
-      await authService.login();
+      const result = await authService.login();
+      if (!result.success) {
+        writeAccountMenuRendererLog(
+          'warn',
+          `login browser handoff failed variant=${loginVariant} reason=${result.reason ?? 'unknown'}`,
+        );
+      }
       reportAccountMenuAction('login', {
         isLoggedIn: false,
-        result: 'success',
+        result: result.success ? 'success' : 'failed',
+        errorCode: result.success ? undefined : (result.reason ?? 'unknown'),
       });
     } catch (error) {
       writeAccountMenuRendererLog('warn', `login request failed variant=${loginVariant}`);
@@ -993,6 +1012,9 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         result: 'failed',
       });
       throw error;
+    } finally {
+      loginStartingRef.current = false;
+      if (mountedRef.current) setLoginStarting(false);
     }
   };
 
@@ -1023,6 +1045,18 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   };
 
   const useSidebarPromoLogin = !isLoggedIn && !connectionState && loggedOutVariant === 'sidebarPromo';
+  // The session also reflects logins started from other entry points.
+  const loginSessionActive = !isLoggedIn && !connectionState && loginSession !== null;
+  const loginOpening = loginStarting || (loginSessionActive && loginSession.status === BrowserLoginStatus.Opening);
+  const loginInProgress = loginOpening || (loginSessionActive && loginSession.status === BrowserLoginStatus.Waiting);
+  const loginStatusCardVisible = loginSessionActive
+    && (loginSession.status !== BrowserLoginStatus.Opening || loginSession.url !== null);
+  const loginButtonTitle = (() => {
+    if (connectionState) return i18nService.t(isLoading ? 'authRestoringSession' : 'authConnectionUnavailable');
+    if (loginOpening) return i18nService.t('loginStarting');
+    if (loginInProgress) return i18nService.t('browserLoginWaitingTitle');
+    return undefined;
+  })();
 
   return (
     <div ref={containerRef} className="relative">
@@ -1031,13 +1065,14 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         onClick={handleClick}
         onFocus={prefetchMenuDailyCheckIn}
         onPointerEnter={prefetchMenuDailyCheckIn}
-        disabled={isLoading}
-        aria-busy={isLoading}
-        aria-describedby={useSidebarPromoLogin ? SIDEBAR_LOGIN_PROMO_BUBBLE_ID : undefined}
-        title={connectionState ? i18nService.t(isLoading ? 'authRestoringSession' : 'authConnectionUnavailable') : undefined}
+        // Only the handoff itself blocks clicks; while waiting, a click reopens the page.
+        disabled={isLoading || loginOpening}
+        aria-busy={isLoading || loginInProgress}
+        aria-describedby={useSidebarPromoLogin && !loginSessionActive ? SIDEBAR_LOGIN_PROMO_BUBBLE_ID : undefined}
+        title={loginButtonTitle}
         className={
           useSidebarPromoLogin
-            ? 'peer sidebar-login-rainbow inline-flex h-7 w-[5.75rem] shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform]'
+            ? `peer sidebar-login-rainbow inline-flex h-7 shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform] ${loginInProgress ? 'min-w-[5.75rem]' : 'w-[5.75rem]'}`
             : 'inline-flex h-7 items-center justify-start gap-2 rounded-md px-1.5 text-sm font-normal text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] cursor-pointer'
         }
       >
@@ -1055,19 +1090,37 @@ const LoginButton: React.FC<LoginButtonProps> = ({
           </>
         ) : (
           useSidebarPromoLogin ? (
-            i18nService.t('sidebarLoginNow')
+            loginInProgress ? (
+              <>
+                <ArrowPathIcon className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                {i18nService.t('browserLoginWaitingLabel')}
+              </>
+            ) : (
+              i18nService.t('sidebarLoginNow')
+            )
           ) : (
             <>
-              <UserAvatarIcon className="h-4 w-4 shrink-0" />
-              {i18nService.t('login')}
+              {loginInProgress ? (
+                <ArrowPathIcon className="h-4 w-4 shrink-0 animate-spin text-secondary" aria-hidden="true" />
+              ) : (
+                <UserAvatarIcon className="h-4 w-4 shrink-0" />
+              )}
+              {i18nService.t(loginInProgress ? 'browserLoginWaitingLabel' : 'login')}
             </>
           )
         )}
       </button>
-      {useSidebarPromoLogin && (
+      {useSidebarPromoLogin && !loginSessionActive && (
         <SidebarLoginPromoBubble
           autoVisible={loginPromoTipVisible}
           pennyOfferVisible={loggedOutPennyActivityEntryVisible}
+        />
+      )}
+      {loginStatusCardVisible && (
+        <BrowserLoginStatusCard
+          session={loginSession}
+          onRetry={() => void handleLogin()}
+          onDismiss={browserLoginSession.clear}
         />
       )}
       {showMenu && !isLoggedIn && connectionState && (

@@ -80,8 +80,14 @@ import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companion
 import { copyCompanionText } from './companionClipboard';
 import { CompanionHintsController } from './companionHints';
 import { CompanionLoginTracker, isCompanionLoginSource, normalizeCompanionLoginStart } from './companionLogin';
+import { CompanionPermissionGuideController, type CompanionPermissionGuideServices } from './companionPermissionGuide';
 import { CompanionResultsController } from './companionResults';
-import { CompanionScreenshotController } from './companionScreenshot';
+import {
+  CompanionScreenPermissionError,
+  CompanionScreenshotController,
+  hasCompanionScreenPermission,
+  requestCompanionScreenAccess,
+} from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { CompanionStageController } from './companionStage';
 import { type CompanionWindowEnvironment, createCompanionWindow, dismissCompanionPanelOnBlur } from './companionWindow';
@@ -92,6 +98,7 @@ import type { CompanionLanguageClient } from './languageToolClient';
 import { CompanionLanguageToolsController } from './languageToolsController';
 import { CompanionQuickAnswerService } from './quickAnswerService';
 import { getCompanionSelectionApps } from './selectionApps';
+import { readWindowsNative } from './windowsNative';
 
 const MAX_SNOOZE_TIMER_MS = 24 * 60 * 60_000;
 
@@ -106,6 +113,9 @@ export interface DesktopCompanionServices {
   fileDrag?: FileDragMonitor;
   quickAnswer?: CompanionQuickAnswerService;
   loadSelectionHook?: () => SelectionHookModule | null;
+  permissionGuide?: CompanionPermissionGuideServices;
+  /** Lists LobsterAI in System Settings' Screen Recording list; macOS prompts the first time. */
+  requestScreenAccess?: () => void;
 }
 
 interface DesktopCompanionOptions {
@@ -118,6 +128,8 @@ interface DesktopCompanionOptions {
   getTaskInfo(sessionId: string): CompanionTaskInfo | null;
   openMain(sessionId?: string | null): void;
   openSettings?(): void;
+  /** Quit and reopen LobsterAI, e.g. so macOS applies a Screen Recording grant. */
+  relaunch?(): void;
   onPreferencesChanged(): void;
   reportAnalytics?: CompanionAnalyticsReporter;
   getAnalyticsOwner?: () => string | null;
@@ -226,6 +238,7 @@ export class DesktopCompanionManager {
   private readonly languageTools: CompanionLanguageToolsController;
   private readonly screenshot: CompanionScreenshotController;
   private readonly results: CompanionResultsController;
+  private readonly permissionGuide: CompanionPermissionGuideController;
   private readonly analytics: CompanionAnalytics;
   private readonly login: CompanionLoginTracker;
 
@@ -298,7 +311,20 @@ export class DesktopCompanionManager {
       setPreferences: patch => { this.setPreferences(patch, AnalyticsSource.Selection); },
       publish: () => this.publish(),
       openSettings: () => this.options.openSettings?.(),
+      pointerKind: () => readWindowsNative(native => native.cursorKind()),
+      foregroundApp: () => readWindowsNative(native => native.foregroundProcessName()),
     }, this.quickAnswer, services.loadSelectionHook);
+    this.permissionGuide = new CompanionPermissionGuideController({
+      // Key-capable on macOS, like the orb: pressing a window that cannot become key half-activates the app.
+      createWindow: bounds => this.createWindow(DesktopCompanionSurface.PermissionGuide, process.platform === 'darwin', bounds),
+      requestAccess: permission => {
+        if (permission !== CompanionPermissionValue.ScreenRecording) return;
+        this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.ContextMenu, interactionType: Interaction.Permission });
+        (services.requestScreenAccess ?? requestCompanionScreenAccess)();
+      },
+      onGranted: permission => { if (permission === CompanionPermissionValue.Accessibility) this.selection.sync(); },
+      relaunch: () => this.options.relaunch?.(),
+    }, services.permissionGuide);
 
     this.languageTools = new CompanionLanguageToolsController({
       analytics: this.analytics,
@@ -486,6 +512,7 @@ export class DesktopCompanionManager {
   dispose(): void {
     this.disposing = true;
     this.screenshot.dispose();
+    this.permissionGuide.dispose();
     this.flushDraft();
     if (this.registeredShortcut) globalShortcut.unregister(this.registeredShortcut);
     clearTimeout(this.snoozeTimer);
@@ -826,6 +853,11 @@ export class DesktopCompanionManager {
       await dialog.showMessageBox({ type: 'info', message: t('desktopCompanionScreenshotFull') });
       return;
     }
+    // Without it macOS hands back only the wallpaper, or no screens at all.
+    if (!hasCompanionScreenPermission()) {
+      this.permissionGuide.explain(CompanionPermissionValue.ScreenRecording);
+      return;
+    }
     const finish = this.analytics.tool({ source: AnalyticsSource.ContextMenu, tool: CompanionAnalyticsTool.Screenshot });
     this.capturing = true;
     const restorePanel = this.panelVisible;
@@ -836,11 +868,14 @@ export class DesktopCompanionManager {
     this.selection.sync();
     let attachment: DesktopCompanionAttachment | null = null;
     let failed = false;
+    let permissionMissing = false;
     try {
       attachment = await this.screenshot.capture(this.companionWindows());
     } catch (error) {
       failed = true;
-      console.error('[DesktopCompanion] Screenshot failed', error);
+      permissionMissing = error instanceof CompanionScreenPermissionError;
+      if (permissionMissing) console.warn('[DesktopCompanion] Screenshot needs Screen Recording permission');
+      else console.error('[DesktopCompanion] Screenshot failed', error);
     } finally {
       finish(failed ? AnalyticsOutcome.Failed : attachment ? AnalyticsOutcome.Success : AnalyticsOutcome.Cancelled);
       this.capturing = false;
@@ -851,7 +886,8 @@ export class DesktopCompanionManager {
       }
     }
     if (failed && !this.disposing) {
-      await dialog.showMessageBox({ type: 'error', message: t('desktopCompanionScreenshotFailed') });
+      if (permissionMissing) this.permissionGuide.explain(CompanionPermissionValue.ScreenRecording);
+      else await dialog.showMessageBox({ type: 'error', message: t('desktopCompanionScreenshotFailed') });
     }
   }
 
@@ -883,6 +919,7 @@ export class DesktopCompanionManager {
 
   private onForegroundChange = (appId: string): void => {
     this.hints.onForegroundChange(appId);
+    this.permissionGuide.onForegroundChange(appId);
     // Clicking a companion surface can activate LobsterAI itself. That must not
     // dismiss the toolbar mid-click or forget which app the user came from.
     const category = categorizeCompanionApp(appId);
@@ -942,7 +979,8 @@ export class DesktopCompanionManager {
   }
 
   private companionWindows(): Array<BrowserWindow | null> {
-    return [this.orb, this.panel, this.stage.browserWindow, this.selection.browserWindow, this.languageTools.browserWindow, this.results.browserWindow];
+    return [this.orb, this.panel, this.stage.browserWindow, this.selection.browserWindow, this.languageTools.browserWindow, this.results.browserWindow,
+      this.permissionGuide.browserWindow];
   }
 
   private publish(): void {
@@ -955,7 +993,8 @@ export class DesktopCompanionManager {
 
   private assertSender(senderId: number): void {
     const allowed = [this.options.getMainWindow()?.webContents.id, this.orb?.webContents.id, this.panel?.webContents.id,
-      this.stage.webContentsId, this.selection.webContentsId, this.languageTools.webContentsId, this.results.webContentsId];
+      this.stage.webContentsId, this.selection.webContentsId, this.languageTools.webContentsId, this.results.webContentsId,
+      this.permissionGuide.webContentsId];
     if (!allowed.some(id => id !== undefined && id !== null && id === senderId)) throw new Error('Unknown desktop companion IPC sender');
   }
 
@@ -1081,7 +1120,7 @@ export class DesktopCompanionManager {
     handle(DesktopCompanionIpc.RequestPermission, value => {
       if (value === CompanionPermissionValue.Accessibility) {
         this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Settings, interactionType: Interaction.Permission });
-        this.selection.requestPermission();
+        if (this.selection.requestPermission()) this.permissionGuide.open(CompanionPermissionValue.Accessibility);
       }
       return this.getState();
     });
