@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 import { pathToFileURL } from 'url';
 
+import { DshRuntimeEndReason } from '../../shared/dshEngine/analytics';
 import {
   DSH_STATE_DIR_NAME,
   DshEngineErrorCode,
@@ -49,6 +50,7 @@ import {
   resolveDshArtifactFromConfig,
   resolveInstalledDshRuntime,
 } from './dshRuntimeInstaller';
+import type { DshRuntimeObservation, DshUsageTelemetry } from './dshUsageTelemetry';
 import { exchangeDshLaunchToken, parseDshWebLaunchUrl, probeDshWebIndex, redactDshWebToken } from './dshWebAuth';
 
 // The pinned version and the per-target archive descriptors travel inside the
@@ -126,6 +128,7 @@ export interface DshResolvedRuntime {
 }
 
 export interface DshEngineState {
+  dshInstanceId?: string;
   phase: DshEnginePhase;
   port: number | null;
   version: string | null;
@@ -176,6 +179,12 @@ export class DshEngineManager {
   private sharedHomeLock: { claim: (port: number) => void; release: () => void } | null = null;
   private homeDirectorySource: (() => string | null) | null = null;
   private nodeToolchainSource: (() => DshNodeToolchain | null) | null = null;
+  private usageTelemetry: DshUsageTelemetry | null = null;
+  private runtimeObservation: DshRuntimeObservation | null = null;
+
+  setUsageTelemetry(telemetry: DshUsageTelemetry | null): void {
+    this.usageTelemetry = telemetry;
+  }
 
   // The kit registers its Electron-as-Node toolchain so the bundled pnpm runs
   // with a `node` on PATH for dependency build scripts. Without a source, pnpm
@@ -218,7 +227,7 @@ export class DshEngineManager {
   }
 
   getState(): DshEngineState {
-    return { ...this.state };
+    return { ...this.state, dshInstanceId: this.runtimeObservation?.instanceId };
   }
 
   onStateChange(listener: (state: DshEngineState) => void): () => void {
@@ -369,6 +378,8 @@ export class DshEngineManager {
 
   async stop(): Promise<void> {
     const child = this.child;
+    this.runtimeObservation?.finish(DshRuntimeEndReason.Stop);
+    this.runtimeObservation = null;
     this.generation += 1;
     this.child = null;
     this.webLaunchUrl = null;
@@ -431,7 +442,13 @@ export class DshEngineManager {
       dshHome,
       timeZone: resolveTimeZone(),
     });
-    const args = buildDshWebArgs(this.resolveLaunchEntry(runtime), port);
+    const launchEntry = this.resolveLaunchEntry(runtime);
+    this.runtimeObservation = this.usageTelemetry?.startRuntime({
+      directory: path.join(app.getPath('userData'), 'dsh-observation'),
+      version: runtime.buildInfo?.dshVersion ?? null,
+      sessionStoreShared: this.state.sessionStoreShared,
+    }) ?? null;
+    const args = buildDshWebArgs(launchEntry, port, this.runtimeObservation?.patchPath);
 
     const workingDirectory = this.resolveWorkingDirectory(runtime.root);
     console.log(
@@ -447,6 +464,8 @@ export class DshEngineManager {
       });
     } catch (error) {
       console.error('[DSH] Failed to spawn runtime', error);
+      this.runtimeObservation?.finish(DshRuntimeEndReason.SpawnFailed, DshEngineErrorCode.SpawnFailed);
+      this.runtimeObservation = null;
       this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: DshEngineErrorCode.SpawnFailed });
       return this.getState();
     }
@@ -464,6 +483,7 @@ export class DshEngineManager {
       // wedged one is still running and has not, so carry the tail here.
       const tail = this.child ? `. Recent output:\n${this.logRing.slice(-20).join('\n')}` : '';
       console.error(`[DSH] Runtime did not become ready: ${startupError}${tail}`);
+      this.runtimeObservation?.finish(DshRuntimeEndReason.StartupFailed, startupError);
       await this.stop();
       this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: startupError });
       return this.getState();
@@ -471,6 +491,7 @@ export class DshEngineManager {
 
     console.log(`[DSH] Ready at http://127.0.0.1:${port}`);
     this.setState({ phase: DshEnginePhase.Ready, port, errorCode: null });
+    this.runtimeObservation?.ready();
     this.pruneSupersededInstalledRuntimes(runtime);
     return this.getState();
   }
@@ -542,6 +563,7 @@ export class DshEngineManager {
     // would hide the URL from the parser and split its token past the redaction.
     const onLine = (line: string) => {
       if (line.length === 0) return;
+      if (this.generation === generation) this.runtimeObservation?.observeOutput(line);
       if (this.generation === generation && !this.webLaunchUrl) {
         this.webLaunchUrl = parseDshWebLaunchUrl(line, port);
       }
@@ -564,6 +586,8 @@ export class DshEngineManager {
       }
       if (this.state.phase === DshEnginePhase.Ready) {
         console.warn(`[DSH] Runtime exited unexpectedly (code=${code ?? 'null'})`);
+        this.runtimeObservation?.finish(DshRuntimeEndReason.Exit);
+        this.runtimeObservation = null;
         this.setState({ phase: DshEnginePhase.Stopped, port: null, errorCode: null });
       }
     });
@@ -636,6 +660,8 @@ export class DshEngineManager {
     this.quitHookInstalled = true;
     app.on('will-quit', () => {
       const child = this.child;
+      this.runtimeObservation?.finish(DshRuntimeEndReason.Quit);
+      this.runtimeObservation = null;
       this.generation += 1;
       this.child = null;
       if (child) {

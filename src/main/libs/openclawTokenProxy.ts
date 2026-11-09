@@ -17,6 +17,7 @@ import {
   NATIVE_RUN_LLM_TRACE_PROXY_PATH,
   parseLlmTraceparent,
 } from '../../shared/cowork/llmTurnUsage';
+import { DSH_INSTANCE_HEADER } from '../../shared/dshEngine/analytics';
 import { EnterpriseApiErrorCode } from '../../shared/enterpriseAccount/constants';
 import {
   LOBSTERAI_CLIENT_CAPABILITIES,
@@ -82,6 +83,23 @@ let enterpriseMembershipRevokedHandler: (
 let inboundAuthTokenGetter: (() => string | null) | null = null;
 let lastUnauthorizedWarnAt = 0;
 let requestFinishedHandler: OpenClawTokenProxyConfig['onRequestFinished'];
+let requestObserver: OpenClawTokenProxyConfig['observeRequest'];
+
+export interface ProxyRequestObservation {
+  traceId: string;
+  spanId: string;
+  path: string;
+  method: string;
+  model: unknown;
+  dshInstanceId: string | string[] | undefined;
+}
+
+export interface ProxyRequestResult {
+  outcome: ProxyRequestOutcomeValue;
+  status: number | null;
+  serverTraceId: string | null;
+  durationMs: number;
+}
 
 export type OpenClawTokenProxyMembershipRevocationEvent = {
   code: number;
@@ -95,6 +113,8 @@ export type OpenClawTokenProxyConfig = {
   getAccountContextHeaders?: () => Record<string, string>;
   getSessionKey?: () => string | null;
   onRequestFinished?: (origin: { traceId: string; sessionId: string; owner: string }) => void;
+  /** Optional observation, including generated traces without a Cowork turn. */
+  observeRequest?: (request: ProxyRequestObservation) => ((result: ProxyRequestResult) => void) | undefined;
   getClientVersion: () => string;
   getEnterpriseAuthSessionSnapshot?: () => EnterpriseAuthSessionSnapshot | null;
   onEnterpriseMembershipRevoked?: (
@@ -140,6 +160,7 @@ type ProxyRequestTrace = {
   /** Prompt prefix compared with the previous request of the same conversation. */
   promptPrefix?: { key: string; observation: PromptPrefixObservation };
   promptUsage?: PromptUsage;
+  onObservedFinish?: (result: ProxyRequestResult) => void;
 };
 
 const ProxyRequestOutcome = {
@@ -164,6 +185,7 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   accountContextHeadersGetter = config.getAccountContextHeaders ?? null;
   sessionKeyGetter = config.getSessionKey ?? null;
   requestFinishedHandler = config.onRequestFinished;
+  requestObserver = config.observeRequest;
   clientVersionGetter = config.getClientVersion;
   enterpriseAuthSessionSnapshotGetter = config.getEnterpriseAuthSessionSnapshot ?? null;
   enterpriseMembershipRevokedHandler = config.onEnterpriseMembershipRevoked ?? null;
@@ -211,6 +233,7 @@ export function stopOpenClawTokenProxy(): void {
   accountContextHeadersGetter = null;
   sessionKeyGetter = null;
   requestFinishedHandler = undefined;
+  requestObserver = undefined;
   clientVersionGetter = null;
   enterpriseAuthSessionSnapshotGetter = null;
   enterpriseMembershipRevokedHandler = null;
@@ -298,6 +321,16 @@ function finishProxyRequest(
     console.warn(message);
   }
   logPromptPrefixObservation(trace);
+  try {
+    trace.onObservedFinish?.({
+      outcome,
+      status: trace.status,
+      serverTraceId: trace.serverTraceId,
+      durationMs: Math.max(0, now - trace.startedAt),
+    });
+  } catch {
+    console.debug('[OpenClawTokenProxy] Request completion observation skipped');
+  }
   // Capture attribution at admission, never from the latest turn/account at completion.
   if (trace.usageOrigin && trace.usageOrigin.owner === sessionKeyGetter?.()) {
     try {
@@ -544,6 +577,18 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     const parsedBody = parseJsonBody(body);
     // Invalid/non-JSON bodies are forwarded unchanged and receive no mode label.
     const requestModel = isRecord(parsedBody) ? parsedBody.model : undefined;
+    try {
+      requestTrace.onObservedFinish = requestObserver?.({
+        traceId: requestTrace.traceId,
+        spanId: requestTrace.spanId,
+        path: requestTrace.path,
+        method: req.method || 'POST',
+        model: requestModel,
+        dshInstanceId: req.headers[DSH_INSTANCE_HEADER],
+      });
+    } catch {
+      console.debug('[OpenClawTokenProxy] Request observation skipped');
+    }
     observePromptPrefix(requestTrace, parsedBody, body.length, requestModel);
     const upstreamBody = shouldHydrateGeminiChatCompletionsBody(req.url)
       ? hydrateGeminiChatCompletionsBody(body)

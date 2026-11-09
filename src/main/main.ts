@@ -407,6 +407,7 @@ import {
   DevelopmentProtocolSwitch,
   resolveDevelopmentLaunchContext,
 } from './libs/developmentProtocolContext';
+import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
 import {
   getExpertStoreUrl,
   getHtmlSharePublicBaseUrl,
@@ -2420,6 +2421,14 @@ const getMainLogReporter = (): MainLogReporter => {
   }
   return mainLogReporter;
 };
+
+const dshUsageTelemetry = new DshUsageTelemetry({
+  getReporter: getMainLogReporter,
+  getProxyBaseUrl: () => {
+    const port = getOpenClawTokenProxyPort();
+    return port ? `http://127.0.0.1:${port}/v1` : null;
+  },
+});
 
 const forwardOpenClawStatus = (status: OpenClawEngineStatus): void => {
   desktopCompanionManager?.setEnginePhase(status.phase);
@@ -10347,6 +10356,7 @@ if (!gotTheLock) {
   });
 
   registerDshHandlers({
+    usageTelemetry: dshUsageTelemetry,
     getStore: () => getStore(),
     getProviders: () => {
       const appConfig = getStore().get<{ providers?: Record<string, ProviderConfig> }>('app_config');
@@ -16019,6 +16029,7 @@ if (!gotTheLock) {
         getServerBaseUrl: getServerApiBaseUrl,
         getAccountContextHeaders: getEnterpriseAccountHeaders,
         getSessionKey: getAuthSessionKey,
+        observeRequest: request => dshUsageTelemetry.observeRequest(request),
         onRequestFinished: origin => {
           void coworkTurnUsageService?.refreshExactTrace(origin).catch(error => {
             console.warn('[TurnUsage] failed to refresh completed background request usage.', error);
