@@ -59,7 +59,7 @@ test.each([true, false])('samples fresh local time after slow startup and prepar
   const sampled = bridged ? afterRehydration : afterHistory;
   expect(prompt.endsWith(buildOpenClawLocalTimeContextPrompt(sampled))).toBe(true);
   expect(prompt).not.toContain(String(start.getTime()));
-  expect(prompt.indexOf('## Local Time Context')).toBeGreaterThan(prompt.indexOf('[Current user request]'));
+  expect(prompt.indexOf('Local time: ')).toBeGreaterThan(prompt.indexOf('[Current user request]'));
   // Once assembled, the exact turn is reused. Clock advancement cannot rewrite it.
   vi.setSystemTime(new Date('2026-10-27T01:20:00Z'));
   expect(prompt.endsWith(buildOpenClawLocalTimeContextPrompt(sampled))).toBe(true);

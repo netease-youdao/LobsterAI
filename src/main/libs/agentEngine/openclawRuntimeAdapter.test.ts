@@ -79,6 +79,7 @@ import {
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
 import { SubagentYield } from './subagent/yield';
+import { OPENCLAW_BOOTSTRAP_MAX_CHARS } from './workspaceDeliveredInstructions';
 
 test('only a live-child native shutdown announcement parks config recovery for self-restart', () => {
   const noteGatewaySelfRestart = vi.fn();
@@ -4455,7 +4456,7 @@ test('system prompt injection keeps AGENTS.md sections when OpenClaw would trunc
   const defaultSystemPrompt = '# Style\n- Keep replies concise and direct.';
   const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
   await withAgentsMdStateDir(
-    `${'Long user notes. '.repeat(1_500)}\n\n## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
+    `${'Long user notes. '.repeat(Math.ceil(OPENCLAW_BOOTSTRAP_MAX_CHARS / 'Long user notes. '.length) + 100)}\n\n## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
     async (stateDir) => {
       const { adapter, requests } = createRunTurnAdapter({ stateDir, defaultSystemPrompt });
 
@@ -8210,6 +8211,38 @@ test('chat final completion is canceled when tool work continues after final', a
   } finally {
     vi.useRealTimers();
   }
+});
+
+test('renders the deferred tool, not the Tool Search plumbing that ran it', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'edit the sheet', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const runId = 'run-tool-search';
+  session.status = 'running';
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, runId));
+
+  let seq = 1;
+  const emitTool = (data: Record<string, unknown>) => {
+    adapter.handleAgentEvent({ runId, sessionKey, stream: 'tool', data }, seq++);
+  };
+  emitTool({ toolCallId: 'call-search', phase: 'start', name: 'tool_search', args: { query: 'excel edit' } });
+  emitTool({ toolCallId: 'call-search', phase: 'result', name: 'tool_search', result: { content: [] } });
+  emitTool({ toolCallId: 'call-describe', phase: 'start', name: 'tool_describe', args: { id: 'excel_edit' } });
+  emitTool({ toolCallId: 'call-run', phase: 'start', name: 'tool_call', args: { id: 'lobster-excel__excel_edit' } });
+  // OpenClaw runs the deferred tool as a nested call with its own events.
+  emitTool({
+    toolCallId: 'tool_search_code:call-run:lobster-excel__excel_edit:1',
+    phase: 'start',
+    name: 'lobster-excel__excel_edit',
+    args: { path: '/tmp/budget.xlsx' },
+  });
+  emitTool({ toolCallId: 'call-run', phase: 'result', name: 'tool_call', result: { content: [] } });
+
+  const toolUses = session.messages.filter((message) => message.type === 'tool_use');
+  expect(toolUses.map((message) => message.metadata?.toolName)).toEqual(['lobster-excel__excel_edit']);
+  expect(session.messages.some((message) => message.metadata?.toolUseId === 'call-run')).toBe(false);
 });
 
 test('tool-use chat final keeps the session running until tool work arrives', async () => {

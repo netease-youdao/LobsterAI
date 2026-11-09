@@ -881,6 +881,12 @@ Adaptations for v2026.8.1:
   the final history sync then kept only the last message. Other clients ignore
   the unknown stream.
 
+Status: LobsterAI now writes `tools.updatePlan: false`, so `progress_card` is not
+registered and this check does not run. The desktop card is gone, most calls
+spent a model request of their own, and the tool description told the model the
+user watches the card instead of the transcript. The patch stays inert; remove it
+with the next upgrade unless `progress_card` comes back.
+
 Verify with:
 
 ```sh
@@ -1275,6 +1281,63 @@ Verify `src/agents/tools/web-fetch.proxy.integration.test.ts`, the neighboring
 web-fetch tests, and `src/infra/net/fetch-guard.test.ts`; then rebuild and test a
 real HTTPS tunnel with the generated desktop config. Remove when upstream
 supports an equivalent proxy transport with validated, pinned destination IPs.
+
+## Tool Search pins hot tools and skips small catalogs
+
+`openclaw-tool-search-direct-tools.patch` adds two `tools.toolSearch` keys.
+
+- `direct`: tool names that stay in the model's tool array while Tool Search
+  defers the rest. Entries are exact names or a trailing `*` prefix such as
+  `lobster-word__*` (one MCP server). Upstream keeps only core file/shell tools
+  direct and has no configuration hook. A pin may name an MCP tool, but only
+  when that name is unique in the run, so a lookalike from another server
+  cannot take its place. Implicitly required names (`message` as the sole reply
+  path) stay OpenClaw-only. Code Mode ignores the list.
+- `minDeferredChars`: skip compaction for a run when the schemas it would hide
+  total fewer characters. Measuring stops once the threshold is reached, and
+  without a threshold nothing extra is serialized.
+
+Why: cached input is billed at 1/50 of uncached input, so shrinking a warm
+prefix saves little, while every deferred tool costs one or two extra model
+requests (search, describe) the first time it is used. A desktop A/B on
+deepseek-flash measured Excel/Word 4 → 6 requests and browser 9.5 → 11.5 when
+those tools were deferred, which made them 35–79% more expensive. LobsterAI
+therefore pins the tools a session is likely to use (by local usage share:
+browser, `web_fetch`, memory, the Word and Excel editors), the interaction and
+safety tools (`AskUserQuestion` — the delete policy skips confirmation when it
+is missing — `ask_user`, `progress_card`), and defers only the long tail. A
+plugin tool's `catalogMode: "direct-only"` is not enough: plugin tool
+descriptors are cached without that field.
+
+Verify `src/agents/tool-surface-plan.test.ts` and `src/config/schema.test.ts`,
+then rebuild the runtime and check a desktop session's `systemPromptReport`.
+A runtime built without this patch rejects the unknown keys, so rebuild before
+running the desktop app. Remove when upstream offers operator-pinned direct
+tools and a deferral threshold.
+
+## Tool Search calls keep native images and drop the catalog echo
+
+`openclaw-tool-call-result-projection.patch` reshapes the model-visible result
+of the structured `tool_call` control:
+
+- Upstream returns `{ tool, result }` with the full catalog entry, so every call
+  repeats the tool's description and input hint (1.1k–5.2k characters per call
+  measured). The model now sees `{ tool: { id, name }, result }`.
+- Upstream serializes the whole result with `jsonResult`, so an image block
+  became base64 text truncated at 20,000 characters: a deferred browser
+  screenshot cost ~13k uncached tokens and the model still had to call
+  `view_image`. Images now stay native blocks appended after the JSON text, as
+  a direct call returns them; the text keeps a short placeholder per image.
+
+The untrusted-content wrapper for network and MCP text, failure `details`
+(which keep the full entry), and Code Mode's `openclaw.tools.call` shape are
+unchanged.
+
+Verify `src/agents/tool-search.test.ts` and
+`src/agents/tool-search.mcp-error.test.ts`. On Windows,
+`code-mode.bridge.host-denial.test.ts` and
+`attempt.code-mode-reconciliation.test.ts` fail with or without this patch.
+Remove when upstream projects `tool_call` results the same way.
 
 ## ChatGPT OAuth token requests honor the gateway proxy (upstream backport)
 

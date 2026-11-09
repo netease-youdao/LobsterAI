@@ -14,6 +14,14 @@ export const SESSION_AGNOSTIC_PERMISSION_SESSION_ID = '__askuser__';
 export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
 
 /**
+ * How long an AskUserQuestion request waits for the user, matching OpenClaw's
+ * native ask_user default (900 s): it carries choice questions as well as
+ * delete confirmations, and a user who steps away must not read as a refusal.
+ * The plugin (openclaw-extensions/ask-user-question) mirrors this value.
+ */
+export const ASK_USER_QUESTION_TIMEOUT_MS = 15 * 60_000;
+
+/**
  * Id prefix of the optimistic session the renderer shows while a new task's
  * start request is in flight. It is never stored: the started session
  * replaces it, so a session carrying it has not reached the runtime yet.
