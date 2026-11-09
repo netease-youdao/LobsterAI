@@ -116,6 +116,7 @@ import {
   CoworkForkMode,
   CoworkIpcChannel,
   CoworkOnboardingMessageKind,
+  CoworkSessionErrorCode,
 } from '../shared/cowork/constants';
 import { isEmbeddingProvider } from '../shared/cowork/embedding';
 import {
@@ -390,6 +391,13 @@ import {
   ensureElectronNodeShim,
   getElectronNodeRuntimePath,
 } from './libs/coworkUtil';
+import {
+  checkCoworkWorkingDirectory,
+  type CoworkWorkingDirectoryCheck,
+  CoworkWorkingDirectoryIssue,
+  type CoworkWorkingDirectoryProblem,
+  getDefaultCoworkProjectDirectory,
+} from './libs/coworkWorkingDirectory';
 import {
   assertDataMigrationSqliteSnapshotMatchesLiveSync,
   buildDataMigrationBackupFileName,
@@ -1989,22 +1997,19 @@ const normalizeCaptureRect = (rect?: Partial<CaptureRect> | null): CaptureRect |
   return normalized.width > 0 && normalized.height > 0 ? normalized : null;
 };
 
-const resolveTaskWorkingDirectory = (workspaceRoot: string): string => {
-  const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
-  // Reject bare Windows drive roots (e.g. "D:\") — mkdir on drive roots causes EPERM,
-  // and some agent engines (OpenClaw) also fail when given a drive root as workspace.
-  if (process.platform === 'win32' && /^[a-zA-Z]:\\?$/.test(resolvedWorkspaceRoot)) {
-    throw new Error(
-      `Cannot use a drive root as the working directory (${resolvedWorkspaceRoot}). Please select a subfolder instead, for example: ${resolvedWorkspaceRoot}Projects`,
-    );
-  }
-  if (!fs.existsSync(resolvedWorkspaceRoot)) {
-    fs.mkdirSync(resolvedWorkspaceRoot, { recursive: true });
-  }
-  if (!fs.statSync(resolvedWorkspaceRoot).isDirectory()) {
-    throw new Error(`Selected workspace is not a directory: ${resolvedWorkspaceRoot}`);
-  }
-  return resolvedWorkspaceRoot;
+const checkTaskWorkingDirectory = (workingDirectory: string): CoworkWorkingDirectoryCheck =>
+  checkCoworkWorkingDirectory(workingDirectory, {
+    recreatableDirectories: [getDefaultCoworkProjectDirectory()],
+  });
+
+const getWorkingDirectoryUnavailableResponse = ({ issue, directory }: CoworkWorkingDirectoryProblem) => {
+  console.warn(`[Cowork] working directory check failed (${issue}): ${directory}`);
+  const error = issue === CoworkWorkingDirectoryIssue.DriveRoot
+    ? t('coworkWorkingDirectoryDriveRoot', { path: directory, example: path.win32.join(directory, 'Projects') })
+    : issue === CoworkWorkingDirectoryIssue.NotDirectory
+      ? t('coworkWorkingDirectoryNotFolder', { path: directory })
+      : t('coworkWorkingDirectoryMissing', { path: directory });
+  return { success: false, code: CoworkSessionErrorCode.WorkingDirectoryUnavailable, error };
 };
 
 const getDefaultExportImageName = (defaultFileName?: string): string => {
@@ -10458,6 +10463,22 @@ if (!gotTheLock) {
         if (options.modelPresetId !== undefined && !parseModelPresetId(options.modelPresetId)) {
           return { success: false, error: t('modelPresetInvalidSession') };
         }
+        const selectedTaskDirectory = resolveSessionWorkingDirectory({
+          cwd: options.cwd,
+          agentId: options.agentId,
+        });
+        if (!selectedTaskDirectory) {
+          return {
+            success: false,
+            error: 'Please select a task folder before submitting.',
+          };
+        }
+        // Check before warming the engine so an unplugged drive fails fast.
+        const workingDirectoryCheck = checkTaskWorkingDirectory(selectedTaskDirectory);
+        if (workingDirectoryCheck.ok === false) {
+          return getWorkingDirectoryUnavailableResponse(workingDirectoryCheck);
+        }
+        const taskWorkingDirectory = workingDirectoryCheck.directory;
         if (!options.modelPresetId) {
           const modelRunGate = await ensureServerModelReadyForRun(
             resolveCoworkRunModelRef({
@@ -10494,17 +10515,6 @@ if (!gotTheLock) {
         const persistedSystemPrompt = containsPlanModePrompt(systemPrompt)
           ? mergeCoworkSystemPrompt(config.systemPrompt)
           : systemPrompt;
-        const selectedTaskDirectory = resolveSessionWorkingDirectory({
-          cwd: options.cwd,
-          agentId: options.agentId,
-        });
-
-        if (!selectedTaskDirectory) {
-          return {
-            success: false,
-            error: 'Please select a task folder before submitting.',
-          };
-        }
         const imageAttachmentValidation = validateCoworkImageAttachmentsForRuntime(options.imageAttachments);
         if (imageAttachmentValidation.ok === false) {
           return {
@@ -10521,7 +10531,6 @@ if (!gotTheLock) {
           t('coworkDefaultSessionTitle'),
         );
         const title = options.title?.trim() || fallbackTitle;
-        const taskWorkingDirectory = resolveTaskWorkingDirectory(selectedTaskDirectory);
         const runtimeSkillIds = options.runtimeSkillIds ?? options.activeSkillIds;
         const selectedTextSnippets = normalizeSelectedTextSnippetsForIpc(options.selectedTextSnippets);
         const browserAnnotations = normalizeBrowserAnnotationBatches(options.browserAnnotations);
@@ -10706,6 +10715,7 @@ if (!gotTheLock) {
         };
         return { success: true, session: sessionWithMessages };
       } catch (error) {
+        console.error('[Cowork] failed to start session:', error);
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to start session',
@@ -10746,6 +10756,13 @@ if (!gotTheLock) {
           `Prompt length ${options.prompt.length}.`,
           `Image attachments ${options.imageAttachments?.length ?? 0}.`,
         );
+        const continueWorkingDirectory = getCoworkStore().getSession(options.sessionId)?.cwd?.trim();
+        if (continueWorkingDirectory) {
+          const workingDirectoryCheck = checkTaskWorkingDirectory(continueWorkingDirectory);
+          if (workingDirectoryCheck.ok === false) {
+            return getWorkingDirectoryUnavailableResponse(workingDirectoryCheck);
+          }
+        }
         const modelRunGate = await ensureServerModelReadyForRun(
           resolveCoworkRunModelRef({ sessionId: options.sessionId }),
         );
@@ -10902,6 +10919,7 @@ if (!gotTheLock) {
         const session = getCoworkStore().getSession(options.sessionId);
         return { success: true, session };
       } catch (error) {
+        console.error('[Cowork] failed to continue session:', error);
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to continue session',
@@ -15805,7 +15823,7 @@ if (!gotTheLock) {
     // We don't trigger permission dialogs at startup to avoid annoying users
 
     // Ensure default working directory exists
-    const defaultProjectDir = path.join(os.homedir(), 'lobsterai', 'project');
+    const defaultProjectDir = getDefaultCoworkProjectDirectory();
     if (!fs.existsSync(defaultProjectDir)) {
       fs.mkdirSync(defaultProjectDir, { recursive: true });
       console.log('Created default project directory:', defaultProjectDir);
