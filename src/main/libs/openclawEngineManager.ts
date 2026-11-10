@@ -22,6 +22,7 @@ import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/star
 import { t } from '../i18n';
 import { AwakeClock } from './awakeClock';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
+import { refreshFakeIpNetworkState } from './fakeIpNetwork';
 import {
   formatGatewayLogDateKey,
   type GatewayLogEntry,
@@ -62,6 +63,7 @@ import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './o
 import { prewarmOpenClawStateDatabases } from './openclawStateDbPrewarm';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
+import { getWebSearchBridgeFilePath, WEB_SEARCH_BRIDGE_FILE_ENV } from './webSearchBridgeFile';
 
 const gwDiagTs = (): string => {
   const d = new Date();
@@ -1189,6 +1191,8 @@ export class OpenClawEngineManager extends EventEmitter {
       ...process.env,
       SKILLS_ROOT: skillsRoot,
       LOBSTERAI_SKILLS_ROOT: skillsRoot,
+      // A bridge server auto-started by the web-search skill's own scripts inherits this.
+      [WEB_SEARCH_BRIDGE_FILE_ENV]: getWebSearchBridgeFilePath(app.getPath('userData')),
       OPENCLAW_HOME: this.baseDir,
       OPENCLAW_STATE_DIR: this.stateDir,
       OPENCLAW_CONFIG_PATH: this.configPath,
@@ -1255,6 +1259,10 @@ export class OpenClawEngineManager extends EventEmitter {
       env.PATH = [nodeShimDir, curPath].filter(Boolean).join(path.delimiter);
       env.LOBSTERAI_NPM_BIN_DIR = npmBinDir || '';
     }
+
+    // Keeps later config syncs current when the proxy mode changed since launch;
+    // not awaited so a slow DNS never delays the gateway.
+    void refreshFakeIpNetworkState();
 
     if (isSystemProxyEnabled()) {
       const { proxyUrl, targetUrl } = await resolveSystemProxyUrlForTargets();

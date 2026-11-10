@@ -120,6 +120,7 @@ const gwDiagTs = (): string => {
   const abs = Math.abs(tz);
   return `[GW-RESTART-DIAG] ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
 };
+import { isFakeIpNetworkActive } from './fakeIpNetwork';
 import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenClawExtension, hasRuntimeBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
 import { rebaseRuntimeExtensionLoadPaths } from './openclawPluginRepairPaths';
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
@@ -2272,7 +2273,9 @@ export class OpenClawConfigSync {
       ...(fetch.maxRedirects ? { maxRedirects: fetch.maxRedirects } : {}),
       ...(fetch.maxChars ? { maxChars: fetch.maxChars } : {}),
       ...(fetch.userAgent ? { userAgent: fetch.userAgent } : {}),
-      ...(fetch.allowRfc2544BenchmarkRange === true
+      // Fake-IP proxies resolve every site into this range; without it the
+      // SSRF guard blocks all of web_fetch. Real private ranges stay blocked.
+      ...(fetch.allowRfc2544BenchmarkRange === true || isFakeIpNetworkActive()
         ? { ssrfPolicy: { allowRfc2544BenchmarkRange: true } }
         : {}),
     };
