@@ -151,6 +151,13 @@ export type OpenClawLoopbackRepairOutcome =
  */
 export const OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV = 'LOBSTERAI_MANAGED_WORKSPACE_ROOT';
 
+/**
+ * OpenClaw's session→SQLite import moves imported legacy transcripts into this
+ * directory beside each sessions directory: `<state>/` for the legacy root
+ * store, `<state>/agents/<id>/` per agent (v2026.8.1 doctor-session-sqlite.ts).
+ */
+export const OPENCLAW_SESSION_IMPORT_ARCHIVE_DIRECTORY = 'session-sqlite-import-archive';
+
 export const OpenClawGatewayFailureKind = {
   HeapOutOfMemory: 'heap_out_of_memory',
 } as const;
