@@ -3,7 +3,7 @@ import { AgentLegacyIdentityCleanupStatus } from '@shared/agent';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import { ProviderName } from '@shared/providers';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
@@ -92,7 +92,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [identity, setIdentity] = useState('');
   const [userInfo, setUserInfo] = useState('');
   const [icon, setIcon] = useState('');
-  const [model, setModel] = useState<Model | null>(null);
+  const [modelOverride, setModelOverride] = useState<Model | null | undefined>(undefined);
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
@@ -109,6 +109,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [initialBoundKeys, setInitialBoundKeys] = useState<Set<string>>(new Set());
   const isMainAgent = isDefaultAgentId(agentId);
 
+  const storedModel = useMemo(
+    () => (agent ? resolveOpenClawModelRef(agent.model, availableModels) ?? defaultSelectedModel ?? null : null),
+    [agent, availableModels, defaultSelectedModel],
+  );
+  const storedModelRef = storedModel ? toOpenClawModelRef(storedModel) : '';
+  const model = modelOverride === undefined ? storedModel : modelOverride;
+
   // Snapshot of initial values for dirty detection
   const initialValuesRef = useRef({
     name: '',
@@ -117,7 +124,6 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     identity: '',
     userInfo: '',
     icon: '',
-    model: '',
     workingDirectory: '',
     skillIds: [] as string[],
     subagentAllowAgentIds: [] as string[],
@@ -132,7 +138,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     if (identity !== init.identity) changedFields.push('identity');
     if (userInfo !== init.userInfo) changedFields.push('userInfo');
     if (icon !== init.icon) changedFields.push('icon');
-    if ((model ? toOpenClawModelRef(model) : '') !== init.model) changedFields.push('model');
+    if ((model ? toOpenClawModelRef(model) : '') !== storedModelRef) changedFields.push('model');
     if (workingDirectory !== init.workingDirectory) changedFields.push('workingDirectory');
     if (skillIds.length !== init.skillIds.length || skillIds.some((id, i) => id !== init.skillIds[i])) {
       changedFields.push('skillIds');
@@ -156,6 +162,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     model,
     name,
     skillIds,
+    storedModelRef,
     subagentAllowAgentIds,
     systemPrompt,
     userInfo,
@@ -264,9 +271,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       setIdentity(nextIdentity);
       setUserInfo(nextUserInfo);
       setIcon(a.icon);
-      const resolvedModel = resolveOpenClawModelRef(a.model, availableModels) ?? defaultSelectedModel ?? null;
-      const resolvedModelRef = resolvedModel ? toOpenClawModelRef(resolvedModel) : '';
-      setModel(resolvedModel);
+      setModelOverride(undefined);
       setWorkingDirectory(a.workingDirectory ?? '');
       setSkillIds(a.skillIds ?? []);
       setSubagentAllowAgentIds(a.subagentAllowAgentIds ?? []);
@@ -277,7 +282,6 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         identity: nextIdentity,
         userInfo: nextUserInfo,
         icon: a.icon,
-        model: resolvedModelRef,
         workingDirectory: a.workingDirectory ?? '',
         skillIds: a.skillIds ?? [],
         subagentAllowAgentIds: a.subagentAllowAgentIds ?? [],
@@ -302,7 +306,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     return () => {
       cancelled = true;
     };
-  }, [agentId, availableModels, defaultSelectedModel]);
+  }, [agentId]);
 
   useEffect(() => {
     if (!agentId) {
@@ -381,7 +385,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         systemPrompt: systemPrompt.trim(),
         identity: identity.trim(),
         model: modelRef,
-        ...(modelRef !== initialValuesRef.current.model
+        ...(modelRef !== storedModelRef
           ? { thinkingLevel: resolveThinkingLevelForModel(model) }
           : {}),
         workingDirectory: workingDirectory.trim(),
@@ -876,7 +880,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-t border-border">
           <AgentDetailToolbar
             model={model}
-            onModelChange={setModel}
+            onModelChange={setModelOverride}
             workingDirectory={workingDirectory}
             onWorkingDirectoryChange={setWorkingDirectory}
           />
