@@ -27,6 +27,7 @@ import {
   DesktopCompanionSurface,
   DesktopCompanionTiming,
 } from '../../shared/desktopCompanion/constants';
+import { CompanionContextMenuIpc, CompanionContextMenuSize } from '../../shared/desktopCompanion/contextMenu';
 import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
@@ -60,6 +61,7 @@ vi.mock('electron', async () => {
     focused = false;
     enabled = true;
     ignoreMouse = false;
+    surface: string | undefined;
     bounds: any;
     webContents = Object.assign(new EventEmitter(), {
       id: this.id,
@@ -89,7 +91,7 @@ vi.mock('electron', async () => {
     setAlwaysOnTop() {}
     setVisibleOnAllWorkspaces() {}
     loadURL() { return Promise.resolve(); }
-    loadFile() { return Promise.resolve(); }
+    loadFile(_file: string, options?: { query?: { surface?: string } }) { this.surface = options?.query?.surface; return Promise.resolve(); }
     destroy() { this.destroyed = true; this.emit('closed'); }
   }
   const workArea = { x: 0, y: 0, width: 1280, height: 900 };
@@ -213,8 +215,13 @@ function dragOverOrb(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileK
     { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, { phase, kinds });
 }
 
+/** The native menu other platforms pop up; macOS draws the same entries in a window of its own. */
 function menu(): MenuItemConstructorOptions[] {
-  invoke(DesktopCompanionIpc.ContextMenu);
+  const platform = vi.spyOn(process, 'platform', 'get');
+  // Build the native menu while preserving the test's platform for its actions.
+  platform.withImplementation(() => 'linux', () => {
+    invoke(DesktopCompanionIpc.ContextMenu);
+  });
   return vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)![0];
 }
 
@@ -2338,5 +2345,109 @@ describe('accessibility permission', () => {
     create(undefined, OpenClawEnginePhase.Running, () => FakeSelectionHook);
     invoke(DesktopCompanionIpc.RequestPermission, CompanionPermission.Accessibility);
     expect(guideOpenSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe('orb menu on macOS', () => {
+  beforeEach(() => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+  });
+
+  function openMenu() {
+    invoke(DesktopCompanionIpc.ContextMenu);
+    const window = mocks.windows.find(win => win.surface === DesktopCompanionSurface.Menu && !win.destroyed);
+    const state = manager.getState().contextMenu!;
+    return {
+      window,
+      state,
+      ready: (id = state.id) => invoke(CompanionContextMenuIpc.Ready, id, window.webContents),
+      run: (id: string) => invoke(CompanionContextMenuIpc.Run, id, window.webContents),
+    };
+  }
+
+  test('draws the menu in its own panel, which floats over full-screen apps, and shows it once painted', () => {
+    create();
+    const { window, state, ready } = openMenu();
+    expect(Menu.buildFromTemplate).not.toHaveBeenCalled();
+    expect(window).not.toBe(orb());
+    expect(state.items.map(item => item.label)).toEqual([
+      'desktopCompanionOpenApp', 'desktopCompanionOpenPanel', 'desktopCompanionScreenshot',
+      'desktopCompanionChangeSkin', 'desktopCompanionSnoozeToday', 'desktopCompanionSettings',
+    ]);
+    expect(state.items.filter(item => item.divided).map(item => item.label)).toEqual(['desktopCompanionScreenshot', 'desktopCompanionSnoozeToday']);
+    expect(state.items[3].submenu!.map(item => item.checked)).toEqual([true, false, false, false, false, false, false, false, false]);
+    expect(state.cards).toEqual({ root: expect.any(Object), [state.items[3].id]: expect.any(Object) });
+    // Beside the orb in the lower right, rising from its middle, wherever the pointer is.
+    const menuHeight = CompanionContextMenuSize.Chrome * 2 + CompanionContextMenuSize.Item * 6 + CompanionContextMenuSize.Divider * 2;
+    expect(window.bounds.x + state.cards.root.x + CompanionContextMenuSize.Width).toBe(orb().bounds.x);
+    expect(window.bounds.y + state.cards.root.y + menuHeight).toBe(orb().bounds.y + orb().bounds.height / 2);
+    expect(window.visible).toBe(false);
+    expect(ready()).toBe(true);
+    expect(window).toMatchObject({ visible: true, focused: true });
+
+    // Opening again hides the previous menu until the new one has painted.
+    const again = openMenu();
+    expect(again.window).toBe(window);
+    expect(window.visible).toBe(false);
+    expect(again.ready(state.id)).toBe(false);
+    expect(again.ready()).toBe(true);
+    expect(window.visible).toBe(true);
+  });
+
+  test('a chosen item closes the menu before it runs, and a closed menu runs nothing', () => {
+    create();
+    const first = openMenu();
+    first.ready();
+    first.run(first.state.items[1].id);
+    expect(manager.getState().contextMenu).toBeNull();
+    expect(first.window.visible).toBe(false);
+    expect(manager.getState().panelVisible).toBe(true);
+
+    const second = openMenu();
+    second.ready();
+    second.run(second.state.items[3].submenu![1].id);
+    expect(manager.getState().preferences.skin).toBe('ruanruanxia');
+    expect(orb().bounds).toMatchObject(DesktopCompanionSize.Orb);
+    second.run(second.state.items[4].id);
+    expect(manager.getState().snooze).toBeNull();
+  });
+
+  test('only the menu window can run or dismiss its items', () => {
+    create();
+    const { state } = openMenu();
+    expect(() => invoke(CompanionContextMenuIpc.Run, state.items[0].id)).toThrow('Invalid companion context menu IPC sender');
+    expect(() => invoke(CompanionContextMenuIpc.Dismiss, undefined, orb().webContents)).toThrow('Invalid companion context menu IPC sender');
+    expect(openMain).not.toHaveBeenCalled();
+    expect(manager.getState().contextMenu).not.toBeNull();
+  });
+
+  test('the quick panel stays open behind the menu and gets focus back, but a click elsewhere closes both', () => {
+    vi.useFakeTimers();
+    create();
+    manager.togglePanel();
+    const panel = mocks.windows.at(-1);
+    readyPanel(panel);
+    expect(panel.focused).toBe(true);
+
+    const first = openMenu();
+    first.ready();
+    // The menu takes key focus, which a native menu would not.
+    panel.blur();
+    vi.advanceTimersByTime(500);
+    expect(manager.getState().panelVisible).toBe(true);
+    invoke(CompanionContextMenuIpc.Dismiss, undefined, first.window.webContents);
+    expect(manager.getState().contextMenu).toBeNull();
+    expect(panel.focused).toBe(true);
+    vi.advanceTimersByTime(500);
+    expect(manager.getState().panelVisible).toBe(true);
+
+    const second = openMenu();
+    second.ready();
+    panel.blur();
+    second.window.blur();
+    vi.advanceTimersByTime(500);
+    expect(manager.getState().contextMenu).toBeNull();
+    expect(manager.getState().panelVisible).toBe(false);
   });
 });
