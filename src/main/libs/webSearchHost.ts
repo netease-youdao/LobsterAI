@@ -397,8 +397,12 @@ export class WebSearchHost {
   }
 
   private async isGoogleUnavailable(page: WebSearchPage): Promise<boolean> {
-    const url = page.url().toLowerCase();
-    if (url.includes('/sorry') || url.includes('consent.google.com')) return true;
+    const url = URL.parse(page.url());
+    if (url?.hostname === 'consent.google.com') return true;
+    if (
+      (url?.hostname === 'www.google.com' || url?.hostname === 'google.com')
+      && (url.pathname === '/sorry' || url.pathname.startsWith('/sorry/'))
+    ) return true;
     return page.evaluate<boolean>(`(${GOOGLE_UNAVAILABLE_SCRIPT})()`, EVALUATE_TIMEOUT_MS).catch(() => false);
   }
 

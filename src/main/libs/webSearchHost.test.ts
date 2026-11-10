@@ -12,18 +12,23 @@ import {
   WebSearchPageOp,
 } from './webSearchHost';
 
-const createFakePage = (options: { selectorFound?: boolean; results?: unknown[] } = {}) => {
+const createFakePage = (options: {
+  selectorFound?: boolean;
+  results?: unknown[];
+  redirectUrl?: string;
+  googleUnavailable?: boolean;
+} = {}) => {
   let currentUrl = '';
   const navigations: string[] = [];
   const page: WebSearchPage = {
     navigate: vi.fn(async (url: string) => {
-      currentUrl = url;
+      currentUrl = options.redirectUrl ?? url;
       navigations.push(url);
     }),
     evaluate: vi.fn(async (script: string) => {
       if (script.startsWith('Boolean(document.querySelector(')) return options.selectorFound ?? true;
       if (script.includes('document.body.innerText) || ""')) return 'page text';
-      if (script.includes('unusual traffic')) return true;
+      if (script.includes('unusual traffic')) return options.googleUnavailable ?? false;
       return options.results ?? [];
     }) as WebSearchPage['evaluate'],
     url: () => currentUrl,
@@ -121,6 +126,39 @@ describe('WebSearchHost', () => {
 
     expect(response).toEqual({ success: false, error: 'Google returned no parsable results' });
     host.dispose();
+  });
+
+  test.each([
+    { redirectUrl: 'https://consent.google.com/m', unavailable: true },
+    { redirectUrl: 'https://www.google.com/sorry/index', unavailable: true },
+    { redirectUrl: 'https://consent.google.com.example.com/', unavailable: false },
+    { redirectUrl: 'https://fake-consent.google.com/', unavailable: false },
+    { redirectUrl: 'https://consent.google.com@example.com/', unavailable: false },
+    { redirectUrl: 'https://www.google.com/search?q=consent.google.com/sorry', unavailable: false },
+    { redirectUrl: 'https://example.com/sorry', unavailable: false },
+    { redirectUrl: 'https://www.google.com/sorry-example', unavailable: false },
+    { redirectUrl: 'about:blank', unavailable: true, googleUnavailable: true },
+  ])('classifies a Google result timeout at $redirectUrl', async ({ redirectUrl, unavailable, googleUnavailable }) => {
+    vi.useFakeTimers();
+    const { page } = createFakePage({ selectorFound: false, redirectUrl, googleUnavailable });
+    const { host } = createHost(page);
+    try {
+      const response = host.handleRequest({
+        op: WebSearchPageOp.Search,
+        engine: WebSearchEngine.Google,
+        query: 'lobster',
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(response).resolves.toEqual({
+        success: false,
+        error: unavailable
+          ? 'Google appears blocked or unavailable from this network'
+          : 'Google search results did not load in time',
+      });
+    } finally {
+      host.dispose();
+      vi.useRealTimers();
+    }
   });
 
   test('rejects unknown engines, non-http URLs and policy-blocked hosts', async () => {
