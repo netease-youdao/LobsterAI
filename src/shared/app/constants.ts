@@ -10,6 +10,13 @@ export const AppIpcChannel = {
 
 export type AppIpcChannel = (typeof AppIpcChannel)[keyof typeof AppIpcChannel];
 
+export const WindowIpcChannel = {
+  /** Renderer asks whether the main window is in full screen (macOS hides the traffic lights then). */
+  IsFullscreen: 'window:isFullscreen',
+} as const;
+
+export type WindowIpcChannel = (typeof WindowIpcChannel)[keyof typeof WindowIpcChannel];
+
 /** Settings tabs the main process can open through AppIpcChannel.OpenSettings. */
 export const OpenSettingsTab = {
   DesktopCompanion: 'desktopCompanion',

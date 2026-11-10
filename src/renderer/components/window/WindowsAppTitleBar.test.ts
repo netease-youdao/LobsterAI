@@ -2,6 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { DEFAULT_SIDEBAR_TASK_FILTER } from '../agentSidebar/taskFilter';
 import WindowsAppTitleBar from './WindowsAppTitleBar';
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -66,7 +67,8 @@ describe('WindowsAppTitleBar', () => {
       searchLabel: 'Search tasks',
       showFilterIcon: true,
       filterLabel: 'Filter tasks',
-      onToggleFilter: () => undefined,
+      taskFilter: DEFAULT_SIDEBAR_TASK_FILTER,
+      onTaskFilterChange: () => undefined,
     });
 
     const sidebarActionIndex = html.indexOf('aria-label="Toggle sidebar"');

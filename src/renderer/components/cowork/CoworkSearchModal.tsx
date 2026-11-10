@@ -7,15 +7,23 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { RootState } from '../../store';
-import { CoworkSessionStatusValue, type CoworkSessionSummary } from '../../types/cowork';
+import {
+  type CoworkSessionContentSearchItem,
+  CoworkSessionStatusValue,
+  type CoworkSessionSummary,
+} from '../../types/cowork';
 import { getAgentDisplayNameById } from '../../utils/agentDisplay';
 import { formatAgentTaskRelativeTime } from '../agentSidebar/time';
 import Modal from '../common/Modal';
 import SkinPresentationScope from '../skin/SkinPresentationScope';
+import { requestConversationSearch } from './pendingConversationSearch';
 
 const SEARCH_SESSION_LIMIT = 100;
+const SEARCH_CONTENT_LIMIT = 50;
 const SEARCH_DEBOUNCE_MS = 180;
 const TASK_SEARCH_ANALYTICS_SOURCE = 'home_task_search';
+// Hits use the lobster logo's orange as text colour, so a long excerpt keeps its line rhythm.
+const SEARCH_HIT_CLASS_NAME = 'font-medium text-[#FF4523]';
 
 const getSessionAgentId = (session: CoworkSessionSummary) => {
   return session.agentId?.trim() || AgentId.Main;
@@ -70,13 +78,35 @@ const renderHighlightedTitle = (title: string, query: string): React.ReactNode =
   return (
     <>
       {title.slice(0, matchIndex)}
-      <span className="rounded-[3px] bg-primary/15 text-foreground">
+      <span className={SEARCH_HIT_CLASS_NAME}>
         {title.slice(matchIndex, matchIndex + trimmedQuery.length)}
       </span>
       {title.slice(matchIndex + trimmedQuery.length)}
     </>
   );
 };
+
+const renderHighlightedSnippet = (
+  snippet: string,
+  highlightStart: number,
+  highlightLength: number,
+): React.ReactNode => {
+  if (highlightStart < 0 || highlightLength <= 0) return snippet;
+  const highlightEnd = highlightStart + highlightLength;
+  return (
+    <>
+      {snippet.slice(0, highlightStart)}
+      <span className={SEARCH_HIT_CLASS_NAME}>
+        {snippet.slice(highlightStart, highlightEnd)}
+      </span>
+      {snippet.slice(highlightEnd)}
+    </>
+  );
+};
+
+type SearchResultRow =
+  | { kind: 'title'; session: CoworkSessionSummary }
+  | { kind: 'content'; session: CoworkSessionSummary; match: CoworkSessionContentSearchItem['match'] };
 
 const Kbd: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[5px] border border-border bg-background px-1 font-sans text-[10px] font-medium text-secondary">
@@ -106,6 +136,10 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   const [searchSessions, setSearchSessions] = useState<CoworkSessionSummary[]>(sessions);
   const [recentSessions, setRecentSessions] = useState<CoworkSessionSummary[]>(sessions);
   const [isLoading, setIsLoading] = useState(false);
+  const [contentResults, setContentResults] = useState<CoworkSessionContentSearchItem[]>([]);
+  const [contentResultQuery, setContentResultQuery] = useState('');
+  const [isContentLoading, setIsContentLoading] = useState(false);
+  const contentRequestIdRef = useRef(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
@@ -129,16 +163,34 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
     return mergeUniqueSessions(titleMatches, recentMatches);
   }, [agents, recentSessions, searchQuery, searchResultQuery, searchSessions]);
 
+  // Content hits for sessions already listed by title add nothing new; drop them.
+  const displayedContentResults = useMemo(() => {
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery || contentResultQuery !== trimmedQuery) return [];
+    const titleSessionIds = new Set(displayedSessions.map(session => session.id));
+    return contentResults.filter(item => !titleSessionIds.has(item.session.id));
+  }, [contentResultQuery, contentResults, displayedSessions, searchQuery]);
+
+  const resultRows = useMemo<SearchResultRow[]>(() => [
+    ...displayedSessions.map(session => ({ kind: 'title' as const, session })),
+    ...displayedContentResults.map(item => ({
+      kind: 'content' as const,
+      session: item.session,
+      match: item.match,
+    })),
+  ], [displayedContentResults, displayedSessions]);
+
   const agentNameBySessionId = useMemo(() => {
     const names = new Map<string, string>();
-    displayedSessions.forEach((session) => {
+    resultRows.forEach(({ session }) => {
       const agentId = getSessionAgentId(session);
       names.set(session.id, getAgentDisplayNameById(agentId, agents) ?? agentId);
     });
     return names;
-  }, [agents, displayedSessions]);
+  }, [agents, resultRows]);
 
   const hasQuery = searchQuery.trim().length > 0;
+  const isSearching = isLoading || isContentLoading;
 
   useEffect(() => {
     if (isOpen) {
@@ -167,6 +219,8 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
       setSearchSessions(sessions);
       setRecentSessions(sessions);
       setSearchResultQuery('');
+      setContentResults([]);
+      setContentResultQuery('');
     }
   }, [isOpen, sessions]);
 
@@ -207,29 +261,62 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   }, [debouncedSearchQuery, isOpen]);
 
   useEffect(() => {
+    if (!isOpen) return;
+    const requestId = contentRequestIdRef.current + 1;
+    contentRequestIdRef.current = requestId;
+    const query = debouncedSearchQuery.trim();
+    if (!query) {
+      setContentResults([]);
+      setContentResultQuery('');
+      setIsContentLoading(false);
+      return;
+    }
+    setIsContentLoading(true);
+    void coworkService.searchSessionContent(query, SEARCH_CONTENT_LIMIT)
+      .then((result) => {
+        if (requestId !== contentRequestIdRef.current) return;
+        if (!result.success) {
+          console.warn('[CoworkSearch] failed to load content search results:', result.error);
+        }
+        setContentResults(result.success ? result.results ?? [] : []);
+        setContentResultQuery(query);
+      })
+      .finally(() => {
+        if (requestId === contentRequestIdRef.current) {
+          setIsContentLoading(false);
+        }
+      });
+  }, [debouncedSearchQuery, isOpen]);
+
+  useEffect(() => {
     navigationSourceRef.current = 'keyboard';
     setActiveIndex(0);
-  }, [displayedSessions]);
+  }, [resultRows]);
 
-  const handleSelectSession = useCallback(async (session: CoworkSessionSummary) => {
-    reportTaskSearchAction('select_result', {
+  const handleSelectRow = useCallback(async (row: SearchResultRow) => {
+    const { session } = row;
+    reportTaskSearchAction(row.kind === 'content' ? 'select_content_result' : 'select_result', {
       agentType: getSessionAgentType(session),
       hasQuery: searchQuery.trim().length > 0,
       isCurrentSession: session.id === currentSessionId,
-      resultCount: displayedSessions.length,
+      resultCount: resultRows.length,
       sessionStatus: session.status,
     });
+    if (row.kind === 'content') {
+      // Queue before switching so the session view claims it as soon as it shows this session.
+      requestConversationSearch(session.id, searchQuery);
+    }
     await onSelectSession(session);
     onClose();
-  }, [currentSessionId, displayedSessions.length, onClose, onSelectSession, searchQuery]);
+  }, [currentSessionId, onClose, onSelectSession, resultRows.length, searchQuery]);
 
   const handleClose = useCallback(() => {
     reportTaskSearchAction('close', {
       hasQuery: searchQuery.trim().length > 0,
-      resultCount: displayedSessions.length,
+      resultCount: resultRows.length,
     });
     onClose();
-  }, [displayedSessions.length, onClose, searchQuery]);
+  }, [onClose, resultRows.length, searchQuery]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -242,28 +329,28 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
       }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
-        if (displayedSessions.length === 0) return;
+        if (resultRows.length === 0) return;
         navigationSourceRef.current = 'keyboard';
         const delta = event.key === 'ArrowDown' ? 1 : -1;
         setActiveIndex((prev) => {
-          const count = displayedSessions.length;
+          const count = resultRows.length;
           return (prev + delta + count) % count;
         });
         return;
       }
       if (event.key === 'Enter') {
-        const session = displayedSessions[activeIndex];
-        if (!session) return;
+        const row = resultRows[activeIndex];
+        if (!row) return;
         event.preventDefault();
-        void handleSelectSession(session);
+        void handleSelectRow(row);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [activeIndex, displayedSessions, handleClose, handleSelectSession, isOpen]);
+  }, [activeIndex, handleClose, handleSelectRow, isOpen, resultRows]);
 
   useEffect(() => {
-    if (!isOpen || isLoading || displayedSessions.length > 0) return;
+    if (!isOpen || isSearching || resultRows.length > 0) return;
     const emptyResultKey = `${searchQuery.trim().length > 0 ? 'query' : 'recent'}:${searchResultQuery}`;
     if (reportedEmptyResultKeyRef.current === emptyResultKey) return;
     reportedEmptyResultKeyRef.current = emptyResultKey;
@@ -271,7 +358,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
       hasQuery: searchQuery.trim().length > 0,
       resultCount: 0,
     });
-  }, [displayedSessions.length, isLoading, isOpen, searchQuery, searchResultQuery]);
+  }, [isOpen, isSearching, resultRows.length, searchQuery, searchResultQuery]);
 
   if (!isOpen) return null;
 
@@ -299,7 +386,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
             aria-label={i18nService.t('search')}
             className="h-14 min-w-0 flex-1 bg-transparent text-[15px] text-foreground placeholder-secondary/70 outline-none"
           />
-          {isLoading && (
+          {isSearching && (
             <svg className="h-4 w-4 shrink-0 animate-spin text-secondary/50" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
@@ -320,80 +407,120 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
             {hasQuery ? i18nService.t('searchResults') : i18nService.t('searchRecentTasks')}
           </div>
           <div className="max-h-[min(420px,48vh)] overflow-y-auto">
-            {displayedSessions.length === 0 ? (
+            {resultRows.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-sm text-secondary">
-                {!isLoading && <MagnifyingGlassIcon className="h-6 w-6 text-secondary/40" />}
-                <span>{isLoading ? i18nService.t('loading') : i18nService.t('searchNoResults')}</span>
+                {!isSearching && <MagnifyingGlassIcon className="h-6 w-6 text-secondary/40" />}
+                <span>{isSearching ? i18nService.t('loading') : i18nService.t('searchNoResults')}</span>
               </div>
             ) : (
-              displayedSessions.map((session, index) => {
+              resultRows.map((row, index) => {
+                const { session } = row;
                 const agentName = agentNameBySessionId.get(session.id) ?? getSessionAgentId(session);
                 const isCurrent = session.id === currentSessionId;
                 const isActive = index === activeIndex;
                 const isRunning = session.status === CoworkSessionStatusValue.Running;
                 const relativeTime = formatAgentTaskRelativeTime(session.updatedAt || session.createdAt);
+                const isContentRow = row.kind === 'content';
+                const isFirstContentRow = isContentRow && resultRows[index - 1]?.kind !== 'content';
                 return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    ref={(node) => {
-                      if (node && isActive && navigationSourceRef.current === 'keyboard') {
-                        node.scrollIntoView({ block: 'nearest' });
-                      }
-                    }}
-                    onClick={() => void handleSelectSession(session)}
-                    onMouseMove={() => {
-                      navigationSourceRef.current = 'pointer';
-                      if (activeIndex !== index) setActiveIndex(index);
-                    }}
-                    data-skin-search-result-active={isActive ? 'true' : undefined}
-                    className={`flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-left text-[13px] transition-colors ${
-                      isActive
-                        ? 'bg-black/[0.05] text-foreground dark:bg-white/[0.08]'
-                        : 'text-secondary'
-                      }`}
-                  >
-                    {isRunning && (
-                      <span
-                        className="inline-flex h-3 w-3 shrink-0 items-center justify-center"
-                        title={i18nService.t('myAgentSidebarRunning')}
-                        aria-label={i18nService.t('myAgentSidebarRunning')}
+                  <React.Fragment key={`${row.kind}:${session.id}`}>
+                    {isFirstContentRow && (
+                      <div
+                        className={`px-2.5 pb-1.5 text-[12px] font-medium text-secondary/80 ${
+                          index > 0 ? 'mt-2 border-t border-border pt-2.5' : ''
+                        }`}
                       >
-                        <svg className="h-3 w-3 animate-spin text-primary" viewBox="0 0 24 24" fill="none">
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          />
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                          />
-                        </svg>
-                      </span>
+                        {i18nService.t('searchContentResults')}
+                      </div>
                     )}
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {renderHighlightedTitle(session.title, searchQuery)}
-                    </span>
-                    {isCurrent && (
-                      <span className="shrink-0 rounded-[5px] bg-primary/10 px-1.5 py-px text-[11px] font-medium text-primary">
-                        {i18nService.t('searchCurrentTask')}
-                      </span>
-                    )}
-                    <span className="max-w-[136px] shrink-0 truncate text-[12px] text-secondary/75">
-                      {agentName}
-                    </span>
-                    <span
-                      className="w-[52px] shrink-0 text-right text-[12px] tabular-nums text-secondary/50"
-                      title={relativeTime.full}
+                    <button
+                      type="button"
+                      ref={(node) => {
+                        if (node && isActive && navigationSourceRef.current === 'keyboard') {
+                          node.scrollIntoView({ block: 'nearest' });
+                        }
+                      }}
+                      onClick={() => void handleSelectRow(row)}
+                      onMouseMove={() => {
+                        navigationSourceRef.current = 'pointer';
+                        if (activeIndex !== index) setActiveIndex(index);
+                      }}
+                      data-skin-search-result-active={isActive ? 'true' : undefined}
+                      className={`flex w-full flex-col justify-center rounded-lg px-2.5 text-left text-[13px] transition-colors ${
+                        isContentRow ? 'gap-0.5 py-1.5' : 'h-9'
+                      } ${
+                        isActive
+                          ? 'bg-black/[0.05] text-foreground dark:bg-white/[0.08]'
+                          : 'text-secondary'
+                      }`}
                     >
-                      {relativeTime.compact}
-                    </span>
-                  </button>
+                      <span className="flex w-full items-center gap-3">
+                        {isRunning && (
+                          <span
+                            className="inline-flex h-3 w-3 shrink-0 items-center justify-center"
+                            title={i18nService.t('myAgentSidebarRunning')}
+                            aria-label={i18nService.t('myAgentSidebarRunning')}
+                          >
+                            <svg className="h-3 w-3 animate-spin text-primary" viewBox="0 0 24 24" fill="none">
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                              />
+                            </svg>
+                          </span>
+                        )}
+                        <span className="min-w-0 flex-1 truncate font-medium">
+                          {isContentRow ? session.title : renderHighlightedTitle(session.title, searchQuery)}
+                        </span>
+                        {isCurrent && (
+                          <span className="shrink-0 rounded-[5px] bg-primary/10 px-1.5 py-px text-[11px] font-medium text-primary">
+                            {i18nService.t('searchCurrentTask')}
+                          </span>
+                        )}
+                        <span className="max-w-[136px] shrink-0 truncate text-[12px] text-secondary/75">
+                          {agentName}
+                        </span>
+                        <span
+                          className="w-[52px] shrink-0 text-right text-[12px] tabular-nums text-secondary/50"
+                          title={relativeTime.full}
+                        >
+                          {relativeTime.compact}
+                        </span>
+                      </span>
+                      {isContentRow && (
+                        <span className="flex w-full items-center gap-3 text-[12px] text-secondary/75">
+                          <span className="min-w-0 flex-1 truncate">
+                            <span className="text-secondary/55">
+                              {row.match.messageType === 'user'
+                                ? i18nService.t('searchContentFromUser')
+                                : i18nService.t('searchContentFromAssistant')}
+                            </span>
+                            {renderHighlightedSnippet(
+                              row.match.snippet,
+                              row.match.highlightStart,
+                              row.match.highlightLength,
+                            )}
+                          </span>
+                          {row.match.matchCount > 1 && (
+                            <span className="shrink-0 text-[11px] tabular-nums text-secondary/50">
+                              {i18nService
+                                .t('searchContentMatchCount')
+                                .replace('{count}', String(row.match.matchCount))}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </button>
+                  </React.Fragment>
                 );
               })
             )}

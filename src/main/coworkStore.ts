@@ -42,11 +42,19 @@ import type {
   CoworkSearchMessage,
   CoworkSearchMessageCursor,
   CoworkSearchMessagePage,
+  CoworkSessionContentMatch,
 } from '../shared/cowork/search';
+import { buildSearchSnippet } from '../shared/cowork/searchSnippet';
 import {
   type CoworkSelectedTextSnippet,
   CoworkSelectedTextSource,
 } from '../shared/cowork/selectedText';
+import {
+  COWORK_SESSION_FILTER_DEFAULT_LIMIT,
+  COWORK_SESSION_FILTER_MAX_IDS,
+  COWORK_SESSION_FILTER_MAX_LIMIT,
+  type CoworkSessionFilterQuery,
+} from '../shared/cowork/sessionFilter';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -829,6 +837,19 @@ interface CoworkSessionSearchOptions {
   offset?: number;
   agentId?: string;
 }
+
+interface CoworkSessionContentSearchOptions {
+  query: string;
+  limit?: number;
+  agentId?: string;
+}
+
+export interface CoworkSessionContentSearchResult {
+  session: CoworkSessionSummary;
+  match: CoworkSessionContentMatch;
+}
+
+const COWORK_SESSION_CONTENT_SEARCH_LIMIT = 50;
 
 export interface CreateCoworkSessionOptions {
   scheduledTaskId?: string | null;
@@ -1923,6 +1944,129 @@ export class CoworkStore {
       );
     }
 
+    return rows.map(row => this.mapSessionSummaryRow(row));
+  }
+
+  /**
+   * Find sessions whose user or non-thinking assistant messages contain the
+   * query. Returns one entry per session, built from its most recent matching
+   * message, ordered like the session list.
+   */
+  searchSessionContent(options: CoworkSessionContentSearchOptions): CoworkSessionContentSearchResult[] {
+    const query = options.query.trim();
+    if (!query) return [];
+    const limit = options.limit ?? COWORK_SESSION_CONTENT_SEARCH_LIMIT;
+    const pattern = `%${this.escapeLikePattern(query)}%`;
+    const agentFilter = options.agentId
+      ? "AND COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?"
+      : '';
+    type ContentMatchRow = CoworkSessionSummaryRow & {
+      match_message_id: string;
+      match_message_type: 'user' | 'assistant';
+      match_content: string;
+      match_created_at: number;
+      match_count: number;
+    };
+    // `msg` rather than `m`: the summary columns already use `m` for IM mappings.
+    const rows = this.getAll<ContentMatchRow>(
+      `
+      WITH matched AS (
+        SELECT
+          msg.id,
+          msg.session_id,
+          msg.type,
+          msg.created_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY msg.session_id
+            ORDER BY COALESCE(msg.sequence, msg.created_at) DESC, msg.created_at DESC, msg.ROWID DESC
+          ) AS match_rank,
+          COUNT(*) OVER (PARTITION BY msg.session_id) AS match_count
+        FROM cowork_messages msg
+        WHERE msg.type IN ('user', 'assistant')
+          AND msg.content LIKE ? ESCAPE '\\'
+          AND NOT (
+            msg.type = 'assistant'
+            AND msg.metadata IS NOT NULL
+            AND json_valid(msg.metadata) = 1
+            AND COALESCE(json_extract(msg.metadata, '$.isThinking'), 0) = 1
+          )
+      )
+      SELECT ${this.getSessionSummaryColumns()},
+        matched.id AS match_message_id,
+        matched.type AS match_message_type,
+        matched.created_at AS match_created_at,
+        matched.match_count AS match_count,
+        (SELECT content FROM cowork_messages WHERE id = matched.id) AS match_content
+      FROM matched
+      JOIN cowork_sessions s ON s.id = matched.session_id
+      WHERE matched.match_rank = 1
+        AND ${VISIBLE_COWORK_SESSION_SQL}
+        ${agentFilter}
+      ORDER BY s.updated_at DESC
+      LIMIT ?
+    `,
+      options.agentId ? [pattern, options.agentId, limit] : [pattern, limit],
+    );
+
+    return rows.map(row => {
+      const snippet = buildSearchSnippet(row.match_content ?? '', query);
+      return {
+        session: this.mapSessionSummaryRow(row),
+        match: {
+          sessionId: row.id,
+          messageId: row.match_message_id,
+          messageType: row.match_message_type,
+          snippet: snippet.snippet,
+          highlightStart: snippet.highlightStart,
+          highlightLength: snippet.highlightLength,
+          matchCount: row.match_count,
+          matchedAt: row.match_created_at,
+        },
+      };
+    });
+  }
+
+  /**
+   * Sessions for the sidebar status/time filter, newest first. Reads the whole
+   * table rather than the paged sidebar list so older matches are not missed.
+   */
+  listFilteredSessions(query: CoworkSessionFilterQuery): CoworkSessionSummary[] {
+    const requestedLimit = query.limit ?? COWORK_SESSION_FILTER_DEFAULT_LIMIT;
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(COWORK_SESSION_FILTER_MAX_LIMIT, Math.floor(requestedLimit)))
+      : COWORK_SESSION_FILTER_DEFAULT_LIMIT;
+    const conditions: string[] = [VISIBLE_COWORK_SESSION_SQL];
+    const params: (string | number)[] = [];
+
+    if (query.statuses) {
+      const statuses = query.statuses.filter(status => typeof status === 'string' && status);
+      if (statuses.length === 0) return [];
+      conditions.push(`s.status IN (${statuses.map(() => '?').join(', ')})`);
+      params.push(...statuses);
+    }
+    if (query.sessionIds) {
+      const sessionIds = Array.from(new Set(
+        query.sessionIds.filter(id => typeof id === 'string' && id),
+      )).slice(0, COWORK_SESSION_FILTER_MAX_IDS);
+      if (sessionIds.length === 0) return [];
+      conditions.push(`s.id IN (${sessionIds.map(() => '?').join(', ')})`);
+      params.push(...sessionIds);
+    }
+    if (query.updatedSince !== undefined && Number.isFinite(query.updatedSince)) {
+      conditions.push('s.updated_at >= ?');
+      params.push(Math.floor(query.updatedSince));
+    }
+
+    const rows = this.getAll<CoworkSessionSummaryRow>(
+      `
+      SELECT ${this.getSessionSummaryColumns()}
+      FROM cowork_sessions s
+      WHERE ${conditions.join('\n        AND ')}
+      ORDER BY s.updated_at DESC, s.created_at DESC
+      LIMIT ?
+    `,
+      [...params, limit],
+    );
     return rows.map(row => this.mapSessionSummaryRow(row));
   }
 

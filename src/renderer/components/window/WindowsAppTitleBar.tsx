@@ -2,6 +2,7 @@ import React, { useCallback, useEffect } from 'react';
 
 import SidebarTaskFilterButton from '../agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from '../agentSidebar/SidebarTaskSearchButton';
+import type { SidebarTaskFilter } from '../agentSidebar/taskFilter';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from './WindowTitleBar';
@@ -20,9 +21,9 @@ interface WindowsAppTitleBarProps {
   searchLabel: string;
   showFilterIcon?: boolean;
   filterLabel?: string;
-  isFilterActive?: boolean;
+  taskFilter?: SidebarTaskFilter;
   hasFilterNotice?: boolean;
-  onToggleFilter?: () => void;
+  onTaskFilterChange?: (filter: SidebarTaskFilter) => void;
   newChatLabel?: string;
   updateBadge?: React.ReactNode;
 }
@@ -39,9 +40,9 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   searchLabel,
   showFilterIcon = false,
   filterLabel,
-  isFilterActive = false,
+  taskFilter,
   hasFilterNotice = false,
-  onToggleFilter,
+  onTaskFilterChange,
   newChatLabel,
   updateBadge,
 }) => {
@@ -114,12 +115,12 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
                 label={searchLabel}
               />
             )}
-            {showFilterIcon && onToggleFilter && (
+            {showFilterIcon && taskFilter && onTaskFilterChange && (
               <SidebarTaskFilterButton
-                isActive={isFilterActive}
+                filter={taskFilter}
+                onChange={onTaskFilterChange}
                 hasUnreadCompletedTasks={hasFilterNotice}
                 label={filterLabel ?? ''}
-                onClick={onToggleFilter}
               />
             )}
             {onNewChat && (

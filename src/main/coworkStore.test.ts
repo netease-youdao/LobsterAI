@@ -535,6 +535,69 @@ test('getSessionSearchMessagePage keyset cursor preserves ROWID order for legacy
   expect(thirdPage.nextOffset).toBe(5);
 });
 
+test('listFilteredSessions combines status, session ids and time across all agents', () => {
+  insertSession('running-old', 'main', 'Running old', 1000);
+  insertSession('running-new', 'writer', 'Running new', 3000);
+  insertSession('failed', 'main', 'Failed', 2000);
+  insertSession('done', 'main', 'Done', 4000);
+  db.prepare("UPDATE cowork_sessions SET status = 'running' WHERE id IN ('running-old', 'running-new')").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'error' WHERE id = 'failed'").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'completed' WHERE id = 'done'").run();
+
+  const ids = (sessions: { id: string }[]) => sessions.map(session => session.id);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'] }))).toEqual(['running-new', 'running-old']);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'], updatedSince: 2000 }))).toEqual(['running-new']);
+  expect(ids(store.listFilteredSessions({ sessionIds: ['done', 'failed', 'missing'] }))).toEqual(['done', 'failed']);
+  expect(ids(store.listFilteredSessions({ updatedSince: 2500 }))).toEqual(['done', 'running-new']);
+  expect(ids(store.listFilteredSessions({ limit: 1 }))).toEqual(['done']);
+  expect(store.listFilteredSessions({ statuses: [] })).toEqual([]);
+  expect(store.listFilteredSessions({ sessionIds: [] })).toEqual([]);
+});
+
+test('searchSessionContent returns one hit per session from user and visible assistant messages', () => {
+  insertSession('older', 'main', 'Ski poster', 1000);
+  insertSession('newer', 'main', 'Jacket edit', 2000);
+  insertSession('thinking-only', 'main', 'Thinking only', 3000);
+  insertSession('tool-only', 'main', 'Tool only', 4000);
+  insertSession('other-agent', 'writer', 'Other agent', 5000);
+
+  insertMessage('older-user', 'older', 'user', 'Remove the zipper on the left arm', null, 1, 100);
+  insertMessage('newer-user', 'newer', 'user', 'Keep the zipper', null, 1, 200);
+  insertMessage('newer-reply', 'newer', 'assistant', 'Done: the ZIPPER now matches.', '{"isFinal":true}', 2, 300);
+  insertMessage('newer-unrelated', 'newer', 'assistant', 'Anything else?', null, 3, 400);
+  insertMessage('thinking', 'thinking-only', 'assistant', 'zipper reasoning', '{"isThinking":true}', 1, 500);
+  insertMessage('tool', 'tool-only', 'tool_result', 'zipper.png', null, 1, 600);
+  insertMessage('other', 'other-agent', 'user', 'zipper on another agent', '{broken', 1, 700);
+
+  const results = store.searchSessionContent({ query: 'zipper' });
+  expect(results.map(result => result.session.id)).toEqual(['other-agent', 'newer', 'older']);
+
+  const newer = results.find(result => result.session.id === 'newer');
+  expect(newer?.match).toMatchObject({
+    messageId: 'newer-reply',
+    messageType: 'assistant',
+    matchCount: 2,
+    matchedAt: 300,
+  });
+  const snippet = newer?.match.snippet ?? '';
+  const highlightStart = newer?.match.highlightStart ?? -1;
+  expect(snippet.slice(highlightStart, highlightStart + 6)).toBe('ZIPPER');
+
+  expect(store.searchSessionContent({ query: 'zipper', agentId: 'writer' }).map(result => result.session.id))
+    .toEqual(['other-agent']);
+  expect(store.searchSessionContent({ query: 'zipper', limit: 1 })).toHaveLength(1);
+  expect(store.searchSessionContent({ query: '   ' })).toEqual([]);
+});
+
+test('searchSessionContent treats LIKE wildcards in the query literally', () => {
+  insertSession('percent', 'main', 'Percent', 1000);
+  insertSession('plain', 'main', 'Plain', 2000);
+  insertMessage('percent-msg', 'percent', 'user', 'Discount is 50% off', null, 1, 100);
+  insertMessage('plain-msg', 'plain', 'user', 'Discount is 500 off', null, 1, 200);
+
+  expect(store.searchSessionContent({ query: '50%' }).map(result => result.session.id)).toEqual(['percent']);
+});
+
 test('searchSessions finds matching titles beyond the recent page', () => {
   for (let index = 0; index < 105; index += 1) {
     insertSession(`recent-${index}`, 'main', `Recent filler ${index}`, 2000 + index);

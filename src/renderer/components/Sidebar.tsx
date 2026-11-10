@@ -25,6 +25,7 @@ import {
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
 import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
+import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './agentSidebar/taskFilter';
 import Modal from './common/Modal';
 import {
   type CoworkTaskSearchRequestEventDetail,
@@ -44,6 +45,7 @@ import LowCreditPurchaseOfferCard from './LowCreditPurchaseOfferCard';
 import SidebarCapabilitiesMenu from './SidebarCapabilitiesMenu';
 import SidebarExperienceSlot from './SidebarExperienceSlot';
 import { useSidebarPurchaseGuide } from './useSidebarPurchaseGuide';
+import { useIsWindowFullscreen } from './window/useIsWindowFullscreen';
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -59,9 +61,9 @@ interface SidebarProps {
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  isTaskFilterActive: boolean;
+  taskFilter: SidebarTaskFilter;
   hasUnreadCompletedTasks: boolean;
-  onToggleTaskFilter: () => void;
+  onTaskFilterChange: (filter: SidebarTaskFilter) => void;
   onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onWidthChange?: (width: number) => void;
   updateNotice?: React.ReactNode;
@@ -188,9 +190,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   isCollapsed,
   onToggleCollapse,
-  isTaskFilterActive,
+  taskFilter,
   hasUnreadCompletedTasks,
-  onToggleTaskFilter,
+  onTaskFilterChange,
   onTaskFilterSummaryChange,
   onWidthChange,
   updateNotice,
@@ -229,7 +231,11 @@ const Sidebar: React.FC<SidebarProps> = ({
   const paymentGuideVisible = canShowPurchaseGuide && purchaseGuide.candidate !== null;
   const paymentGuideOwnsSlot = canShowPurchaseGuide && (paymentGuideVisible || purchaseGuide.loading);
   const isWindows = window.electron.platform === 'win32';
+  const isMac = window.electron.platform === 'darwin';
   const showHeaderRow = !isWindows;
+  const isWindowFullscreen = useIsWindowFullscreen();
+  // macOS hides the traffic lights in full screen; take their slot instead of leaving a gap.
+  const alignHeaderStart = isMac && isWindowFullscreen;
   const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn && !accountConnectionState;
   const shouldShowLoginPromoTip = showLoginPromo && showLoginPromoTip;
   const batchSelectableKeySet = useMemo(
@@ -632,7 +638,11 @@ const Sidebar: React.FC<SidebarProps> = ({
       >
       <div className="pt-3 pb-3">
         {showHeaderRow && (
-          <div className="draggable sidebar-header-drag h-8 flex items-center justify-end px-3">
+          <div
+            className={`draggable sidebar-header-drag h-8 flex items-center px-3 ${
+              alignHeaderStart ? 'justify-start gap-0.5' : 'justify-end'
+            }`}
+          >
             {!isWindows && (
               <>
                 <button
@@ -655,10 +665,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                     />
                     {SIDEBAR_TASK_FILTER_ENABLED && activeView === MainView.Cowork && (
                       <SidebarTaskFilterButton
-                        isActive={isTaskFilterActive}
+                        filter={taskFilter}
+                        onChange={onTaskFilterChange}
                         hasUnreadCompletedTasks={hasUnreadCompletedTasks}
                         label={i18nService.t('sidebarFilter')}
-                        onClick={onToggleTaskFilter}
                         className="non-draggable"
                       />
                     )}
@@ -762,7 +772,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             batchAgentId={batchAgentId}
             deletedSessionIds={deletedSessionIds}
             selectedKeys={selectedKeys}
-            isTaskFilterActive={isTaskFilterActive}
+            taskFilter={taskFilter}
+            onClearTaskFilter={() => onTaskFilterChange(DEFAULT_SIDEBAR_TASK_FILTER)}
             onShowCowork={onShowCowork}
             onTaskFilterSummaryChange={onTaskFilterSummaryChange}
             onTaskSelected={(params) => {

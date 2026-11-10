@@ -25,6 +25,7 @@ import { normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
+import type { CoworkSessionFilterQuery } from '../../shared/cowork/sessionFilter';
 import {
   type CoworkSteerRequest,
   CoworkSteerStatus,
@@ -85,6 +86,7 @@ import type {
   CoworkMemoryStats,
   CoworkPermissionResult,
   CoworkSession,
+  CoworkSessionContentSearchResult,
   CoworkSessionListResult,
   CoworkStartOptions,
   CoworkUserMemoryEntry,
@@ -1040,6 +1042,34 @@ class CoworkService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to search sessions',
+      };
+    }
+  }
+
+  async listFilteredSessions(query: CoworkSessionFilterQuery): Promise<CoworkSessionListResult> {
+    try {
+      const result = await window.electron?.cowork?.listFilteredSessions(query);
+      return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    } catch (error) {
+      console.warn('[CoworkSidebarFilter] filtered session request failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to list filtered sessions',
+      };
+    }
+  }
+
+  async searchSessionContent(query: string, limit?: number): Promise<CoworkSessionContentSearchResult> {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return { success: true, results: [] };
+    try {
+      const result = await window.electron?.cowork?.searchSessionContent({ query: trimmedQuery, limit });
+      return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    } catch (error) {
+      console.warn('[CoworkSearch] session content search failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to search session content',
       };
     }
   }

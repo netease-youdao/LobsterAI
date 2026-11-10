@@ -209,6 +209,7 @@ import {
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
+import { takePendingConversationSearch } from './pendingConversationSearch';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -5387,6 +5388,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       );
     };
   }, [handleOpenConversationSearch]);
+
+  // The task search can open a session on a content hit; pre-fill the
+  // conversation search so it jumps to the match. Runs after the search hook's
+  // own session-change reset, so the query is not cleared again.
+  const applyPendingConversationSearch = useCallback(() => {
+    if (!sessionId) return;
+    const pendingQuery = takePendingConversationSearch(sessionId);
+    if (!pendingQuery) return;
+    handleOpenConversationSearch();
+    setConversationSearchQuery(pendingQuery);
+  }, [handleOpenConversationSearch, sessionId, setConversationSearchQuery]);
+
+  useEffect(() => {
+    applyPendingConversationSearch();
+    window.addEventListener(CoworkUiEvent.PendingConversationSearch, applyPendingConversationSearch);
+    return () => {
+      window.removeEventListener(CoworkUiEvent.PendingConversationSearch, applyPendingConversationSearch);
+    };
+  }, [applyPendingConversationSearch]);
 
   useEffect(() => {
     if (isConversationSearchOpen) return undefined;

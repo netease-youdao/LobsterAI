@@ -665,12 +665,45 @@ select::-ms-expand {
   }
 }
 
+.sidebar-task-filter-menu {
+  transform-origin: left top;
+  animation: sidebar-task-filter-menu-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sidebar-task-filter-menu[data-state='closed'] {
+  pointer-events: none;
+  animation: sidebar-task-filter-menu-out 120ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes sidebar-task-filter-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+
+@keyframes sidebar-task-filter-menu-out {
+  to {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sidebar-capabilities-menu {
     animation-name: sidebar-capabilities-menu-fade;
   }
 
   .sidebar-capabilities-menu[data-state='closed'] {
+    animation-name: sidebar-capabilities-menu-fade;
+    animation-direction: reverse;
+  }
+
+  .sidebar-task-filter-menu {
+    animation-name: sidebar-capabilities-menu-fade;
+  }
+
+  .sidebar-task-filter-menu[data-state='closed'] {
     animation-name: sidebar-capabilities-menu-fade;
     animation-direction: reverse;
   }

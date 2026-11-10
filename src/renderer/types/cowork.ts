@@ -17,6 +17,7 @@ import type {
   CoworkTurnUsageAnchor,
 } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkModelChange } from '../../shared/cowork/modelChange';
+import type { CoworkSessionContentMatch } from '../../shared/cowork/search';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
 import type {
   KitReference,
@@ -479,6 +480,17 @@ export interface CoworkSessionListResult {
   sessions?: CoworkSessionSummary[];
   /** Whether more sessions exist beyond the currently loaded set. */
   hasMore?: boolean;
+  error?: string;
+}
+
+export interface CoworkSessionContentSearchItem {
+  session: CoworkSessionSummary;
+  match: CoworkSessionContentMatch;
+}
+
+export interface CoworkSessionContentSearchResult {
+  success: boolean;
+  results?: CoworkSessionContentSearchItem[];
   error?: string;
 }
 
