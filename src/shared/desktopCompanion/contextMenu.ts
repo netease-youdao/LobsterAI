@@ -10,11 +10,14 @@ export const CompanionContextMenuIpc = {
 /** The card a context menu opens with; submenus are keyed by the id of the item that opens them. */
 export const COMPANION_CONTEXT_MENU_ROOT = 'root';
 
-/** Fixed card metrics, shared with the renderer's styles so the window can be placed before it paints. */
+/**
+ * Fixed card metrics, shared with the renderer's styles so the window can be placed before it paints.
+ * Rows match the quick panel's menus (15px text with 8px above and below).
+ */
 export const CompanionContextMenuSize = {
   Width: 224,
   SubmenuWidth: 184,
-  Item: 30,
+  Item: 36,
   /** A group break: a 1px rule with 4px above and below. */
   Divider: 9,
   /** The card's padding plus its border, on each side. */

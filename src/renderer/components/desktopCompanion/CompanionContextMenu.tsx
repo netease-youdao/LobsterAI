@@ -1,3 +1,6 @@
+// The quick panel's menus use the app theme; read the same tokens.
+import '../../theme/css/themes.css';
+
 import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useLayoutEffect, useRef, useState } from 'react';
 
@@ -9,6 +12,7 @@ import {
   type CompanionContextMenuState,
 } from '../../../shared/desktopCompanion/contextMenu';
 import type { CompanionPoint } from '../../../shared/desktopCompanion/geometry';
+import { observeCompanionTheme } from './companionTheme';
 
 /** Keeps a submenu open while the pointer crosses other items on its way there. */
 const SUBMENU_CLOSE_DELAY_MS = 250;
@@ -53,9 +57,9 @@ function MenuCard({ items, at, width, active, expanded = -1, onItemEnter, onItem
             onMouseEnter={() => onItemEnter(index)}
             onClick={() => onItemClick(index)}
           >
-            {choices && <span className="ctx-check">{item.checked && <CheckIcon />}</span>}
             <span className="ctx-label">{item.label}</span>
             {item.submenu && <ChevronRightIcon className="ctx-chevron" />}
+            {choices && <span className="ctx-check">{item.checked && <CheckIcon />}</span>}
           </button>
         </React.Fragment>
       ))}
@@ -187,6 +191,8 @@ function ContextMenu({ menu }: { menu: CompanionContextMenuState }) {
 
 /** The orb's right-click menu on macOS, drawn in a panel that also shows over full-screen apps. */
 export default function CompanionContextMenu({ state }: { state: DesktopCompanionState }) {
+  // Follow the main window's theme, like the quick panel, before the first menu paints.
+  useLayoutEffect(() => observeCompanionTheme(), []);
   if (!state.contextMenu) return null;
   return <ContextMenu key={state.contextMenu.id} menu={state.contextMenu} />;
 }
