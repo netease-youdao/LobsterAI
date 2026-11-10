@@ -217,12 +217,11 @@ function dragOverOrb(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileK
 
 /** The native menu other platforms pop up; macOS draws the same entries in a window of its own. */
 function menu(): MenuItemConstructorOptions[] {
-  const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
-  try {
+  const platform = vi.spyOn(process, 'platform', 'get');
+  // Build the native menu while preserving the test's platform for its actions.
+  platform.withImplementation(() => 'linux', () => {
     invoke(DesktopCompanionIpc.ContextMenu);
-  } finally {
-    platform.mockRestore();
-  }
+  });
   return vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)![0];
 }
 
