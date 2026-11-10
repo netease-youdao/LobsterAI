@@ -1,10 +1,17 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 import { RemoteAgentSettings, type RemoteAgentSettingsAccessState, RemoteAgentSettingsAction, type RemoteAgentSettingsAuthorization, type RemoteAgentSettingsBinding, type RemoteAgentSettingsCandidate, type RemoteAgentSettingsRevoke,RemoteAgentSettingsSection, RemoteAgentSettingsStatus } from '../../shared/remote/agentSettings';
 import type { AgentSettingsService } from '../libs/agentSettings/service';
 import { type AgentSettingsAction, type AgentSettingsContext, type AgentSettingsPersistence, AgentSettingsPhase, type AgentSettingsReceipt, type AgentSettingsSnapshot,AgentSettingsSource } from '../libs/agentSettings/types';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { type LocalSettingsBinding, type PendingSettingsAccess, RemoteAgentSettingsAccess, type RemoteAgentSettingsConnection, settingsIdentity } from './remoteAgentSettingsAccess';
+
+function mobileDeviceShortLabel(userId: string, scopeKey: string, mobileDeviceId: string): string | undefined {
+  if (!/^[1-9]\d{0,18}$/u.test(userId)) return undefined;
+  // Match the App Connections API and iOS. Keep the numeric ID exact even beyond JavaScript's safe range.
+  const input = `[${userId},${JSON.stringify(scopeKey)},${JSON.stringify(mobileDeviceId)}]`;
+  return createHash('sha256').update(input, 'utf8').digest('hex').slice(0, 6).toUpperCase();
+}
 
 export interface RemoteAgentSettingsDependencies {
   service: Pick<AgentSettingsService, 'read' | 'prepare' | 'apply' | 'recover'>;
@@ -112,7 +119,10 @@ export class RemoteAgentSettingsProtocol {
       accountEpoch: this.access.epoch(), owner: current?.owner ?? null, candidates: [], agents: [], bindings: [] };
     if (!current) return base;
     this.access.activate(current); base.accountEpoch = this.access.epoch();
-    base.bindings = this.access.bindings(current).map(({ identity: _identity, connection: _connection, ...binding }) => binding);
+    const shortLabel = (deviceId: string): string | undefined =>
+      mobileDeviceShortLabel(current.owner.userId, current.owner.scopeKey, deviceId);
+    base.bindings = this.access.bindings(current).map(({ identity: _identity, connection: _connection, ...binding }) =>
+      ({ ...binding, shortLabel: shortLabel(binding.mobileDeviceId) }));
     if (!base.supported) return base;
     let data: { items: RemoteAgentSettingsCandidate[] };
     try { data = await this.deps.request(`/devices/${encode(current.deviceId)}/agent-settings-access-candidates`, 'GET') as typeof data; }
@@ -120,7 +130,8 @@ export class RemoteAgentSettingsProtocol {
     this.assertConnection(current);
     if (!Array.isArray(data?.items) || data.items.length > 200) throw new Error('SETTINGS_INVALID_RESPONSE');
     base.candidates = data.items.filter(item => item && SAFE_ID.test(item.mobileDeviceId) && SAFE_ID.test(item.grantId)
-      && /^[1-9]\d{0,18}$/u.test(item.grantVersion) && typeof item.name === 'string' && item.name.length <= 200);
+      && /^[1-9]\d{0,18}$/u.test(item.grantVersion) && typeof item.name === 'string' && item.name.length <= 200)
+      .map(item => ({ ...item, shortLabel: shortLabel(item.mobileDeviceId) }));
     base.agents = this.deps.listAgents(); return base;
   }
   async authorize(input: RemoteAgentSettingsAuthorization): Promise<RemoteAgentSettingsAccessState> {

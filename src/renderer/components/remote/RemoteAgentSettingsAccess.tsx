@@ -43,9 +43,12 @@ export function RemoteAgentSettingsAccess({ identity }: { identity: string }): R
     {state?.supported && <>
       {!state.candidates.length && <p className="text-xs text-secondary">{t('remoteAgentSettingsNoPhones')}</p>}
       <div className="grid grid-cols-2 gap-3">
-        <label className="space-y-1 text-xs">{t('remoteAgentSettingsPhone')}
+        <label className="min-w-0 space-y-1 text-xs">{t('remoteAgentSettingsPhone')}
           <select value={phoneId} disabled={busy} className="block w-full rounded border border-border bg-background p-2" onChange={event => { setPhoneId(event.target.value); setPermissions(emptyAgentSettingsPermissions()); }}>
-            <option value="">{t('remoteAgentSettingsSelect')}</option>{state.candidates.map(item => <option key={item.mobileDeviceId} value={item.mobileDeviceId}>{item.name}</option>)}
+            <option value="">{t('remoteAgentSettingsSelect')}</option>
+            {state.candidates.map(item => <option key={item.mobileDeviceId} value={item.mobileDeviceId}>
+              {item.shortLabel ? `${item.name} · ${item.shortLabel}` : item.name}
+            </option>)}
           </select></label>
         <label className="space-y-1 text-xs">{t('remoteAgentSettingsAgent')}
           <select value={agentId} disabled={busy} className="block w-full rounded border border-border bg-background p-2" onChange={event => { setAgentId(event.target.value); setPermissions(emptyAgentSettingsPermissions()); }}>
@@ -70,8 +73,12 @@ export function RemoteAgentSettingsAccess({ identity }: { identity: string }): R
           agentId, mobileDeviceId: phone.mobileDeviceId, grantId: phone.grantId, grantVersion: phone.grantVersion, sections: permissions })); }}>{t('remoteAgentSettingsAuthorize')}</button>
     </>}
     {!!state?.bindings.length && <ul className="space-y-2 border-t border-border pt-3 text-xs">{state.bindings.map(binding => <li key={binding.bindingId} className="flex items-center justify-between gap-3">
-      <span>{state.candidates.find(item => item.mobileDeviceId === binding.mobileDeviceId)?.name ?? binding.mobileDeviceId} · {state.agents.find(item => item.agentId === binding.agentId)?.name ?? binding.agentId}</span>
-      {binding.status === RemoteAgentSettingsStatus.Active ? <button type="button" disabled={busy} className="text-primary disabled:opacity-50"
+      <span className="min-w-0 break-words">
+        {state.candidates.find(item => item.mobileDeviceId === binding.mobileDeviceId)?.name ?? binding.mobileDeviceId}
+        {binding.shortLabel && <> · <span className="font-mono font-medium">{binding.shortLabel}</span></>}
+        {' · '}{state.agents.find(item => item.agentId === binding.agentId)?.name ?? binding.agentId}
+      </span>
+      {binding.status === RemoteAgentSettingsStatus.Active ? <button type="button" disabled={busy} className="shrink-0 text-primary disabled:opacity-50"
         onClick={() => void run(() => window.electron.remote.revokeAgentSettings({ expectedAccountEpoch: state.accountEpoch, bindingId: binding.bindingId, bindingVersion: binding.bindingVersion }))}>{t('remoteAgentSettingsRevoke')}</button>
         : <span className="text-secondary">{t('remoteAgentSettingsPendingRevoke')}</span>}
     </li>)}</ul>}

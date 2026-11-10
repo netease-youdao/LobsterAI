@@ -16,8 +16,8 @@ export interface RemoteAgentSettingsBinding {
 export interface RemoteAgentSettingsCandidate { mobileDeviceId: string; name: string; grantId: string; grantVersion: string }
 export interface RemoteAgentSettingsAccessState {
   supported: boolean; conversationReady: boolean; accountEpoch: string; owner: RemoteOwner | null;
-  candidates: RemoteAgentSettingsCandidate[]; agents: Array<{ agentId: string; name: string }>;
-  bindings: RemoteAgentSettingsBinding[];
+  candidates: Array<RemoteAgentSettingsCandidate & { shortLabel?: string }>; agents: Array<{ agentId: string; name: string }>;
+  bindings: Array<RemoteAgentSettingsBinding & { shortLabel?: string }>;
 }
 export interface RemoteAgentSettingsAuthorization {
   expectedAccountEpoch: string; agentId: string; mobileDeviceId: string; grantId: string; grantVersion: string;

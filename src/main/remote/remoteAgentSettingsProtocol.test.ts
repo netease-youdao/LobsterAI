@@ -7,10 +7,10 @@ import { payloadHash } from './canonical';
 import type { RemoteAgentSettingsConnection } from './remoteAgentSettingsAccess';
 import { agentSettingsErrorReason, RemoteAgentSettingsProtocol } from './remoteAgentSettingsProtocol';
 
-async function fixture() {
+async function fixture(userId = 'owner') {
   const data = new Map<string, unknown>();
   const store: AgentSettingsPersistence = { get: key => structuredClone(data.get(key) ?? null) as never, set: (key, value) => { data.set(key, structuredClone(value)); } };
-  const connection: RemoteAgentSettingsConnection = { owner: { userId: 'owner', scopeKey: 'personal' }, dataSpaceId: 'test', dataGeneration: '1', deviceId: 'desktop',
+  const connection: RemoteAgentSettingsConnection = { owner: { userId, scopeKey: 'personal' }, dataSpaceId: 'test', dataGeneration: '1', deviceId: 'desktop',
     route: 'https://example.test', connectionGeneration: 'generation-1', active: true };
   const service = { read: vi.fn(async () => ({ revision: 'rev-1', value: { text: 'private' }, documentState: 'present' as const, sourceUpdatedAt: null, readAt: new Date().toISOString() })),
     prepare: vi.fn(), apply: vi.fn(), recover: vi.fn(async () => ({ operationId: operationId, section: 'memory' as const, status: 'reconciling' as const })) };
@@ -44,6 +44,13 @@ async function fixture() {
     losePermit: () => { losePermit = true; }, onPermit: (action: () => void) => { permitAction = action; }, corruptHash: () => { requestHash = 'a'.repeat(64); } };
 }
 describe('Agent settings HTTP execution', () => {
+  it('uses the same device code for the candidate and its binding with a 64-bit user ID', async () => {
+    const { protocol } = await fixture('9223372036854775807');
+    const { candidates, bindings } = await protocol.state();
+    expect(candidates[0]?.shortLabel).toBe('BEC0C0');
+    expect(bindings[0]?.shortLabel).toBe('BEC0C0');
+  });
+
   it('reads only after a durable permit and keeps document bodies out of settled evidence', async () => {
     const f = await fixture(); f.protocol.tick();
     await vi.waitFor(() => expect(f.request.mock.calls.some(([path]) => path.endsWith('/result'))).toBe(true));
