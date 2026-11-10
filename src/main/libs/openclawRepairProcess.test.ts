@@ -7,12 +7,16 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
+import {
+  formatOpenClawRepairProgress, OPENCLAW_REPAIR_PROGRESS_PREFIX, OpenClawRepairPhase, OpenClawRepairProgressStage,
+} from '../../shared/openclawEngine/repair';
 import { setLanguage } from '../i18n';
 import {
   createOpenClawRepairRunner,
   OPENCLAW_REPAIR_WAIT_POLICY,
   OpenClawRepairProcessOutcome,
   OpenClawRepairTimeoutReason,
+  resolveOpenClawRepairMaxWaitMs,
 } from './openclawRepairProcess';
 
 const { mockExecFile } = vi.hoisted(() => ({ mockExecFile: vi.fn() }));
@@ -170,6 +174,121 @@ test('awake time still bounds a Doctor that stays silent across a sleep', async 
   expect(diagnostics().report).toMatchObject({
     outcome: OpenClawRepairProcessOutcome.TimedOut, timeoutReason: OpenClawRepairTimeoutReason.Idle,
   });
+});
+
+const MIB = 1024 * 1024;
+const GIB = 1024 * MIB;
+const snapshotArgs = ['/runtime/openclaw-gateway-repair.mjs', '/backup/snapshot-request.json'];
+
+function progressLine(files: number, bytes: number, totals?: { files: number; bytes: number }): string {
+  return `${formatOpenClawRepairProgress({
+    phase: OpenClawRepairPhase.Snapshot,
+    stage: totals ? OpenClawRepairProgressStage.Copy : OpenClawRepairProgressStage.Scan,
+    files, bytes, ...(totals ? { totalFiles: totals.files, totalBytes: totals.bytes } : {}),
+  })}\n`;
+}
+
+test('the wait for a measured copy scales with its bytes and files within the ordinary limit and the ceiling', () => {
+  const policy = OPENCLAW_REPAIR_WAIT_POLICY;
+  expect(resolveOpenClawRepairMaxWaitMs({ files: 500, bytes: 200 * MIB }, 5_000)).toBe(policy.maxWaitMs);
+  // 8 GiB at 2 MiB/s is 4096 s, 20,000 files add 200 s; then the 30 s already spent and one idle window.
+  expect(resolveOpenClawRepairMaxWaitMs({ files: 20_000, bytes: 8 * GIB }, 30_000)).toBe(30_000 + 4_096_000 + 200_000 + policy.idleTimeoutMs);
+  expect(resolveOpenClawRepairMaxWaitMs({ files: 1_000_000, bytes: 2048 * GIB }, 30_000)).toBe(policy.measuredMaxWaitMs);
+});
+
+test('a multi-GB snapshot on slow storage is not stopped while its copy keeps advancing', async () => {
+  const totals = { files: 20_000, bytes: 8 * GIB };
+  const pending = createOpenClawRepairRunner(backupDir)('/electron', snapshotArgs, { ...options, timeoutMs: 300_000 });
+  await vi.advanceTimersByTimeAsync(20_000);
+  child.stdout.write(progressLine(12_000, 5 * GIB));
+  await vi.advanceTimersByTimeAsync(10_000);
+  // A line can arrive split across reads.
+  const plan = progressLine(0, 0, totals);
+  child.stdout.write(plan.slice(0, OPENCLAW_REPAIR_PROGRESS_PREFIX.length + 7));
+  child.stdout.write(plan.slice(OPENCLAW_REPAIR_PROGRESS_PREFIX.length + 7));
+  // About 3 MiB/s: the copy needs some 46 minutes, three times the ordinary 15-minute limit.
+  let copied = 0;
+  for (let minute = 1; minute <= 46; minute++) {
+    await vi.advanceTimersByTimeAsync(60_000);
+    copied = Math.min(totals.bytes, minute * 180 * MIB);
+    child.stdout.write(progressLine(Math.round(totals.files * copied / totals.bytes), copied, totals));
+  }
+  expect(child.kill).not.toHaveBeenCalled();
+  close(null, 'LOBSTERAI_GATEWAY_REPAIR_RESULT={}', '');
+  await expect(pending).resolves.toMatchObject({ code: 0 });
+  const { report } = diagnostics();
+  expect(report).toMatchObject({
+    outcome: OpenClawRepairProcessOutcome.Exited, durationMs: 30_000 + 46 * 60_000,
+    maxWaitMs: resolveOpenClawRepairMaxWaitMs(totals, 30_000),
+    progress: { stage: OpenClawRepairProgressStage.Copy, bytes: copied, totalBytes: totals.bytes, totalFiles: totals.files },
+  });
+  expect(report.durationMs).toBeGreaterThan(OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('a snapshot that stops making progress is still stopped by the idle limit despite its large budget', async () => {
+  const totals = { files: 20_000, bytes: 8 * GIB };
+  const pending = createOpenClawRepairRunner(backupDir)('/electron', snapshotArgs, options);
+  const rejection = expect(pending).rejects.toThrow('timed out');
+  await vi.advanceTimersByTimeAsync(30_000);
+  child.stdout.write(progressLine(0, 0, totals));
+  await vi.advanceTimersByTimeAsync(60_000);
+  child.stdout.write(progressLine(40, 64 * MIB, totals));
+  // The helper reports only when its counts move: a copy stuck in one I/O call is silent.
+  await vi.advanceTimersByTimeAsync(OPENCLAW_REPAIR_WAIT_POLICY.idleTimeoutMs - 1);
+  expect(child.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+  close(interrupted(), progressLine(40, 64 * MIB, totals), '');
+  await rejection;
+  expect(diagnostics().report).toMatchObject({
+    outcome: OpenClawRepairProcessOutcome.TimedOut, timeoutReason: OpenClawRepairTimeoutReason.Idle,
+    durationMs: 90_000 + OPENCLAW_REPAIR_WAIT_POLICY.idleTimeoutMs, progress: { files: 40, bytes: 64 * MIB },
+  });
+});
+
+test('later progress cannot move the measured limit, which still ends a copy that never finishes', async () => {
+  const totals = { files: 1_000, bytes: 2 * GIB };
+  const limitMs = resolveOpenClawRepairMaxWaitMs(totals, 10_000);
+  expect(limitMs).toBe(1_344_000);
+  const pending = createOpenClawRepairRunner(backupDir)('/electron', snapshotArgs, options);
+  const rejection = expect(pending).rejects.toThrow('timed out');
+  await vi.advanceTimersByTimeAsync(10_000);
+  child.stdout.write(progressLine(0, 0, totals));
+  for (let step = 1; step <= 6; step++) {
+    await vi.advanceTimersByTimeAsync(200_000);
+    // Larger totals in a later report are ignored.
+    child.stdout.write(progressLine(step, step * MIB, { files: 1_000, bytes: 100 * GIB }));
+  }
+  await vi.advanceTimersByTimeAsync(limitMs - 1_210_000 - 1);
+  expect(child.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(child.kill).toHaveBeenCalledOnce();
+  close(interrupted(), '', '');
+  await rejection;
+  expect(diagnostics().report).toMatchObject({
+    outcome: OpenClawRepairProcessOutcome.TimedOut, timeoutReason: OpenClawRepairTimeoutReason.Limit,
+    durationMs: limitMs, maxWaitMs: limitMs,
+  });
+});
+
+test('output that is not a well-formed progress line keeps the ordinary limit', async () => {
+  const pending = createOpenClawRepairRunner(backupDir)('/electron', snapshotArgs, options);
+  const rejection = expect(pending).rejects.toThrow('timed out');
+  child.stdout.write(`${OPENCLAW_REPAIR_PROGRESS_PREFIX}{"phase":"snapshot","stage":"copy","files":-1,"bytes":0,"totalFiles":1,"totalBytes":${1024 * GIB}}\n`);
+  child.stdout.write(`Migrating ${OPENCLAW_REPAIR_PROGRESS_PREFIX}{"phase":"snapshot","stage":"copy","files":0,"bytes":0,"totalBytes":${1024 * GIB}}\n`);
+  for (let i = 0; i < 4; i++) {
+    await vi.advanceTimersByTimeAsync(200_000);
+    child.stderr.write('still working\n');
+  }
+  await vi.advanceTimersByTimeAsync(OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs - 800_000);
+  expect(child.kill).toHaveBeenCalledOnce();
+  close(interrupted(), '', '');
+  await rejection;
+  expect(diagnostics().report).toMatchObject({
+    timeoutReason: OpenClawRepairTimeoutReason.Limit, maxWaitMs: OPENCLAW_REPAIR_WAIT_POLICY.maxWaitMs,
+  });
+  expect(diagnostics().report).not.toHaveProperty('progress');
 });
 
 test.each(['ENOENT', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'])('preserves %s without calling it a timeout or success', async code => {
