@@ -432,6 +432,7 @@ import {
   syncEnterpriseConfig,
 } from './libs/enterpriseConfigSync';
 import { ExpertStore } from './libs/expertStore';
+import { refreshFakeIpNetworkState } from './libs/fakeIpNetwork';
 import {
   createOfficePreviewSession,
   createPreviewSession,
@@ -638,6 +639,8 @@ import {
 } from './libs/systemProxy';
 import { TaskUsageAnalytics } from './libs/usageAnalytics';
 import { type UsageTitleOutbox, UsageTitleSync } from './libs/usageTitleSync';
+import { getWebSearchBridgeFilePath, removeWebSearchBridgeFile, writeWebSearchBridgeFile } from './libs/webSearchBridgeFile';
+import { WebSearchHost } from './libs/webSearchHost';
 import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
 import { getLogFilePath, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
@@ -2225,6 +2228,7 @@ let coworkStore: CoworkStore | null = null;
 let openClawRuntimeAdapter: OpenClawRuntimeAdapter | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let agentBrowserHost: AgentBrowserHost | null = null;
+let webSearchHost: WebSearchHost | null = null;
 let browserCredentialService: BrowserCredentialService | null = null;
 let browserCredentialApprovalService: BrowserCredentialApprovalService | null = null;
 let skillManager: SkillManager | null = null;
@@ -2383,6 +2387,16 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
     });
   }
   return agentBrowserHost;
+};
+
+const getWebSearchHost = (): WebSearchHost => {
+  if (!webSearchHost) {
+    webSearchHost = new WebSearchHost({
+      getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
+      getPageContext: () => getAgentBrowserHost().getBackgroundPageContext(),
+    });
+  }
+  return webSearchHost;
 };
 
 const formatAutoLaunchStatusForLog = (status: AutoLaunchStatus): string => {
@@ -4341,6 +4355,21 @@ const startAskUserServer = async (): Promise<void> => {
   const runtime = getMcpRuntime();
   await runtime.startAskUserServer();
   runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
+  runtime.setWebSearchPageHandler(request => getWebSearchHost().handleRequest(request));
+  const webSearchBridgeFile = getWebSearchBridgeFilePath(app.getPath('userData'));
+  const webSearchCallbackUrl = runtime.getWebSearchCallbackUrl();
+  try {
+    if (webSearchCallbackUrl) {
+      writeWebSearchBridgeFile(webSearchBridgeFile, {
+        bridgeUrl: webSearchCallbackUrl,
+        bridgeSecret: runtime.getBridgeSecret(),
+      });
+    } else {
+      removeWebSearchBridgeFile(webSearchBridgeFile);
+    }
+  } catch (error) {
+    console.warn('[WebSearchHost] Failed to publish the search bridge endpoint:', error);
+  }
   for (const editor of officeEditing.editors) {
     runtime.setEditorToolHandler(editor.id, editor.editorName, request => officeEditing.callTool(editor.id, request.tool, request.args));
   }
@@ -5123,6 +5152,8 @@ const updateTitleBarOverlay = () => {
 
 const applyProxyPreference = async (useSystemProxy: boolean): Promise<void> => {
   setSystemProxyEnabled(useSystemProxy);
+  // TUN-mode proxies capture traffic whatever this preference says.
+  await refreshFakeIpNetworkState();
 
   try {
     await session.defaultSession.setProxy({ mode: useSystemProxy ? 'system' : 'direct' });
@@ -15636,6 +15667,12 @@ if (!gotTheLock) {
     currentAppCleanupStep = 'skill-services';
     const skillServices = getSkillServiceManager();
     await skillServices.stopAll();
+    webSearchHost?.dispose();
+    try {
+      removeWebSearchBridgeFile(getWebSearchBridgeFilePath(app.getPath('userData')));
+    } catch (error) {
+      console.warn('[WebSearchHost] Failed to remove the search bridge endpoint file:', error);
+    }
 
     // Stop all IM gateways gracefully.
     if (imGatewayManager) {

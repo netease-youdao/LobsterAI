@@ -11,6 +11,7 @@ import { cpRecursiveSync } from '../fsCompat';
 import { getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import { resolveNodeRuntimeForSpawn } from '../libs/nodeRuntime';
 import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
+import { getWebSearchBridgeFilePath, WEB_SEARCH_BRIDGE_FILE_ENV } from '../libs/webSearchBridgeFile';
 
 const WEB_SEARCH_STOP_TIMEOUT_MS = 2_000;
 const WEB_SEARCH_STOP_POLL_INTERVAL_MS = 50;
@@ -73,6 +74,7 @@ function buildSkillServiceEnv(): Record<string, string | undefined> {
   // Expose Electron executable so skill scripts can run JS with ELECTRON_RUN_AS_NODE
   // even when system Node.js is not installed.
   env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+  env[WEB_SEARCH_BRIDGE_FILE_ENV] = getWebSearchBridgeFilePath(app.getPath('userData'));
   appendPythonRuntimeToEnv(env);
 
   return env;
