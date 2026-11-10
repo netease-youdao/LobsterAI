@@ -299,6 +299,7 @@ import {
   stopDshFeatureRuntimes,
 } from './ipcHandlers/dsh/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
+import { registerImageCreationHandlers } from './ipcHandlers/imageCreation';
 import { registerImageEditingHandlers } from './ipcHandlers/imageEditing';
 import { registerKitHandlers } from './ipcHandlers/kits';
 import { hasUnsafeMarkdownEdits, registerMarkdownEditingHandlers } from './ipcHandlers/markdownEditing';
@@ -420,6 +421,7 @@ import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
 import {
   getExpertStoreUrl,
   getHtmlSharePublicBaseUrl,
+  getImageCreationExamplesUrl,
   getKitStoreUrl,
   getPortalTasksUrl,
   getServerApiBaseUrl,
@@ -467,6 +469,7 @@ import {
   buildArtifactIdentityClientSourceKey,
   buildHtmlShareClientSourceKey,
 } from './libs/htmlShare/htmlShareSourceKey';
+import { ImageCreationStore } from './libs/imageCreationStore';
 import { composesImageEditLocally, ImageEditingService, ImageEditResultError } from './libs/imageEditing';
 import { getKeyfromAttribution, initializeKeyfromAttribution } from './libs/keyfromAttribution';
 import { LibraryThumbnailRenderer } from './libs/libraryThumbnailRenderer';
@@ -11765,6 +11768,10 @@ if (!gotTheLock) {
     return resolveAgentWorkspacePath(normalizedAgentId);
   };
 
+  registerImageCreationHandlers(new ImageCreationStore({
+    getEndpoint: getImageCreationExamplesUrl,
+    cacheDirectory: path.join(app.getPath('userData'), 'image-creation'),
+  }));
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
       schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },

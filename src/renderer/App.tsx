@@ -17,6 +17,7 @@ import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { DesktopCompanionMainPage } from '../shared/desktopCompanion/constants';
 import { ENABLE_EXPERT_PLAZA_UI } from '../shared/featureFlags';
 import { FeedbackUiEvent } from '../shared/feedback/constants';
+import { ImageCreation } from '../shared/imageCreation/constants';
 import {
   LibraryNavigationEvent,
   LibrarySourceFilter,
@@ -81,6 +82,7 @@ import { configService } from './services/config';
 import { coworkService } from './services/cowork';
 import { openExpertDraft } from './services/expertOnboarding';
 import { i18nService } from './services/i18n';
+import type { PreparedImageExampleReference } from './services/imageCreationDraft';
 import {
   beginLatestAsyncRequest,
   invalidateLatestAsyncRequest,
@@ -105,6 +107,7 @@ import {
   addDraftAttachment,
   clearDraftAttachments,
   clearDraftSelectedTextSnippets,
+  setDraftAttachments,
   setDraftCollaborationMode,
   setDraftKitIds,
   setDraftPrompt,
@@ -236,6 +239,7 @@ const App: React.FC = () => {
   const [showFeedback, setShowFeedback] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
   const [mainView, setMainView] = useState<MainView>(MainView.Cowork);
+  const [initialExpertPresetId, setInitialExpertPresetId] = useState<string | undefined>();
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
     requestId: number;
@@ -779,8 +783,10 @@ const App: React.FC = () => {
     setMainView(MainView.Kits);
   }, []);
 
-  const handleShowExperts = useCallback(() => {
+  const handleShowExperts = useCallback((event?: Event) => {
     if (!ENABLE_EXPERT_PLAZA_UI) return;
+    const presetId = (event as CustomEvent<{ presetId?: unknown }> | undefined)?.detail?.presetId;
+    setInitialExpertPresetId(typeof presetId === 'string' ? presetId : undefined);
     setMainView(MainView.Experts);
   }, []);
 
@@ -789,15 +795,21 @@ const App: React.FC = () => {
     return () => window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
   }, [handleShowExperts]);
 
-  const handleExpertSummon = useCallback((agent: Agent, prompt: string) => {
+  const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);
+    if (reference) {
+      dispatch(setDraftAttachments({ draftKey: ImageCreation.HomeDraft, attachments: [{
+        path: reference.localPath, name: reference.name, isImage: true,
+        dataUrl: `data:${reference.mimeType};base64,${reference.base64Data}`,
+      }] }));
+    }
     setMainView(MainView.Cowork);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
         detail: { resetCollaborationMode: true, text: prompt },
       }));
     }, 0);
-  }, []);
+  }, [dispatch]);
 
   const handleSkillsConnectorsSectionChange = useCallback((section: SkillsConnectorsSection) => {
     if (section === SkillsConnectorsSection.Connectors) {
@@ -2243,6 +2255,7 @@ const App: React.FC = () => {
               />
             ) : ENABLE_EXPERT_PLAZA_UI && mainView === MainView.Experts ? (
               <ExpertPlazaView
+                initialPresetId={initialExpertPresetId}
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}

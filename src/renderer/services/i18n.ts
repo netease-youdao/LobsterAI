@@ -1,4 +1,5 @@
 import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy';
+import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
 import { configService } from './config';
@@ -23,6 +24,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
     ...imageEditingTranslations.zh,
+    ...imageCreationTranslations.zh,
     officeSaved: '已自动保存',
     officePending: '等待保存…',
     officeSaving: '正在保存…',
@@ -4746,6 +4748,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
     ...imageEditingTranslations.en,
+    ...imageCreationTranslations.en,
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',
     officeSaving: 'Saving…',

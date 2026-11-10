@@ -104,6 +104,7 @@ import type {
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../../shared/htmlShare/constants';
+import type { ImageCreationCatalog, ImageExampleReference } from '../../shared/imageCreation/constants';
 import type {
   InstalledKitRecord,
   KitReference,
@@ -2212,6 +2213,10 @@ interface IElectronAPI {
     onQuotaChanged: (callback: () => void) => () => void;
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
+  };
+  imageCreation: {
+    getCatalog: () => Promise<ImageCreationCatalog>;
+    getReference: (exampleId: string) => Promise<ImageExampleReference>;
   };
   media: {
     getPreferences: (owner: string) => Promise<MediaPreferenceResult>;
