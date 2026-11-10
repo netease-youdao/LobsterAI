@@ -180,9 +180,9 @@ svg { flex-shrink: 0; }
 /* ── Orb menu (macOS) ──────────────────────────────────── */
 
 /*
- * Styled like the quick panel's menus, from the same app theme tokens (rounded-xl border-border bg-surface
- * shadow-popover, rows hover:bg-surface-raised). The main process places the window from
- * CompanionContextMenuSize: 36px items, 9px dividers, 4px padding plus a 1px border.
+ * Themed like the quick panel's menus, from the same app theme tokens (rounded-xl border-border bg-surface
+ * shadow-popover, rows hover:bg-surface-raised), but sized like macOS's native menus. The main process places
+ * the window from CompanionContextMenuSize: 28px items, 9px dividers, 4px padding plus a 1px border.
  */
 .ctx-surface, .ctx-surface:focus-visible { position: relative; width: 100%; height: 100%; outline: none; user-select: none; cursor: default; }
 .ctx-card {
@@ -190,15 +190,15 @@ svg { flex-shrink: 0; }
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.05); animation: ctx-in 0.12s ease-out;
 }
 .ctx-item {
-  display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 12px;
-  color: var(--lobster-foreground); font-size: 15px; line-height: 21px; text-align: left; white-space: nowrap; cursor: default;
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 12px;
+  color: var(--lobster-foreground); font-size: 13px; line-height: 18px; text-align: left; white-space: nowrap; cursor: default;
   transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .ctx-item[data-active="true"] { background: var(--lobster-surface-raised); }
 .ctx-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.ctx-check { width: 16px; height: 16px; display: grid; place-items: center; color: var(--lobster-primary); }
-.ctx-check svg { width: 16px; height: 16px; stroke-width: 2.5; }
-.ctx-chevron { width: 16px; height: 16px; color: var(--lobster-text-secondary); }
+.ctx-check { width: 14px; height: 14px; display: grid; place-items: center; color: var(--lobster-primary); }
+.ctx-check svg { width: 14px; height: 14px; stroke-width: 2.2; }
+.ctx-chevron { width: 14px; height: 14px; color: var(--lobster-text-secondary); }
 .ctx-divider { height: 1px; margin: 4px 12px; background: var(--lobster-border); }
 @keyframes ctx-in { from { opacity: 0; } }
 

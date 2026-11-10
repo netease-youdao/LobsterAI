@@ -27,7 +27,7 @@ import {
   DesktopCompanionSurface,
   DesktopCompanionTiming,
 } from '../../shared/desktopCompanion/constants';
-import { CompanionContextMenuIpc } from '../../shared/desktopCompanion/contextMenu';
+import { CompanionContextMenuIpc, CompanionContextMenuSize } from '../../shared/desktopCompanion/contextMenu';
 import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
@@ -2379,8 +2379,10 @@ describe('orb menu on macOS', () => {
     expect(state.items.filter(item => item.divided).map(item => item.label)).toEqual(['desktopCompanionScreenshot', 'desktopCompanionSnoozeToday']);
     expect(state.items[3].submenu!.map(item => item.checked)).toEqual([true, false, false, false, false, false, false, false, false]);
     expect(state.cards).toEqual({ root: expect.any(Object), [state.items[3].id]: expect.any(Object) });
-    // From the pointer, with room for the card's shadow around it.
-    expect(window.bounds).toMatchObject({ x: 100 - DesktopCompanionSize.SurfacePad, y: 100 - DesktopCompanionSize.SurfacePad });
+    // Beside the orb in the lower right, rising from its middle, wherever the pointer is.
+    const menuHeight = CompanionContextMenuSize.Chrome * 2 + CompanionContextMenuSize.Item * 6 + CompanionContextMenuSize.Divider * 2;
+    expect(window.bounds.x + state.cards.root.x + CompanionContextMenuSize.Width).toBe(orb().bounds.x);
+    expect(window.bounds.y + state.cards.root.y + menuHeight).toBe(orb().bounds.y + orb().bounds.height / 2);
     expect(window.visible).toBe(false);
     expect(ready()).toBe(true);
     expect(window).toMatchObject({ visible: true, focused: true });

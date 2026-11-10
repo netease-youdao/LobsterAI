@@ -1,5 +1,5 @@
 import { DesktopCompanionSize } from './constants';
-import { clampCompanionBounds, type CompanionPoint, type CompanionRect } from './geometry';
+import { clampCompanionBounds, type CompanionPoint, type CompanionRect, companionStageOpensLeft } from './geometry';
 
 export const CompanionContextMenuIpc = {
   Run: 'desktop-companion:context-menu-run',
@@ -12,12 +12,12 @@ export const COMPANION_CONTEXT_MENU_ROOT = 'root';
 
 /**
  * Fixed card metrics, shared with the renderer's styles so the window can be placed before it paints.
- * Rows match the quick panel's menus (15px text with 8px above and below).
+ * Rows follow macOS's native menus (13px text in 28px rows).
  */
 export const CompanionContextMenuSize = {
-  Width: 224,
-  SubmenuWidth: 184,
-  Item: 36,
+  Width: 200,
+  SubmenuWidth: 160,
+  Item: 28,
   /** A group break: a 1px rule with 4px above and below. */
   Divider: 9,
   /** The card's padding plus its border, on each side. */
@@ -67,13 +67,17 @@ function measureCard(items: CompanionContextMenuItem[]): { tops: number[]; heigh
 }
 
 /**
- * Opens like a native context menu: from the pointer, flipped toward the room
- * left on screen. Submenus open on the right unless only the left has room,
- * level with the item that opens them. The window covers every card plus the
- * transparent shadow margin, so a submenu opens without moving the window.
+ * Opens right beside the orb, whichever part of it was clicked: on the side
+ * toward the middle of the screen, the card lined up with the orb window's
+ * edge like the quick panel, hanging from the orb's middle or rising from it
+ * when there is no room below. Submenus keep going away from the orb unless
+ * only the other side has room, level with the item that opens them. Without
+ * an orb, `anchor` is the pointer as an empty rect. The window covers every
+ * card plus the transparent shadow margin, so a submenu opens without moving
+ * the window.
  */
 export function resolveCompanionContextMenuLayout(
-  pointer: CompanionPoint,
+  anchor: CompanionRect,
   items: CompanionContextMenuItem[],
   workArea: CompanionRect,
 ): CompanionContextMenuLayout {
@@ -83,20 +87,24 @@ export function resolveCompanionContextMenuLayout(
   const root = measureCard(items);
   const width = CompanionContextMenuSize.Width;
   const subWidth = CompanionContextMenuSize.SubmenuWidth;
+  const opensLeft = companionStageOpensLeft(anchor, workArea);
+  const middle = anchor.y + anchor.height / 2;
   const menu = clampCompanionBounds({
     width,
     height: root.height,
-    x: pointer.x + width <= right ? pointer.x : pointer.x - width,
-    y: pointer.y + root.height <= area.y + area.height ? pointer.y : pointer.y - root.height,
+    x: opensLeft ? anchor.x - width : anchor.x + anchor.width,
+    y: middle + root.height <= area.y + area.height ? middle : middle - root.height,
   }, area);
-  const opensRight = menu.x + menu.width + subWidth <= right || menu.x - subWidth < area.x;
+  const subFitsLeft = menu.x - subWidth >= area.x;
+  const subFitsRight = menu.x + menu.width + subWidth <= right;
+  const subOpensLeft = opensLeft ? subFitsLeft || !subFitsRight : subFitsLeft && !subFitsRight;
   const cards: Array<[string, CompanionRect]> = [[COMPANION_CONTEXT_MENU_ROOT, menu]];
   items.forEach((item, index) => {
     if (!item.submenu?.length) return;
     cards.push([item.id, clampCompanionBounds({
       width: subWidth,
       height: measureCard(item.submenu).height,
-      x: opensRight ? menu.x + menu.width : menu.x - subWidth,
+      x: subOpensLeft ? menu.x - subWidth : menu.x + menu.width,
       y: menu.y + root.tops[index] - CompanionContextMenuSize.Chrome,
     }, area)]);
   });

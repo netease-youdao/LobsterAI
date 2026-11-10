@@ -266,6 +266,7 @@ export class DesktopCompanionManager {
     this.screenshot = new CompanionScreenshotController(this.env);
     this.contextMenu = new CompanionContextMenuController({
       createWindow: () => this.createWindow(DesktopCompanionSurface.Menu, true),
+      anchor: () => this.orbBounds(),
       nativeOwner: () => (this.panelVisible ? this.panel : this.orb),
       focusedWindow: () => this.companionWindows().find(win => !!win && !win.isDestroyed() && win.isFocused()) ?? null,
       publish: () => this.publish(),

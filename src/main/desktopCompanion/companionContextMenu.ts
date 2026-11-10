@@ -7,6 +7,7 @@ import {
   type CompanionContextMenuState,
   resolveCompanionContextMenuLayout,
 } from '../../shared/desktopCompanion/contextMenu';
+import type { CompanionRect } from '../../shared/desktopCompanion/geometry';
 import { dismissCompanionPanelOnBlur } from './companionWindow';
 
 /** An action, a radio choice (with `checked`), a submenu, or a group break. */
@@ -17,6 +18,8 @@ export type CompanionMenuEntry =
 
 interface ContextMenuHost {
   createWindow(): BrowserWindow;
+  /** The orb the menu opens beside, or null to open it from the pointer. */
+  anchor(): CompanionRect | null;
   /** The window a native menu is attached to. */
   nativeOwner(): BrowserWindow | null;
   /** The companion window holding key focus before the menu took it. */
@@ -77,7 +80,9 @@ export class CompanionContextMenuController {
     this.actions.clear();
     const items = this.model(entries, '');
     const pointer = screen.getCursorScreenPoint();
-    const layout = resolveCompanionContextMenuLayout(pointer, items, screen.getDisplayNearestPoint(pointer).workArea);
+    const orb = this.host.anchor();
+    const workArea = (orb ? screen.getDisplayMatching(orb) : screen.getDisplayNearestPoint(pointer)).workArea;
+    const layout = resolveCompanionContextMenuLayout(orb ?? { ...pointer, width: 0, height: 0 }, items, workArea);
     win.setBounds(layout.bounds);
     // The renderer paints this opening while the window is hidden, then asks to reveal it.
     this.current = { id: randomUUID(), items, cards: layout.cards };
