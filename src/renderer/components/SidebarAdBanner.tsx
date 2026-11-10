@@ -3,7 +3,8 @@ import React from 'react';
 
 import { getClientBannerTargetUrl } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
-import type { ClientBanner } from './sidebarAdBannerState';
+import SidebarAdBannerHtml from './SidebarAdBannerHtml';
+import { type ClientBanner, isHtmlSidebarBanner } from './sidebarAdBannerState';
 
 interface SidebarAdBannerProps {
   banner: ClientBanner;
@@ -27,6 +28,7 @@ const SidebarAdBanner: React.FC<SidebarAdBannerProps> = ({
     );
   };
 
+  const htmlBanner = isHtmlSidebarBanner(banner);
   const imageAspectRatio = banner.imageWidth && banner.imageHeight
     ? `${banner.imageWidth} / ${banner.imageHeight}`
     : '16 / 5';
@@ -43,17 +45,21 @@ const SidebarAdBanner: React.FC<SidebarAdBannerProps> = ({
         }
       }}
       className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} group relative block w-full overflow-visible rounded-lg bg-transparent drop-shadow-[0_4px_4px_rgba(227,227,228,0.5)] transition-opacity hover:opacity-95 dark:drop-shadow-none`}
-      style={{
+      style={htmlBanner ? undefined : {
         aspectRatio: imageAspectRatio,
       }}
       aria-label={banner.activityDescription}
     >
-      <img
-        src={banner.imageUrl}
-        alt=""
-        className="absolute inset-0 h-full w-full object-cover"
-        aria-hidden="true"
-      />
+      {htmlBanner ? (
+        <SidebarAdBannerHtml html={banner.htmlContent ?? ''} />
+      ) : (
+        <img
+          src={banner.imageUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          aria-hidden="true"
+        />
+      )}
       <button
         type="button"
         tabIndex={hidden ? -1 : 0}

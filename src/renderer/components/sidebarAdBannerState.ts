@@ -8,6 +8,9 @@ export interface ClientBanner {
   imageUrl: string;
   imageWidth?: number;
   imageHeight?: number;
+  /** image (default) or html; html banners may keep imageUrl as a fallback for older clients. */
+  contentType?: 'image' | 'html';
+  htmlContent?: string | null;
   minClientVersion?: string | null;
   onlineAt?: string;
   offlineAt?: string;
@@ -20,6 +23,12 @@ export interface SidebarBannerDismissState {
 }
 
 export const SIDEBAR_BANNER_PLACEMENT = 'desktop_sidebar';
+
+export const isHtmlSidebarBanner = (banner: ClientBanner): boolean => (
+  banner.contentType === 'html'
+  && typeof banner.htmlContent === 'string'
+  && banner.htmlContent.trim().length > 0
+);
 const SIDEBAR_BANNER_DISMISS_STATE_VERSION = 'dismissed_versions_v2';
 
 export const getSidebarBannerVersion = (banner: ClientBanner): string => (

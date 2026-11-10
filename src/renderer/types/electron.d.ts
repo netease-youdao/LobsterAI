@@ -644,6 +644,8 @@ interface ClientBannerData {
   imageUrl: string;
   imageWidth?: number;
   imageHeight?: number;
+  contentType?: 'image' | 'html';
+  htmlContent?: string | null;
   updatedAt?: string;
 }
 

@@ -37,12 +37,17 @@ export const parseUtcDateTime = (value: string | null | undefined): number => {
   return Date.parse(normalized);
 };
 
+const hasRenderableContent = (value: Record<string, unknown>): boolean => (
+  (value.contentType === 'html' && isNonEmptyString(value.htmlContent))
+  || isNonEmptyString(value.imageUrl)
+);
+
 const normalizeBanner = (value: unknown): ClientBanner | null => {
   if (!isRecord(value)
       || typeof value.id !== 'number'
       || !isNonEmptyString(value.activityDescription)
       || !isNonEmptyString(value.linkUrl)
-      || !isNonEmptyString(value.imageUrl)
+      || !hasRenderableContent(value)
       || (value.minClientVersion !== null
         && value.minClientVersion !== undefined
         && typeof value.minClientVersion !== 'string')) {

@@ -369,7 +369,7 @@ import {
   updateServerModelMetadata,
   updateServerModelMetadataFromResponse,
 } from './libs/claudeSettings';
-import { appendClientBannerVersion } from './libs/clientBannerRequest';
+import { appendClientBannerContentTypes, appendClientBannerVersion } from './libs/clientBannerRequest';
 import {
   getCopilotLoopbackPort,
   startCopilotLoopbackProxy,
@@ -8677,10 +8677,10 @@ if (!gotTheLock) {
     const serverBaseUrl = getServerApiBaseUrl();
     try {
       const snapshotUrl = appendKeyfromQuery(
-        appendClientBannerVersion(
+        appendClientBannerContentTypes(appendClientBannerVersion(
           `${serverBaseUrl}/api/client-banners/snapshot?placement=desktop_sidebar`,
           app.getVersion(),
-        ),
+        )),
       );
       const snapshotResponse = await net.fetch(snapshotUrl, { cache: 'no-store' });
       if (snapshotResponse.ok) {
@@ -8713,10 +8713,10 @@ if (!gotTheLock) {
 
     try {
       const legacyUrl = appendKeyfromQuery(
-        appendClientBannerVersion(
+        appendClientBannerContentTypes(appendClientBannerVersion(
           `${serverBaseUrl}/api/client-banners/active-list?placement=desktop_sidebar`,
           app.getVersion(),
-        ),
+        )),
       );
       const legacyResponse = await net.fetch(legacyUrl, { cache: 'no-store' });
       if (!legacyResponse.ok) return { success: false };
