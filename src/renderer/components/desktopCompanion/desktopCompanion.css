@@ -177,6 +177,26 @@ svg { flex-shrink: 0; }
 .stage-drop[data-status="failed"] .drop-hint { flex: 1; color: var(--c-accent-ink); }
 @keyframes drop-appear { from { opacity: 0; } to { opacity: 1; } }
 
+/* ── Orb menu (macOS) ──────────────────────────────────── */
+
+/* The main process places the window from CompanionContextMenuSize: 30px items, 9px dividers, 4px padding plus a 1px border. */
+.ctx-surface, .ctx-surface:focus-visible { position: relative; width: 100%; height: 100%; outline: none; user-select: none; cursor: default; }
+.ctx-card {
+  position: absolute; padding: 4px; background: var(--c-surface); border: 1px solid var(--c-line); border-radius: 10px;
+  box-shadow: var(--c-shadow); animation: ctx-in 0.1s ease-out;
+}
+.ctx-item {
+  display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 8px; border-radius: 6px;
+  color: var(--c-ink); font-size: 13px; text-align: left; white-space: nowrap; cursor: default;
+}
+.ctx-item[data-active="true"] { background: var(--c-surface-3); }
+.ctx-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ctx-check { width: 14px; height: 14px; display: grid; place-items: center; color: var(--c-accent); }
+.ctx-check svg { width: 14px; height: 14px; stroke-width: 2.2; }
+.ctx-chevron { width: 14px; height: 14px; color: var(--c-ink-3); stroke-width: 2; }
+.ctx-divider { height: 1px; margin: 4px 6px; background: var(--c-line); }
+@keyframes ctx-in { from { opacity: 0; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

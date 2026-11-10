@@ -1,5 +1,6 @@
 import type { CompanionAnalyticsEvent } from './analytics';
 import type { CompanionAppCategory } from './appCategories';
+import type { CompanionContextMenuBridge, CompanionContextMenuState } from './contextMenu';
 import type { CompanionFileKind } from './fileKinds';
 import type { CompanionHintTopic } from './hintPolicy';
 import type { LanguageToolResume, LanguageToolsBridge, SpeechStatus } from './languageTools';
@@ -68,6 +69,8 @@ export const DesktopCompanionSurface = {
   Result: 'result',
   /** Floats beside System Settings while the user grants a permission there. */
   PermissionGuide: 'permission-guide',
+  /** The orb's right-click menu on macOS. */
+  Menu: 'menu',
 } as const;
 export type DesktopCompanionSurface = typeof DesktopCompanionSurface[keyof typeof DesktopCompanionSurface];
 
@@ -194,6 +197,8 @@ export interface DesktopCompanionState {
   stageSide: DesktopCompanionStageSide;
   /** Where the quick panel's card sits in its window, and so which corner points back at the orb. */
   panelPlacement: DesktopCompanionPanelPlacement;
+  /** The orb's menu while it is open in its own window (macOS). */
+  contextMenu: CompanionContextMenuState | null;
   fileDragActive: boolean;
   foreground: DesktopCompanionForeground | null;
   capabilities: DesktopCompanionCapabilities;
@@ -325,7 +330,7 @@ export interface DesktopCompanionLoginStart {
 }
 
 export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge,
-  CompanionPermissionGuideBridge {
+  CompanionPermissionGuideBridge, CompanionContextMenuBridge {
   reportAnalytics(event: CompanionAnalyticsEvent): Promise<void>;
   /** Keeps the card open through the browser sign-in so it can continue afterwards. */
   startLogin(request: DesktopCompanionLoginStart): Promise<void>;

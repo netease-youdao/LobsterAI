@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 
 import { DesktopCompanionSurface } from '../shared/desktopCompanion/constants';
+import CompanionContextMenu from './components/desktopCompanion/CompanionContextMenu';
 import CompanionOrb from './components/desktopCompanion/CompanionOrb';
 import CompanionResultSurface from './components/desktopCompanion/CompanionResultSurface';
 import CompanionStage from './components/desktopCompanion/CompanionStage';
@@ -48,6 +49,7 @@ function DesktopCompanion() {
     case DesktopCompanionSurface.Selection: return <SelectionSurface state={state} />;
     case DesktopCompanionSurface.LanguageTools: return <LanguageToolsSurface state={state} />;
     case DesktopCompanionSurface.PermissionGuide: return <PermissionGuideSurface />;
+    case DesktopCompanionSurface.Menu: return <CompanionContextMenu state={state} />;
     // The quick panel loads companion-composer.html instead.
     default: return null;
   }

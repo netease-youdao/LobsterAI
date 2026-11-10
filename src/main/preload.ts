@@ -73,6 +73,7 @@ import {
   type DesktopCompanionSelection,
   type DesktopCompanionState,
 } from '../shared/desktopCompanion/constants';
+import { CompanionContextMenuIpc } from '../shared/desktopCompanion/contextMenu';
 import { CompanionPermissionGuideIpc } from '../shared/desktopCompanion/permissionGuide';
 import { CompanionResultIpc } from '../shared/desktopCompanion/results';
 import { CompanionScreenshotIpc } from '../shared/desktopCompanion/screenshot';
@@ -204,6 +205,9 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(DesktopCompanionIpc.MainPageRequested, handler);
     },
     showContextMenu: () => ipcRenderer.invoke(DesktopCompanionIpc.ContextMenu),
+    runContextMenuItem: id => ipcRenderer.invoke(CompanionContextMenuIpc.Run, id),
+    contextMenuReady: id => ipcRenderer.invoke(CompanionContextMenuIpc.Ready, id),
+    dismissContextMenu: () => ipcRenderer.invoke(CompanionContextMenuIpc.Dismiss),
     drag: (phase, grab) => ipcRenderer.send(DesktopCompanionIpc.Drag, { phase, grab }),
     orbFileDrag: (phase, kinds) => ipcRenderer.send(DesktopCompanionIpc.OrbFileDrag, { phase, kinds }),
     taskStarted: sessionId => ipcRenderer.invoke(DesktopCompanionIpc.TaskStarted, sessionId),
