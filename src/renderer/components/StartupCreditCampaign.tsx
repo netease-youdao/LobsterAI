@@ -81,6 +81,8 @@ interface CampaignPosterLoadState {
 
 interface StartupCreditCampaignProps {
   enabled?: boolean;
+  /** Hold the modal back while another startup pop-up (the launch ad) is open. */
+  deferred?: boolean;
 }
 
 const preloadStartupCreditPoster = (url: string): Promise<boolean> => {
@@ -162,6 +164,7 @@ const reportClaimFailure = (
 
 const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
   enabled = true,
+  deferred = false,
 }) => {
   const {
     isLoggedIn,
@@ -828,7 +831,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
     snapshot?.context.authenticated,
   ]);
 
-  if (!enabled || !modalOpen || !gatewayReady || !posterReady) return null;
+  if (!enabled || deferred || !modalOpen || !gatewayReady || !posterReady) return null;
   if (!descriptor && (isOffer || isBusy || isSuccess || isAlreadyClaimed)) {
     return null;
   }

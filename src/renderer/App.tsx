@@ -43,6 +43,7 @@ import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import ExpertPlazaView from './components/experts/ExpertPlazaView';
 import FeedbackDialog from './components/feedback/FeedbackDialog';
+import LaunchAdModal from './components/LaunchAdModal';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import NewUserOnboardingOverlay, {
@@ -272,6 +273,7 @@ const App: React.FC = () => {
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [isLaunchAdOpen, setIsLaunchAdOpen] = useState(false);
   const [trialTaskCreatedSignal, setTrialTaskCreatedSignal] = useState(0);
   const [newUserOnboardingStep, setNewUserOnboardingStep] =
     useState<NewUserOnboardingStepType>(NewUserOnboardingStep.NewTask);
@@ -2175,8 +2177,13 @@ const App: React.FC = () => {
         taskCreatedSignal={trialTaskCreatedSignal}
         enabled={privacyAgreed === true && !isOverlayActive && hasResolvedEngineStartupOverlayState && !isEngineStartupOverlayVisible}
       />
+      <LaunchAdModal
+        enabled={privacyAgreed === true && !isOverlayActive}
+        onOpenChange={setIsLaunchAdOpen}
+      />
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
+        deferred={isLaunchAdOpen}
       />
       {windowsStandaloneTitleBar}
       <div

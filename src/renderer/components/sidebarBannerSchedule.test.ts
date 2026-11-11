@@ -17,6 +17,7 @@ import {
   getActiveCachedBanners,
   getNextBannerScheduleEventDelay,
   getSidebarBannerScheduleCacheKey,
+  GUEST_BANNER_AUDIENCE_KEY,
   readCachedBannerSchedule,
   saveCachedBannerSchedule,
   SIDEBAR_BANNER_SCHEDULE_CACHE_MAX_AGE_MS,
@@ -79,6 +80,22 @@ describe('sidebar banner schedule', () => {
     expect(schedule.banners.map(item => item.id)).toEqual([43, 45]);
     expect(isHtmlSidebarBanner(schedule.banners[0])).toBe(true);
     expect(isHtmlSidebarBanner(schedule.banners[1])).toBe(false);
+  });
+
+  test('only reuses a cached schedule fetched for the same account', async () => {
+    const schedule = createCachedBannerSchedule({
+      serverTime: SERVER_TIME,
+      nextRefreshAt: null,
+      clientVersion: CLIENT_VERSION,
+      banners: [banner()],
+    }, 1000)!;
+    storeMock.getItem.mockResolvedValue({ ...schedule, audienceKey: 'user:42:personal' });
+
+    await expect(readCachedBannerSchedule(undefined, 2000, CLIENT_VERSION, 'user:42:personal'))
+      .resolves.toMatchObject({ audienceKey: 'user:42:personal' });
+    await expect(readCachedBannerSchedule(undefined, 2000, CLIENT_VERSION, 'user:7:personal'))
+      .resolves.toBeNull();
+    await expect(readCachedBannerSchedule(undefined, 2000, CLIENT_VERSION)).resolves.toBeNull();
   });
 
   test('expires a cached banner locally at its server offline time', () => {
@@ -160,7 +177,7 @@ describe('sidebar banner schedule', () => {
       undefined,
       SERVER_TIME_MS,
       CLIENT_VERSION,
-    )).resolves.toEqual(schedule);
+    )).resolves.toEqual({ ...schedule, audienceKey: GUEST_BANNER_AUDIENCE_KEY });
     expect(storeMock.setItem).toHaveBeenCalledWith(
       getSidebarBannerScheduleCacheKey(),
       schedule,

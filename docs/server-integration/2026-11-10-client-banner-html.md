@@ -83,7 +83,7 @@ banner 对象新增两个字段：
 
 ### Admin
 
-- 「广告类型」选「代码（随主题变化）」后显示代码编辑框，可以一键插入示例。右侧按 14 套客户端主题实时预览，宽度为默认侧栏宽度 228px。
+- 「广告类型」选「代码（随主题变化）」后显示代码编辑框，可以一键插入示例。右侧按 14 套客户端主题实时预览；侧栏广告可切换 188 / 228 / 388px 三档宽度，开屏弹窗按 400px 预览。
 - 主题变量快照在 `src/utils/clientThemePresets.ts`。客户端新增主题或改主题取值时，需要同步这个文件。
 
 ## 4. 广告代码编写约定（给运营和设计）
@@ -91,7 +91,7 @@ banner 对象新增两个字段：
 - 只写 HTML 和 `<style>`，不写脚本。动效用 CSS `@keyframes`。
 - 用主题变量取色，常用的有：`--lobster-primary`、`--lobster-primary-foreground`、`--lobster-accent`、`--lobster-surface`、`--lobster-text-primary`、`--lobster-text-secondary`、`--lobster-border`、`--lobster-warning`、`--lobster-radius`。完整列表见客户端 `src/renderer/theme/tokens/contract.ts`。
 - 深色主题的差异样式写在 `:host-context(.dark) .xxx { … }` 下。只针对某套主题时写 `:host-context([data-theme="sunset"])`。
-- 广告宽度铺满侧栏：默认 228px，用户拖拽侧栏时在 188–388px 之间变化。高度由内容决定。不要写死宽度。
+- 广告宽度铺满侧栏：默认 228px，用户拖拽侧栏时在 188–388px 之间变化。高度由内容决定。不要写死宽度。建议以 228px 为设计宽，用容器查询单位等比缩放（示例中的 `--u: min(1px, calc(100cqi / 228))`，尺寸写成 `calc(var(--u) * N)`），侧栏变窄时整体缩小、不会被裁掉。
 - 内容右上角预留约 24px 给关闭按钮。
 - 图片用 `https` 地址，例如 `<img src="https://…">` 或 `background-image: url(https://…)`。
 

@@ -11,6 +11,9 @@ export interface ClientBanner {
   /** image (default) or html; html banners may keep imageUrl as a fallback for older clients. */
   contentType?: 'image' | 'html';
   htmlContent?: string | null;
+  weight?: number;
+  /** Launch-modal pop-up frequency: every_launch, daily or once. */
+  displayFrequency?: string;
   minClientVersion?: string | null;
   onlineAt?: string;
   offlineAt?: string;
