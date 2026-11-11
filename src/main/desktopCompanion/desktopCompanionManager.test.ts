@@ -1729,6 +1729,7 @@ describe('stage: hints and drops', () => {
 
   test('a task sent from the composer shows an inactive bubble which opens its task in the main window', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    values.set(DesktopCompanionStoreKey.Position, { x: 1200, y: 750 });
     create();
     manager.togglePanel();
     const panel = mocks.windows.at(-1);
@@ -2367,6 +2368,7 @@ describe('orb menu on macOS', () => {
   }
 
   test('draws the menu in its own panel, which floats over full-screen apps, and shows it once painted', () => {
+    values.set(DesktopCompanionStoreKey.Position, { x: 1200, y: 750 });
     create();
     const { window, state, ready } = openMenu();
     expect(Menu.buildFromTemplate).not.toHaveBeenCalled();
