@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkImageAttachmentPayload } from '../../../shared/cowork/imageAttachments';
+import type { CoworkMessageEditRequest, CoworkMessageVersionSwitchRequest } from '../../../shared/cowork/messageEdit';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
@@ -124,6 +125,10 @@ export type CoworkStartOptions = {
 };
 
 export type CoworkContinueOptions = {
+  /** Internal edit coordinator fields; never accepted from renderer IPC. */
+  messageEditOperationId?: string;
+  requestId?: string;
+  onAccepted?: () => void;
   analytics?: UsageContext;
   skipInitialUserMessage?: boolean;
   systemPrompt?: string;
@@ -157,6 +162,11 @@ export interface CoworkRuntime {
   ): this;
   startSession(sessionId: string, prompt: string, options?: CoworkStartOptions): Promise<void>;
   continueSession(sessionId: string, prompt: string, options?: CoworkContinueOptions): Promise<void>;
+  editMessage?(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void>;
+  recoverMessageEdit?(sessionId: string, operationId: string): Promise<void>;
+  hasPendingMessageEdit?(sessionId: string): boolean;
+  switchMessageVersion?(request: CoworkMessageVersionSwitchRequest): Promise<string | undefined>;
+  reconcileMessageVersionSwitch?(sessionId: string): Promise<void>;
   submitBtw?(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse>;
   abortBtw?(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse>;
   submitSteer?(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse>;

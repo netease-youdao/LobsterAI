@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { store } from '../store';
-import { addMessage, setCurrentSession, setMessageWindow } from '../store/slices/coworkSlice';
+import { addMessage, setCurrentSession, setDraftPrompt, setMessageWindow } from '../store/slices/coworkSlice';
 import {
   type CoworkMessage,
   type CoworkSession,
@@ -52,6 +52,48 @@ afterEach(() => {
   coworkService.clearSession();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('coworkService message edit projection', () => {
+  test('keeps the bottom draft and rejects an old in-flight page after history is shortened', async () => {
+    const oldMessages = makeMessages(121);
+    store.dispatch(setCurrentSession(makeSession(oldMessages.slice(20, 70), 20, 120)));
+    store.dispatch(addMessage({ sessionId: 'session-1', message: oldMessages[120] }));
+    store.dispatch(setDraftPrompt({ sessionId: 'session-1', draft: 'Unsent bottom draft' }));
+    let resolvePage!: (value: { success: boolean; messages: CoworkMessage[]; offset: number; total: number }) => void;
+    const page = new Promise<Parameters<typeof resolvePage>[0]>(resolve => { resolvePage = resolve; });
+    const replacement = makeSession(makeMessages(6), 0, 6);
+    vi.stubGlobal('window', { electron: { cowork: {
+      getSessionMessages: vi.fn(() => page),
+      editMessage: vi.fn(async () => ({ success: true })),
+      getSession: vi.fn(async () => ({ success: true, session: replacement })),
+      remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+    } } });
+
+    const oldPage = coworkService.loadNewerMessages('session-1');
+    await coworkService.editMessage({ sessionId: 'session-1', messageId: 'message-4', prompt: 'Corrected' });
+    resolvePage({ success: true, messages: oldMessages.slice(70, 120), offset: 70, total: 121 });
+
+    await expect(oldPage).resolves.toBe(false);
+    const state = store.getState().cowork;
+    expect(state.currentSession?.messages).toEqual(replacement.messages);
+    expect(state.currentSession?.totalMessages).toBe(6);
+    expect(state.detachedTailMessagesBySessionId['session-1']).toBeUndefined();
+    expect(state.draftPrompts['session-1']).toBe('Unsent bottom draft');
+  });
+
+  test('leaves visible history intact when validation fails before rewind', async () => {
+    const session = makeSession(makeMessages(8), 0, 8);
+    store.dispatch(setCurrentSession(session));
+    const getSession = vi.fn();
+    vi.stubGlobal('window', { electron: { cowork: {
+      editMessage: vi.fn(async () => ({ success: false, error: 'Missing attachment' })), getSession,
+    } } });
+    await expect(coworkService.editMessage({ sessionId: 'session-1', messageId: 'message-4', prompt: 'Corrected' }))
+      .resolves.toMatchObject({ success: false });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(store.getState().cowork.currentSession?.messages).toEqual(session.messages);
+  });
 });
 
 describe('coworkService.loadSession', () => {

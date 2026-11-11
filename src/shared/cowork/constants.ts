@@ -83,6 +83,11 @@ export const COWORK_TEMP_ATTACHMENTS_DIR_NAME = 'attachments';
 export const CoworkIpcChannel = {
   SessionStart: 'cowork:session:start',
   SessionContinue: 'cowork:session:continue',
+  EditMessage: 'cowork:message:edit',
+  CheckMessageEdit: 'cowork:message:checkEdit',
+  GetMessageEdit: 'cowork:message:editState',
+  RecoverMessageEdit: 'cowork:message:recoverEdit',
+  SwitchMessageVersion: 'cowork:message:switchVersion',
   GetSession: 'cowork:session:get',
   GenerateSessionTitle: 'cowork:session:generateTitle',
   RenameSession: 'cowork:session:rename',

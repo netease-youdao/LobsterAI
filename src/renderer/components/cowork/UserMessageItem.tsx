@@ -45,6 +45,7 @@ import {
   COWORK_DETAIL_GUTTER_CLASS,
   messageMetaClassName,
 } from './messageDisplayUtils';
+import MessageVersionSwitcher from './MessageVersionSwitcher';
 import { UserMessagePastedTexts } from './PastedTextCards';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
 import { useKitDetailCatalog } from './useKitDetailCatalog';
@@ -117,10 +118,12 @@ const CopyButton: React.FC<{
 
 const ReEditButton: React.FC<{
   visible: boolean;
+  disabled?: boolean;
   onClick: () => void;
-}> = ({ visible, onClick }) => {
+}> = ({ visible, disabled, onClick }) => {
   return (
     <button
+      disabled={disabled}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
@@ -129,7 +132,7 @@ const ReEditButton: React.FC<{
         visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
       }`}
       tabIndex={visible ? 0 : -1}
-      title={i18nService.t('coworkReEdit')}
+      title={i18nService.t(disabled ? 'coworkEditBusy' : 'coworkReEdit')}
     >
       <EditIcon className="w-4 h-4 text-[var(--icon-secondary)]" />
     </button>
@@ -279,10 +282,14 @@ const UserMessageItem: React.FC<{
   /** Session the message belongs to; used to resolve browser annotation screenshot assets. */
   sessionId?: string;
   onReEdit?: (message: CoworkMessage) => void;
+  reEditDisabled?: boolean;
+  /** Shows another version of an edited message; `targetIndex` is 1-based. */
+  onSwitchVersion?: (message: CoworkMessage, targetIndex: number) => void;
+  versionSwitchDisabled?: boolean;
   onLocateSelectedText?: (sourceMessageId: string) => void;
   /** Opens the annotation restore view in the artifact panel. */
   onOpenAnnotation?: (message: CoworkMessage, payload: BrowserAnnotationAttachmentOpenPayload) => void;
-}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, onLocateSelectedText, onOpenAnnotation }) => {
+}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, reEditDisabled, onSwitchVersion, versionSwitchDisabled, onLocateSelectedText, onOpenAnnotation }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
   const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
@@ -509,10 +516,18 @@ const UserMessageItem: React.FC<{
                   {onReEdit && (
                     <ReEditButton
                       visible={isHovered}
+                      disabled={reEditDisabled}
                       onClick={handleReEditClick}
                     />
                   )}
                 </div>
+                {onSwitchVersion && metadata?.messageVersion && metadata.messageVersion.count > 1 && (
+                  <MessageVersionSwitcher
+                    info={metadata.messageVersion}
+                    disabled={versionSwitchDisabled}
+                    onSwitch={targetIndex => onSwitchVersion(message, targetIndex)}
+                  />
+                )}
                 {isGoalSettingMessage && (
                   <div className="mt-1 inline-flex h-5 shrink-0 items-center gap-1 text-[11px] leading-none text-zinc-400 dark:text-zinc-500 select-none">
                     <GoalIcon className="h-4 w-4 text-[var(--icon-secondary)]" />

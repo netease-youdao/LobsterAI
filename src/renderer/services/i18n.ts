@@ -1,3 +1,4 @@
+import { messageEditTranslations } from '../../shared/cowork/messageEdit';
 import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy';
 import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
@@ -10,6 +11,7 @@ export type LanguageType = 'zh' | 'en';
 // 语言文本映射
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    ...messageEditTranslations.zh,
     modelPresetBalanced: '快速',
     modelPresetUltimate: '旗舰',
     modelPresetBalancedDescription: '快速响应，高效胜任日常工作',
@@ -825,6 +827,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSubscribe: '订阅',
     authCurrentPlan: '当前套餐',
     authLogout: '退出登录',
+    authLogoutConfirmTitle: '确认退出登录？',
+    authLogoutConfirmMessage: '退出后需要重新登录，才能继续使用账号相关的功能。',
     authLoginRequired: '请先登录后再开始对话。',
     authLoginRequiredBtn: '登录',
     chatLoginExperienceTitlePrefix: '欢迎使用',
@@ -4743,6 +4747,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     workspaceDiffIncomplete: '部分文件超出读取限额，行数统计不完整。',
   },
   en: {
+    ...messageEditTranslations.en,
     modelPresetBalanced: 'Fast',
     modelPresetUltimate: 'Flagship',
     modelPresetBalancedDescription: 'Fast responses for efficient everyday work',
@@ -5595,6 +5600,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSubscribe: 'Subscribe',
     authCurrentPlan: 'Current Plan',
     authLogout: 'Log Out',
+    authLogoutConfirmTitle: 'Log out?',
+    authLogoutConfirmMessage: 'You will need to log in again to use account features.',
     authLoginRequired: 'Please log in to start a conversation.',
     authLoginRequiredBtn: 'Log In',
     chatLoginExperienceTitlePrefix: 'Welcome to',

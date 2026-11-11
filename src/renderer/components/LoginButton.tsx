@@ -51,6 +51,7 @@ import { waitForDailyCheckInRefresh } from './dailyCheckInSnapshotStore';
 import UserAvatarIcon from './icons/UserAvatarIcon';
 import BrowserLoginStatusCard from './login/BrowserLoginStatusCard';
 import { useBrowserLoginSession } from './login/useBrowserLoginSession';
+import LogoutConfirmDialog from './LogoutConfirmDialog';
 import SidebarLoginPromoBubble, { SIDEBAR_LOGIN_PROMO_BUBBLE_ID } from './SidebarLoginPromoBubble';
 import {
   type StartupCreditCampaignEntry,
@@ -367,7 +368,11 @@ const UserMenu: React.FC<UserMenuProps> = ({
     onClose();
   };
 
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
   const handleLogout = async () => {
+    setLoggingOut(true);
     try {
       await authService.logout();
       reportAccountMenuAction('logout', {
@@ -383,6 +388,9 @@ const UserMenu: React.FC<UserMenuProps> = ({
         result: 'failed',
       });
       throw error;
+    } finally {
+      setLoggingOut(false);
+      setLogoutConfirmOpen(false);
     }
   };
 
@@ -733,9 +741,16 @@ const UserMenu: React.FC<UserMenuProps> = ({
         <AccountMenuAction
           icon={<PortalMenuIcon src={logoutIconUrl} darkInvert />}
           label={i18nService.t('authLogout')}
-          onClick={handleLogout}
+          onClick={() => setLogoutConfirmOpen(true)}
         />
       </div>
+      {logoutConfirmOpen && (
+        <LogoutConfirmDialog
+          isLoggingOut={loggingOut}
+          onCancel={() => setLogoutConfirmOpen(false)}
+          onConfirm={() => void handleLogout()}
+        />
+      )}
     </div>
   );
 };
@@ -830,10 +845,15 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       const target = event.target;
       const isEnterpriseAccountFlyout = target instanceof Element
         && target.closest('[data-enterprise-account-flyout="true"]') !== null;
+      // Dialogs opened from the menu (e.g. the logout confirmation) are portaled
+      // to <body>; clicks inside them must not dismiss the menu that owns them.
+      const isInsideModal = target instanceof Element
+        && target.closest('[data-app-modal]') !== null;
       if (
         containerRef.current
         && !containerRef.current.contains(target as Node)
         && !isEnterpriseAccountFlyout
+        && !isInsideModal
       ) {
         setShowMenu(false);
       }
