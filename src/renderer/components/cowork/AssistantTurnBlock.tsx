@@ -62,6 +62,7 @@ import {
   COWORK_DETAIL_GUTTER_CLASS,
   formatElapsedDuration,
   formatTurnDuration,
+  getActivityCurrentActionText,
   getActivityIndicatorStatusText,
   getActivityLiveStatusText,
   getAssistantMessageDisplayText,
@@ -1065,9 +1066,20 @@ const AssistantTurnBlock: React.FC<{
   const processLabel = processBaseLabel;
   // What the running step is doing right now, for the status line: the last
   // work item while it is still live; null in the silent gaps between steps.
-  const liveStatusText = liveTailItem && isActivityItemLive(liveTailItem) && !isTailTextStalled
+  const liveStepStatusText = liveTailItem && isActivityItemLive(liveTailItem) && !isTailTextStalled
     ? getActivityLiveStatusText(liveTailItem)
     : null;
+  // The running step's own line sits right above the status line. When both
+  // would read the same phrase ("Waiting for command output" twice), the
+  // status line keeps to the plain working label beside the turn's clock.
+  const isStatusRepeatingStepLine = liveStepStatusText != null
+    && liveTailItem?.type === 'tool_group'
+    && !toolGroupOverrides.has(liveTailItem.group.toolUse.id)
+    && !isMediaGenerationToolName(String(liveTailItem.group.toolUse.metadata?.toolName ?? ''))
+    && liveStepStatusText === getActivityCurrentActionText(liveTailItem);
+  const liveStatusText = isStatusRepeatingStepLine
+    ? i18nService.t('coworkProcessing')
+    : liveStepStatusText;
   // While a generation placeholder is the step running right now it already shows
   // the progress and elapsed time; the status line below would only repeat them.
   const isLiveMediaPlaceholder = liveTailItem?.type === 'tool_group'
