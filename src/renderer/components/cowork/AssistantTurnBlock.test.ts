@@ -8,7 +8,11 @@ import type { CoworkMessage } from '../../types/cowork';
 import AssistantTurnBlock from './AssistantTurnBlock';
 import { buildConversationTurns, buildDisplayItems } from './messageDisplayUtils';
 
-const renderTurn = (messages: CoworkMessage[], isStreamingTurn: boolean): string => {
+const renderTurn = (
+  messages: CoworkMessage[],
+  isStreamingTurn: boolean,
+  showActivityIndicator = false,
+): string => {
   const store = configureStore({
     reducer: {
       auth: () => ({ creditQuotaSnapshot: null }),
@@ -18,7 +22,7 @@ const renderTurn = (messages: CoworkMessage[], isStreamingTurn: boolean): string
   const turn = buildConversationTurns(buildDisplayItems(messages))[0];
   return renderToStaticMarkup(React.createElement(Provider, {
     store,
-    children: React.createElement(AssistantTurnBlock, { turn, isStreamingTurn }),
+    children: React.createElement(AssistantTurnBlock, { turn, isStreamingTurn, showActivityIndicator }),
   }));
 };
 
@@ -48,7 +52,7 @@ test('a finished turn folds its process behind a duration line that keeps its ar
   expect(html).toContain('Done.');
 });
 
-test('a file being written shows its line count but no timer, while a command keeps its timer', () => {
+test('a running step line carries no timer of its own; the status line owns the only clock', () => {
   const startedAt = Date.now() - 10_000;
   const writing = renderTurn([
     ...process,
@@ -70,7 +74,35 @@ test('a file being written shows its line count but no timer, while a command ke
       metadata: { toolName: 'exec', toolInput: { command: 'npm install' }, toolUseId: 'exec-1' },
     },
   ], true);
-  expect(commanding).toMatch(/ · 1\ds/);
+  expect(commanding).toContain('data-activity-label="live"');
+  expect(commanding).not.toMatch(/ · \d+s/);
+});
+
+test('the status line does not repeat the phrase of the step line right above it', () => {
+  const startedAt = Date.now() - 20_000;
+  const waiting = renderTurn([
+    ...process,
+    {
+      id: 'poll-1', type: 'tool_use', content: '', timestamp: startedAt,
+      metadata: { toolName: 'process', toolInput: { action: 'poll', sessionId: 's' }, toolUseId: 'poll-1' },
+    },
+  ], true, true);
+  expect(waiting.match(/正在等待命令输出/g)).toHaveLength(1);
+  expect(waiting).toMatch(/role="status"[^>]*>正在处理</);
+  // One clock on screen: the turn's, counted from the user's message.
+  expect(waiting.match(/tabular-nums/g)).toHaveLength(1);
+
+  // A step line that names its target leaves the status line its own phrase.
+  const fetching = renderTurn([
+    ...process,
+    {
+      id: 'fetch-1', type: 'tool_use', content: '', timestamp: startedAt,
+      metadata: { toolName: 'web_fetch', toolInput: { url: 'https://github.com/openclaw/openclaw' }, toolUseId: 'fetch-1' },
+    },
+  ], true, true);
+  expect(fetching).toContain('github.com');
+  expect(fetching).toMatch(/role="status"[^>]*>[^<]*网页/);
+  expect(fetching).not.toMatch(/role="status"[^>]*>正在处理</);
 });
 
 test('a running turn lists every step of its current run without a duration line', () => {
