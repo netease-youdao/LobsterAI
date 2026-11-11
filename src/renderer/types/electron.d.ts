@@ -68,6 +68,7 @@ import type {
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../shared/cowork/llmTurnUsage';
+import type { MessageSpeechBridge } from '../../shared/cowork/messageSpeech';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
@@ -681,6 +682,7 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  messageSpeech: MessageSpeechBridge;
   desktopCompanion: DesktopCompanionBridge;
   platform: string;
   arch: string;

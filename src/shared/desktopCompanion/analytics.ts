@@ -21,7 +21,7 @@ export const CompanionAnalyticsAction = {
 export const CompanionAnalyticsSource = {
   Orb: 'orb', Shortcut: 'shortcut', Tray: 'tray', ContextMenu: 'context_menu',
   Panel: 'panel', Selection: 'selection', LanguageTools: 'language_tools',
-  Result: 'result', FileDrop: 'file_drop', Hint: 'hint', Settings: 'settings', System: 'system',
+  Result: 'result', FileDrop: 'file_drop', Hint: 'hint', Settings: 'settings', System: 'system', MainChat: 'main_chat',
 } as const;
 export type CompanionAnalyticsSource = typeof CompanionAnalyticsSource[keyof typeof CompanionAnalyticsSource];
 

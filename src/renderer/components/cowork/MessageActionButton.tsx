@@ -11,6 +11,7 @@ interface MessageActionButtonProps {
   onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   children: React.ReactNode;
   expanded?: boolean;
+  pressed?: boolean;
   className?: string;
 }
 
@@ -20,6 +21,7 @@ export const MessageActionButton: React.FC<MessageActionButtonProps> = ({
   onClick,
   children,
   expanded,
+  pressed,
   className = '',
 }) => (
   <button
@@ -32,6 +34,7 @@ export const MessageActionButton: React.FC<MessageActionButtonProps> = ({
     title={label}
     aria-label={label}
     aria-expanded={expanded}
+    aria-pressed={pressed}
   >
     {children}
   </button>
