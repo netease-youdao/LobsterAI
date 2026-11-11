@@ -92,6 +92,7 @@ import {
   type HtmlShareSourceType,
   type HtmlShareStatus,
 } from '../shared/htmlShare/constants';
+import { type ImageCreationCatalog, ImageCreationIpc, type ImageExampleReference } from '../shared/imageCreation/constants';
 import {
   KitIpcChannel,
   type KitReference,
@@ -1552,6 +1553,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(AuthIpcChannel.LifecycleEvent, handler);
       return () => ipcRenderer.removeListener(AuthIpcChannel.LifecycleEvent, handler);
     },
+  },
+  imageCreation: {
+    getCatalog: () => ipcRenderer.invoke(ImageCreationIpc.GetCatalog) as Promise<ImageCreationCatalog>,
+    getReference: (exampleId: string) => ipcRenderer.invoke(ImageCreationIpc.GetReference, exampleId) as Promise<ImageExampleReference>,
   },
   media: {
     getPreferences: (owner: string) =>
