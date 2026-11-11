@@ -4134,8 +4134,11 @@ const bindCoworkRuntimeForwarder = (): void => {
     }
   });
 
-  runtime.on('sessionStopped', (sessionId: string) => {
+  runtime.on('sessionStopped', (sessionId, turn) => {
     getDesktopNotificationManager().handleSessionStopped(sessionId);
+    void coworkTurnUsageService?.settleStoppedTurn(sessionId, turn).catch((error) => {
+      console.warn(`[TurnUsage] settlement failed for stopped session ${sessionId}.`, error);
+    });
   });
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {

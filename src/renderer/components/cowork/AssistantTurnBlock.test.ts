@@ -4,8 +4,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Provider } from 'react-redux';
 import { expect, test } from 'vitest';
 
+import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../../../shared/cowork/llmTurnUsage';
 import type { CoworkMessage } from '../../types/cowork';
 import AssistantTurnBlock from './AssistantTurnBlock';
+import ConversationTurnsView from './ConversationTurnsView';
 import { buildConversationTurns, buildDisplayItems } from './messageDisplayUtils';
 
 const renderTurn = (
@@ -16,6 +18,7 @@ const renderTurn = (
   const store = configureStore({
     reducer: {
       auth: () => ({ creditQuotaSnapshot: null }),
+      enterpriseAccount: () => ({ context: null }),
       cowork: () => ({ isStreaming: isStreamingTurn }),
     },
   });
@@ -40,6 +43,57 @@ const process: CoworkMessage[] = [
   ...toolMessages('tool-1', 3_000),
   ...toolMessages('tool-2', 5_000),
 ];
+
+const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+const usage = buildCoworkTurnUsage({ traceId, requestCount: 3, creditsUsed: 12.5 }, { traceId, now: 60_000 })!;
+const userWithUsage: CoworkMessage = { ...process[0], metadata: { turnUsage: usage } };
+
+test.each([
+  { name: 'before any assistant output', items: [] },
+  { name: 'during thinking', items: [process[1]] },
+  { name: 'during a tool call after earlier text', items: [
+    { id: 'progress', type: 'assistant' as const, content: 'Working on it.', timestamp: 2_000 },
+    ...toolMessages('stopped-tool', 3_000).slice(0, 1),
+  ] },
+])('shows stopped turn usage once $name', ({ items }) => {
+  const html = renderTurn([userWithUsage, ...items], false);
+  expect(html.match(/12\.5 积分/g)).toHaveLength(1);
+});
+
+test('keeps a single usage chip with the final reply, including a stopped partial reply', () => {
+  const html = renderTurn([
+    userWithUsage, ...process.slice(1),
+    { id: 'partial-reply', type: 'assistant', content: 'Here is the first part.', timestamp: 55_000 },
+  ], false);
+  expect(html.match(/12\.5 积分/g)).toHaveLength(1);
+  expect(html).toContain('cowork-message-meta');
+});
+
+test('keeps usage hidden while the turn is streaming', () => {
+  expect(renderTurn([userWithUsage, ...process.slice(1)], true)).not.toContain('12.5 积分');
+});
+
+test.each([
+  { status: CoworkTurnUsageStatus.Pending, label: '积分计算中' },
+  { status: CoworkTurnUsageStatus.Partial, label: '≥12.5 积分' },
+  { status: CoworkTurnUsageStatus.Failed, label: '积分消耗' },
+])('renders the $status usage entry without a reply', ({ status, label }) => {
+  const html = renderTurn([{ ...userWithUsage, metadata: { turnUsage: { ...usage, status } } }], false);
+  expect(html).toContain(label);
+});
+
+test('mounts a conversation turn containing only the user message and persisted usage', () => {
+  const store = configureStore({ reducer: {
+    auth: () => ({ creditQuotaSnapshot: null }),
+    enterpriseAccount: () => ({ context: null }),
+    kit: () => ({ installedKits: [] }),
+    cowork: () => ({ isStreaming: false }),
+  } });
+  const html = renderToStaticMarkup(React.createElement(Provider, { store,
+    children: React.createElement(ConversationTurnsView, { messages: [userWithUsage] }),
+  }));
+  expect(html).toContain('12.5 积分');
+});
 
 test('a finished turn folds its process behind a duration line that keeps its arrow', () => {
   const html = renderTurn([

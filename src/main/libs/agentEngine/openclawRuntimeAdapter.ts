@@ -5556,6 +5556,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.configRestartImWorkloads.forgetSession(sessionId);
     const turn = this.activeTurns.get(sessionId);
     const yielded = this.yieldedSessions.get(sessionId);
+    const stoppedTurn = turn ? {
+      userMessageId: turn.userMessageId,
+      traceId: turn.llmTraceId,
+      runIds: [...turn.knownRunIds],
+      startedAt: turn.startedAtMs,
+    } : yielded ? { runIds: [yielded.runId] } : undefined;
     this.yieldedSessions.delete(sessionId);
     this.pendingGoalContinuations.delete(sessionId);
     if (yielded && this.gatewayClient) {
@@ -5603,7 +5609,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.questionController.cancelBySession(sessionId);
     this.store.updateSession(sessionId, { status: 'idle' });
     this.emitSessionStatus(sessionId, 'idle');
-    this.emit('sessionStopped', sessionId);
+    this.emit('sessionStopped', sessionId, stoppedTurn);
     this.resolveTurn(sessionId);
   }
 

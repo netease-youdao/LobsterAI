@@ -12,7 +12,6 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
-import { getCoworkTurnUsage } from '../../../shared/cowork/llmTurnUsage';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
 import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
@@ -99,6 +98,7 @@ import ModelReconnectStatusLine from './ModelReconnectStatusLine';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
 import TurnUsageChip from './TurnUsageChip';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useStreamStall } from './useStreamStall';
 
 // ── ContextCompressionIcon ───────────────────────────────────────────────────
@@ -689,9 +689,7 @@ const AssistantTurnBlock: React.FC<{
     ? turnEndTimestamp - turnStartTimestamp
     : null;
   // The user message may be outside the loaded page of a long turn.
-  const turnUsage = isStreamingTurn
-    ? null
-    : getCoworkTurnUsage(turn.userMessage?.metadata) ?? turn.inheritedTurnUsage?.turnUsage;
+  const turnUsage = isStreamingTurn ? null : getConversationTurnUsage(turn);
   const turnUsageMessageId = turn.userMessage?.id ?? turn.inheritedTurnUsage?.userMessageId;
   const turnUsageSlot = showCopyButtons && turnUsage && turnUsageMessageId ? (
     <TurnUsageChip
@@ -700,7 +698,7 @@ const AssistantTurnBlock: React.FC<{
       durationMs={processDurationMs}
     />
   ) : null;
-  // Show usage only with the final visible text reply.
+  // Prefer the final visible text reply; interrupted turns may need a footer.
   let turnUsageReplyId: string | null = null;
   for (let index = consolidatedItems.length - 1; index >= 0; index--) {
     const item = consolidatedItems[index];
@@ -1101,7 +1099,7 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length) {
+  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !turnUsageSlot) {
     return null;
   }
 
@@ -1187,6 +1185,11 @@ const AssistantTurnBlock: React.FC<{
                     )}
                   </div>
                 )}
+              </div>
+            )}
+            {!turnUsageReplyId && turnUsageSlot && (
+              <div className="flex items-center text-[12px] leading-5 text-secondary" data-cowork-search-exclude="true">
+                {turnUsageSlot}
               </div>
             )}
           </div>

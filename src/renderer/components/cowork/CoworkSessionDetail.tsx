@@ -219,6 +219,7 @@ import {
   mergeCoworkTextExportMessages,
 } from './sessionExport';
 import SubagentSpawnCard from './SubagentSpawnCard';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useConversationEntrySettle } from './useConversationEntrySettle';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
 import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
@@ -6140,7 +6141,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       // Persistent busy-state indicator at the insertion point of the
       // running turn (Codex/ChatGPT style: visible for the whole run).
       const showActivityIndicator = isSessionBusy && isLastTurn;
-      const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator;
+      const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator || Boolean(getConversationTurnUsage(turn));
       // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX).
       // While exporting the conversation image, force-render every turn:
       // lazy placeholders have no export anchors and capture as blank blocks.

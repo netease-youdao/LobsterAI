@@ -44,6 +44,14 @@ export interface PermissionRequest {
   toolUseId?: string | null;
 }
 
+/** Captured before stop clears the active turn and its gateway run ids. */
+export type CoworkStoppedTurn = {
+  userMessageId?: string;
+  traceId?: string;
+  runIds: string[];
+  startedAt?: number;
+};
+
 export interface CoworkRuntimeEvents {
   message: (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => void;
@@ -56,7 +64,7 @@ export interface CoworkRuntimeEvents {
   permissionResolved: (sessionId: string, requestId: string) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
-  sessionStopped: (sessionId: string) => void;
+  sessionStopped: (sessionId: string, turn?: CoworkStoppedTurn) => void;
 }
 
 export type CoworkContextUsage = {
