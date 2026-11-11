@@ -46,7 +46,6 @@ import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import HomeImageCreation from '../imageCreation/HomeImageCreation';
-import HomeScrollArea from '../imageCreation/HomeScrollArea';
 import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
 import { PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
@@ -120,7 +119,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const [isInitialized, setIsInitialized] = useState(false);
-  const [imageGalleryVisible, setImageGalleryVisible] = useState(false);
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
   // Shown when a session start is blocked because no usable model config exists;
@@ -950,25 +948,25 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           {homeHeader}
 
           {/* Main content */}
-          <HomeScrollArea galleryVisible={imageGalleryVisible}>
-            <div className={`relative flex min-h-full w-full min-w-[320px] flex-col items-center ${imageGalleryVisible ? 'px-7 pb-20 pt-[clamp(60px,9vh,150px)] xl:px-12' : 'px-4 py-8'}`}>
+          <div className="relative z-10 flex-1 overflow-y-auto min-h-0">
+            <div className="relative flex min-h-full w-full min-w-[320px] flex-col items-center px-4 py-8">
               {/* Flexible spacers (2:3) keep the welcome block at the optical
                   center on tall windows; min-h preserves breathing room before
                   the page starts scrolling on short windows. */}
-              <div aria-hidden="true" className={imageGalleryVisible ? 'h-0 w-full shrink-0' : 'w-full min-h-[56px] flex-[2_0_0px]'} />
+              <div aria-hidden="true" className="w-full min-h-[56px] flex-[2_0_0px]" />
               {/* Welcome Section - staggered entrance animation */}
-              <div data-skin-home-copy="true" className={`w-full max-w-3xl text-center ${imageGalleryVisible ? 'flex flex-wrap items-center justify-center' : ''}`}>
+              <div data-skin-home-copy="true" className="w-full max-w-3xl text-center">
                 <HomeSkinEmblem
-                  className={imageGalleryVisible ? 'h-8 w-8 animate-fade-in-up' : 'mx-auto h-12 w-12 animate-fade-in-up'}
+                  className="mx-auto h-12 w-12 animate-fade-in-up"
                 />
                 <h2
-                  className={`${imageGalleryVisible ? 'ml-3 text-[30px] leading-10' : 'mt-4 text-2xl leading-[var(--lobster-leading-2xl)]'} font-semibold tracking-normal text-foreground animate-fade-in-up`}
+                  className="mt-4 text-2xl font-semibold leading-[var(--lobster-leading-2xl)] tracking-normal text-foreground animate-fade-in-up"
                   style={{ animationDelay: '70ms', animationFillMode: 'both' }}
                 >
                   {i18nService.t(resolveHomeGreetingKey())}
                 </h2>
                 <p
-                  className="mt-1.5 w-full text-sm font-normal leading-[var(--lobster-leading-sm)] text-secondary animate-fade-in-up"
+                  className="mt-1.5 text-sm font-normal leading-[var(--lobster-leading-sm)] text-secondary animate-fade-in-up"
                   style={{ animationDelay: '120ms', animationFillMode: 'both' }}
                 >
                   {i18nService.t('coworkHomeTagline')}
@@ -977,7 +975,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
               {/* Prompt Input Area - Large version with folder selector */}
               <div
-                className={`relative z-30 mt-8 w-full ${imageGalleryVisible ? 'max-w-[720px]' : 'max-w-3xl'} animate-fade-in-up`}
+                className="relative z-30 mt-8 w-full max-w-3xl animate-fade-in-up"
                 style={{ animationDelay: '180ms', animationFillMode: 'both' }}
               >
                 <CoworkPromptInput
@@ -1006,9 +1004,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                 />
               </div>
 
-              {/* Quick Actions */}
+              {/* Quick Actions. Stays `relative`: the home image examples anchor
+                  to this block and hang below it without taking part in the
+                  vertical centering. */}
               <div
-                className={`relative z-0 ${imageGalleryVisible ? 'mt-[clamp(56px,7vh,96px)] max-w-[1040px]' : 'mt-8 max-w-[960px]'} flex w-full flex-col items-center animate-fade-in-up`}
+                className="relative z-0 mt-8 flex w-full max-w-3xl flex-col items-center animate-fade-in-up"
                 style={{ animationDelay: '260ms', animationFillMode: 'both' }}
               >
                 <HomeImageCreation
@@ -1016,14 +1016,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                   selectedActionId={selectedActionId}
                   onActionSelect={handleActionSelect}
                   onDeselect={handleQuickActionDeselect}
-                  onGalleryVisibilityChange={setImageGalleryVisible}
                   onDraftReady={prompt => {
                     promptInputRef.current?.setValue(prompt, 'template');
                     promptInputRef.current?.focus();
                   }}
                 >
                   {selectedAction && (
-                    <div className="mx-auto mt-4 w-full max-w-3xl">
+                    <div className="mt-4 w-full">
                       <PromptPanel
                         action={selectedAction}
                         onPromptSelect={handleQuickActionPromptSelect}
@@ -1035,9 +1034,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                 <CreditsResetCampaignFloat />
               </div>
 
-              <div aria-hidden="true" className={imageGalleryVisible ? 'h-4 w-full shrink-0' : 'w-full min-h-[24px] flex-[3_0_0px]'} />
+              <div aria-hidden="true" className="w-full min-h-[24px] flex-[3_0_0px]" />
             </div>
-          </HomeScrollArea>
+          </div>
         </>
       )}
       {modelAccessPrompt && (

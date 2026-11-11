@@ -13,7 +13,6 @@ interface QuickActionBarProps {
   selectedActionId?: string | null;
   onActionSelect: (actionId: string) => void;
   children?: React.ReactNode;
-  relaxed?: boolean;
 }
 
 // 图标映射
@@ -26,13 +25,13 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   AcademicCapIcon,
 };
 
-const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedActionId, onActionSelect, children, relaxed = false }) => {
+const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedActionId, onActionSelect, children }) => {
   if (actions.length === 0 && !children) {
     return null;
   }
 
   return (
-    <div data-skin-quick-actions="true" className={`flex flex-wrap items-center gap-2 ${relaxed ? 'justify-start' : 'justify-center'}`}>
+    <div data-skin-quick-actions="true" className="flex flex-wrap items-center justify-center gap-2">
       {actions.map((action) => {
         const IconComponent = iconMap[action.icon];
         const isSelected = action.id === selectedActionId;
@@ -43,9 +42,8 @@ const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedAction
             type="button"
             aria-pressed={isSelected}
             onClick={() => onActionSelect(action.id)}
-            className={`group flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal leading-5 transition-all duration-200 ease-out active:translate-y-0 active:scale-[0.97] ${relaxed
-              ? 'border-transparent bg-transparent text-secondary hover:bg-surface-raised hover:text-foreground'
-              : isSelected
+            className={`group flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal leading-5 transition-all duration-200 ease-out active:translate-y-0 active:scale-[0.97] ${
+              isSelected
                 ? 'border-[color-mix(in_srgb,var(--lobster-primary)_50%,transparent)] bg-primary-muted text-primary'
                 : 'border-border-subtle bg-surface text-secondary hover:-translate-y-px hover:border-primary/30 hover:bg-surface-raised hover:text-foreground hover:shadow-subtle'
             }`}
