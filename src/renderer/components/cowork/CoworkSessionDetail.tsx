@@ -220,6 +220,7 @@ import {
 } from './sessionExport';
 import SubagentSpawnCard from './SubagentSpawnCard';
 import { useConversationEntrySettle } from './useConversationEntrySettle';
+import { useConversationScrollAnchor } from './useConversationScrollAnchor';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
 import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
 import { expandCollapsedUserMessage } from './userMessageCollapse';
@@ -1502,7 +1503,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const shouldAutoScrollRef = useRef(true);
   const userDetachedFromBottomRef = useRef(false);
   const [isViewportAtSessionBottom, setIsViewportAtSessionBottom] = useState(true);
-  const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [showCompactConfirm, setShowCompactConfirm] = useState(false);
   const [selectedTextAction, setSelectedTextAction] = useState<{
     text: string;
@@ -1510,10 +1510,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     left: number;
     top: number;
   } | null>(null);
-  const isLoadingMoreMessagesRef = useRef(false);
   const isLoadingNewerMessagesRef = useRef(false);
   const newerMessagesLoadRequestRef = useRef(0);
-  const prevScrollHeightRef = useRef<number | null>(null);
   const scrollToBottomIntentRef = useRef(false);
   const scrollToBottomSettleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const suppressSelectedTextActionUntilRef = useRef(0);
@@ -1798,7 +1796,26 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     updateShouldAutoScroll(true);
   }, [currentSession?.id, updateShouldAutoScroll]);
 
-  const setConversationContentElement = useConversationEntrySettle({
+  const {
+    loadOlderMessages,
+    isLoadingMoreMessages,
+    isLoadingMoreMessagesRef,
+    anchorMessageId,
+    setContentElement: setAnchorContentElement,
+  } = useConversationScrollAnchor({
+    sessionId,
+    messagesOffset: currentSession?.messagesOffset ?? 0,
+    scrollContainerRef,
+    canRestore: () => !shouldAutoScrollRef.current
+      && !scrollToBottomIntentRef.current
+      && !isNavigatingRef.current
+      && !isExportingImageRef.current
+      && !conversationSearchViewportLockedRef.current,
+    loadMessages: beforePrepend => sessionId
+      ? coworkService.loadMoreMessages(sessionId, beforePrepend)
+      : Promise.resolve(false),
+  });
+  const setEntryContentElement = useConversationEntrySettle({
     sessionId: currentSession?.id,
     scrollContainerRef,
     canHoldBottom: () => shouldAutoScrollRef.current
@@ -1806,6 +1823,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       && !isExportingImageRef.current
       && !conversationSearchViewportLockedRef.current,
   });
+  const setConversationContentElement = useCallback((element: HTMLElement | null) => {
+    setAnchorContentElement(element);
+    setEntryContentElement(element);
+  }, [setAnchorContentElement, setEntryContentElement]);
 
   const handleCompactContext = useCallback(() => {
     if (!currentSession?.id) {
@@ -4629,15 +4650,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const sessionId = currentSession?.id;
       const offset = currentSession?.messagesOffset ?? 0;
       if (sessionId && offset > 0) {
-        isLoadingMoreMessagesRef.current = true;
-        setIsLoadingMoreMessages(true);
-        prevScrollHeightRef.current = container.scrollHeight;
         logDetailDiagnostic(`loading older messages after scrolling near the top for session ${sessionId}; current offset is ${offset}.`);
-        coworkService.loadMoreMessages(sessionId).catch(() => {
-          prevScrollHeightRef.current = null;
-          isLoadingMoreMessagesRef.current = false;
-          setIsLoadingMoreMessages(false);
-        });
+        void loadOlderMessages();
       }
     }
 
@@ -4700,6 +4714,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentSession?.messages.length,
     currentSession?.messagesOffset,
     currentSession?.totalMessages,
+    isLoadingMoreMessagesRef,
+    loadOlderMessages,
     updateShouldAutoScroll,
   ]);
 
@@ -4884,9 +4900,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // no scroll event can reach either pagination edge in that state.
   useEffect(() => {
     const container = scrollContainerRef.current;
-    // The loading row is still mounted when a prepended page commits, so
-    // measure again once it is gone; otherwise a long collapsed turn stops
-    // loading before its user message, which no scroll can then reach.
     if (!container || isLoadingMoreMessages) return;
     const sessionId = currentSession?.id;
     const offset = currentSession?.messagesOffset ?? 0;
@@ -4894,17 +4907,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const totalMessages = currentSession?.totalMessages ?? loadedCount;
     if (!sessionId || container.scrollHeight > container.clientHeight) return;
     if (offset > 0 && !isLoadingMoreMessagesRef.current) {
-      isLoadingMoreMessagesRef.current = true;
-      setIsLoadingMoreMessages(true);
-      prevScrollHeightRef.current = container.scrollHeight;
       logDetailDiagnostic(
         `auto-loading older messages because session ${sessionId} content height ${container.scrollHeight} does not exceed viewport height ${container.clientHeight}; current offset is ${offset}.`,
       );
-      coworkService.loadMoreMessages(sessionId).catch(() => {
-        prevScrollHeightRef.current = null;
-        isLoadingMoreMessagesRef.current = false;
-        setIsLoadingMoreMessages(false);
-      });
+      void loadOlderMessages({ automatic: true });
       return;
     }
     if (offset + loadedCount < totalMessages && !isLoadingNewerMessagesRef.current) {
@@ -4928,28 +4934,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentSession?.messagesOffset,
     currentSession?.totalMessages,
     isLoadingMoreMessages,
+    isLoadingMoreMessagesRef,
+    loadOlderMessages,
   ]);
-
-  // Restore scroll position synchronously before browser paint when messages are prepended
-  useLayoutEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container || prevScrollHeightRef.current === null) return;
-    const newScrollHeight = container.scrollHeight;
-    container.scrollTop += newScrollHeight - prevScrollHeightRef.current;
-    prevScrollHeightRef.current = null;
-    isLoadingMoreMessagesRef.current = false;
-    setIsLoadingMoreMessages(false);
-    if (scrollToBottomIntentRef.current) {
-      requestAnimationFrame(() => {
-        const latestContainer = scrollContainerRef.current;
-        if (!latestContainer || !scrollToBottomIntentRef.current) return;
-        latestContainer.scrollTo({
-          top: latestContainer.scrollHeight,
-          behavior: 'auto',
-        });
-      });
-    }
-  }, [currentSession?.messages.length]);
 
   const navigateToRailItem = useCallback((
     railIndex: number,
@@ -5231,7 +5218,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const entryAnimation = useTurnEntryAnimation(
     currentSession?.id,
     turns[turns.length - 1]?.id,
-    Boolean(messageVersionSwitch || messageEdit.editing),
+    // Prepending can remount a partial turn. Its entry transform would shift
+    // the reading anchor again after the pagination layout has settled.
+    Boolean(messageVersionSwitch || messageEdit.editing || isLoadingMoreMessages),
   );
 
   const mediaTaskPresentations = useMemo(() => buildMediaTaskPresentations(turns), [turns]);
@@ -6137,6 +6126,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     return turns.map((turn, index) => {
       const isLastTurn = index === turns.length - 1;
+      const turnMessageIds = getTurnMessageIds(turn);
       // Persistent busy-state indicator at the insertion point of the
       // running turn (Codex/ChatGPT style: visible for the whole run).
       const showActivityIndicator = isSessionBusy && isLastTurn;
@@ -6148,6 +6138,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         || index === forcedRailTurnIndex
         || index === editingTurnIndex
         || index === messageVersionSwitch?.turnIndex
+        || (anchorMessageId !== null && turnMessageIds.has(anchorMessageId))
         || isExportingImage;
       const messageVersionClass = messageVersionSwitch
         ? MESSAGE_VERSION_PHASE_CLASS[messageVersionSwitch.phase]
@@ -6160,7 +6151,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const turnRailIdx = turn.userMessage || hasAssistantContent ? railCounter++ : -1;
       const assistantRailMessageId = getAssistantRailMessageId(turn);
 
-      const turnMessageIds = getTurnMessageIds(turn);
       const turnArtifacts = rawSessionArtifacts.filter(
         a => turnMessageIds.has(a.messageId) && PREVIEWABLE_ARTIFACT_TYPES.has(a.type)
       );
@@ -6173,6 +6163,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
       return (
         <LazyRenderTurn key={resolveTurnKey(entryAnimation, turn.id)} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}
+          scrollContainerRef={scrollContainerRef} lastMessageId={Array.from(turnMessageIds).pop()}
           className={editingTurnIndex >= 0 && index > editingTurnIndex
             ? 'opacity-40 transition-opacity'
             : messageVersionSwitch && index > messageVersionSwitch.turnIndex ? messageVersionClass : undefined}>
@@ -6684,6 +6675,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         style={{ minWidth: isArtifactPanelExpanded ? 0 : COWORK_DETAIL_MIN_WIDTH }}
       >
       <div className="relative z-10 flex-1 min-h-0">
+        {isLoadingMoreMessages && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 py-2 text-center text-xs text-secondary" role="status">
+            <span className="rounded-full bg-background px-3 py-1">{i18nService.t('loading')}</span>
+          </div>
+        )}
         <div
           ref={scrollContainerRef}
           onScroll={handleMessagesScroll}
@@ -6701,11 +6697,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             />
           )}
           <div ref={setConversationContentElement}>
-            {isLoadingMoreMessages && (
-              <div className="py-2 text-center text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('loading')}
-              </div>
-            )}
             {messageEdit.pending && (
               <div className={`${COWORK_DETAIL_GUTTER_CLASS} py-3`} role="status">
                 <div className={`${COWORK_DETAIL_CONTENT_CLASS} rounded-xl border border-border bg-surface-raised p-4 text-sm`}>
