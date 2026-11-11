@@ -9,6 +9,7 @@ import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companion
 
 interface LanguageClientDeps {
   reportAnalytics?: CompanionAnalyticsReporter;
+  analyticsSource?: CompanionAnalyticsSource;
   fetchWithAuth(url: string, options?: RequestInit): Promise<Response>;
   fetchAnonymous(url: string, options?: RequestInit): Promise<Response>;
   getInstallationId(): string | null;
@@ -51,7 +52,7 @@ export class CompanionLanguageClient {
       || (request.targetLanguage !== undefined && !Object.values(TranslationTarget).includes(request.targetLanguage))) {
       return { success: false, code: LanguageToolCode.InvalidInput };
     }
-    const finish = this.analytics.tool({ source: CompanionAnalyticsSource.LanguageTools, tool: request.tool });
+    const finish = this.analytics.tool({ source: this.deps.analyticsSource ?? CompanionAnalyticsSource.LanguageTools, tool: request.tool });
     const blocked = (code: number): LanguageToolResult => {
       finish(Outcome.Blocked, companionLanguageErrorReason(code));
       return { success: false, code };

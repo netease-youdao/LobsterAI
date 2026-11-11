@@ -108,6 +108,7 @@ interface CompanionStore {
 
 export interface DesktopCompanionServices {
   languageClient?: CompanionLanguageClient;
+  beforeSpeech?: () => void;
   foreground?: ForegroundAppMonitor;
   fileDrag?: FileDragMonitor;
   quickAnswer?: CompanionQuickAnswerService;
@@ -344,6 +345,7 @@ export class DesktopCompanionManager {
       hideSelection: () => this.selection.hide(),
       abortFollowUp: id => this.quickAnswer.abortOwnedBy(id),
       isCapturing: () => this.selection.capturing,
+      beforeSpeech: services.beforeSpeech,
     }, services.languageClient);
 
     this.foreground.on('change', this.onForegroundChange);
@@ -468,6 +470,7 @@ export class DesktopCompanionManager {
   }
 
   resetLanguageTools(): void { this.languageTools.reset(); this.clearTaskAnalytics(); }
+  stopSpeech(): void { this.languageTools.stopSpeech(); }
 
   /**
    * Call once a user login has switched the account in and its session reset has been sent.

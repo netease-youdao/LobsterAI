@@ -162,6 +162,7 @@ import type {
   SkinListResponse,
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
+import { createMessageSpeechBridge } from './conversation/messageSpeechPreload';
 import { createLanguageToolsBridge } from './desktopCompanion/languageToolsPreload';
 import { createImageEditingBridge } from './imageEditingPreload';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
@@ -171,6 +172,7 @@ import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
+  messageSpeech: createMessageSpeechBridge(),
   desktopCompanion: {
     reportAnalytics: event => ipcRenderer.invoke(DesktopCompanionIpc.ReportAnalytics, event),
     startLogin: request => ipcRenderer.invoke(DesktopCompanionIpc.LoginStart, request),

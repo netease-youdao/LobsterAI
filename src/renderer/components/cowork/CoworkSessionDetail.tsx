@@ -209,6 +209,8 @@ import {
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
+import { isMessageSpeechTurnCompleted } from './messageSpeech/eligibility';
+import MessageSpeechSession from './messageSpeech/MessageSpeechSession';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -6194,6 +6196,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 }
                 awaitingRunStart={isAwaitingRunStart}
                 showCopyButtons={!isStreaming || !isLastTurn}
+                enableMessageSpeech={!remoteManaged && !isExportingImage && isMessageSpeechTurnCompleted(turn, {
+                  isLastTurn,
+                  sessionStatus: currentSession.status,
+                  isStreaming,
+                  hasRunningSubagents: turnHasRunningSubagents,
+                })}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
                 modelSwitchNoticeMessageId={
                   !isExportingImage && modelSwitchNotice?.sessionId === currentSession.id
@@ -7204,6 +7212,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       </div>
       </div>
       <ImageStudioHost sessionId={currentSession.id} />
+      <MessageSpeechSession sessionId={currentSession.id} />
     </MarkdownLinkOpenerContext.Provider>
     </ArtifactFileShareProvider>
   );

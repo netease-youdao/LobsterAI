@@ -556,6 +556,7 @@ const AssistantTurnBlock: React.FC<{
   /** The session's start request is still in flight (optimistic temp session). */
   awaitingRunStart?: boolean;
   showCopyButtons?: boolean;
+  enableMessageSpeech?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
   modelSwitchNoticeMessageId?: string | null;
@@ -588,6 +589,7 @@ const AssistantTurnBlock: React.FC<{
   activityStatusOverride = null,
   awaitingRunStart = false,
   showCopyButtons = true,
+  enableMessageSpeech = false,
   completedGoal,
   hiddenSystemMessageId,
   modelSwitchNoticeMessageId,
@@ -939,6 +941,7 @@ const AssistantTurnBlock: React.FC<{
           resolveLocalFilePath={resolveLocalFilePath}
           mapDisplayText={mapDisplayText}
           showCopyButton={isLastAssistant}
+          enableMessageSpeech={enableMessageSpeech && isLastAssistant && planConfirmationMessageId !== item.message.id}
           onFork={isLastAssistant ? onForkMessage : undefined}
           turnMetadata={isLastAssistant
             ? withTurnModelPreset(

@@ -23,6 +23,7 @@ import {
   getMessageModelLabelParts,
   MEDIA_TOKEN_DISPLAY_RE,
 } from './messageDisplayUtils';
+import MessageSpeechButton from './messageSpeech/MessageSpeechButton';
 import ProposedPlanBlock from './ProposedPlanBlock';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 
@@ -60,6 +61,7 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
+  enableMessageSpeech?: boolean;
   onFork?: (messageId: string) => void;
   turnMetadata?: CoworkMessageMetadata | null;
   completedGoal?: CoworkGoal | null;
@@ -74,6 +76,7 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath,
   mapDisplayText,
   showCopyButton = false,
+  enableMessageSpeech = false,
   onFork,
   turnMetadata,
   completedGoal,
@@ -176,6 +179,7 @@ const AssistantMessageItem: React.FC<{
           },
         })}
       />
+      {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
     </div>
   ) : null;
   return (

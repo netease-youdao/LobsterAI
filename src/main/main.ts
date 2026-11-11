@@ -241,8 +241,10 @@ import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaun
 import { BrowserCredentialApprovalService } from './browserCredentials/browserCredentialApprovalService';
 import { BrowserCredentialService } from './browserCredentials/browserCredentialService';
 import { readEnvironmentSnapshot } from './conversation/environmentSnapshot';
+import { MessageSpeechController } from './conversation/messageSpeechController';
 import { WorkspaceReviewSourceStore } from './conversation/reviewSource';
 import { isScopedReview, ScopedReviewStore } from './conversation/scopedReview';
+import { bindCoworkTurnOutcomes } from './conversation/turnOutcomes';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
 import { DesktopCompanionManager } from './desktopCompanion/desktopCompanionManager';
 import { CompanionLanguageClient } from './desktopCompanion/languageToolClient';
@@ -3969,6 +3971,8 @@ const bindCoworkRuntimeForwarder = (): void => {
   if (coworkRuntimeForwarderBound) return;
   const runtime = getCoworkEngineRouter();
 
+  bindCoworkTurnOutcomes(runtime, getCoworkStore());
+
   runtime.on('message', (sessionId: string, message: unknown, beforeMessageId?: string) => {
     const safeMessage = sanitizeCoworkMessageForIpc(message);
     const windows = BrowserWindow.getAllWindows();
@@ -4619,6 +4623,7 @@ let mainWindow: BrowserWindow | null = null;
 let dataMigrationRestoreWindow: BrowserWindow | null = null;
 let desktopNotificationManager: DesktopNotificationManager | null = null;
 let desktopCompanionManager: DesktopCompanionManager | null = null;
+let messageSpeechController: MessageSpeechController | null = null;
 let ensureMainWindowForReason: ((reason: string) => BrowserWindow | null) | null = null;
 let isOpenSessionFromNotificationReady = false;
 let pendingOpenSessionFromNotificationId: string | null = null;
@@ -6067,6 +6072,7 @@ if (!gotTheLock) {
   };
 
   const emitAuthSessionChanged = (event: AuthSessionChangedEvent, excludedWebContentsId?: number): void => {
+    messageSpeechController?.stop();
     desktopCompanionManager?.resetLanguageTools();
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed() && window.webContents.id !== excludedWebContentsId) {
@@ -8339,6 +8345,7 @@ if (!gotTheLock) {
       const previousAccountScope = getCurrentMediaAccountScope();
       activeAuthExchangeIntent = null;
       authAccountGeneration += 1;
+      messageSpeechController?.stop();
       desktopCompanionManager?.resetLanguageTools();
       const exchangeAccountGeneration = authAccountGeneration;
       clearEnterpriseAccountContext(getStore());
@@ -14555,6 +14562,16 @@ if (!gotTheLock) {
     fetchWithAuth, fetchAnonymous: (url, options) => net.fetch(url, options),
     getInstallationId: getOrCreateInstallationId, getServerApiBaseUrl, getSessionKey: getAuthSessionKey,
   });
+  messageSpeechController = new MessageSpeechController({
+    getMainWindow: () => mainWindow,
+    beforeStart: () => desktopCompanionManager?.stopSpeech(),
+    client: new CompanionLanguageClient({
+      reportAnalytics: event => getMainLogReporter().report(event),
+      analyticsSource: CompanionAnalyticsSource.MainChat,
+      fetchWithAuth, fetchAnonymous: (url, options) => net.fetch(url, options),
+      getInstallationId: getOrCreateInstallationId, getServerApiBaseUrl, getSessionKey: getAuthSessionKey,
+    }),
+  });
 
   registerSiteIpcHandlers({
     fetchWithAuth: (url, options) => {
@@ -15636,6 +15653,8 @@ if (!gotTheLock) {
     // so nothing re-shows a window that hideAppWindowsForQuit() just hid.
     desktopCompanionManager?.dispose();
     desktopCompanionManager = null;
+    messageSpeechController?.dispose();
+    messageSpeechController = null;
     skillManager?.stopWatching();
     cancelAllMcpOAuthLogins();
     stopMediaPollTimer();
@@ -16396,6 +16415,7 @@ if (!gotTheLock) {
       },
       services: {
         languageClient: desktopLanguageClient,
+        beforeSpeech: () => messageSpeechController?.stop(),
         quickAnswer: new CompanionQuickAnswerService({ getSessionKey: getAuthSessionKey,
           getProxyToken: () => getOpenClawLoopbackState().proxyToken,
           resolvePreset: (presetId, signal) => modelPresetClient.resolve(crypto.randomUUID(), presetId, false, signal),

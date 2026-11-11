@@ -487,6 +487,7 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  turnOutcome?: import('../shared/cowork/turnOutcome').CoworkTurnOutcome;
   imageEdits?: import('../shared/imageEditing/types').ImageEditMessageSnapshot[];
   modelChange?: CoworkModelChange;
   modelPresetId?: ModelPresetId;
@@ -2722,6 +2723,9 @@ export class CoworkStore {
     }
     if (updates.metadata !== undefined) {
       const existing = this.getMessage(sessionId, messageId)?.metadata;
+      if (existing?.turnOutcome && updates.metadata.turnOutcome === undefined) {
+        updates = { ...updates, metadata: { ...updates.metadata, turnOutcome: existing.turnOutcome } };
+      }
       if (existing?.modelPresetId) {
         updates = { ...updates, metadata: { ...updates.metadata,
           modelPresetId: existing.modelPresetId, resolvedModelId: existing.resolvedModelId } };
