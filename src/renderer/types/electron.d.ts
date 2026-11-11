@@ -1039,6 +1039,11 @@ interface IElectronAPI {
       code?: string;
       engineStatus?: OpenClawEngineStatus;
     }>;
+    editMessage: (request: import('../../shared/cowork/messageEdit').CoworkMessageEditRequest) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    getMessageEdit: (sessionId: string) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    checkMessageEdit: (request: { sessionId: string; messageId: string }) => Promise<{ success: boolean; error?: string }>;
+    recoverMessageEdit: (request: { sessionId: string; operationId: string }) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    switchMessageVersion: (request: import('../../shared/cowork/messageEdit').CoworkMessageVersionSwitchRequest) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
     continueSession: (options: {
       analytics?: UsageContext;
       sessionId: string;

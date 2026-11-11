@@ -90,6 +90,7 @@ export interface CoworkLiveEditDiff {
 export interface CoworkMessageMetadata {
   turnOutcome?: CoworkTurnOutcome;
   imageEdits?: import('../../shared/imageEditing/types').ImageEditMessageSnapshot[];
+  messageVersion?: import('../../shared/cowork/messageEdit').CoworkMessageVersionInfo;
   modelChange?: CoworkModelChange;
   modelPresetId?: ModelPresetId;
   resolvedModelId?: string;

@@ -65,6 +65,8 @@ import {
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
 import { VISIBLE_COWORK_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
+import { CoworkMessageEditStore } from './libs/coworkMessageEditStore';
+import { CoworkMessageVersionStore } from './libs/coworkMessageVersionStore';
 import { compactMessageMetadataMedia } from './libs/mediaMetadataCompaction';
 import {
   type SessionProjection,
@@ -487,8 +489,12 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  imageAttachments?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPayload[];
+  imageAttachmentPreviews?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPreview[];
+  browserAnnotations?: import('../shared/cowork/browserAnnotations').CoworkBrowserAnnotationMessageBatch[];
   turnOutcome?: import('../shared/cowork/turnOutcome').CoworkTurnOutcome;
   imageEdits?: import('../shared/imageEditing/types').ImageEditMessageSnapshot[];
+  messageVersion?: import('../shared/cowork/messageEdit').CoworkMessageVersionInfo;
   modelChange?: CoworkModelChange;
   modelPresetId?: ModelPresetId;
   resolvedModelId?: string;
@@ -838,6 +844,8 @@ export interface CreateCoworkSessionOptions {
 
 export class CoworkStore {
   private db: Database.Database;
+  readonly messageEdits: CoworkMessageEditStore;
+  readonly messageVersions: CoworkMessageVersionStore;
   private readonly sessionProjectionNotifications: SessionProjectionNotifications;
   private readonly knownIMPlatforms = new Set<string>(PlatformRegistry.platforms);
 
@@ -854,6 +862,8 @@ export class CoworkStore {
       ),
     });
     this.ensureContinuityCapsuleTable();
+    this.messageEdits = new CoworkMessageEditStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
+    this.messageVersions = new CoworkMessageVersionStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
   }
 
   onSessionProjectionChanges(listener: (changes: SessionProjectionChanges) => void): () => void {
@@ -1586,6 +1596,8 @@ export class CoworkStore {
       delete sanitized.turnToken;
       delete sanitized.openClawRunId;
       delete sanitized.openClawSessionKey;
+      // Versions belong to the source session's gateway transcript.
+      delete sanitized.messageVersion;
       delete sanitized[OpenClawCronRunMetadataKey.SessionKey];
       delete sanitized[OpenClawCronRunMetadataKey.EntryIndex];
       if (Array.isArray(sanitized.selectedTextSnippets)) {
@@ -1730,6 +1742,10 @@ export class CoworkStore {
     );
     this.db.prepare(`DELETE FROM library_artifact_sessions WHERE session_id IN (${placeholders})`).run(...ids);
     this.db.prepare(`DELETE FROM cowork_session_capsules WHERE session_id IN (${placeholders})`).run(...ids);
+    // Foreign keys are not enforced on this connection, so edit and version records are removed by hand.
+    for (const table of ['cowork_message_edits', 'cowork_message_versions', 'cowork_message_version_switches']) {
+      this.db.prepare(`DELETE FROM ${table} WHERE session_id IN (${placeholders})`).run(...ids);
+    }
     this.db.prepare(`DELETE FROM cowork_messages WHERE session_id IN (${placeholders})`).run(...ids);
     this.db.prepare(`DELETE FROM cowork_sessions WHERE id IN (${placeholders})`).run(...ids);
     const affectedArtifactIds = affectedArtifactRows.map(row => row.artifact_id);

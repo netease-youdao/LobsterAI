@@ -672,6 +672,11 @@ contextBridge.exposeInMainWorld('electron', {
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => ipcRenderer.invoke(CoworkIpcChannel.SessionStart, options),
+    editMessage: (request: import('../shared/cowork/messageEdit').CoworkMessageEditRequest) => ipcRenderer.invoke(CoworkIpcChannel.EditMessage, request),
+    getMessageEdit: (sessionId: string) => ipcRenderer.invoke(CoworkIpcChannel.GetMessageEdit, sessionId),
+    checkMessageEdit: (request: { sessionId: string; messageId: string }) => ipcRenderer.invoke(CoworkIpcChannel.CheckMessageEdit, request),
+    recoverMessageEdit: (request: { sessionId: string; operationId: string }) => ipcRenderer.invoke(CoworkIpcChannel.RecoverMessageEdit, request),
+    switchMessageVersion: (request: import('../shared/cowork/messageEdit').CoworkMessageVersionSwitchRequest) => ipcRenderer.invoke(CoworkIpcChannel.SwitchMessageVersion, request),
     continueSession: (options: {
       analytics?: UsageContext;
       sessionId: string;

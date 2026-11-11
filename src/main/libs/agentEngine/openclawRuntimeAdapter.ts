@@ -60,6 +60,7 @@ import {
   validateCoworkImageAttachmentSize,
 } from '../../../shared/cowork/imageAttachments';
 import { type CoworkLlmTrace, getCoworkLlmTrace } from '../../../shared/cowork/llmTurnUsage';
+import type { CoworkMessageEditRequest, CoworkMessageVersionSwitchRequest } from '../../../shared/cowork/messageEdit';
 import {
   parseOpenClawCronSessionKey,
   resolveOpenClawCronRunHistoryKey,
@@ -171,11 +172,13 @@ import {
   formatCoworkContinuityCapsuleBridge,
   formatCoworkMiniContinuityCapsuleBridge,
 } from './coworkContinuityCapsule';
+import { CoworkMessageEditCoordinator, type EditHistoryMessage, matchesEditRun } from './coworkMessageEdit';
 import { buildCoworkTopKEvidenceBridgeResult } from './coworkTopKEvidence';
 import { buildCoworkWorkspaceRehydrationBridge } from './coworkWorkspaceRehydration';
 import { extractCronDeliveredTarget } from './cronDeliveryTarget';
 import { buildEmptyResponseHintMetadata, findRecoveredEmptyResponseHintIds } from './emptyResponseHint';
 import { buildMediaGenerationTurnInstruction } from './mediaGenerationTurnInstruction';
+import { toPersistedMediaReferences } from './messageEditMedia';
 import {
   applyModelRetryEvent,
   buildModelReconnectMetadata,
@@ -760,6 +763,7 @@ type ActiveTurn = {
   runId: string;
   model: string;
   turnToken: number;
+  userMessageId?: string;
   planMode: boolean;
   /** Prevents repeated model retries when a plan response is incomplete. */
   planModeRecoveryAttempted?: boolean;
@@ -2602,6 +2606,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly engineManager: OpenClawEngineManager;
   private readonly options: OpenClawRuntimeAdapterOptions;
   private readonly activeTurns = new Map<string, ActiveTurn>();
+  private readonly messageEditDiscardedRunIds = new Set<string>();
   /** A yielded execution is closed, but its user request still awaits continuation. */
   private readonly yieldedSessions = new Map<string, { sessionKey: string; runId: string; turnToken: number; yieldedAt: number }>();
   private readonly pendingGoalContinuations = new Map<string, PendingGoalContinuation>();
@@ -3522,8 +3527,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (existing) {
       return existing;
     }
+    const turnToken = this.latestTurnTokenBySession.get(sessionId);
     let request: Promise<CoworkContextUsage | null>;
-    request = this.resolveContextUsage(sessionId).finally(() => {
+    request = this.resolveContextUsage(sessionId).then(usage =>
+      this.latestTurnTokenBySession.get(sessionId) === turnToken ? usage : null).finally(() => {
       if (this.contextUsageInFlightBySession.get(sessionId) === request) {
         this.contextUsageInFlightBySession.delete(sessionId);
       }
@@ -4884,6 +4891,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
     await this.runTurn(sessionId, stripNullChars(prompt), {
+      messageEditOperationId: options.messageEditOperationId,
+      requestId: options.requestId,
+      onAccepted: options.onAccepted,
       skipInitialUserMessage: options.skipInitialUserMessage ?? false,
       systemPrompt: options.systemPrompt,
       skillIds: options.skillIds,
@@ -4898,6 +4908,65 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       selectedTextSnippets: options.selectedTextSnippets,
       browserAnnotations: options.browserAnnotations,
     });
+  }
+
+  private messageEditCoordinator?: CoworkMessageEditCoordinator;
+
+  private getMessageEditCoordinator(): CoworkMessageEditCoordinator {
+    return this.messageEditCoordinator ??= new CoworkMessageEditCoordinator({
+      store: this.store,
+      request: async (method, params) => {
+        await this.ensureGatewayClientReady();
+        return this.requireGatewayClient().request(method, params, { timeoutMs: 30_000 });
+      },
+      resolveSessionKey: sessionId => {
+        const session = this.store.getSession(sessionId, 0);
+        const key = session?.claudeSessionId || (session ? this.toSessionKey(sessionId, session.agentId) : '');
+        return key && isManagedSessionKey(key) ? key : null;
+      },
+      isBusy: sessionId => this.isSessionActive(sessionId) || this.yieldedSessions.has(sessionId)
+        || this.pendingBtwRunBySessionId.has(sessionId) || this.pendingGoalContinuations.has(sessionId),
+      reset: sessionId => this.resetAfterMessageEdit(sessionId),
+      send: (sessionId, prompt, options) => this.continueSession(sessionId, prompt, options),
+    });
+  }
+
+  async editMessage(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void> {
+    await this.getMessageEditCoordinator().edit(request, options);
+  }
+
+  async recoverMessageEdit(sessionId: string, operationId: string): Promise<void> {
+    await this.getMessageEditCoordinator().recover(sessionId, operationId);
+  }
+
+  async switchMessageVersion(request: CoworkMessageVersionSwitchRequest): Promise<string | undefined> {
+    return this.getMessageEditCoordinator().switchVersion(request);
+  }
+
+  async reconcileMessageVersionSwitch(sessionId: string): Promise<void> {
+    await this.getMessageEditCoordinator().reconcileVersionSwitch(sessionId);
+  }
+
+  hasPendingMessageEdit(sessionId: string): boolean {
+    return Boolean(this.messageEditCoordinator?.isLocked(sessionId) || this.store.messageEdits.pending(sessionId));
+  }
+
+  private resetAfterMessageEdit(sessionId: string): void {
+    for (const runId of this.store.messageEdits.discardedRequestIds(sessionId)) this.messageEditDiscardedRunIds.add(runId);
+    this.cleanupSessionTurn(sessionId);
+    this.nextTurnToken(sessionId);
+    this.gatewayHistoryCountBySession.delete(sessionId);
+    this.channelSyncCursor.delete(sessionId);
+    this.fullySyncedSessions.delete(sessionId);
+    this.bridgedSessions.delete(sessionId);
+    this.lastSystemPromptBySession.delete(sessionId);
+    this.continuityFullBridgeCompactedAtBySession.delete(sessionId);
+    this.workspaceRehydrationBridgeCompactedAtBySession.delete(sessionId);
+    this.contextUsageInFlightBySession.delete(sessionId);
+    this.sessionModelPatchStateBySession.delete(sessionId);
+    this.approvalController.clearBySession(sessionId);
+    this.questionController.cancelBySession(sessionId);
+    this.emit('contextUsageUpdate', sessionId, { sessionId, status: 'unknown', updatedAt: Date.now() });
   }
 
   async submitBtw(
@@ -5839,6 +5908,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     sessionId: string,
     prompt: string,
     options: {
+      messageEditOperationId?: string;
+      requestId?: string;
+      onAccepted?: () => void;
       skipInitialUserMessage?: boolean;
       systemPrompt?: string;
       skillIds?: string[];
@@ -5856,6 +5928,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
     },
   ): Promise<void> {
+    const pendingEdit = this.store.messageEdits?.pending(sessionId);
+    if (!options.messageEditOperationId && (pendingEdit || this.messageEditCoordinator?.isLocked(sessionId))) {
+      throw new Error(t('coworkEditRecoveryNeeded'));
+    }
     if (
       !prompt.trim()
       && (!options.imageAttachments || options.imageAttachments.length === 0)
@@ -5892,6 +5968,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       ?? 'modal';
     this.confirmationModeBySession.set(sessionId, confirmationMode);
 
+    const runId = options.requestId ?? randomUUID();
+    let requestMessageId: string | undefined;
     let llmTrace: CoworkLlmTrace;
     let usageModelSelection: CoworkMessageMetadata | undefined;
     if (!options.skipInitialUserMessage) {
@@ -5929,8 +6007,19 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const userMessage = this.store.addMessage(sessionId, {
         type: 'user',
         content: prompt,
-        metadata: { ...metadata, ...imageEditMessageMetadata(options.mediaReferences), llmTrace },
+        metadata: {
+          ...metadata, ...imageEditMessageMetadata(options.mediaReferences), llmTrace,
+          openclawRequestId: runId,
+          editContext: {
+            skillIds: options.skillIds,
+            imageAttachmentCount: options.imageAttachments?.length ?? 0,
+            mediaSelection: options.mediaSelection,
+            workflowKind: options.workflowKind,
+            mediaReferences: toPersistedMediaReferences(options.mediaReferences, options.imageAttachments),
+          },
+        },
       });
+      requestMessageId = userMessage.id;
       usageModelSelection = userMessage.metadata;
       this.refreshContinuityCapsule(sessionId, ContinuityCapsuleSource.UserMessage, {
         sourceMessageId: userMessage.id,
@@ -5939,6 +6028,17 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     } else {
       llmTrace = this.ensureLatestUserMessageLlmTrace(session);
       usageModelSelection = this.store.getLatestUserMessage(sessionId)?.metadata;
+      const initialUser = this.store.getLatestUserMessage(sessionId);
+      requestMessageId = initialUser?.id;
+      if (initialUser && !initialUser.metadata?.openclawRequestId) {
+        this.store.updateMessage(sessionId, initialUser.id, { metadata: {
+          ...initialUser.metadata, openclawRequestId: runId,
+          editContext: { skillIds: options.skillIds, mediaSelection: options.mediaSelection,
+            imageAttachmentCount: options.imageAttachments?.length ?? 0,
+            workflowKind: options.workflowKind,
+            mediaReferences: toPersistedMediaReferences(options.mediaReferences, options.imageAttachments) },
+        } });
+      }
     }
 
     const agentId = options.agentId || session.agentId || 'main';
@@ -5951,6 +6051,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       : null;
     let effectivePrompt = prompt;
 
+    // Reserve the local session before the first await so editing cannot race startup.
+    this.store.updateSession(sessionId, { status: 'running' });
+    this.emitSessionStatus(sessionId, 'running');
     try {
       await this.assertTranscriptSafeForRun({ sessionId, sessionKey, agentId });
     } catch (error) {
@@ -5960,8 +6063,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       throw error;
     }
 
-    this.store.updateSession(sessionId, { status: 'running' });
-    this.emitSessionStatus(sessionId, 'running');
     firstResponseTiming.gatewayReadyStartedAtMs = Date.now();
     await this.ensureGatewayClientReady();
     registerLlmUsageContext(llmTrace.traceId, sessionId,
@@ -5980,7 +6081,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     );
     this.startChannelPolling();
 
-    const runId = randomUUID();
     const turnToken = this.nextTurnToken(sessionId);
 
     const agent = this.store.getAgent(agentId);
@@ -6119,6 +6219,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       runId,
       model: currentModel,
       turnToken,
+      userMessageId: requestMessageId,
       planMode,
       knownRunIds: new Set([runId]),
       assistantMessageId: null,
@@ -6217,6 +6318,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       if (returnedRunId) {
         this.bindRunIdToTurn(sessionId, returnedRunId);
       }
+      options.onAccepted?.();
     } catch (error) {
       this.cleanupSessionTurn(sessionId);
       this.store.updateSession(sessionId, { status: 'error' });
@@ -7780,6 +7882,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     );
   }
   private handleGatewayEvent(event: GatewayEventFrame): void {
+    if (isRecord(event.payload) && typeof event.payload.runId === 'string'
+      && this.messageEditDiscardedRunIds.has(event.payload.runId)) return;
     // Any event from the gateway proves the connection is alive.
     // Previously only 'tick' updated this timestamp, but during heavy exec
     // streaming the gateway's tick timer gets starved by I/O while other
@@ -11993,6 +12097,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           continue;
         }
 
+        if (this.latestTurnTokenBySession.has(sessionId) && !this.isCurrentTurnToken(sessionId, turn.turnToken)) return;
+        const latestUser = turn.userMessageId ? this.store.getMessage(sessionId, turn.userMessageId) : null;
+        const requestId = latestUser?.metadata?.openclawRequestId;
+        if (latestUser && typeof requestId === 'string') {
+          const entry = (history.messages as EditHistoryMessage[]).find(message => matchesEditRun(message, requestId));
+          if (entry?.__openclaw?.id && latestUser.metadata?.openclawEntryId !== entry.__openclaw.id) {
+            this.store.updateMessage(sessionId, latestUser.id, { metadata: { ...latestUser.metadata, openclawEntryId: entry.__openclaw.id } });
+          }
+        }
         historyMessages = history.messages;
         logThinkingDiagnostic(
           'history-final-reconcile',
