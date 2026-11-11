@@ -2027,7 +2027,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       + `source type is ${sourceType}, source is ${sourceLabel}; `
       + `${result.snippets.length} excerpts now contain ${result.snippets.reduce((total, item) => total + item.text.length, 0)} characters`,
     );
-    promptInputRef.current?.focus();
+    // Focus after selection cleanup so it cannot clear the textarea caret.
+    requestAnimationFrame(() => promptInputRef.current?.focus());
   }, [currentSession?.id, dispatch, getConversationControlAnalyticsParams, selectedDraftSnippets]);
 
   const handleAddSelectedText = useCallback(() => {
