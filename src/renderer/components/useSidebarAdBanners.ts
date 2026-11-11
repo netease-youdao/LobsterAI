@@ -5,13 +5,16 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useSelector } from 'react-redux';
 
+import type { RootState } from '../store';
 import {
   type ClientBanner,
   createSidebarBannerDismissState,
   readSidebarBannerDismissState,
   saveSidebarBannerDismissState,
   shouldShowSidebarBanners,
+  SIDEBAR_BANNER_PLACEMENT,
   type SidebarBannerDismissState,
 } from './sidebarAdBannerState';
 import { startSidebarBannerAutoRefresh } from './sidebarBannerAutoRefresh';
@@ -22,6 +25,7 @@ import {
   expireCachedBannerSchedule,
   getActiveCachedBanners,
   getNextBannerScheduleEventDelay,
+  GUEST_BANNER_AUDIENCE_KEY,
   isCachedBannerScheduleFresh,
   readCachedBannerSchedule,
   saveCachedBannerSchedule,
@@ -35,13 +39,31 @@ interface SidebarBannerLoadOptions {
 }
 
 export interface UseSidebarAdBannersResult {
+  /** Active banners, ignoring the sidebar dismiss state. */
+  banners: ClientBanner[];
   visibleBanners: ClientBanner[];
   loading: boolean;
   refresh: () => Promise<boolean>;
   dismissGroup: () => Promise<void>;
 }
 
-export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
+/** Stable per-account key so cached targeted banners never leak across accounts. */
+const useBannerAudienceKey = (): string | null => {
+  const { isLoggedIn, isLoading, user } = useSelector((state: RootState) => state.auth);
+  if (isLoading) return null;
+  if (!isLoggedIn || !user) return GUEST_BANNER_AUDIENCE_KEY;
+  const identity = user.yid || user.userId || (user.id !== undefined ? String(user.id) : '');
+  return `user:${identity}:${user.accountMode ?? 'personal'}`;
+};
+
+export const useSidebarAdBanners = (): UseSidebarAdBannersResult => (
+  useClientBanners(SIDEBAR_BANNER_PLACEMENT)
+);
+
+export const useClientBanners = (placement: string): UseSidebarAdBannersResult => {
+  const audienceKey = useBannerAudienceKey();
+  const audienceKeyRef = useRef(audienceKey);
+  audienceKeyRef.current = audienceKey;
   const [banners, setBanners] = useState<ClientBanner[]>([]);
   const [dismissState, setDismissState] = useState<
     SidebarBannerDismissState | null
@@ -62,7 +84,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
     if (isCurrentRequest() && !silent) setLoading(true);
 
     try {
-      const result = await window.electron.auth.getClientBannerSnapshot();
+      const result = await window.electron.auth.getClientBannerSnapshot(placement);
       if (!isCurrentRequest()) return false;
       if (!result.success || !result.data || !Array.isArray(result.data.banners)) {
         if (!silent) {
@@ -72,18 +94,22 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
         return false;
       }
 
-      const nextSchedule = createCachedBannerSchedule({
+      const createdSchedule = createCachedBannerSchedule({
         serverTime: result.data.serverTime,
         nextRefreshAt: result.data.nextRefreshAt,
         clientVersion: result.data.clientVersion,
         banners: result.data.banners as ClientBanner[],
       });
-      if (!nextSchedule) return false;
+      if (!createdSchedule) return false;
+      const nextSchedule: CachedBannerSchedule = {
+        ...createdSchedule,
+        audienceKey: audienceKeyRef.current ?? GUEST_BANNER_AUDIENCE_KEY,
+      };
       const nextBanners = getActiveCachedBanners(nextSchedule);
-      const nextDismissState = await readSidebarBannerDismissState(nextBanners);
+      const nextDismissState = await readSidebarBannerDismissState(nextBanners, placement);
       if (!isCurrentRequest()) return false;
       try {
-        await saveCachedBannerSchedule(nextSchedule);
+        await saveCachedBannerSchedule(nextSchedule, placement);
       } catch (error) {
         logSidebarExperienceDiagnostic('warn', 'failed to persist sidebar banner schedule', error);
       }
@@ -104,7 +130,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
     } finally {
       if (isCurrentRequest()) setLoading(false);
     }
-  }, []);
+  }, [placement]);
 
   const load = useCallback((options: SidebarBannerLoadOptions = {}): Promise<boolean> => {
     if (loadInFlightRef.current) return loadInFlightRef.current;
@@ -123,16 +149,25 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
 
   useEffect(() => {
     mountedRef.current = true;
+    // Wait for the auth state so the first request and cache lookup use the right account.
+    if (audienceKey === null) return undefined;
+    // Account changed: drop the previous account's banners and in-flight requests.
+    loadRequestIdRef.current += 1;
+    loadInFlightRef.current = null;
+    setSchedule(null);
+    setBanners([]);
+    setLoading(true);
+    let cancelled = false;
     void (async () => {
       const clientVersion = await window.electron.appInfo.getVersion().catch(() => '');
       const cachedSchedule = clientVersion
-        ? await readCachedBannerSchedule(undefined, Date.now(), clientVersion)
+        ? await readCachedBannerSchedule(placement, Date.now(), clientVersion, audienceKey)
         : null;
-      if (!mountedRef.current) return;
+      if (cancelled || !mountedRef.current) return;
       if (cachedSchedule) {
         const cachedBanners = getActiveCachedBanners(cachedSchedule);
-        const cachedDismissState = await readSidebarBannerDismissState(cachedBanners);
-        if (!mountedRef.current) return;
+        const cachedDismissState = await readSidebarBannerDismissState(cachedBanners, placement);
+        if (cancelled || !mountedRef.current) return;
         setSchedule(cachedSchedule);
         setBanners(cachedBanners);
         setDismissState(cachedDismissState);
@@ -141,10 +176,11 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
       await load({ silent: cachedSchedule !== null });
     })();
     return () => {
+      cancelled = true;
       mountedRef.current = false;
       loadRequestIdRef.current += 1;
     };
-  }, [load]);
+  }, [audienceKey, load, placement]);
 
   useEffect(
     () => startSidebarBannerAutoRefresh(refresh),
@@ -158,7 +194,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
       if (!isCachedBannerScheduleFresh(schedule)) {
         setSchedule(null);
         setBanners([]);
-        void clearCachedBannerSchedule().catch(error => {
+        void clearCachedBannerSchedule(placement).catch(error => {
           logSidebarExperienceDiagnostic('warn', 'failed to clear stale sidebar banner schedule', error);
         });
         void refresh();
@@ -168,7 +204,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
       const nextBanners = getActiveCachedBanners(expiredSchedule);
       setSchedule(expiredSchedule);
       setBanners(nextBanners);
-      void saveCachedBannerSchedule(expiredSchedule).catch(error => {
+      void saveCachedBannerSchedule(expiredSchedule, placement).catch(error => {
         logSidebarExperienceDiagnostic('warn', 'failed to expire sidebar banner schedule', error);
       });
 
@@ -178,7 +214,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
       }, SIDEBAR_BANNER_BOUNDARY_BUFFER_MS + jitter);
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [refresh, schedule]);
+  }, [placement, refresh, schedule]);
 
   const dismissGroup = useCallback(async (): Promise<void> => {
     if (banners.length === 0) return;
@@ -188,11 +224,11 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
     );
     setDismissState(nextState);
     try {
-      await saveSidebarBannerDismissState(nextState);
+      await saveSidebarBannerDismissState(nextState, placement);
     } catch (error) {
       logSidebarExperienceDiagnostic('warn', 'failed to persist sidebar banner dismiss state', error);
     }
-  }, [banners, dismissState]);
+  }, [banners, dismissState, placement]);
 
   const visibleBanners = useMemo(
     () => (
@@ -204,6 +240,7 @@ export const useSidebarAdBanners = (): UseSidebarAdBannersResult => {
   );
 
   return {
+    banners,
     visibleBanners,
     loading,
     refresh,

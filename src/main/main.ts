@@ -88,6 +88,7 @@ import {
   normalizeBrowserWebAccessConfig,
 } from '../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
+import { normalizeClientBannerPlacement } from '../shared/clientBanner/constants';
 import { ClipboardIpc } from '../shared/clipboard/constants';
 import {
   type CoworkBrowserAnnotationMessageBatch,
@@ -372,7 +373,11 @@ import {
   updateServerModelMetadata,
   updateServerModelMetadataFromResponse,
 } from './libs/claudeSettings';
-import { appendClientBannerVersion } from './libs/clientBannerRequest';
+import {
+  appendClientBannerContentTypes,
+  appendClientBannerVersion,
+  fetchClientBanner,
+} from './libs/clientBannerRequest';
 import {
   getCopilotLoopbackPort,
   startCopilotLoopbackProxy,
@@ -8714,16 +8719,22 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.GetClientBannerSnapshot, async () => {
+  ipcMain.handle(AuthIpcChannel.GetClientBannerSnapshot, async (_event, placementArg?: unknown) => {
     const serverBaseUrl = getServerApiBaseUrl();
+    const placement = encodeURIComponent(normalizeClientBannerPlacement(placementArg));
+    const bannerFetchDeps = {
+      hasAuthTokens: () => getAuthTokens() !== null,
+      fetchWithAuth,
+      fetchPublic: (url: string, init?: RequestInit) => net.fetch(url, init),
+    };
     try {
       const snapshotUrl = appendKeyfromQuery(
-        appendClientBannerVersion(
-          `${serverBaseUrl}/api/client-banners/snapshot?placement=desktop_sidebar`,
+        appendClientBannerContentTypes(appendClientBannerVersion(
+          `${serverBaseUrl}/api/client-banners/snapshot?placement=${placement}`,
           app.getVersion(),
-        ),
+        )),
       );
-      const snapshotResponse = await net.fetch(snapshotUrl, { cache: 'no-store' });
+      const snapshotResponse = await fetchClientBanner(snapshotUrl, { cache: 'no-store' }, bannerFetchDeps);
       if (snapshotResponse.ok) {
         const snapshotBody = (await snapshotResponse.json()) as {
           code: number;
@@ -8754,12 +8765,12 @@ if (!gotTheLock) {
 
     try {
       const legacyUrl = appendKeyfromQuery(
-        appendClientBannerVersion(
-          `${serverBaseUrl}/api/client-banners/active-list?placement=desktop_sidebar`,
+        appendClientBannerContentTypes(appendClientBannerVersion(
+          `${serverBaseUrl}/api/client-banners/active-list?placement=${placement}`,
           app.getVersion(),
-        ),
+        )),
       );
-      const legacyResponse = await net.fetch(legacyUrl, { cache: 'no-store' });
+      const legacyResponse = await fetchClientBanner(legacyUrl, { cache: 'no-store' }, bannerFetchDeps);
       if (!legacyResponse.ok) return { success: false };
       const legacyBody = (await legacyResponse.json()) as {
         code: number;

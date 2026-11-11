@@ -646,6 +646,10 @@ interface ClientBannerData {
   imageUrl: string;
   imageWidth?: number;
   imageHeight?: number;
+  contentType?: 'image' | 'html';
+  htmlContent?: string | null;
+  audiences?: string | null;
+  displayFrequency?: 'every_launch' | 'daily' | 'once';
   updatedAt?: string;
 }
 
@@ -2206,7 +2210,7 @@ interface IElectronAPI {
     claimCreditsFinalReward: (campaignCode: string) => Promise<{ success: boolean; data?: CreditsFinalRewardClaimData; error?: string }>;
     getActiveClientBanner: () => Promise<{ success: boolean; data?: ClientBannerData | null }>;
     getActiveClientBanners: () => Promise<{ success: boolean; data?: ClientBannerData[] }>;
-    getClientBannerSnapshot: () => Promise<{
+    getClientBannerSnapshot: (placement?: string) => Promise<{
       success: boolean;
       data?: ClientBannerSnapshotData;
     }>;
