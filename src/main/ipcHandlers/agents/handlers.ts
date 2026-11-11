@@ -77,11 +77,16 @@ async function cleanupLegacyIdentityBlockForAgent(
   return result;
 }
 
-/** Lets other windows (e.g. the desktop companion's composer) reload agents after a change. */
-function notifyAgentsChanged(sender: WebContents): void {
+/** Remote writes notify all windows; local IPC writes exclude the originating renderer. */
+export function notifyAgentsChanged(sender?: WebContents): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.id === sender.id) continue;
-    win.webContents.send(AgentIpcChannel.Changed);
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed() || win.webContents.id === sender?.id) continue;
+      win.webContents.send(AgentIpcChannel.Changed);
+    } catch (error) {
+      // A closing window must not block other readers or turn a saved edit into an IPC failure.
+      console.warn('[Agents] Failed to notify a window of agent changes:', error);
+    }
   }
 }
 

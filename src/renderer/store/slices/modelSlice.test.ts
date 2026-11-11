@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
+import { ModelPresetId, modelPresetModelId } from '../../../shared/modelPresets/constants';
 import type { Model } from './modelSlice';
 import modelReducer, {
   clearAgentSelectedModel,
@@ -268,5 +269,33 @@ describe('selectAgentSelectedModel', () => {
 
     const result = selectAgentSelectedModel(state, 'agent-1', 'nonexistent/model');
     expect(result).toEqual(modelB);
+  });
+});
+
+
+describe('persisted Agent model versus cached preset', () => {
+  const fast: Model = { ...serverModel, id: modelPresetModelId(ModelPresetId.Balanced), presetId: ModelPresetId.Balanced };
+  const ultimate: Model = { ...serverModel, id: modelPresetModelId(ModelPresetId.Ultimate), presetId: ModelPresetId.Ultimate };
+
+  test.each([ultimate, modelA])('a remote model change to $id wins over an old fast preset', expected => {
+    const state = makeState({ availableModels: [fast, ultimate, modelA], selectedModelByAgent: { agent: fast }, defaultSelectedModel: fast });
+    expect(selectAgentSelectedModel(state, 'agent', `${expected.providerKey}/${expected.id}`)).toEqual(expected);
+    expect(selectAgentSelectedModel(state, 'other-agent', '')).toEqual(fast);
+  });
+
+  test('the matching preset retains its local options', () => {
+    const selected = { ...ultimate, presetThinkingLevel: 'high' as const };
+    const state = makeState({ availableModels: [fast, ultimate], selectedModelByAgent: { agent: selected } });
+    expect(selectAgentSelectedModel(state, 'agent', `lobsterai-server/${ultimate.id}`)).toEqual(selected);
+  });
+
+  test('an Agent without a saved model keeps its legacy preset preference', () => {
+    const state = makeState({ availableModels: [fast, ultimate], selectedModelByAgent: { agent: ultimate }, defaultSelectedModel: fast });
+    expect(selectAgentSelectedModel(state, 'agent', '')).toEqual(ultimate);
+  });
+
+  test('an unavailable saved model retains the existing accessible fallback', () => {
+    const state = makeState({ availableModels: [fast, { ...ultimate, accessible: false }], selectedModelByAgent: { agent: fast }, defaultSelectedModel: modelA });
+    expect(selectAgentSelectedModel(state, 'agent', `lobsterai-server/${ultimate.id}`)).toEqual(fast);
   });
 });

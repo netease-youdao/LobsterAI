@@ -37,6 +37,7 @@ function setup() {
   let defaultModel = 'private-provider/secret-model', granted = true, encryption = true;
   const key = randomBytes(32);
   const sync = vi.fn(async () => undefined);
+  const onAgentUpdated = vi.fn();
   const options: AgentSettingsFactoryOptions = {
     stateDir: root, journalDir: path.join(root, 'journal'), store: store as unknown as AgentSettingsFactoryOptions['store'], models,
     agents: { captureOwner: () => owner, listAgents: () => [...rows.values()] } as unknown as AgentSettingsFactoryOptions['agents'],
@@ -47,9 +48,9 @@ function setup() {
       decryptString: data => { const decipher = createDecipheriv('aes-256-gcm', key, data.subarray(0, 12)); decipher.setAuthTag(data.subarray(-16)); return Buffer.concat([decipher.update(data.subarray(12, -16)), decipher.final()]).toString('utf8'); },
     },
     access: () => ({ assertAccess: () => { if (!granted) throw new Error('SETTINGS_ACCESS_REQUIRED'); }, assertRecoveryAccess: () => undefined }),
-    getDefaultModel: () => defaultModel, authorizeConversation: async () => undefined, syncAndConfirmConfig: sync,
+    getDefaultModel: () => defaultModel, authorizeConversation: async () => undefined, syncAndConfirmConfig: sync, onAgentUpdated,
   };
-  return { core: createAgentSettingsService(options), context, models, rows, store, sync, root,
+  return { core: createAgentSettingsService(options), context, models, rows, store, sync, root, onAgentUpdated,
     setDefault: (value: string) => { defaultModel = value; }, revoke: () => { granted = false; }, noEncryption: () => { encryption = false; } };
 }
 
@@ -112,4 +113,70 @@ test('Linux basic-text and unknown key stores cannot enable protected settings',
   for (const backend of ['basic_text', 'unknown']) expect(isSettingsEncryptionAvailable({ isEncryptionAvailable: () => true, getSelectedStorageBackend: () => backend }, 'linux')).toBe(false);
   expect(isSettingsEncryptionAvailable({ isEncryptionAvailable: () => true }, 'linux')).toBe(false);
   expect(isSettingsEncryptionAvailable({ isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'kwallet6' }, 'linux')).toBe(true);
+});
+
+async function prepareModelUpdate(f: ReturnType<typeof setup>) {
+  const before = await f.core.service.read(f.context, AgentSettingsSection.Model);
+  const model = f.models.refresh(f.context.owner, f.context.deviceId)[0];
+  await f.core.service.prepare(f.context, {
+    operationId: 'model-update', section: AgentSettingsSection.Model, expectedRevision: before.revision,
+    value: { modelRef: model.modelRef, modelVersion: model.version, thinkingLevel: null },
+  });
+}
+
+test('remote model writes notify desktop readers after persistence and before config confirmation', async () => {
+  const f = setup();
+  await prepareModelUpdate(f);
+  f.onAgentUpdated.mockImplementation(() => {
+    expect(f.rows.get('agent')?.model).toBe('private-provider/secret-model');
+    expect(f.sync).not.toHaveBeenCalled();
+  });
+  expect(f.onAgentUpdated).not.toHaveBeenCalled();
+  const receipt = await f.core.service.apply(f.context, 'model-update', async () => ({ permitId: 'permit', startBefore: Date.now() + 5000 }));
+  expect(receipt.status).toBe('applied');
+  expect(f.onAgentUpdated).toHaveBeenCalledOnce();
+  await f.core.service.recover(f.context, 'model-update');
+  expect(f.store.updateAgent).toHaveBeenCalledOnce();
+  expect(f.onAgentUpdated).toHaveBeenCalledOnce();
+});
+
+test('a persisted remote model still refreshes desktop state when config confirmation needs recovery', async () => {
+  const f = setup();
+  await prepareModelUpdate(f);
+  f.sync.mockRejectedValueOnce(new Error('gateway pending'));
+  await expect(f.core.service.apply(f.context, 'model-update', async () => ({ permitId: 'permit', startBefore: Date.now() + 5000 }))).rejects.toThrow('gateway pending');
+  expect(f.onAgentUpdated).toHaveBeenCalledOnce();
+  expect((await f.core.service.recover(f.context, 'model-update')).status).toBe('applied');
+  expect(f.store.updateAgent).toHaveBeenCalledOnce();
+});
+
+test('rejected remote settings never notify desktop readers', async () => {
+  const f = setup();
+  await prepareModelUpdate(f);
+  f.revoke();
+  await expect(f.core.service.apply(f.context, 'model-update', async () => ({ permitId: 'permit', startBefore: Date.now() + 5000 }))).rejects.toThrow();
+  expect(f.store.updateAgent).not.toHaveBeenCalled();
+  expect(f.onAgentUpdated).not.toHaveBeenCalled();
+});
+
+test('failed remote database writes never notify desktop readers', async () => {
+  const f = setup();
+  await prepareModelUpdate(f);
+  f.store.updateAgent.mockImplementationOnce(() => { throw new Error('database failure'); });
+  await expect(f.core.service.apply(f.context, 'model-update', async () => ({ permitId: 'permit', startBefore: Date.now() + 5000 }))).rejects.toThrow('database failure');
+  expect(f.onAgentUpdated).not.toHaveBeenCalled();
+});
+
+
+test('a notification failure cannot turn a persisted settings write into an unrecorded operation', async () => {
+  const f = setup();
+  await prepareModelUpdate(f);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    f.onAgentUpdated.mockImplementationOnce(() => { throw new Error('window closed'); });
+    expect((await f.core.service.apply(f.context, 'model-update', async () => ({ permitId: 'permit', startBefore: Date.now() + 5000 }))).status).toBe('applied');
+    expect((await f.core.service.recover(f.context, 'model-update')).status).toBe('applied');
+    expect(f.store.updateAgent).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
+  } finally { warn.mockRestore(); }
 });

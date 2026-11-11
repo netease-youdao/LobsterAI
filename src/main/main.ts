@@ -294,7 +294,7 @@ import type {
   WecomInstanceConfig,
 } from './im/types';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
-import { registerAgentHandlers } from './ipcHandlers/agents';
+import { notifyAgentsChanged, registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
@@ -6485,6 +6485,7 @@ if (!gotTheLock) {
       stateDir: getOpenClawEngineManager().getStateDir(), journalDir: path.join(app.getPath('userData'), 'agent-settings'),
       store: getCoworkStore(), agents: getAgentManager(), models, runtime: settingsRuntime, protection: safeStorage,
       access: () => remoteBridge?.agentSettingsProtocol() ?? null, getDefaultModel: resolveDefaultAgentModelRef,
+      onAgentUpdated: () => notifyAgentsChanged(),
       authorizeConversation: (context, proposal, digest) => {
         if (!settingsHost) throw new Error('CONVERSATION_CHANGE_UNAVAILABLE');
         return settingsHost.authorize(context, proposal, digest);

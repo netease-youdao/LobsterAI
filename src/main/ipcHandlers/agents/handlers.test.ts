@@ -4,7 +4,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { AgentAccessErrorCode, AgentIpcChannel } from '../../../shared/agent/constants';
 import { ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
 import { AgentAccessError } from '../../agentOwnership';
-import { type AgentHandlerDeps, registerAgentHandlers } from './handlers';
+import { type AgentHandlerDeps, notifyAgentsChanged, registerAgentHandlers } from './handlers';
 
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: vi.fn() },
@@ -17,11 +17,11 @@ function setup(syncOpenClawConfig: AgentHandlerDeps['syncOpenClawConfig'], agent
   const addPresetAgent = vi.fn().mockResolvedValue(agent);
   const assertCurrentOwner = vi.fn();
   const assertAgentAccess = vi.fn();
-  const sender = { id: 1, send: vi.fn() };
+  const sender = { id: 1, isDestroyed: () => false, send: vi.fn() };
   const otherWindowSend = vi.fn();
   vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
     { isDestroyed: () => false, webContents: sender },
-    { isDestroyed: () => false, webContents: { id: 2, send: otherWindowSend } },
+    { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: otherWindowSend } },
   ] as unknown as BrowserWindow[]);
   registerAgentHandlers({
     getAgentManager: () => ({ addPresetAgent, listAgents: () => [], captureOwner: () => null, assertCurrentOwner, assertAgentAccess }),
@@ -161,4 +161,49 @@ test('working directory change hot-reloads OpenClaw config without restarting th
   expect(result).toMatchObject({ success: true });
   expect(refreshImSessionWorkingDirectoriesForAgent).toHaveBeenCalledExactlyOnceWith('main');
   expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: 'agent-working-directory-updated' });
+});
+
+
+test('remote Agent changes notify every live window without an originating renderer', () => {
+  const mainSend = vi.fn();
+  const companionSend = vi.fn();
+  const destroyedSend = vi.fn();
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+    { isDestroyed: () => false, webContents: { id: 1, isDestroyed: () => false, send: mainSend } },
+    { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: companionSend } },
+    { isDestroyed: () => true, webContents: { id: 3, isDestroyed: () => false, send: destroyedSend } },
+  ] as unknown as BrowserWindow[]);
+  notifyAgentsChanged();
+  expect(mainSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+  expect(companionSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+  expect(destroyedSend).not.toHaveBeenCalled();
+});
+
+
+test('a destroyed renderer is skipped without preventing other windows from refreshing', () => {
+  const destroyedSend = vi.fn();
+  const liveSend = vi.fn();
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+    { isDestroyed: () => false, webContents: { id: 1, isDestroyed: () => true, send: destroyedSend } },
+    { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: liveSend } },
+  ] as unknown as BrowserWindow[]);
+  notifyAgentsChanged();
+  expect(destroyedSend).not.toHaveBeenCalled();
+  expect(liveSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+});
+
+test('a window closing during notification cannot prevent the remaining windows from refreshing', () => {
+  const error = new Error('Object has been destroyed');
+  const failedSend = vi.fn(() => { throw error; });
+  const liveSend = vi.fn();
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+      { isDestroyed: () => false, webContents: { id: 1, isDestroyed: () => false, send: failedSend } },
+      { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: liveSend } },
+    ] as unknown as BrowserWindow[]);
+    expect(() => notifyAgentsChanged()).not.toThrow();
+    expect(liveSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[Agents] Failed to notify a window of agent changes:', error);
+  } finally { warn.mockRestore(); }
 });

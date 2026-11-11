@@ -29,6 +29,8 @@ export interface AgentSettingsFactoryOptions {
   /** Missing/not-yet-created binding protocol must fail closed during initialization. */
   access(): SettingsAccess | null;
   getDefaultModel(): string;
+  /** Refresh desktop readers after a durable Agent write, even if gateway confirmation is pending. */
+  onAgentUpdated(): void;
   authorizeConversation: NonNullable<AgentSettingsDependencies['authorizeConversation']>;
   /** Must confirm actual gateway application, and reject pending/rejected config; never await this run's end. */
   syncAndConfirmConfig(context: AgentSettingsContext, section: AgentSettingsSection): Promise<void>;
@@ -86,6 +88,9 @@ export function createAgentSettingsService(options: AgentSettingsFactoryOptions)
         normalized.thinkingLevel = parsed;
       }
       if (!options.store.updateAgent(context.agentId, normalized, context.owner)) throw new AgentSettingsError(AgentSettingsReason.Agent);
+      // Notifications must not prevent the core from recording the persisted write for recovery.
+      try { options.onAgentUpdated(); }
+      catch (error) { console.warn('[AgentSettings] Failed to notify desktop readers:', error); }
     },
     readModel(context, agent) {
       const inherited = !agent.model;

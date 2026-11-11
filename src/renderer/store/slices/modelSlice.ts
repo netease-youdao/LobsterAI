@@ -129,8 +129,8 @@ interface ModelState {
  * Resolve the effective selected model for a given agent.
  *
  * Resolution chain:
- *   1. Per-agent user override from selectedModelByAgent map
- *   2. Agent's configured model string (resolved via resolveOpenClawModelRef)
+ *   1. Agent's configured model string (including presets); retain matching cached options
+ *   2. Per-agent user override when the configured model cannot be resolved
  *   3. App-level defaultSelectedModel
  */
 export function selectAgentSelectedModel(
@@ -139,7 +139,6 @@ export function selectAgentSelectedModel(
   agentModelRef: string,
 ): Model {
   const override = modelState.selectedModelByAgent[agentId];
-  if (override?.presetId && isModelAccessible(override)) return override;
   const trimmed = agentModelRef.trim();
   if (trimmed) {
     const resolved = resolveOpenClawModelRef(trimmed, modelState.availableModels);
