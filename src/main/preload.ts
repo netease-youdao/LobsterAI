@@ -641,7 +641,8 @@ contextBridge.exposeInMainWorld('electron', {
     },
     addPreset: async (presetId: string) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.AddPreset, presetId);
-      return result?.success ? result.agent : null;
+      if (!result?.success) throw new Error(result?.error || 'Failed to add preset agent');
+      return result.agent;
     },
     onChanged: (callback: () => void) => {
       const handler = () => callback();
