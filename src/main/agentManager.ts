@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { parseAgentAvatarImageUrl } from '../shared/agent/avatar';
 import { AgentSource } from '../shared/agent/constants';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
@@ -102,8 +104,9 @@ export class AgentManager {
 
     return this.store.createAgent({
       ...presetToCreateRequest(preset),
-      // A custom/imported agent may already own the legacy preset ID.
-      id: this.store.getAgent(preset.id) ? undefined : preset.id,
+      // Historical ownership triggers can keep deleted IDs reserved.
+      // presetId identifies the template; each new instance needs its own ID.
+      id: randomUUID(),
       model: defaultModel?.trim() || '',
       workingDirectory: '',
     });
