@@ -205,7 +205,7 @@ import {
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
-import { isMessageSpeechTurnCompleted } from './messageSpeech/eligibility';
+import { getLastMessageSpeechTurnIndex, isMessageSpeechTurnCompleted } from './messageSpeech/eligibility';
 import MessageSpeechSession from './messageSpeech/MessageSpeechSession';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
@@ -6135,6 +6135,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       );
     }
 
+    const lastMessageSpeechTurnIndex = getLastMessageSpeechTurnIndex(turns);
     return turns.map((turn, index) => {
       const isLastTurn = index === turns.length - 1;
       // Persistent busy-state indicator at the insertion point of the
@@ -6249,7 +6250,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 awaitingRunStart={isAwaitingRunStart}
                 showCopyButtons={!isStreaming || !isLastTurn}
                 enableMessageSpeech={!remoteManaged && !isExportingImage && isMessageSpeechTurnCompleted(turn, {
-                  isLastTurn,
+                  isLastTurn: index === lastMessageSpeechTurnIndex,
                   sessionStatus: currentSession.status,
                   isStreaming,
                   hasRunningSubagents: turnHasRunningSubagents,
