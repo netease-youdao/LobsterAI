@@ -8,6 +8,18 @@ export const LAUNCH_AD_STATE_KEY = 'client_launch_ad.state.v1';
 /** Stop pop-up attempts that would land long after the user started working. */
 export const LAUNCH_AD_MAX_DELAY_MS = 10_000;
 const MAX_TRACKED_VERSIONS = 50;
+/** Launch-modal width bounds; the server validates the same range when Admin saves a banner. */
+export const LAUNCH_AD_DEFAULT_WIDTH = 400;
+export const LAUNCH_AD_MIN_WIDTH = 320;
+export const LAUNCH_AD_MAX_WIDTH = 960;
+
+/** Width the launch modal should use for a banner; unknown or out-of-range values fall back to the default. */
+export const resolveLaunchAdWidth = (banner: Pick<ClientBanner, 'modalWidth'>): number => {
+  const width = banner.modalWidth;
+  if (typeof width !== 'number' || !Number.isFinite(width)) return LAUNCH_AD_DEFAULT_WIDTH;
+  if (width < LAUNCH_AD_MIN_WIDTH || width > LAUNCH_AD_MAX_WIDTH) return LAUNCH_AD_DEFAULT_WIDTH;
+  return Math.round(width);
+};
 
 export interface LaunchAdVersionState {
   lastShownAt?: number;
