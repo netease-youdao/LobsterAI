@@ -12,7 +12,6 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
-import { getCoworkTurnUsage } from '../../../shared/cowork/llmTurnUsage';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
 import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
@@ -43,6 +42,7 @@ import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
 import AssistantMessageItem from './AssistantMessageItem';
+import AssistantTurnFooter from './AssistantTurnFooter';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
@@ -62,6 +62,7 @@ import {
   COWORK_DETAIL_GUTTER_CLASS,
   formatElapsedDuration,
   formatTurnDuration,
+  getActivityCurrentActionText,
   getActivityIndicatorStatusText,
   getActivityLiveStatusText,
   getAssistantMessageDisplayText,
@@ -98,6 +99,7 @@ import ModelReconnectStatusLine from './ModelReconnectStatusLine';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
 import TurnUsageChip from './TurnUsageChip';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useStreamStall } from './useStreamStall';
 
 // ── ContextCompressionIcon ───────────────────────────────────────────────────
@@ -556,6 +558,7 @@ const AssistantTurnBlock: React.FC<{
   /** The session's start request is still in flight (optimistic temp session). */
   awaitingRunStart?: boolean;
   showCopyButtons?: boolean;
+  enableMessageSpeech?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
   modelSwitchNoticeMessageId?: string | null;
@@ -588,6 +591,7 @@ const AssistantTurnBlock: React.FC<{
   activityStatusOverride = null,
   awaitingRunStart = false,
   showCopyButtons = true,
+  enableMessageSpeech = false,
   completedGoal,
   hiddenSystemMessageId,
   modelSwitchNoticeMessageId,
@@ -686,9 +690,7 @@ const AssistantTurnBlock: React.FC<{
     ? turnEndTimestamp - turnStartTimestamp
     : null;
   // The user message may be outside the loaded page of a long turn.
-  const turnUsage = isStreamingTurn
-    ? null
-    : getCoworkTurnUsage(turn.userMessage?.metadata) ?? turn.inheritedTurnUsage?.turnUsage;
+  const turnUsage = isStreamingTurn ? null : getConversationTurnUsage(turn);
   const turnUsageMessageId = turn.userMessage?.id ?? turn.inheritedTurnUsage?.userMessageId;
   const turnUsageSlot = showCopyButtons && turnUsage && turnUsageMessageId ? (
     <TurnUsageChip
@@ -697,7 +699,7 @@ const AssistantTurnBlock: React.FC<{
       durationMs={processDurationMs}
     />
   ) : null;
-  // Show usage only with the final visible text reply.
+  // Prefer the final visible text reply; interrupted turns may need a footer.
   let turnUsageReplyId: string | null = null;
   for (let index = consolidatedItems.length - 1; index >= 0; index--) {
     const item = consolidatedItems[index];
@@ -939,6 +941,7 @@ const AssistantTurnBlock: React.FC<{
           resolveLocalFilePath={resolveLocalFilePath}
           mapDisplayText={mapDisplayText}
           showCopyButton={isLastAssistant}
+          enableMessageSpeech={enableMessageSpeech && isLastAssistant && planConfirmationMessageId !== item.message.id}
           onFork={isLastAssistant ? onForkMessage : undefined}
           turnMetadata={isLastAssistant
             ? withTurnModelPreset(
@@ -1062,9 +1065,20 @@ const AssistantTurnBlock: React.FC<{
   const processLabel = processBaseLabel;
   // What the running step is doing right now, for the status line: the last
   // work item while it is still live; null in the silent gaps between steps.
-  const liveStatusText = liveTailItem && isActivityItemLive(liveTailItem) && !isTailTextStalled
+  const liveStepStatusText = liveTailItem && isActivityItemLive(liveTailItem) && !isTailTextStalled
     ? getActivityLiveStatusText(liveTailItem)
     : null;
+  // The running step's own line sits right above the status line. When both
+  // would read the same phrase ("Waiting for command output" twice), the
+  // status line keeps to the plain working label beside the turn's clock.
+  const isStatusRepeatingStepLine = liveStepStatusText != null
+    && liveTailItem?.type === 'tool_group'
+    && !toolGroupOverrides.has(liveTailItem.group.toolUse.id)
+    && !isMediaGenerationToolName(String(liveTailItem.group.toolUse.metadata?.toolName ?? ''))
+    && liveStepStatusText === getActivityCurrentActionText(liveTailItem);
+  const liveStatusText = isStatusRepeatingStepLine
+    ? i18nService.t('coworkProcessing')
+    : liveStepStatusText;
   // While a generation placeholder is the step running right now it already shows
   // the progress and elapsed time; the status line below would only repeat them.
   const isLiveMediaPlaceholder = liveTailItem?.type === 'tool_group'
@@ -1086,7 +1100,10 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length) {
+  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
+  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
+
+  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
     return null;
   }
 
@@ -1173,6 +1190,14 @@ const AssistantTurnBlock: React.FC<{
                   </div>
                 )}
               </div>
+            )}
+            {trailingTurnUsageSlot && (
+              <AssistantTurnFooter
+                turn={turn}
+                turnUsageSlot={trailingTurnUsageSlot}
+                mapDisplayText={mapDisplayText}
+                onForkMessage={onForkMessage}
+              />
             )}
           </div>
         </div>

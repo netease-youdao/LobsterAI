@@ -77,6 +77,15 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
   const canOpenDetails = !isEnterprise || enterpriseContext !== null;
 
   useEffect(() => {
+    if (!sessionId || turnUsage.status !== CoworkTurnUsageStatus.Pending) return;
+    // Recover a stop interrupted by app exit. The main process coalesces this
+    // with any settlement that is still running in the current app instance.
+    void coworkService.refreshTurnUsage(sessionId, userMessageId).catch((error) => {
+      console.warn('[TurnUsage] Failed to refresh pending usage.', error);
+    });
+  }, [sessionId, userMessageId, turnUsage.traceId, turnUsage.status]);
+
+  useEffect(() => {
     if (!open) return undefined;
     popoverRef.current?.focus({ preventScroll: true });
     const handlePointerDown = (event: PointerEvent) => {

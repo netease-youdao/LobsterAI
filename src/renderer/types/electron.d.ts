@@ -68,6 +68,7 @@ import type {
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../shared/cowork/llmTurnUsage';
+import type { MessageSpeechBridge } from '../../shared/cowork/messageSpeech';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
@@ -104,6 +105,7 @@ import type {
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../../shared/htmlShare/constants';
+import type { ImageCreationCatalog, ImageExampleReference } from '../../shared/imageCreation/constants';
 import type {
   InstalledKitRecord,
   KitReference,
@@ -685,6 +687,7 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  messageSpeech: MessageSpeechBridge;
   desktopCompanion: DesktopCompanionBridge;
   platform: string;
   arch: string;
@@ -1037,6 +1040,11 @@ interface IElectronAPI {
       code?: string;
       engineStatus?: OpenClawEngineStatus;
     }>;
+    editMessage: (request: import('../../shared/cowork/messageEdit').CoworkMessageEditRequest) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    getMessageEdit: (sessionId: string) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    checkMessageEdit: (request: { sessionId: string; messageId: string }) => Promise<{ success: boolean; error?: string }>;
+    recoverMessageEdit: (request: { sessionId: string; operationId: string }) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    switchMessageVersion: (request: import('../../shared/cowork/messageEdit').CoworkMessageVersionSwitchRequest) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
     continueSession: (options: {
       analytics?: UsageContext;
       sessionId: string;
@@ -2217,6 +2225,10 @@ interface IElectronAPI {
     onQuotaChanged: (callback: () => void) => () => void;
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
+  };
+  imageCreation: {
+    getCatalog: () => Promise<ImageCreationCatalog>;
+    getReference: (exampleId: string) => Promise<ImageExampleReference>;
   };
   media: {
     getPreferences: (owner: string) => Promise<MediaPreferenceResult>;

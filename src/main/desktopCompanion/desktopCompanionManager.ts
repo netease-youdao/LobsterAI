@@ -4,8 +4,6 @@ import {
   dialog,
   globalShortcut,
   ipcMain,
-  Menu,
-  type MenuItemConstructorOptions,
   type Rectangle,
   screen,
   type WebContents,
@@ -78,6 +76,7 @@ import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { t } from '../i18n';
 import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companionAnalytics';
 import { copyCompanionText } from './companionClipboard';
+import { CompanionContextMenuController, type CompanionMenuEntry } from './companionContextMenu';
 import { CompanionHintsController } from './companionHints';
 import { CompanionLoginTracker, isCompanionLoginSource, normalizeCompanionLoginStart } from './companionLogin';
 import { CompanionPermissionGuideController, type CompanionPermissionGuideServices } from './companionPermissionGuide';
@@ -109,6 +108,7 @@ interface CompanionStore {
 
 export interface DesktopCompanionServices {
   languageClient?: CompanionLanguageClient;
+  beforeSpeech?: () => void;
   foreground?: ForegroundAppMonitor;
   fileDrag?: FileDragMonitor;
   quickAnswer?: CompanionQuickAnswerService;
@@ -239,6 +239,7 @@ export class DesktopCompanionManager {
   private readonly screenshot: CompanionScreenshotController;
   private readonly results: CompanionResultsController;
   private readonly permissionGuide: CompanionPermissionGuideController;
+  private readonly contextMenu: CompanionContextMenuController;
   private readonly analytics: CompanionAnalytics;
   private readonly login: CompanionLoginTracker;
 
@@ -264,6 +265,13 @@ export class DesktopCompanionManager {
     this.fileDrag = services.fileDrag ?? new CompanionFileDragMonitor();
     this.quickAnswer = services.quickAnswer ?? new CompanionQuickAnswerService();
     this.screenshot = new CompanionScreenshotController(this.env);
+    this.contextMenu = new CompanionContextMenuController({
+      createWindow: () => this.createWindow(DesktopCompanionSurface.Menu, true),
+      anchor: () => this.orbBounds(),
+      nativeOwner: () => (this.panelVisible ? this.panel : this.orb),
+      focusedWindow: () => this.companionWindows().find(win => !!win && !win.isDestroyed() && win.isFocused()) ?? null,
+      publish: () => this.publish(),
+    });
     this.results = new CompanionResultsController({
       analytics: this.analytics,
       store,
@@ -274,6 +282,7 @@ export class DesktopCompanionManager {
       beforeOpen: () => { this.hidePanel(); this.stage.clear(); this.selection.hide(); },
       openMain: sessionId => this.options.openMain(sessionId),
       isCapturing: () => this.capturing,
+      isContextMenuOpen: () => this.contextMenu.isOpen,
       publish: () => this.publish(),
     }, this.sessionId);
     this.stage = new CompanionStageController({
@@ -336,6 +345,7 @@ export class DesktopCompanionManager {
       hideSelection: () => this.selection.hide(),
       abortFollowUp: id => this.quickAnswer.abortOwnedBy(id),
       isCapturing: () => this.selection.capturing,
+      beforeSpeech: services.beforeSpeech,
     }, services.languageClient);
 
     this.foreground.on('change', this.onForegroundChange);
@@ -390,6 +400,7 @@ export class DesktopCompanionManager {
       stage: this.stage.stage,
       stageSide: this.stageSide(),
       panelPlacement: this.panelPlacement,
+      contextMenu: this.contextMenu.state,
       fileDragActive: this.fileDragActive,
       foreground: this.foregroundAppId && category ? { appId: this.foregroundAppId, category } : null,
       capabilities: {
@@ -459,6 +470,7 @@ export class DesktopCompanionManager {
   }
 
   resetLanguageTools(): void { this.languageTools.reset(); this.clearTaskAnalytics(); }
+  stopSpeech(): void { this.languageTools.stopSpeech(); }
 
   /**
    * Call once a user login has switched the account in and its session reset has been sent.
@@ -535,6 +547,7 @@ export class DesktopCompanionManager {
     this.quickAnswer.dispose();
     this.languageTools.dispose();
     this.results.dispose();
+    this.contextMenu.dispose();
     this.orb?.destroy();
     this.panel?.destroy();
     this.orb = null;
@@ -749,7 +762,8 @@ export class DesktopCompanionManager {
     if (!this.panel || this.panel.isDestroyed()) {
       this.panelLoginVisible = false;
       const win = this.createWindow(DesktopCompanionSurface.Panel, true, this.panelLayout().bounds);
-      dismissCompanionPanelOnBlur(win, () => this.hidePanel());
+      // The orb's menu takes key focus on macOS, where a native menu would not; it hands focus back.
+      dismissCompanionPanelOnBlur(win, () => this.hidePanel(), () => !this.contextMenu.isOpen);
       win.on('close', event => {
         if (this.disposing) return;
         event.preventDefault();
@@ -980,7 +994,7 @@ export class DesktopCompanionManager {
 
   private companionWindows(): Array<BrowserWindow | null> {
     return [this.orb, this.panel, this.stage.browserWindow, this.selection.browserWindow, this.languageTools.browserWindow, this.results.browserWindow,
-      this.permissionGuide.browserWindow];
+      this.permissionGuide.browserWindow, this.contextMenu.browserWindow];
   }
 
   private publish(): void {
@@ -994,13 +1008,13 @@ export class DesktopCompanionManager {
   private assertSender(senderId: number): void {
     const allowed = [this.options.getMainWindow()?.webContents.id, this.orb?.webContents.id, this.panel?.webContents.id,
       this.stage.webContentsId, this.selection.webContentsId, this.languageTools.webContentsId, this.results.webContentsId,
-      this.permissionGuide.webContentsId];
+      this.permissionGuide.webContentsId, this.contextMenu.webContentsId];
     if (!allowed.some(id => id !== undefined && id !== null && id === senderId)) throw new Error('Unknown desktop companion IPC sender');
   }
 
   private showContextMenu(): void {
     this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Orb, interactionType: Interaction.ContextMenu });
-    const template: MenuItemConstructorOptions[] = [
+    const entries: CompanionMenuEntry[] = [
       { label: t('desktopCompanionOpenApp'), click: () => {
         this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.ContextMenu, interactionType: Interaction.OpenMain, hasSession: !!this.sessionId });
         this.hidePanel(); this.options.openMain(this.sessionId);
@@ -1014,7 +1028,7 @@ export class DesktopCompanionManager {
       {
         label: t('desktopCompanionChangeSkin'),
         submenu: COMPANION_SKINS.map(skin => ({
-          label: t(skin.nameKey), type: 'radio' as const, checked: this.preferences.skin === skin.id,
+          label: t(skin.nameKey), checked: this.preferences.skin === skin.id,
           click: () => this.setPreferences({ skin: skin.id }, AnalyticsSource.ContextMenu),
         })),
       },
@@ -1027,7 +1041,7 @@ export class DesktopCompanionManager {
         this.options.openSettings?.();
       } }] : []),
     ];
-    Menu.buildFromTemplate(template).popup({ window: this.panelVisible ? this.panel ?? undefined : this.orb ?? undefined });
+    this.contextMenu.show(entries);
   }
 
   private registerIpc(): void {

@@ -18,6 +18,7 @@ import type {
 } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkModelChange } from '../../shared/cowork/modelChange';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
+import type { CoworkTurnOutcome } from '../../shared/cowork/turnOutcome';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -87,7 +88,9 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  turnOutcome?: CoworkTurnOutcome;
   imageEdits?: import('../../shared/imageEditing/types').ImageEditMessageSnapshot[];
+  messageVersion?: import('../../shared/cowork/messageEdit').CoworkMessageVersionInfo;
   modelChange?: CoworkModelChange;
   modelPresetId?: ModelPresetId;
   resolvedModelId?: string;

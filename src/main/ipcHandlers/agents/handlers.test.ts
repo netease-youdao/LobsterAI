@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
@@ -80,6 +81,9 @@ test('sync failure is reported and a retry can finish preparation', async () => 
     .mockResolvedValueOnce({ success: true, changed: true });
   const { invoke, otherWindowSend } = setup(sync);
   expect(await invoke()).toMatchObject({ success: false, error: 'Gateway unavailable' });
+  expect(errorLog).toHaveBeenCalledWith('[Agents] Failed to prepare preset agent:',
+    expect.objectContaining({ presetId: ExpertFixtureId.Data, durationMs: expect.any(Number) }),
+    expect.objectContaining({ message: 'Gateway unavailable' }));
   expect(otherWindowSend).not.toHaveBeenCalled();
   expect(await invoke()).toMatchObject({ success: true });
   expect(otherWindowSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
@@ -87,9 +91,27 @@ test('sync failure is reported and a retry can finish preparation', async () => 
 });
 
 test('unknown presets do not trigger synchronization or claim success', async () => {
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
   const sync = vi.fn();
   const { invoke, otherWindowSend } = setup(sync, null);
   expect(await invoke()).toMatchObject({ success: false });
+  expect(sync).not.toHaveBeenCalled();
+  expect(otherWindowSend).not.toHaveBeenCalled();
+  expect(errorLog).toHaveBeenCalledWith('[Agents] Failed to prepare preset agent:',
+    expect.objectContaining({ presetId: ExpertFixtureId.Data }),
+    expect.objectContaining({ message: `Preset agent not found: ${ExpertFixtureId.Data}` }));
+});
+
+test('preparation exceptions keep their original error and stack in local logs without analytics', async () => {
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const sync = vi.fn();
+  const { invoke, addPresetAgent, otherWindowSend } = setup(sync);
+  const error = Object.assign(new Error('SQLITE_ERROR: no such column: icon_customized'), { code: 'SQLITE_ERROR' });
+  addPresetAgent.mockRejectedValueOnce(error);
+
+  expect(await invoke()).toEqual({ success: false, error: error.message });
+  expect(errorLog).toHaveBeenCalledExactlyOnceWith('[Agents] Failed to prepare preset agent:',
+    expect.objectContaining({ presetId: ExpertFixtureId.Data, durationMs: expect.any(Number) }), error);
   expect(sync).not.toHaveBeenCalled();
   expect(otherWindowSend).not.toHaveBeenCalled();
 });

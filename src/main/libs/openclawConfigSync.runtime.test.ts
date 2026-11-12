@@ -116,6 +116,13 @@ const mockRuntimeState = vi.hoisted(() => ({
   },
 }));
 
+const fakeIpNetworkMock = vi.hoisted(() => ({ active: false }));
+
+// The real check reads this machine's network interfaces.
+vi.mock('./fakeIpNetwork', () => ({
+  isFakeIpNetworkActive: () => fakeIpNetworkMock.active,
+}));
+
 vi.mock('./claudeSettings', () => ({
   getAllServerModelMetadata: () => mockRuntimeState.serverModels,
   listProviderSourceEntries: () => mockRuntimeState.providerSourceEntries,
@@ -4627,6 +4634,21 @@ describe('OpenClawConfigSync runtime config output', () => {
     const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(withoutBridge.mcp.servers[serverNames[0]]).toBeUndefined();
     for (const server of available) expect(withoutBridge.mcp.servers[server]).toEqual(launch(server));
+  });
+
+  test('allows the fake-IP range for web fetch only on a fake-IP network', async () => {
+    const sync = await createSync();
+    try {
+      expect(sync.sync('web-fetch-direct-network').ok).toBe(true);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).tools.web.fetch.ssrfPolicy).toBeUndefined();
+
+      fakeIpNetworkMock.active = true;
+      expect(sync.sync('web-fetch-fake-ip-network').ok).toBe(true);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).tools.web.fetch.ssrfPolicy)
+        .toEqual({ allowRfc2544BenchmarkRange: true });
+    } finally {
+      fakeIpNetworkMock.active = false;
+    }
   });
 
   test.each([

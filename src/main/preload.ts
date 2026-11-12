@@ -73,6 +73,7 @@ import {
   type DesktopCompanionSelection,
   type DesktopCompanionState,
 } from '../shared/desktopCompanion/constants';
+import { CompanionContextMenuIpc } from '../shared/desktopCompanion/contextMenu';
 import { CompanionPermissionGuideIpc } from '../shared/desktopCompanion/permissionGuide';
 import { CompanionResultIpc } from '../shared/desktopCompanion/results';
 import { CompanionScreenshotIpc } from '../shared/desktopCompanion/screenshot';
@@ -91,6 +92,7 @@ import {
   type HtmlShareSourceType,
   type HtmlShareStatus,
 } from '../shared/htmlShare/constants';
+import { type ImageCreationCatalog, ImageCreationIpc, type ImageExampleReference } from '../shared/imageCreation/constants';
 import {
   KitIpcChannel,
   type KitReference,
@@ -160,6 +162,7 @@ import type {
   SkinListResponse,
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
+import { createMessageSpeechBridge } from './conversation/messageSpeechPreload';
 import { createLanguageToolsBridge } from './desktopCompanion/languageToolsPreload';
 import { createImageEditingBridge } from './imageEditingPreload';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
@@ -169,6 +172,7 @@ import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
+  messageSpeech: createMessageSpeechBridge(),
   desktopCompanion: {
     reportAnalytics: event => ipcRenderer.invoke(DesktopCompanionIpc.ReportAnalytics, event),
     startLogin: request => ipcRenderer.invoke(DesktopCompanionIpc.LoginStart, request),
@@ -204,6 +208,9 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(DesktopCompanionIpc.MainPageRequested, handler);
     },
     showContextMenu: () => ipcRenderer.invoke(DesktopCompanionIpc.ContextMenu),
+    runContextMenuItem: id => ipcRenderer.invoke(CompanionContextMenuIpc.Run, id),
+    contextMenuReady: id => ipcRenderer.invoke(CompanionContextMenuIpc.Ready, id),
+    dismissContextMenu: () => ipcRenderer.invoke(CompanionContextMenuIpc.Dismiss),
     drag: (phase, grab) => ipcRenderer.send(DesktopCompanionIpc.Drag, { phase, grab }),
     orbFileDrag: (phase, kinds) => ipcRenderer.send(DesktopCompanionIpc.OrbFileDrag, { phase, kinds }),
     taskStarted: sessionId => ipcRenderer.invoke(DesktopCompanionIpc.TaskStarted, sessionId),
@@ -634,7 +641,8 @@ contextBridge.exposeInMainWorld('electron', {
     },
     addPreset: async (presetId: string) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.AddPreset, presetId);
-      return result?.success ? result.agent : null;
+      if (!result?.success) throw new Error(result?.error || 'Failed to add preset agent');
+      return result.agent;
     },
     onChanged: (callback: () => void) => {
       const handler = () => callback();
@@ -665,6 +673,11 @@ contextBridge.exposeInMainWorld('electron', {
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => ipcRenderer.invoke(CoworkIpcChannel.SessionStart, options),
+    editMessage: (request: import('../shared/cowork/messageEdit').CoworkMessageEditRequest) => ipcRenderer.invoke(CoworkIpcChannel.EditMessage, request),
+    getMessageEdit: (sessionId: string) => ipcRenderer.invoke(CoworkIpcChannel.GetMessageEdit, sessionId),
+    checkMessageEdit: (request: { sessionId: string; messageId: string }) => ipcRenderer.invoke(CoworkIpcChannel.CheckMessageEdit, request),
+    recoverMessageEdit: (request: { sessionId: string; operationId: string }) => ipcRenderer.invoke(CoworkIpcChannel.RecoverMessageEdit, request),
+    switchMessageVersion: (request: import('../shared/cowork/messageEdit').CoworkMessageVersionSwitchRequest) => ipcRenderer.invoke(CoworkIpcChannel.SwitchMessageVersion, request),
     continueSession: (options: {
       analytics?: UsageContext;
       sessionId: string;
@@ -1548,6 +1561,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(AuthIpcChannel.LifecycleEvent, handler);
       return () => ipcRenderer.removeListener(AuthIpcChannel.LifecycleEvent, handler);
     },
+  },
+  imageCreation: {
+    getCatalog: () => ipcRenderer.invoke(ImageCreationIpc.GetCatalog) as Promise<ImageCreationCatalog>,
+    getReference: (exampleId: string) => ipcRenderer.invoke(ImageCreationIpc.GetReference, exampleId) as Promise<ImageExampleReference>,
   },
   media: {
     getPreferences: (owner: string) =>

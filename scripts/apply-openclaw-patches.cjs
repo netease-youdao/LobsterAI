@@ -1569,6 +1569,26 @@ v20260801StrongPatchValidators['zz-openclaw-plan-completion-check.patch'] = [
   },
 ];
 
+v20260801StrongPatchValidators['zzzz-openclaw-bootstrap-prefix-cache.patch'] = [
+  {
+    file: 'src/shared/google-turn-ordering.ts',
+    snippets: ['timestamp: first.timestamp,'],
+    forbiddenSnippets: ['Date.now()'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts',
+    snippets: ['keeps reconstructed bootstrap messages byte-identical across runs'],
+  },
+  {
+    file: 'src/config/sessions/session-accessor.sqlite-bounded-context.test.ts',
+    snippets: ['keeps bootstrap stable across reopens after a long turn is byte-truncated'],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-memory.test.ts',
+    snippets: ['keeps bootstrap stable on bounded fallback after a compaction %s failure'],
+  },
+];
+
 v20260801StrongPatchValidators['zzz-openclaw-session-prefix-cache.patch'] = [
   {
     file: 'src/agents/lobsterai-session-snapshot.ts',
