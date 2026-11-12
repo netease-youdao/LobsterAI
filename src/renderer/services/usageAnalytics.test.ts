@@ -37,11 +37,17 @@ test('expert draft attribution reaches task submission but does not leak into a 
   usage.prepareExpertAnalytics('local-expert', 'expert-data', {
     entry: UsageEntry.Starter,
     catalogVersion: 'v1',
+    exampleId: 'quarterly-report',
+    exampleMode: 'guided',
+    exampleWorkflow: 'outline',
   });
   const draft = mocks.report.mock.calls[0][0];
   const context = usage.beginTaskSubmission('local-expert')!;
   expect(context).toMatchObject({
     presetId: 'expert-data',
+    exampleId: 'quarterly-report',
+    exampleMode: 'guided',
+    exampleWorkflow: 'outline',
     journeyId: draft.journeyId,
     entry: UsageEntry.Starter,
     catalogVersion: 'v1',

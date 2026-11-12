@@ -93,11 +93,13 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../../../shared/kit/constants';
+import { SlidesAgentTool } from '../../../shared/office/slides/slidesAgent';
 import {
   isOpenClawToolSearchControlTool,
   OpenClawGatewayFailureKind,
 } from '../../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyStatus } from '../../../shared/openclawTranscript/constants';
+import { buildPptOutlineSystemPrompt, isPptOutlineSystemPrompt, PPT_OUTLINE_CONTENT_GUIDANCE } from '../../../shared/pptCreation/outline';
 import { ProviderName } from '../../../shared/providers';
 import type { Agent, CoworkExecutionMode, CoworkMessage, CoworkMessageMetadata, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
@@ -765,6 +767,7 @@ type ActiveTurn = {
   turnToken: number;
   userMessageId?: string;
   planMode: boolean;
+  pptOutline?: boolean;
   /** Prevents repeated model retries when a plan response is incomplete. */
   planModeRecoveryAttempted?: boolean;
   /** Expected abort while replacing a blocked mutating tool run with a plan-only recovery. */
@@ -894,6 +897,7 @@ type ActiveTurn = {
 };
 
 const PLAN_MODE_BLOCKED_TOOL_NAMES = new Set([
+  SlidesAgentTool.Edit,
   MediaGenerationTool.Image,
   MediaGenerationTool.Video,
   'apply_patch',
@@ -1173,7 +1177,8 @@ export function isSignificantAssistantStreamReset(previousLength: number, nextLe
     && nextLength <= previousLength * ASSISTANT_STREAM_RESET_RATIO;
 }
 
-function buildPlanModeOutboundReminder(): string {
+function buildPlanModeOutboundReminder(systemPrompt: string): string {
+  if (isPptOutlineSystemPrompt(systemPrompt)) return buildPptOutlineSystemPrompt();
   return [
     '[Plan Mode reminder]',
     'Plan Mode is active for this turn.',
@@ -6221,6 +6226,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       turnToken,
       userMessageId: requestMessageId,
       planMode,
+      pptOutline: isPptOutlineSystemPrompt(outboundSystemPrompt),
       knownRunIds: new Set([runId]),
       assistantMessageId: null,
       committedAssistantText: '',
@@ -6406,7 +6412,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         sections.push(`[Current user request]\n${prompt}`);
       }
       if (planMode) {
-        sections.push(buildPlanModeOutboundReminder());
+        sections.push(buildPlanModeOutboundReminder(normalizedSystemPrompt));
       }
       // Sample after startup/rehydration; retries reuse this completed string.
       sections.push(buildOpenClawLocalTimeContextPrompt());
@@ -6472,7 +6478,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       sections.push(`[Current user request]\n${prompt}`);
     }
     if (planMode) {
-      sections.push(buildPlanModeOutboundReminder());
+      sections.push(buildPlanModeOutboundReminder(normalizedSystemPrompt));
     }
     // History probes may be slow. Freeze time only when the prompt is ready.
     sections.push(buildOpenClawLocalTimeContextPrompt());
@@ -10804,7 +10810,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       'Do not call any tools and do not repeat environment exploration.',
       'Output the complete plan now in the same language as the original user request.',
       'Wrap it in <proposed_plan> and </proposed_plan>.',
-      'Include Summary, Implementation Approach, Key Changes, Validation, and Assumptions or Questions.',
+      turn.pptOutline ? PPT_OUTLINE_CONTENT_GUIDANCE : 'Include Summary, Implementation Approach, Key Changes, Validation, and Assumptions or Questions.',
       'Use at least 8 concrete bullets or short paragraphs; do not output introductory text outside the tags.',
     ].join('\n');
     const session = this.store.getSession(sessionId);
@@ -11016,7 +11022,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         'Do not call any tools. Use only the read-only context already gathered in this conversation.',
         'Output the complete plan now in the same language as the original user request.',
         'Wrap it in <proposed_plan> and </proposed_plan>.',
-        'Include Summary, Implementation Approach, Key Changes, Validation, and Assumptions or Questions.',
+        turn.pptOutline ? PPT_OUTLINE_CONTENT_GUIDANCE : 'Include Summary, Implementation Approach, Key Changes, Validation, and Assumptions or Questions.',
         'Use at least 8 concrete bullets or short paragraphs; do not output introductory text outside the tags.',
       ].join('\n'),
       deliver: false,

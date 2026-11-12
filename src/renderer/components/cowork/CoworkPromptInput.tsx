@@ -51,6 +51,7 @@ import {
 } from '../../../shared/cowork/steer';
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
 import { isChatPresetSession } from '../../../shared/modelPresets/constants';
+import { buildPptOutlineSystemPrompt, shouldUsePptOutlinePrompt } from '../../../shared/pptCreation/outline';
 import { agentService } from '../../services/agent';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
@@ -1924,8 +1925,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       .map(id => skills.find(s => s.id === id))
       .filter((s): s is Skill => s !== undefined);
     const kitPrompt = buildSelectedKitContextPrompt(activeKitIds, marketplaceKits, installedKits);
+    const planningSession = currentSession?.id === sessionId ? currentSession : null;
+    const planningAgent = agents.find(agent => agent.id === (planningSession?.agentId ?? currentAgentId));
+    const pptOutline = shouldUsePptOutlinePrompt(allSkillIds, planningAgent?.skillIds ?? [], planningSession?.systemPrompt);
     const skillPrompt = effectivePlanMode
-      ? buildPlanModeSystemPrompt()
+      ? (pptOutline ? buildPptOutlineSystemPrompt() : buildPlanModeSystemPrompt())
       : [
         kitPrompt,
         buildSelectedSkillRoutingPrompt(activeSkills),
@@ -2074,7 +2078,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     resetGoalInput(false);
     draftStartedAnalyticsRef.current = false;
     inputSourceOverrideRef.current = null;
-  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, narrow, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
+  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, currentSession, agents, currentAgentId, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, narrow, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
   handleSubmitRef.current = handleSubmit;
   useImageEditSubmission({ sessionId, onSubmit, isStreaming, modelSupportsImage,
     blocked: disabled || submitDisabled || isPatchingModel || remoteManaged || isVoiceRecording

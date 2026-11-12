@@ -131,6 +131,7 @@ import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
+import { type PptAssetRequest, type PptCatalog, PptCreationIpc, type PptPreparedFile } from '../shared/pptCreation/constants';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
   type ShareDeploymentAnalyzeProjectInput,
@@ -1564,6 +1565,10 @@ contextBridge.exposeInMainWorld('electron', {
   imageCreation: {
     getCatalog: () => ipcRenderer.invoke(ImageCreationIpc.GetCatalog) as Promise<ImageCreationCatalog>,
     getReference: (exampleId: string) => ipcRenderer.invoke(ImageCreationIpc.GetReference, exampleId) as Promise<ImageExampleReference>,
+  },
+  pptCreation: {
+    getCatalog: () => ipcRenderer.invoke(PptCreationIpc.GetCatalog) as Promise<PptCatalog>,
+    getAsset: (request: PptAssetRequest) => ipcRenderer.invoke(PptCreationIpc.GetAsset, request) as Promise<PptPreparedFile>,
   },
   media: {
     getPreferences: (owner: string) =>

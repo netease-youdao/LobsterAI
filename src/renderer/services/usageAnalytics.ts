@@ -26,6 +26,9 @@ let draft:
       journeyId: string;
       presetId?: string;
       catalogVersion?: string;
+      exampleId?: string;
+      exampleMode?: string;
+      exampleWorkflow?: string;
       entry: UsageEntry;
     }
   | undefined;
@@ -70,6 +73,9 @@ export function prepareExpertAnalytics(
   params: {
     journeyId?: string;
     catalogVersion?: string;
+    exampleId?: string;
+    exampleMode?: string;
+    exampleWorkflow?: string;
     entry: UsageEntry;
   },
 ): void {
@@ -80,6 +86,9 @@ export function prepareExpertAnalytics(
       presetId: catalogAnalyticsId(presetId),
       journeyId: params.journeyId ?? crypto.randomUUID(),
       catalogVersion: catalogAnalyticsId(params.catalogVersion),
+      exampleId: catalogAnalyticsId(params.exampleId),
+      exampleMode: catalogAnalyticsId(params.exampleMode),
+      exampleWorkflow: catalogAnalyticsId(params.exampleWorkflow),
       entry: params.entry,
     };
     const { agentId: _localAgentId, ...fields } = draft;
@@ -144,6 +153,9 @@ export function beginTaskSubmission(
       journeyId: prepared?.journeyId ?? previous?.journeyId,
       presetId: agent?.source === AgentSource.Preset ? catalogAnalyticsId(agent.presetId) : undefined,
       catalogVersion: prepared?.catalogVersion ?? previous?.catalogVersion,
+      exampleId: prepared?.exampleId ?? previous?.exampleId,
+      exampleMode: prepared?.exampleMode ?? previous?.exampleMode,
+      exampleWorkflow: prepared?.exampleWorkflow ?? previous?.exampleWorkflow,
       entry: sessionId ? UsageEntry.Continue : (prepared?.entry ?? UsageEntry.Direct),
     };
     submissions.set(context, currentOwner);

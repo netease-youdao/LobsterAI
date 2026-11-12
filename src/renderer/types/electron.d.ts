@@ -159,6 +159,7 @@ import type {
   OpenClawUserConfigActionResult,
   OpenClawUserConfigStatus,
 } from '../../shared/openclawUserConfig/constants';
+import type { PptAssetRequest, PptCatalog, PptPreparedFile } from '../../shared/pptCreation/constants';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -2228,6 +2229,10 @@ interface IElectronAPI {
   imageCreation: {
     getCatalog: () => Promise<ImageCreationCatalog>;
     getReference: (exampleId: string) => Promise<ImageExampleReference>;
+  };
+  pptCreation: {
+    getCatalog: () => Promise<PptCatalog>;
+    getAsset: (request: PptAssetRequest) => Promise<PptPreparedFile>;
   };
   media: {
     getPreferences: (owner: string) => Promise<MediaPreferenceResult>;

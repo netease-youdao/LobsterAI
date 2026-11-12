@@ -3,6 +3,7 @@ import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy
 import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { pptCreationTranslations } from '../../shared/pptCreation/copy';
 import { configService } from './config';
 
 // 支持的语言类型
@@ -27,6 +28,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...mediaTranslations.zh,
     ...imageEditingTranslations.zh,
     ...imageCreationTranslations.zh,
+    ...pptCreationTranslations.zh,
     officeSaved: '已自动保存',
     officePending: '等待保存…',
     officeSaving: '正在保存…',
@@ -4763,6 +4765,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...mediaTranslations.en,
     ...imageEditingTranslations.en,
     ...imageCreationTranslations.en,
+    ...pptCreationTranslations.en,
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',
     officeSaving: 'Saving…',

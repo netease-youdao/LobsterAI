@@ -312,6 +312,7 @@ import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
 import { registerOpenClawUserConfigHandlers } from './ipcHandlers/openclawUserConfig/handlers';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPluginHandlers } from './ipcHandlers/plugins';
+import { registerPptCreationHandlers } from './ipcHandlers/pptCreation';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -434,6 +435,7 @@ import {
   getImageCreationExamplesUrl,
   getKitStoreUrl,
   getPortalTasksUrl,
+  getPptCreationExamplesUrl,
   getServerApiBaseUrl,
   getSkillStoreUrl,
   refreshEndpointsTestMode,
@@ -614,6 +616,7 @@ import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './l
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { collectOpenWithArgv, findBundledPathArg, OpenWithPathQueue } from './libs/openWithPathQueue';
+import { PptCreationStore } from './libs/pptCreationStore';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { recordSessionModelChange } from './libs/sessionModelChange';
@@ -11958,6 +11961,10 @@ if (!gotTheLock) {
   registerImageCreationHandlers(new ImageCreationStore({
     getEndpoint: getImageCreationExamplesUrl,
     cacheDirectory: path.join(app.getPath('userData'), 'image-creation'),
+  }));
+  registerPptCreationHandlers(new PptCreationStore({
+    getEndpoint: getPptCreationExamplesUrl,
+    cacheDirectory: path.join(app.getPath('userData'), 'ppt-creation'),
   }));
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,

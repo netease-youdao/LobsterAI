@@ -1,0 +1,166 @@
+{
+  "research_date": "2026-11-11",
+  "base_branch": "release/2026.11.9",
+  "base_commit": "35d72497f125c80c6c96cdab1ebe62b659d28a09",
+  "data_source": "Production MySQL reader through bhumi-data dispatcher; personal and enterprise usage ledgers",
+  "account_filter": {
+    "user_type": "consumer",
+    "status": 1
+  },
+  "recall_pattern": "ppt|powerpoint|幻灯片|演示文稿|课件|slides?",
+  "sampling": "Sort salted SHA-256 account hashes, take first 200 accounts, use earliest matching summary per account in the window.",
+  "deduplication": "Account + session (if present) + whitespace-normalized summary; punctuation preserved. Sum associated call counts across query partitions.",
+  "stock_detection": "Compare first 100 characters after removing punctuation and whitespace against the four current Chinese homepage prompt templates; this does not prove a click source.",
+  "classification_method": "One research agent manually reviewed all 200 summaries; no independent second annotator.",
+  "overview": {
+    "window": [
+      "2026-11-04",
+      "2026-11-11"
+    ],
+    "timezone": "Asia/Shanghai",
+    "files": [
+      {
+        "file": "personal-2026-11-04.json",
+        "groups": 385,
+        "elapsed_ms": 21290
+      },
+      {
+        "file": "personal-2026-11-05.json",
+        "groups": 312,
+        "elapsed_ms": 20401
+      },
+      {
+        "file": "personal-2026-11-06.json",
+        "groups": 263,
+        "elapsed_ms": 19034
+      },
+      {
+        "file": "personal-2026-11-07.json",
+        "groups": 258,
+        "elapsed_ms": 14421
+      },
+      {
+        "file": "personal-2026-11-08.json",
+        "groups": 235,
+        "elapsed_ms": 15692
+      },
+      {
+        "file": "personal-2026-11-09.json",
+        "groups": 354,
+        "elapsed_ms": 21170
+      },
+      {
+        "file": "personal-2026-11-10.json",
+        "groups": 362,
+        "elapsed_ms": 23107
+      },
+      {
+        "file": "enterprise-candidates.json",
+        "groups": 26,
+        "elapsed_ms": 1354
+      }
+    ],
+    "candidate_prompt_groups": 2180,
+    "candidate_accounts": 894,
+    "candidate_sessions": 1006,
+    "missing_session_prompt_groups": 426,
+    "candidate_calls": 67508,
+    "candidate_successful_calls": 67508.0,
+    "stock_template_prompt_groups": 14,
+    "stock_template_accounts": 14,
+    "stock_template_groups_by_id": {
+      "pptx-training": 3,
+      "pptx-ai-intro": 6,
+      "pptx-work-report": 4,
+      "pptx-content-research": 1
+    },
+    "sample_size": 200,
+    "sample_stock_templates": {
+      "pptx-ai-intro": 3
+    },
+    "sample_potentially_truncated": 43,
+    "sample_missing_session": 37,
+    "sample_all_success_calls_zero": 0
+  },
+  "classification": {
+    "sample_size": 200,
+    "operation_counts": {
+      "create": 86,
+      "unclear": 14,
+      "read": 27,
+      "edit": 31,
+      "unrelated": 30,
+      "asset": 12
+    },
+    "actionable_count": 117,
+    "scene_counts_actionable": {
+      "teaching": 25,
+      "work": 19,
+      "training": 17,
+      "business": 18,
+      "unknown": 15,
+      "career": 10,
+      "academic": 10,
+      "event": 3
+    },
+    "actionable_non_stock_count": 114,
+    "scene_counts_non_stock": {
+      "teaching": 25,
+      "work": 19,
+      "training": 14,
+      "business": 18,
+      "unknown": 15,
+      "career": 10,
+      "academic": 10,
+      "event": 3
+    },
+    "low_confidence_all": 25,
+    "low_confidence_actionable": 18,
+    "explicit_attachment_marker_actionable": 51,
+    "explicit_template_or_reference_style_actionable": 12,
+    "outline_or_planning_actionable": 8,
+    "actionable_potentially_truncated": 23,
+    "actionable_missing_session": 17
+  },
+  "high_confidence_scene_counts": {
+    "teaching": 23,
+    "work": 15,
+    "training": 15,
+    "business": 13,
+    "unknown": 11,
+    "career": 10,
+    "academic": 9,
+    "event": 3
+  },
+  "channel_account_counts": {
+    "personal": 885,
+    "enterprise": 9
+  },
+  "scene_codebook": {
+    "teaching": "学科教学与课程展示",
+    "work": "工作汇报与经营数据",
+    "business": "商业方案与行业分析",
+    "training": "培训、科普与知识分享",
+    "career": "求职与职业规划展示",
+    "academic": "学术研究与答辩",
+    "event": "活动与舞台展示",
+    "unknown": "明确创作或改编但场景不明",
+    "excluded": "不计入明确创作/改编场景"
+  },
+  "operation_codebook": {
+    "create": "新建或内容规划",
+    "edit": "已有PPT修改或改编",
+    "asset": "配套素材或模板准备",
+    "read": "阅读、摘要、讲稿或其他输出",
+    "unclear": "意图不明或能力咨询",
+    "unrelated": "无关命中或系统包装"
+  },
+  "limits": [
+    "Candidate accounts, input groups and model calls are not confirmed PPT users, tasks or delivered presentations.",
+    "Ledger user_message is capped at 200 characters; len>=197 is a potential truncation indicator, not proof.",
+    "No artifact completion, adoption, cost improvement, causal conversion or full product penetration can be inferred.",
+    "Only current consumer/active account flags were applied, without the historical image-report risk pool or new risk detection.",
+    "Sample proportions describe the sampled accounts' earliest matching summary, not all requests or all users.",
+    "No raw prompts, local attachment paths, account identifiers or credentials are included in this evidence."
+  ]
+}
