@@ -60,6 +60,8 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
       model_preset_id TEXT,
+      context_window_override INTEGER,
+      context_window_owner_key TEXT,
       thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,

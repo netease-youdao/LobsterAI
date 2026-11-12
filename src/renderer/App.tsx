@@ -17,6 +17,7 @@ import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { DesktopCompanionMainPage } from '../shared/desktopCompanion/constants';
 import { ENABLE_EXPERT_PLAZA_UI } from '../shared/featureFlags';
 import { FeedbackUiEvent } from '../shared/feedback/constants';
+import { ImageCreation } from '../shared/imageCreation/constants';
 import {
   LibraryNavigationEvent,
   LibrarySourceFilter,
@@ -44,6 +45,7 @@ import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import ExpertPlazaView from './components/experts/ExpertPlazaView';
 import FeedbackDialog from './components/feedback/FeedbackDialog';
+import LaunchAdModal from './components/LaunchAdModal';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import NewUserOnboardingOverlay, {
@@ -77,11 +79,13 @@ import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selector
 import { SkinProvider } from './providers/SkinProvider';
 import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
+import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
 import { openExpertDraft } from './services/expertOnboarding';
 import { i18nService } from './services/i18n';
+import type { PreparedImageExampleReference } from './services/imageCreationDraft';
 import {
   beginLatestAsyncRequest,
   invalidateLatestAsyncRequest,
@@ -106,6 +110,7 @@ import {
   addDraftAttachment,
   clearDraftAttachments,
   clearDraftSelectedTextSnippets,
+  setDraftAttachments,
   setDraftCollaborationMode,
   setDraftKitIds,
   setDraftPrompt,
@@ -237,6 +242,7 @@ const App: React.FC = () => {
   const [showFeedback, setShowFeedback] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
   const [mainView, setMainView] = useState<MainView>(MainView.Cowork);
+  const [initialExpertPresetId, setInitialExpertPresetId] = useState<string | undefined>();
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
     requestId: number;
@@ -273,6 +279,7 @@ const App: React.FC = () => {
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [isLaunchAdOpen, setIsLaunchAdOpen] = useState(false);
   const [trialTaskCreatedSignal, setTrialTaskCreatedSignal] = useState(0);
   const [newUserOnboardingStep, setNewUserOnboardingStep] =
     useState<NewUserOnboardingStepType>(NewUserOnboardingStep.NewTask);
@@ -780,8 +787,10 @@ const App: React.FC = () => {
     setMainView(MainView.Kits);
   }, []);
 
-  const handleShowExperts = useCallback(() => {
+  const handleShowExperts = useCallback((event?: Event) => {
     if (!ENABLE_EXPERT_PLAZA_UI) return;
+    const presetId = (event as CustomEvent<{ presetId?: unknown }> | undefined)?.detail?.presetId;
+    setInitialExpertPresetId(typeof presetId === 'string' ? presetId : undefined);
     setMainView(MainView.Experts);
   }, []);
 
@@ -790,15 +799,39 @@ const App: React.FC = () => {
     return () => window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
   }, [handleShowExperts]);
 
-  const handleExpertSummon = useCallback((agent: Agent, prompt: string) => {
+  // In-app links from ads and other server-configured entries (lobsterai://settings/…, lobsterai://view/…).
+  useEffect(() => {
+    const handleDeepLink = (event: Event) => {
+      const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
+      if (!target) return;
+      if (target.kind === 'settings') {
+        handleShowSettings({ initialTab: target.tab });
+        return;
+      }
+      setShowSettings(false);
+      if (target.view === MainView.Experts) handleShowExperts();
+      else if (target.view === MainView.Library) handleShowLibrary();
+      else setMainView(target.view);
+    };
+    window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+    return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
+
+  const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);
+    if (reference) {
+      dispatch(setDraftAttachments({ draftKey: ImageCreation.HomeDraft, attachments: [{
+        path: reference.localPath, name: reference.name, isImage: true,
+        dataUrl: `data:${reference.mimeType};base64,${reference.base64Data}`,
+      }] }));
+    }
     setMainView(MainView.Cowork);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
         detail: { resetCollaborationMode: true, text: prompt },
       }));
     }, 0);
-  }, []);
+  }, [dispatch]);
 
   const handleSkillsConnectorsSectionChange = useCallback((section: SkillsConnectorsSection) => {
     if (section === SkillsConnectorsSection.Connectors) {
@@ -2177,8 +2210,13 @@ const App: React.FC = () => {
         taskCreatedSignal={trialTaskCreatedSignal}
         enabled={privacyAgreed === true && !isOverlayActive && hasResolvedEngineStartupOverlayState && !isEngineStartupOverlayVisible}
       />
+      <LaunchAdModal
+        enabled={privacyAgreed === true && !isOverlayActive}
+        onOpenChange={setIsLaunchAdOpen}
+      />
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
+        deferred={isLaunchAdOpen}
       />
       {windowsStandaloneTitleBar}
       <div
@@ -2245,6 +2283,7 @@ const App: React.FC = () => {
               />
             ) : ENABLE_EXPERT_PLAZA_UI && mainView === MainView.Experts ? (
               <ExpertPlazaView
+                initialPresetId={initialExpertPresetId}
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}

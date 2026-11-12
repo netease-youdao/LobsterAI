@@ -12,14 +12,17 @@
  *   const msg = t('imMissingCredentials', { fields: 'appId, appSecret' });
  */
 
+import { messageEditTranslations } from '../shared/cowork/messageEdit';
 import { desktopCompanionTranslations } from '../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../shared/imageEditing/copy';
 import { mediaTranslations } from '../shared/media/copy';
+import { modelContextWindowTranslations } from '../shared/providers/contextWindowCopy';
 
 export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    ...messageEditTranslations.zh,
     modelPresetBalanced: '快速',
     modelPresetUltimate: '旗舰',
     modelPresetPricingHint: '按候选模型权重选择，当前会话保持固定。实际积分按底层模型扣费。',
@@ -31,6 +34,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
+    ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
@@ -444,6 +448,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    ...messageEditTranslations.en,
     modelPresetBalanced: 'Fast',
     modelPresetUltimate: 'Flagship',
     modelPresetPricingHint: 'Weighted model selection stays fixed for this conversation. Credits are charged at the underlying model rate.',
@@ -455,6 +460,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
+    ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
     openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',

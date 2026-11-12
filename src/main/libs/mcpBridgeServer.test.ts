@@ -159,6 +159,37 @@ describe('McpBridgeServer browser bridge', () => {
   });
 });
 
+describe('McpBridgeServer web search page', () => {
+  test('authenticates and forwards hidden search page requests', async () => {
+    const secret = 'web-search-test-secret';
+    const server = new McpBridgeServer(secret);
+
+    try {
+      await server.start();
+      const post = (headers: Record<string, string>, body: unknown) => fetch(server.webSearchCallbackUrl!, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+
+      expect((await post({}, { op: 'status' })).status).toBe(401);
+      expect((await post({ 'x-mcp-bridge-secret': secret }, { op: 'status' })).status).toBe(503);
+
+      server.onWebSearchPage(async request => ({ success: true, data: { op: request.op, query: request.query } }));
+      expect((await post({ 'x-mcp-bridge-secret': secret }, { query: 'missing op' })).status).toBe(400);
+
+      const response = await post({ 'x-mcp-bridge-secret': secret }, { op: 'search', query: 'lobster' });
+      expect(response.ok).toBe(true);
+      await expect(response.json()).resolves.toEqual({
+        success: true,
+        data: { op: 'search', query: 'lobster' },
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe('McpBridgeServer host info', () => {
   test('serves the app process id to authenticated callers only', async () => {
     const secret = 'host-info-test-secret';

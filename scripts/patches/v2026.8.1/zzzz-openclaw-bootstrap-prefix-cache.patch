@@ -1,0 +1,296 @@
+diff --git a/src/shared/google-turn-ordering.ts b/src/shared/google-turn-ordering.ts
+--- a/src/shared/google-turn-ordering.ts
++++ b/src/shared/google-turn-ordering.ts
+@@ -5,27 +5,20 @@
+
+ /** Add a synthetic user bootstrap when Google-style providers receive assistant-first turns. */
+ export function sanitizeGoogleAssistantFirstOrdering(messages: AgentMessage[]): AgentMessage[] {
+-  const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
+-  const role = first?.role;
+-  const content = first?.content;
+-  if (
+-    role === "user" &&
+-    typeof content === "string" &&
+-    content.trim() === GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT
+-  ) {
+-    return messages;
+-  }
+-  if (role !== "assistant") {
++  const first = messages[0];
++  if (first?.role !== "assistant") {
+     return messages;
+   }
+
+   // Google chat APIs reject assistant-first transcripts. The bootstrap marker
+   // makes the mutation idempotent while preserving the original assistant turn.
++  // Reuse the retained turn's time so boundary timestamp stamping keeps the
++  // model-visible prefix stable when the same history is replayed later.
+   const bootstrap: AgentMessage = {
+     role: "user",
+     content: GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT,
+-    timestamp: Date.now(),
+-  } as AgentMessage;
++    timestamp: first.timestamp,
++  };
+
+   return [bootstrap, ...messages];
+ }
+diff --git a/src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts
+--- a/src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts
+@@ -21,7 +21,7 @@
+  *
+  * Self-contained: no gateway, no provider, no live session.
+  */
+-import { describe, expect, it } from "vitest";
++import { describe, expect, it, vi } from "vitest";
+ import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
+ import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
+ import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
+@@ -35,6 +35,8 @@
+   type UserTurnInput,
+ } from "../../../sessions/user-turn-transcript.js";
+ import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
++import { sanitizeGoogleAssistantFirstOrdering } from "../../../shared/google-turn-ordering.js";
++import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+ import {
+   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+   relocateCurrentRuntimeContextCarrierToTail,
+@@ -181,6 +183,38 @@
+ // ---------------------------------------------------------------------------
+
+ describe("prompt-cache byte-identity (issue #3658)", () => {
++  it("keeps reconstructed bootstrap messages byte-identical across runs", async () => {
++    const history: AgentMsg[] = [
++      { ...ASSISTANT_MSG, timestamp: TS_TURN1 },
++      storedUserMsg("Continue the task", TS_TURN2),
++    ];
++    const firstHistory = structuredClone(history);
++    const nextHistory = structuredClone(history);
++    const now = vi.spyOn(Date, "now").mockReturnValue(TS_TURN2);
++    try {
++      const firstReplay = sanitizeGoogleAssistantFirstOrdering(firstHistory);
++      const firstPayload = await captureOpenAICompletionsPayload(firstReplay);
++      now.mockReturnValue(TS_TURN2 + 120_000);
++      const nextReplay = sanitizeGoogleAssistantFirstOrdering(nextHistory);
++      const nextPayload = await captureOpenAICompletionsPayload(nextReplay);
++
++      expect(JSON.stringify(nextPayload.messages)).toBe(JSON.stringify(firstPayload.messages));
++      expect(firstTwoProviderMessages(nextPayload)[1]).toEqual({
++        role: "user",
++        content: `${EXPECTED_PREFIX_TURN1}(session bootstrap)`,
++      });
++      expect(nextPayload.messages).toContainEqual({
++        role: "user",
++        content: `${EXPECTED_PREFIX_TURN2}Continue the task`,
++      });
++      expect(sanitizeGoogleAssistantFirstOrdering(firstReplay)).toBe(firstReplay);
++      expect(firstHistory).toEqual(history);
++      expect(nextHistory).toEqual(history);
++    } finally {
++      now.mockRestore();
++    }
++  });
++
+   it("bare current-turn message == same message aged to history (byte-identical, both stamped from msg.timestamp)", () => {
+     // This is THE gate. It models the REAL wire asymmetry that the live capture
+     // proved: turn 1 sent BARE+array when current, BARE+string when historical.
+@@ -458,6 +492,7 @@
+         }),
+       ]);
+     } finally {
++      await cleanupSessionStateForTest({ stateDir: dir });
+       fs.rmSync(dir, { recursive: true, force: true });
+     }
+   });
+diff --git a/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts b/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+--- a/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
++++ b/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+@@ -1,7 +1,10 @@
+ import path from "node:path";
+ import { expect, it, vi } from "vitest";
++import { normalizeMessagesForLlmBoundary } from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
++import { convertToLlm } from "../../agents/sessions/messages.js";
+ import { SessionManager } from "../../agents/sessions/session-manager.js";
+ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
++import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
+ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+ import {
+@@ -543,6 +546,52 @@
+   return context.events.slice(1).map((event) => (event as { id: string }).id);
+ }
+
++it("keeps bootstrap stable across reopens after a long turn is byte-truncated", async () => {
++  await withBoundedContextScope(async (scope) => {
++    const timestamp = 1_700_000_000_000;
++    await persistSessionTranscriptTurn(scope, {
++      messages: [
++        {
++          eventId: "initial-user",
++          parentId: null,
++          message: { role: "user", content: "Complete a long task", timestamp },
++        },
++        ...Array.from({ length: 40 }, (_, index) => ({
++          eventId: `step-${index}`,
++          parentId: index === 0 ? "initial-user" : `step-${index - 1}`,
++          message: makeAgentAssistantMessage({
++            content: [{ type: "text", text: `step ${index} ${"a".repeat(400)}` }],
++            timestamp: timestamp + index * 1000,
++          }),
++        })),
++      ],
++      touchSessionEntry: false,
++    });
++    const limits = { maxBytes: 8_000, maxEvents: 10_000 };
++    expect(readSessionTranscriptBoundedActiveContextCore(scope, limits).truncated).toBe(true);
++    const readModelHistory = () => {
++      const history = SessionManager.open(scope, undefined, limits).buildSessionContext().messages;
++      expect(history[0]?.role).toBe("assistant");
++      expect(history.some((message) => message.role === "user")).toBe(false);
++      return JSON.stringify(
++        convertToLlm(
++          normalizeMessagesForLlmBoundary(sanitizeGoogleAssistantFirstOrdering(history), {
++            timezone: "Asia/Taipei",
++          }),
++        ),
++      );
++    };
++    const now = vi.spyOn(Date, "now").mockReturnValue(timestamp + 60_000);
++    try {
++      const first = readModelHistory();
++      now.mockReturnValue(timestamp + 180_000);
++      expect(readModelHistory()).toBe(first);
++    } finally {
++      now.mockRestore();
++    }
++  });
++});
++
+ it("keeps a byte-limited tail start fixed until the tail outgrows a quarter-capacity step", async () => {
+   await withBoundedContextScope(async (scope) => {
+     let parentId = await appendBoundedTestTurns(scope, {
+diff --git a/src/auto-reply/reply/agent-runner-memory.test.ts b/src/auto-reply/reply/agent-runner-memory.test.ts
+--- a/src/auto-reply/reply/agent-runner-memory.test.ts
++++ b/src/auto-reply/reply/agent-runner-memory.test.ts
+@@ -13,12 +13,18 @@
+ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+ import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
+ import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
++import { normalizeMessagesForLlmBoundary } from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
+ import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
++import { resolveEmbeddedSessionContextLimits } from "../../agents/embedded-agent-runner/run/session-context-limits.js";
+ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+ import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
++import { convertToLlm } from "../../agents/sessions/messages.js";
++import { SessionManager } from "../../agents/sessions/session-manager.js";
++import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+ import type { SessionEntry } from "../../config/sessions.js";
+ import {
+   loadSessionEntry,
++  persistSessionTranscriptTurn,
+   readSessionTranscriptMessageEvents,
+   readSessionTranscriptActiveStats,
+   readTranscriptStatsSync,
+@@ -34,6 +40,8 @@
+ } from "../../plugins/memory-state.test-fixtures.js";
+ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+ import { setActivePluginRegistry } from "../../plugins/runtime.js";
++import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
++import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+ import type { ReplyPayload } from "../types.js";
+ import {
+   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
+@@ -3585,6 +3593,10 @@
+   });
+
+   describe("model-context byte bound", () => {
++    afterEach(async () => {
++      await cleanupSessionStateForTest({ stateDir: rootDir });
++    });
++
+     // A 100k-token model hydrates at most 800 kB of history per attempt.
+     const modelContextTokens = 100_000;
+     const imageHeavyEvents = (count: number) =>
+@@ -3682,6 +3694,81 @@
+       expect(await runBytePreflight(sessionEntry)).toBe(sessionEntry);
+       expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+     });
++
++    it.each(["result", "exception"])(
++      "keeps bootstrap stable on bounded fallback after a compaction %s failure",
++      async (failure) => {
++        const timestamp = 1_700_000_000_000;
++        const entry = freshEntry();
++        const scope = {
++          agentId: "main",
++          sessionId: entry.sessionId,
++          sessionKey: "main",
++          storePath: path.join(rootDir, "sessions.json"),
++        };
++        await upsertSessionEntryCore(scope, entry);
++        await persistSessionTranscriptTurn(scope, {
++          messages: [
++            {
++              eventId: "initial-user",
++              parentId: null,
++              message: { role: "user", content: "Complete a long task", timestamp },
++            },
++            ...Array.from({ length: 12 }, (_, index) => ({
++              eventId: `step-${index}`,
++              parentId: index === 0 ? "initial-user" : `step-${index - 1}`,
++              message: makeAgentAssistantMessage({
++                content: [{ type: "text", text: `${index} ${"a".repeat(100_000)}` }],
++                timestamp: timestamp + index * 1000,
++              }),
++            })),
++          ],
++          touchSessionEntry: false,
++        });
++        if (failure === "exception") {
++          compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new Error("summary unavailable"));
++        } else {
++          compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
++            ok: false,
++            compacted: false,
++            reason: "guard_blocked",
++          });
++        }
++        const readModelHistory = () => {
++          const manager = SessionManager.open(
++            scope,
++            undefined,
++            resolveEmbeddedSessionContextLimits(modelContextTokens),
++          );
++          expect(manager.getBoundaryCount()).toBe(0);
++          const history = manager.buildSessionContext().messages;
++          expect(history[0]?.role).toBe("assistant");
++          return JSON.stringify(
++            convertToLlm(
++              normalizeMessagesForLlmBoundary(sanitizeGoogleAssistantFirstOrdering(history), {
++                timezone: "Asia/Taipei",
++              }),
++            ),
++          );
++        };
++
++        expect(await runBytePreflight(entry)).toBe(entry);
++        expect(requireCompactEmbeddedAgentSessionCall().preflightCompactionTrigger).toBe(
++          "model_context_bytes",
++        );
++        expect(incrementCompactionCountMock).not.toHaveBeenCalled();
++        const now = vi.spyOn(Date, "now").mockReturnValue(timestamp + 60_000);
++        try {
++          const first = readModelHistory();
++          now.mockReturnValue(timestamp + 180_000);
++          expect(await runBytePreflight(entry)).toBe(entry);
++          expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
++          expect(readModelHistory()).toBe(first);
++        } finally {
++          now.mockRestore();
++        }
++      },
++    );
+   });
+
+   it.each([

@@ -1,4 +1,5 @@
 import { OpenClawApi, OpenClawProviderId } from './constants';
+import { CONTEXT_WINDOW_SELECTION_CAPABILITY } from './modelContextWindow';
 
 export const ModelRuntimeProfile = {
   MoonshotKimiK3: 'moonshot-kimi-k3',
@@ -24,6 +25,7 @@ export const LOBSTERAI_CLIENT_CAPABILITIES = [
   KIMI_K3_AGENTIC_CAPABILITY,
   THINKING_LEVEL_CONTROL_CAPABILITY,
   UPSTREAM_ERROR_DETAILS_CAPABILITY,
+  CONTEXT_WINDOW_SELECTION_CAPABILITY,
 ].join(',');
 
 const KIMI_K3_REASONING_EFFORTS = [

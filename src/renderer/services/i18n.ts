@@ -1,6 +1,9 @@
+import { messageEditTranslations } from '../../shared/cowork/messageEdit';
 import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy';
+import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { modelContextWindowTranslations } from '../../shared/providers/contextWindowCopy';
 import { configService } from './config';
 
 // 支持的语言类型
@@ -9,6 +12,7 @@ export type LanguageType = 'zh' | 'en';
 // 语言文本映射
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    ...messageEditTranslations.zh,
     modelPresetBalanced: '快速',
     modelPresetUltimate: '旗舰',
     modelPresetBalancedDescription: '快速响应，高效胜任日常工作',
@@ -22,7 +26,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
+    ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
+    ...imageCreationTranslations.zh,
     officeSaved: '已自动保存',
     officePending: '等待保存…',
     officeSaving: '正在保存…',
@@ -834,6 +840,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSubscribe: '订阅',
     authCurrentPlan: '当前套餐',
     authLogout: '退出登录',
+    authLogoutConfirmTitle: '确认退出登录？',
+    authLogoutConfirmMessage: '退出后需要重新登录，才能继续使用账号相关的功能。',
     authLoginRequired: '请先登录后再开始对话。',
     authLoginRequiredBtn: '登录',
     chatLoginExperienceTitlePrefix: '欢迎使用',
@@ -2570,6 +2578,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     voiceInputListeningHint: '支持中英混合，正在识别中...',
     voiceInputLoginRequired: '登录后可使用语音输入',
     voiceInputLoginTitle: '语音输入需要登录',
+    coworkReadAloud: '朗读',
+    coworkReadAloudStop: '停止朗读',
+    coworkReadAloudPreparing: '正在准备朗读，点击停止',
+    coworkReadAloudLoginHint: '登录后可朗读',
+    coworkReadAloudLoginTitle: '登录后即可朗读回复',
+    coworkReadAloudLoginDesc: '朗读功能仅登录后可使用。登录完成后，请再次点击朗读按钮。',
+    coworkReadAloudTooLong: '回复过长，朗读每次最多支持 100,000 字符。',
+    coworkReadAloudUnavailable: '朗读暂不可用，请稍后重试。',
+    coworkReadAloudFailed: '朗读失败，请重试。',
     voiceInputLoginDesc: '该功能仅登录后可使用，请先登录后再使用语音输入。',
     voiceInputFailed: '语音输入失败，请稍后重试',
     voiceInputMicrophoneDenied: '无法访问麦克风，请检查系统麦克风权限',
@@ -4747,6 +4764,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     workspaceDiffIncomplete: '部分文件超出读取限额，行数统计不完整。',
   },
   en: {
+    ...messageEditTranslations.en,
     modelPresetBalanced: 'Fast',
     modelPresetUltimate: 'Flagship',
     modelPresetBalancedDescription: 'Fast responses for efficient everyday work',
@@ -4760,7 +4778,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
+    ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
+    ...imageCreationTranslations.en,
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',
     officeSaving: 'Saving…',
@@ -5609,6 +5629,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSubscribe: 'Subscribe',
     authCurrentPlan: 'Current Plan',
     authLogout: 'Log Out',
+    authLogoutConfirmTitle: 'Log out?',
+    authLogoutConfirmMessage: 'You will need to log in again to use account features.',
     authLoginRequired: 'Please log in to start a conversation.',
     authLoginRequiredBtn: 'Log In',
     chatLoginExperienceTitlePrefix: 'Welcome to',
@@ -7429,6 +7451,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     voiceInputListeningHint: 'Supports mixed Chinese and English. Recognizing...',
     voiceInputLoginRequired: 'Sign in to use voice input',
     voiceInputLoginTitle: 'Sign in required for voice input',
+    coworkReadAloud: 'Read aloud',
+    coworkReadAloudStop: 'Stop reading',
+    coworkReadAloudPreparing: 'Preparing audio. Click to stop',
+    coworkReadAloudLoginHint: 'Sign in to read aloud',
+    coworkReadAloudLoginTitle: 'Sign in to read replies aloud',
+    coworkReadAloudLoginDesc: 'Sign in to use read aloud. After signing in, click the read-aloud button again.',
+    coworkReadAloudTooLong: 'This reply is too long. Read aloud supports up to 100,000 characters per request.',
+    coworkReadAloudUnavailable: 'Read aloud is unavailable. Please try again later.',
+    coworkReadAloudFailed: 'Read aloud failed. Please try again.',
     voiceInputLoginDesc: 'Voice input is available only after you sign in.',
     voiceInputFailed: 'Voice input failed. Please try again later.',
     voiceInputMicrophoneDenied:

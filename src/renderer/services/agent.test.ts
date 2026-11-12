@@ -43,6 +43,20 @@ beforeEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
+describe('agentService.addPreset', () => {
+  test('propagates preparation errors without changing the agent list', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const error = new Error('Expert catalog integrity check failed');
+    (globalThis as { window?: unknown }).window = {
+      electron: { agents: { addPreset: vi.fn().mockRejectedValue(error) } },
+    };
+    const before = store.getState().agent;
+
+    await expect(agentService.addPreset('image-creation-partner')).rejects.toBe(error);
+    expect(store.getState().agent).toBe(before);
+  });
+});
+
 describe('agentService.updateAgent', () => {
   test('refreshes active skills when the current agent is saved', async () => {
     store.dispatch(setAgents([{

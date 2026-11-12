@@ -18,6 +18,7 @@ import {
   COWORK_SESSION_PAGE_SIZE,
   CoworkForkMode,
   type CoworkForkMode as CoworkForkModeType,
+  type CoworkSessionStatus,
 } from '../shared/cowork/constants';
 import type { CoworkErrorDetail } from '../shared/cowork/errorDetail';
 import {
@@ -73,6 +74,8 @@ import {
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
 import { VISIBLE_COWORK_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
+import { CoworkMessageEditStore } from './libs/coworkMessageEditStore';
+import { CoworkMessageVersionStore } from './libs/coworkMessageVersionStore';
 import { compactMessageMetadataMedia } from './libs/mediaMetadataCompaction';
 import {
   type SessionProjection,
@@ -424,7 +427,7 @@ function shouldAutoDeleteMemoryText(text: string): boolean {
 }
 
 // Types mirroring src/types/cowork.ts for main process use
-export type CoworkSessionStatus = 'idle' | 'running' | 'completed' | 'error';
+export type { CoworkSessionStatus } from '../shared/cowork/constants';
 export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type CoworkAgentEngine = 'openclaw';
@@ -495,7 +498,12 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  imageAttachments?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPayload[];
+  imageAttachmentPreviews?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPreview[];
+  browserAnnotations?: import('../shared/cowork/browserAnnotations').CoworkBrowserAnnotationMessageBatch[];
+  turnOutcome?: import('../shared/cowork/turnOutcome').CoworkTurnOutcome;
   imageEdits?: import('../shared/imageEditing/types').ImageEditMessageSnapshot[];
+  messageVersion?: import('../shared/cowork/messageEdit').CoworkMessageVersionInfo;
   modelChange?: CoworkModelChange;
   modelPresetId?: ModelPresetId;
   resolvedModelId?: string;
@@ -576,6 +584,8 @@ export interface CoworkSession {
   systemPrompt: string;
   modelOverride: string;
   modelPresetId?: ModelPresetId | null;
+  contextWindowOverride?: number | null;
+  contextWindowOwnerKey?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
@@ -858,6 +868,8 @@ export interface CreateCoworkSessionOptions {
 
 export class CoworkStore {
   private db: Database.Database;
+  readonly messageEdits: CoworkMessageEditStore;
+  readonly messageVersions: CoworkMessageVersionStore;
   private readonly sessionProjectionNotifications: SessionProjectionNotifications;
   private readonly knownIMPlatforms = new Set<string>(PlatformRegistry.platforms);
 
@@ -874,6 +886,8 @@ export class CoworkStore {
       ),
     });
     this.ensureContinuityCapsuleTable();
+    this.messageEdits = new CoworkMessageEditStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
+    this.messageVersions = new CoworkMessageVersionStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
   }
 
   onSessionProjectionChanges(listener: (changes: SessionProjectionChanges) => void): () => void {
@@ -1106,6 +1120,8 @@ export class CoworkStore {
       system_prompt: string;
       model_override?: string | null;
       model_preset_id?: string | null;
+      context_window_override?: number | null;
+      context_window_owner_key?: string | null;
       thinking_level?: string | null;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
@@ -1117,7 +1133,7 @@ export class CoworkStore {
 
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, thinking_level, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -1160,6 +1176,8 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       modelOverride: row.model_override || '',
       modelPresetId: parseModelPresetId(row.model_preset_id),
+      contextWindowOverride: row.context_window_override ?? null,
+      contextWindowOwnerKey: row.context_window_owner_key ?? null,
       thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       activeSkillIds,
@@ -1382,7 +1400,8 @@ export class CoworkStore {
         now,
       );
 
-      this.db.prepare('UPDATE cowork_sessions SET model_preset_id = ? WHERE id = ?').run(source.modelPresetId ?? null, id);
+      this.db.prepare('UPDATE cowork_sessions SET model_preset_id = ?, context_window_override = ?, context_window_owner_key = ? WHERE id = ?')
+        .run(source.modelPresetId ?? null, source.contextWindowOverride ?? null, source.contextWindowOwnerKey ?? null, id);
 
       for (const contextMessage of contextMessages) {
         const content = contextMessage.content.trim();
@@ -1606,6 +1625,8 @@ export class CoworkStore {
       delete sanitized.turnToken;
       delete sanitized.openClawRunId;
       delete sanitized.openClawSessionKey;
+      // Versions belong to the source session's gateway transcript.
+      delete sanitized.messageVersion;
       delete sanitized[OpenClawCronRunMetadataKey.SessionKey];
       delete sanitized[OpenClawCronRunMetadataKey.EntryIndex];
       if (Array.isArray(sanitized.selectedTextSnippets)) {
@@ -1630,7 +1651,7 @@ export class CoworkStore {
     updates: Partial<
       Pick<
         CoworkSession,
-        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'modelPresetId' | 'thinkingLevel' | 'executionMode' | 'goal'
+        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'modelPresetId' | 'contextWindowOverride' | 'contextWindowOwnerKey' | 'thinkingLevel' | 'executionMode' | 'goal'
       >
     >,
     options: { touchUpdatedAt?: boolean } = {},
@@ -1685,6 +1706,14 @@ export class CoworkStore {
     if (updates.thinkingLevel !== undefined) {
       setClauses.push('thinking_level = ?');
       values.push(updates.thinkingLevel);
+    }
+    if (updates.contextWindowOverride !== undefined) {
+      setClauses.push('context_window_override = ?');
+      values.push(updates.contextWindowOverride);
+    }
+    if (updates.contextWindowOwnerKey !== undefined) {
+      setClauses.push('context_window_owner_key = ?');
+      values.push(updates.contextWindowOwnerKey);
     }
     if (updates.executionMode !== undefined) {
       setClauses.push('execution_mode = ?');
@@ -1750,6 +1779,10 @@ export class CoworkStore {
     );
     this.db.prepare(`DELETE FROM library_artifact_sessions WHERE session_id IN (${placeholders})`).run(...ids);
     this.db.prepare(`DELETE FROM cowork_session_capsules WHERE session_id IN (${placeholders})`).run(...ids);
+    // Foreign keys are not enforced on this connection, so edit and version records are removed by hand.
+    for (const table of ['cowork_message_edits', 'cowork_message_versions', 'cowork_message_version_switches']) {
+      this.db.prepare(`DELETE FROM ${table} WHERE session_id IN (${placeholders})`).run(...ids);
+    }
     this.db.prepare(`DELETE FROM cowork_messages WHERE session_id IN (${placeholders})`).run(...ids);
     this.db.prepare(`DELETE FROM cowork_sessions WHERE id IN (${placeholders})`).run(...ids);
     const affectedArtifactIds = affectedArtifactRows.map(row => row.artifact_id);
@@ -2866,6 +2899,9 @@ export class CoworkStore {
     }
     if (updates.metadata !== undefined) {
       const existing = this.getMessage(sessionId, messageId)?.metadata;
+      if (existing?.turnOutcome && updates.metadata.turnOutcome === undefined) {
+        updates = { ...updates, metadata: { ...updates.metadata, turnOutcome: existing.turnOutcome } };
+      }
       if (existing?.modelPresetId) {
         updates = { ...updates, metadata: { ...updates.metadata,
           modelPresetId: existing.modelPresetId, resolvedModelId: existing.resolvedModelId } };

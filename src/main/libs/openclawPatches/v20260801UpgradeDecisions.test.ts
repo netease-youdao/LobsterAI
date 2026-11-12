@@ -80,6 +80,7 @@ const RETAINED_PATCHES = [
   'openclaw-tool-payload-transcript-fidelity.patch',
   'openclaw-tool-search-direct-tools.patch',
   'openclaw-transcript-replay-validation.patch',
+  'openclaw-user-context-window-selection.patch',
   'openclaw-view-image-task-cwd.patch',
   'openclaw-web-fetch-proxy.patch',
   'openclaw-web-login-channel-routing.patch',
@@ -101,6 +102,7 @@ const RETAINED_PATCHES = [
   'zzz-openclaw-plugin-degraded-startup.patch',
   'zzz-openclaw-session-prefix-cache.patch',
   'zzz-openclaw-stream-drop-reconnect.patch',
+  'zzzz-openclaw-bootstrap-prefix-cache.patch',
   'zzzz-openclaw-compaction-context-overflow-retry.patch',
   'zzzz-openclaw-recovery-compaction-events.patch',
 ] as const;

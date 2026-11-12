@@ -68,6 +68,7 @@ import type {
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../shared/cowork/llmTurnUsage';
+import type { MessageSpeechBridge } from '../../shared/cowork/messageSpeech';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
@@ -106,6 +107,7 @@ import type {
   HtmlShareSourceType,
   HtmlShareStatus,
 } from '../../shared/htmlShare/constants';
+import type { ImageCreationCatalog, ImageExampleReference } from '../../shared/imageCreation/constants';
 import type {
   InstalledKitRecord,
   KitReference,
@@ -646,6 +648,11 @@ interface ClientBannerData {
   imageUrl: string;
   imageWidth?: number;
   imageHeight?: number;
+  contentType?: 'image' | 'html';
+  htmlContent?: string | null;
+  audiences?: string | null;
+  displayFrequency?: 'every_launch' | 'daily' | 'once';
+  modalWidth?: number | null;
   updatedAt?: string;
 }
 
@@ -682,6 +689,7 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  messageSpeech: MessageSpeechBridge;
   desktopCompanion: DesktopCompanionBridge;
   platform: string;
   arch: string;
@@ -1035,6 +1043,11 @@ interface IElectronAPI {
       code?: string;
       engineStatus?: OpenClawEngineStatus;
     }>;
+    editMessage: (request: import('../../shared/cowork/messageEdit').CoworkMessageEditRequest) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    getMessageEdit: (sessionId: string) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    checkMessageEdit: (request: { sessionId: string; messageId: string }) => Promise<{ success: boolean; error?: string }>;
+    recoverMessageEdit: (request: { sessionId: string; operationId: string }) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
+    switchMessageVersion: (request: import('../../shared/cowork/messageEdit').CoworkMessageVersionSwitchRequest) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
     continueSession: (options: {
       analytics?: UsageContext;
       sessionId: string;
@@ -2098,6 +2111,10 @@ interface IElectronAPI {
       input: ActivityHostExecuteActionInput,
     ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
+  modelContextWindows: {
+    get: (request: import('../../shared/providers/modelContextWindow').ModelContextWindowRequest) => Promise<{ success: boolean; data?: import('../../shared/providers/modelContextWindow').ModelContextWindowState; error?: string }>;
+    set: (request: import('../../shared/providers/modelContextWindow').ModelContextWindowRequest, tokens: number | null) => Promise<{ success: boolean; data?: import('../../shared/providers/modelContextWindow').ModelContextWindowState; error?: string }>;
+  };
   modelPresets: {
     available: () => Promise<{ success: boolean; data?: AvailableModelPreset[]; error?: string }>;
     getPreferences: () => Promise<{ success: boolean; data?: Record<string, ModelPresetPreference>; error?: string }>;
@@ -2155,6 +2172,7 @@ interface IElectronAPI {
         supportsToolCalling?: boolean;
         agenticReady?: boolean;
         contextWindow?: number;
+        contextWindowOptions?: number[];
         maxTokens?: number;
         explicitContextCache?: boolean;
         costMultiplier?: number;
@@ -2220,7 +2238,7 @@ interface IElectronAPI {
     claimCreditsFinalReward: (campaignCode: string) => Promise<{ success: boolean; data?: CreditsFinalRewardClaimData; error?: string }>;
     getActiveClientBanner: () => Promise<{ success: boolean; data?: ClientBannerData | null }>;
     getActiveClientBanners: () => Promise<{ success: boolean; data?: ClientBannerData[] }>;
-    getClientBannerSnapshot: () => Promise<{
+    getClientBannerSnapshot: (placement?: string) => Promise<{
       success: boolean;
       data?: ClientBannerSnapshotData;
     }>;
@@ -2229,6 +2247,10 @@ interface IElectronAPI {
     onQuotaChanged: (callback: () => void) => () => void;
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
+  };
+  imageCreation: {
+    getCatalog: () => Promise<ImageCreationCatalog>;
+    getReference: (exampleId: string) => Promise<ImageExampleReference>;
   };
   media: {
     getPreferences: (owner: string) => Promise<MediaPreferenceResult>;

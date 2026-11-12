@@ -120,6 +120,7 @@ const gwDiagTs = (): string => {
   const abs = Math.abs(tz);
   return `[GW-RESTART-DIAG] ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
 };
+import { isFakeIpNetworkActive } from './fakeIpNetwork';
 import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenClawExtension, hasRuntimeBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
 import { rebaseRuntimeExtensionLoadPaths } from './openclawPluginRepairPaths';
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
@@ -2272,7 +2273,9 @@ export class OpenClawConfigSync {
       ...(fetch.maxRedirects ? { maxRedirects: fetch.maxRedirects } : {}),
       ...(fetch.maxChars ? { maxChars: fetch.maxChars } : {}),
       ...(fetch.userAgent ? { userAgent: fetch.userAgent } : {}),
-      ...(fetch.allowRfc2544BenchmarkRange === true
+      // Fake-IP proxies resolve every site into this range; without it the
+      // SSRF guard blocks all of web_fetch. Real private ranges stay blocked.
+      ...(fetch.allowRfc2544BenchmarkRange === true || isFakeIpNetworkActive()
         ? { ssrfPolicy: { allowRfc2544BenchmarkRange: true } }
         : {}),
     };
@@ -2562,9 +2565,17 @@ export class OpenClawConfigSync {
             });
             collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
             const serverModel = serverSel.providerConfig.models[0];
+            // Selectable managed models keep the server's default budget even when a
+            // compatibility profile declares a larger native model capacity.
+            if (sm.contextWindowOptions?.length && isPositiveModelLimit(sm.contextWindow)) {
+              serverModel.contextWindow = sm.contextWindow;
+              serverModel.maxTokens = clampModelMaxTokens(serverModel.maxTokens, sm.contextWindow);
+            }
             Object.assign(serverModel, buildPresetContextWindows({
               contextWindow: serverModel.contextWindow,
               presetContextWindows: sm.presetContextWindows,
+              contextWindowOptions: sm.contextWindowOptions,
+              presetContextWindowOptions: sm.presetContextWindowOptions,
             }));
             collectThinkingProfile(
               candidateThinkingProfiles,

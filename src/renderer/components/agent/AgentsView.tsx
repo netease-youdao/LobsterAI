@@ -54,6 +54,8 @@ const AgentsView: React.FC<AgentsViewProps> = ({
     setAddingPreset(presetId);
     try {
       await agentService.addPreset(presetId);
+    } catch (error) {
+      console.error('[AgentsView] Failed to add preset agent:', error);
     } finally {
       setAddingPreset(null);
     }

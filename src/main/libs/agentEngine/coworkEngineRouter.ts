@@ -7,6 +7,7 @@ import type {
   CoworkBtwSubmitResponse,
 } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import type { CoworkMessageEditRequest, CoworkMessageVersionSwitchRequest } from '../../../shared/cowork/messageEdit';
 import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type { TaskUsageAnalytics } from '../usageAnalytics';
@@ -97,6 +98,35 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       throw new Error(`Steer is not supported by engine: ${engine}`);
     }
     return this.runtime.submitSteer(sessionId, text, clientSteerId);
+  }
+
+  async editMessage(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void> {
+    if (!this.runtime.editMessage) throw new Error('Message editing is unavailable.');
+    const started = this.analytics?.begin(request.sessionId, options, true);
+    try {
+      await this.runtime.editMessage(request, options);
+    } catch (error) {
+      if (started) this.analytics?.end(request.sessionId, UsageOutcome.Failed, error);
+      throw error;
+    }
+  }
+
+  async recoverMessageEdit(sessionId: string, operationId: string): Promise<void> {
+    if (!this.runtime.recoverMessageEdit) throw new Error('Message edit recovery is unavailable.');
+    await this.runtime.recoverMessageEdit(sessionId, operationId);
+  }
+
+  async switchMessageVersion(request: CoworkMessageVersionSwitchRequest): Promise<string | undefined> {
+    if (!this.runtime.switchMessageVersion) throw new Error('Message versions are unavailable.');
+    return this.runtime.switchMessageVersion(request);
+  }
+
+  async reconcileMessageVersionSwitch(sessionId: string): Promise<void> {
+    await this.runtime.reconcileMessageVersionSwitch?.(sessionId);
+  }
+
+  hasPendingMessageEdit(sessionId: string): boolean {
+    return this.runtime.hasPendingMessageEdit?.(sessionId) ?? false;
   }
 
   async submitBtw(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse> {
@@ -306,9 +336,9 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.emit('error', sessionId, error);
     });
 
-    runtime.on('sessionStopped', (sessionId) => {
+    runtime.on('sessionStopped', (sessionId, turn) => {
       this.analytics?.end(sessionId, UsageOutcome.Cancelled);
-      this.emit('sessionStopped', sessionId);
+      this.emit('sessionStopped', sessionId, turn);
     });
   }
 

@@ -9,10 +9,14 @@ import {
 } from './conversationSearch';
 import CoworkConversationSearch from './CoworkConversationSearch';
 
-test('hides result navigation before a query is entered', () => {
+test.each([
+  ConversationSearchStatus.Idle,
+  ConversationSearchStatus.Loading,
+  ConversationSearchStatus.Ready,
+])('keeps the empty search in one row while %s', status => {
   const html = renderToStaticMarkup(React.createElement(CoworkConversationSearch, {
     query: '',
-    status: ConversationSearchStatus.Ready,
+    status,
     activeMatchIndex: -1,
     resultCount: 0,
     isResultLimitReached: false,
@@ -23,13 +27,14 @@ test('hides result navigation before a query is entered', () => {
   }));
 
   expect(html).not.toContain('border-t');
+  expect(html).not.toMatch(/(?:正在搜索|Searching)/);
   expect(html).not.toMatch(/(?:上一个结果|Previous result)/);
   expect(html).not.toMatch(/(?:下一个结果|Next result)/);
 });
 
-test('shows loading status without navigation before a query is entered', () => {
+test('shows loading status without navigation while a query is loading', () => {
   const html = renderToStaticMarkup(React.createElement(CoworkConversationSearch, {
-    query: '',
+    query: 'needle',
     status: ConversationSearchStatus.Loading,
     activeMatchIndex: -1,
     resultCount: 0,

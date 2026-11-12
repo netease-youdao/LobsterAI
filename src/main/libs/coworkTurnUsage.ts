@@ -10,6 +10,7 @@ import {
   mergeLlmTraceUsageSummaries,
 } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessage, CoworkMessageMetadata } from '../coworkStore';
+import type { CoworkStoppedTurn } from './agentEngine/types';
 import type { NativeRunTurnUsage } from './nativeRunTurnUsage';
 
 type TurnUsageStore = {
@@ -60,6 +61,8 @@ export type CoworkTurnUsageServiceDeps = {
 
 /** The ledger is written before each proxied stream ends; one retry covers a slow commit. */
 const PARTIAL_RETRY_DELAY_MS = 1_500;
+/** Cancellation can reach the ledger after the local stream has already closed. */
+const STOPPED_TURN_RETRY_DELAYS_MS = [PARTIAL_RETRY_DELAY_MS, 3_000, 5_000];
 /** Conversation tail searched for replies that follow the user message being bound. */
 const BIND_REPLY_CHECK_LIMIT = 40;
 
@@ -68,7 +71,10 @@ type SettleMode = {
   afterTurn: boolean;
   /** A newly finished request invalidates even an already running summary fetch. */
   afterRequest?: boolean;
+  afterStop?: boolean;
 };
+
+type TurnUsageObservation = Pick<CoworkTurnUsage, 'observedCompletedRequests' | 'observedRequests'>;
 
 /**
  * Settles the credits and token usage of a Cowork turn from the
@@ -87,6 +93,25 @@ export class CoworkTurnUsageService {
   async settleLatestTurn(sessionId: string, nativeRuns?: NativeTurnRuns): Promise<void> {
     if (nativeRuns?.runIds.length) this.bindNativeRunUsage(sessionId, nativeRuns);
     const message = this.deps.getStore().getLatestUserMessage(sessionId);
+    await this.settleFinishedTurn(sessionId, message, { afterTurn: true });
+  }
+
+  async settleStoppedTurn(sessionId: string, turn?: CoworkStoppedTurn): Promise<void> {
+    if (turn?.runIds.length) this.bindNativeRunUsage(sessionId, turn, turn.userMessageId);
+    const store = this.deps.getStore();
+    // A stop owns the original turn even if history sync replaced its message
+    // or the user has already submitted the next prompt.
+    let message = turn?.userMessageId ? store.getMessage(sessionId, turn.userMessageId)
+      : store.getLatestUserMessage(sessionId);
+    if (turn?.traceId && getCoworkLlmTrace(message?.metadata)?.traceId !== turn.traceId) {
+      message = store.findUserMessageByTrace(turn.traceId, sessionId)?.message ?? null;
+    }
+    await this.settleFinishedTurn(sessionId, message, { afterTurn: true, afterStop: true });
+  }
+
+  private async settleFinishedTurn(
+    sessionId: string, message: CoworkMessage | null | undefined, mode: SettleMode,
+  ): Promise<void> {
     const trace = getCoworkLlmTrace(message?.metadata);
     if (!message || !trace) return;
     const stats = this.getTurnTraceStats(trace);
@@ -96,18 +121,18 @@ export class CoworkTurnUsageService {
       );
       return;
     }
-    await this.settle(sessionId, message.id, { afterTurn: true });
+    await this.settle(sessionId, message.id, mode);
   }
 
   /**
    * OpenClaw starts IM and cron runs itself, so their synced user message has
    * no client trace. Give it the traces and media tasks the runs reported.
    */
-  private bindNativeRunUsage(sessionId: string, nativeRuns: NativeTurnRuns): void {
+  private bindNativeRunUsage(sessionId: string, nativeRuns: NativeTurnRuns, userMessageId?: string): void {
     const usage = this.deps.claimNativeRunTurnUsage?.(nativeRuns.runIds);
     if (!usage) return;
     const store = this.deps.getStore();
-    const message = store.getLatestUserMessage(sessionId);
+    const message = userMessageId ? store.getMessage(sessionId, userMessageId) : store.getLatestUserMessage(sessionId);
     // A desktop prompt in an IM session keeps the trace it was sent with.
     if (!message || getCoworkLlmTrace(message.metadata)) return;
     // The run's own message has not synced; never charge an earlier turn for it.
@@ -182,9 +207,9 @@ export class CoworkTurnUsageService {
     const key = JSON.stringify([owner, sessionId, trace.traceId]);
     const existing = this.inFlight.get(key);
     if (existing) {
-      if (mode.afterRequest) {
+      if (mode.afterRequest || mode.afterStop) {
         existing.rerun = true;
-        existing.mode = mode;
+        existing.mode = { ...existing.mode, ...mode };
       }
       return existing.promise;
     }
@@ -217,26 +242,54 @@ export class CoworkTurnUsageService {
     const trace = getCoworkLlmTrace(message?.metadata);
     if (!message || message.type !== 'user' || !trace) return null;
 
-    const previous = getCoworkTurnUsage(message.metadata);
-    const completed = this.getTurnTraceStats(trace)?.completed;
-    const observedCompletedRequests = completed === undefined ? previous?.observedCompletedRequests
-      : Math.max(completed, previous?.observedCompletedRequests ?? 0);
+    let previous = getCoworkTurnUsage(message.metadata);
+    const stats = this.getTurnTraceStats(trace);
+    const observedCompletedRequests = stats === null ? previous?.observedCompletedRequests
+      : Math.max(stats.completed, previous?.observedCompletedRequests ?? 0);
+    const observedRequests = mode.afterStop || previous?.observedRequests !== undefined
+      ? Math.max(stats?.requests ?? 0, previous?.observedRequests ?? 0) : undefined;
+    const observation: TurnUsageObservation = {
+      ...(observedCompletedRequests !== undefined ? { observedCompletedRequests } : {}),
+      ...(observedRequests !== undefined ? { observedRequests } : {}),
+    };
+    // Keep the stop's request count across reloads and late request callbacks.
+    // A successful earlier request alone does not settle a cancelled stream.
+    if (previous && observedRequests !== undefined) {
+      previous = {
+        ...previous,
+        ...observation,
+        status: previous.status === CoworkTurnUsageStatus.Settled && previous.requestCount < observedRequests
+          ? CoworkTurnUsageStatus.Partial : previous.status,
+      };
+      this.persist(sessionId, messageId, previous);
+      this.deps.emitTurnUsage({ sessionId, messageId, turnUsage: previous });
+    }
     if (mode.afterTurn && !previous) {
+      const pending = this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Pending, observation);
+      if (observedRequests !== undefined) this.persist(sessionId, messageId, pending);
       this.deps.emitTurnUsage({
         sessionId,
         messageId,
-        turnUsage: this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Pending, observedCompletedRequests),
+        turnUsage: pending,
       });
     }
 
     const mediaTaskIds = message.metadata?.turnMediaTaskIds ?? [];
-    let usage = await this.fetchUsage(trace, observedCompletedRequests, mediaTaskIds, owner);
+    let usage = await this.fetchUsage(trace, observation, mediaTaskIds, owner);
     if (this.deps.getSessionKey?.() !== owner) return null;
-    if (mode.afterTurn && (!usage || usage.status === CoworkTurnUsageStatus.Partial
-      || (mode.afterRequest && previous && usage.requestCount <= previous.requestCount))) {
-      await this.sleep(PARTIAL_RETRY_DELAY_MS);
+    const retryDelays = mode.afterStop ? STOPPED_TURN_RETRY_DELAYS_MS : [PARTIAL_RETRY_DELAY_MS];
+    for (const delay of mode.afterTurn ? retryDelays : []) {
+      if (usage && usage.status !== CoworkTurnUsageStatus.Partial
+        && !(mode.afterRequest && previous && usage.requestCount <= previous.requestCount)) break;
+      if (mode.afterStop && usage && (!previous || usage.requestCount >= previous.requestCount)) {
+        const resultMessageId = this.persist(sessionId, messageId, usage);
+        if (!resultMessageId) return null;
+        this.deps.emitTurnUsage({ sessionId, messageId: resultMessageId, turnUsage: usage });
+      }
+      await this.sleep(delay);
       if (this.deps.getSessionKey?.() !== owner) return null;
-      usage = await this.fetchUsage(trace, observedCompletedRequests, mediaTaskIds, owner) ?? usage;
+      const refreshed = await this.fetchUsage(trace, observation, mediaTaskIds, owner);
+      if (refreshed && (!usage || refreshed.requestCount >= usage.requestCount)) usage = refreshed;
     }
     if (this.deps.getSessionKey?.() !== owner) return null;
 
@@ -247,7 +300,7 @@ export class CoworkTurnUsageService {
       usage = null;
     }
     const result = usage
-      ?? (hasPreviousSummary ? previous : this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Failed, observedCompletedRequests));
+      ?? (hasPreviousSummary ? previous : this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Failed, observation));
     const resultMessageId = this.persist(sessionId, messageId, result);
     if (!resultMessageId) return null;
     this.deps.emitTurnUsage({ sessionId, messageId: resultMessageId, turnUsage: result });
@@ -265,7 +318,7 @@ export class CoworkTurnUsageService {
 
   private async fetchUsage(
     trace: CoworkLlmTrace,
-    observedCompletedRequests: number | undefined,
+    observation: TurnUsageObservation,
     mediaTaskIds: string[],
     owner: string | null | undefined,
   ): Promise<CoworkTurnUsage | null> {
@@ -283,7 +336,7 @@ export class CoworkTurnUsageService {
     }
     const usage = buildCoworkTurnUsage(mergeLlmTraceUsageSummaries(trace.traceId, summaries), {
       traceId: trace.traceId,
-      observedCompletedRequests,
+      ...observation,
       now: this.now(),
     });
     if (!usage) {
@@ -359,7 +412,7 @@ export class CoworkTurnUsageService {
   private buildEmptyUsage(
     trace: CoworkLlmTrace,
     status: CoworkTurnUsage['status'],
-    observedCompletedRequests: number | undefined,
+    observation: TurnUsageObservation,
   ): CoworkTurnUsage {
     return {
       traceId: trace.traceId,
@@ -374,7 +427,7 @@ export class CoworkTurnUsageService {
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      ...(typeof observedCompletedRequests === 'number' ? { observedCompletedRequests } : {}),
+      ...observation,
       updatedAt: this.now(),
     };
   }

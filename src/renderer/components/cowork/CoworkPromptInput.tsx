@@ -112,7 +112,7 @@ import type { Model } from '../../store/slices/modelSlice';
 import { isSameModelIdentity } from '../../store/slices/modelSlice';
 import { setActiveSkillIds, setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import type { CoworkSession } from '../../types/cowork';
-import { CoworkCollaborationMode, CoworkImageAttachment } from '../../types/cowork';
+import { CoworkCollaborationMode, CoworkImageAttachment, CoworkSessionStatusValue } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
 import { getAgentDisplayName, usesManagedPresetAvatar } from '../../utils/agentDisplay';
@@ -147,6 +147,7 @@ import ModelSelector, {
 import { SkillsPopover } from '../skills';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import {
+  buildSessionModelSelectionPatch,
   resolveAgentModelSelection,
   resolveAgentStartModel,
   resolveEffectiveModel,
@@ -192,6 +193,7 @@ import {
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
+import { matchesSendShortcut } from './sendShortcut';
 import { buildPlanModeSystemPrompt } from './skillSystemPrompt';
 import { usePersistAgentModelSelection } from './usePersistAgentModelSelection';
 import { useCoworkVoiceInput } from './voiceInput/useCoworkVoiceInput';
@@ -2189,32 +2191,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Use synced state (kept up-to-date via config-updated event) so that
     // changes made in the Settings panel are reflected immediately without
     // requiring a configService read at event time.
-    const sendKey = currentSendShortcut;
-
-    let isSendCombo = false;
-    switch (sendKey) {
-      case '':
-        isSendCombo = false;
-        break;
-      case 'Enter':
-        isSendCombo = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-        break;
-      case 'Shift+Enter':
-        isSendCombo = event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-        break;
-      case 'Ctrl+Enter':
-        isSendCombo = isMacPlatform
-          ? event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
-          : event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
-        break;
-      case 'Alt+Enter':
-        isSendCombo = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
-        break;
-      default:
-        // Unknown config value — fall back to bare Enter so the user can always send
-        isSendCombo = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-        break;
-    }
+    const isSendCombo = matchesSendShortcut(currentSendShortcut, event, isMacPlatform);
 
     const goalCommandCanRunWhileStreaming = goalInputActive && !!sessionId && !!onGoalCommand;
     const followUpCanQueueWhileStreaming = !!sessionId && !remoteManaged;
@@ -3076,6 +3053,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     <div className="flex flex-col items-start gap-1">
       <ModelSelector
         allowPresets={!sessionId || !currentSession || isChatPresetSession(currentSession)}
+        allowContextWindowSelection={!sessionId || !!currentSession && isChatPresetSession(currentSession)}
+        contextWindowSessionId={sessionId ?? undefined}
+        contextWindowDisabled={isStreaming || currentSession?.status === CoworkSessionStatusValue.Running}
         compact={useHomeContextLayout}
         iconOnly={narrow}
         anchorAccessPrompt={narrow}
@@ -3130,6 +3110,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           const modelRef = keepsBoundPreset ? currentSession!.modelOverride
             : selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
           if (sessionId) {
+            const keepsSessionModel = keepsBoundPreset || meta.thinkingOnly === true
+              || (!currentSession?.modelPresetId && currentSession?.modelOverride === modelRef);
             const requestId = modelPatchRequestIdRef.current + 1;
             modelPatchRequestIdRef.current = requestId;
             const previousModelOverride = currentSession?.id === sessionId
@@ -3151,10 +3133,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             }));
 
             try {
-              const patchedSession = await coworkService.patchSession(sessionId, {
-                ...(keepsBoundPreset ? {} : { model: modelRef }),
-                thinkingLevel: nextThinkingLevel || null,
-              });
+              const patchedSession = await coworkService.patchSession(sessionId,
+                buildSessionModelSelectionPatch(modelRef, nextThinkingLevel, keepsSessionModel));
               if (requestId !== modelPatchRequestIdRef.current) return;
 
               if (!patchedSession) {

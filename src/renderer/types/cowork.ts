@@ -4,6 +4,7 @@ import type {
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
   CoworkForkMode,
+  CoworkSessionStatus,
 } from '../../shared/cowork/constants';
 import type { CoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../shared/cowork/goal';
@@ -19,6 +20,7 @@ import type {
 import type { CoworkModelChange } from '../../shared/cowork/modelChange';
 import type { CoworkSessionContentMatch } from '../../shared/cowork/search';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
+import type { CoworkTurnOutcome } from '../../shared/cowork/turnOutcome';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -40,16 +42,7 @@ import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 // Cowork image attachment for vision-capable models
 export type CoworkImageAttachment = CoworkImageAttachmentPayload;
 
-// Cowork session status
-export const CoworkSessionStatusValue = {
-  Idle: 'idle',
-  Running: 'running',
-  Completed: 'completed',
-  Error: 'error',
-} as const;
-
-export type CoworkSessionStatus =
-  typeof CoworkSessionStatusValue[keyof typeof CoworkSessionStatusValue];
+export { type CoworkSessionStatus,CoworkSessionStatusValue } from '../../shared/cowork/constants';
 
 // Cowork message types
 export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
@@ -88,7 +81,9 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  turnOutcome?: CoworkTurnOutcome;
   imageEdits?: import('../../shared/imageEditing/types').ImageEditMessageSnapshot[];
+  messageVersion?: import('../../shared/cowork/messageEdit').CoworkMessageVersionInfo;
   modelChange?: CoworkModelChange;
   modelPresetId?: ModelPresetId;
   resolvedModelId?: string;
@@ -189,6 +184,7 @@ export interface CoworkSession {
   systemPrompt: string;
   modelOverride: string;
   modelPresetId?: ModelPresetId | null;
+  contextWindowOverride?: number | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];

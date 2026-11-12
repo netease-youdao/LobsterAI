@@ -1,6 +1,10 @@
 const { notarize } = require('@electron/notarize');
 const path = require('path');
 
+// This afterSign hook owns notarization and stapling. Keep mac.notarize=false
+// in electron-builder.json so inherited APPLE_* credentials do not also trigger
+// electron-builder's built-in notarizer before this hook runs.
+
 // Load .env when dotenv is available, but do not require it for packaging.
 try {
   require('dotenv').config();

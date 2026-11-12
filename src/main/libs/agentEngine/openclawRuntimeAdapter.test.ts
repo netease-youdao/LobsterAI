@@ -3806,6 +3806,7 @@ function createRunTurnAdapter(options: {
       sessionKey: 'agent:main:lobsterai:session-1',
       source: options.sessionModelOverride ? 'sessionOverride' : 'agentModel',
       confirmedAt: Date.now(),
+      contextWindowFingerprint: adapter.sessionContextWindowFingerprint(session.id, options.cachedModel),
     });
   }
 
@@ -4617,6 +4618,7 @@ test('continueSession patches a session override before chat.send even when the 
   expect(requests[0].params).toEqual({
     key: 'agent:main:lobsterai:session-1',
     model,
+    contextWindow: null,
     reasoningLevel: 'stream',
   });
 });
@@ -5676,12 +5678,25 @@ test('stopSession finalizes streamed assistant metadata with the active model', 
   const sessionKey = `agent:main:lobsterai:${session.id}`;
   const turn = createActiveTurn(session.id, sessionKey, 'run-stop');
   turn.model = model;
+  turn.userMessageId = 'msg-1';
+  turn.llmTraceId = '4bf92f3577b34da6a3ce929d0e0e4736';
   turn.assistantMessageId = 'msg-2';
   turn.currentAssistantSegmentText = 'partial answer';
   adapter.activeTurns.set(session.id, turn);
 
+  const stoppedSpy = vi.fn(() => {
+    expect(adapter.isSessionActive(session.id)).toBe(false);
+    expect(adapter.getTurnRunIds(session.id)).toEqual([]);
+  });
+  const completedSpy = vi.fn();
+  adapter.on('sessionStopped', stoppedSpy);
+  adapter.on('complete', completedSpy);
   adapter.stopSession(session.id);
 
+  expect(stoppedSpy).toHaveBeenCalledWith(session.id, {
+    userMessageId: 'msg-1', traceId: turn.llmTraceId, runIds: ['run-stop'], startedAt: turn.startedAtMs,
+  });
+  expect(completedSpy).not.toHaveBeenCalled();
   const assistantMessage = session.messages.find((message) => message.id === 'msg-2');
   expect(assistantMessage?.content).toBe('partial answer');
   expect(assistantMessage?.metadata).toMatchObject({
