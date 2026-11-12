@@ -297,7 +297,7 @@ class AgentService {
       return null;
     } catch (error) {
       console.error('Failed to add preset agent:', error);
-      return null;
+      throw error;
     }
   }
 

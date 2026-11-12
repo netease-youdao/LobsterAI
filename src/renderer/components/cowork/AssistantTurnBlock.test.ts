@@ -5,6 +5,8 @@ import { Provider } from 'react-redux';
 import { expect, test } from 'vitest';
 
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../../../shared/cowork/llmTurnUsage';
+import { ModelPresetId } from '../../../shared/modelPresets/constants';
+import { i18nService } from '../../services/i18n';
 import type { CoworkMessage } from '../../types/cowork';
 import AssistantTurnBlock from './AssistantTurnBlock';
 import ConversationTurnsView from './ConversationTurnsView';
@@ -18,14 +20,16 @@ const renderTurn = (
   const store = configureStore({
     reducer: {
       auth: () => ({ creditQuotaSnapshot: null }),
+      cowork: () => ({ isStreaming: isStreamingTurn, currentSession: null }),
       enterpriseAccount: () => ({ context: null }),
-      cowork: () => ({ isStreaming: isStreamingTurn }),
     },
   });
   const turn = buildConversationTurns(buildDisplayItems(messages))[0];
   return renderToStaticMarkup(React.createElement(Provider, {
     store,
-    children: React.createElement(AssistantTurnBlock, { turn, isStreamingTurn, showActivityIndicator }),
+    children: React.createElement(AssistantTurnBlock, {
+      turn, isStreamingTurn, showActivityIndicator, onForkMessage: () => {},
+    }),
   }));
 };
 
@@ -46,7 +50,9 @@ const process: CoworkMessage[] = [
 
 const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
 const usage = buildCoworkTurnUsage({ traceId, requestCount: 3, creditsUsed: 12.5 }, { traceId, now: 60_000 })!;
-const userWithUsage: CoworkMessage = { ...process[0], metadata: { turnUsage: usage } };
+const userWithUsage: CoworkMessage = { ...process[0], metadata: {
+  turnUsage: usage, modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'deepseek-flash',
+} };
 
 test.each([
   { name: 'before any assistant output', items: [] },
@@ -55,9 +61,18 @@ test.each([
     { id: 'progress', type: 'assistant' as const, content: 'Working on it.', timestamp: 2_000 },
     ...toolMessages('stopped-tool', 3_000).slice(0, 1),
   ] },
-])('shows stopped turn usage once $name', ({ items }) => {
+])('shows one complete stopped turn footer $name', ({ items }) => {
   const html = renderTurn([userWithUsage, ...items], false);
   expect(html.match(/12\.5 积分/g)).toHaveLength(1);
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html).toContain('cowork-message-meta-full-date');
+  expect(html).toContain('deepseek-flash');
+  expect(html).toContain(`aria-label="${i18nService.t('coworkForkFromMessage')}"`);
+  const copyButton = html.match(/<button[^>]*aria-label="复制到剪贴板"[^>]*>/)?.[0];
+  expect(copyButton).toBeDefined();
+  expect(copyButton?.includes('disabled=""')).toBe(!items.some(
+    item => item.type === 'assistant' && !item.metadata?.isThinking,
+  ));
 });
 
 test('keeps a single usage chip with the final reply, including a stopped partial reply', () => {
@@ -66,7 +81,33 @@ test('keeps a single usage chip with the final reply, including a stopped partia
     { id: 'partial-reply', type: 'assistant', content: 'Here is the first part.', timestamp: 55_000 },
   ], false);
   expect(html.match(/12\.5 积分/g)).toHaveLength(1);
-  expect(html).toContain('cowork-message-meta');
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html.match(/aria-label="复制到剪贴板"/g)).toHaveLength(1);
+  expect(html).toContain(`aria-label="${i18nService.t('coworkForkFromMessage')}"`);
+});
+
+test('a stopped footer retains the actual model when the last assistant segment has no model metadata', () => {
+  const html = renderTurn([
+    userWithUsage,
+    { id: 'progress', type: 'assistant', content: 'Working on it.', timestamp: 2_000,
+      metadata: { model: 'deepseek-pro' } },
+    { ...process[1], timestamp: 2_500 },
+    ...toolMessages('tool', 3_000),
+  ], false);
+  expect(html).toContain('deepseek-pro');
+  expect(html).not.toContain('deepseek-flash');
+  expect(html.match(/12\.5 积分/g)).toHaveLength(1);
+});
+
+test('a stopped footer does not offer to copy hidden assistant output', () => {
+  const html = renderTurn([
+    userWithUsage,
+    { id: 'silent', type: 'assistant', content: 'NO_REPLY', timestamp: 2_000 },
+    ...toolMessages('tool', 3_000),
+  ], false);
+  const copyButton = html.match(/<button[^>]*aria-label="复制到剪贴板"[^>]*>/)?.[0];
+  expect(copyButton).toContain('disabled=""');
+  expect(html).not.toContain('NO_REPLY');
 });
 
 test('keeps usage hidden while the turn is streaming', () => {
@@ -90,7 +131,9 @@ test('mounts a conversation turn containing only the user message and persisted 
     cowork: () => ({ isStreaming: false }),
   } });
   const html = renderToStaticMarkup(React.createElement(Provider, { store,
-    children: React.createElement(ConversationTurnsView, { messages: [userWithUsage] }),
+    children: React.createElement(ConversationTurnsView, {
+      messages: [userWithUsage], scrollContainerRef: React.createRef<HTMLDivElement>(),
+    }),
   }));
   expect(html).toContain('12.5 积分');
 });
@@ -200,4 +243,40 @@ test('a running turn spends no step line on progress card updates once they fini
   expect(running).not.toContain('更新了任务进度');
   expect(running).not.toContain('progress_card');
   expect(running.match(/data-activity-step-kind="command"/g)).toHaveLength(3);
+});
+
+test('a turn stopped during a tool step still shows its credits after usage settles', () => {
+  const turnUsage = {
+    traceId: '0123456789abcdef0123456789abcdef',
+    status: CoworkTurnUsageStatus.Settled,
+    requestCount: 2,
+    failedRequestCount: 1,
+    models: ['deepseek-flash'],
+    creditsUsed: 37,
+    displayCreditsUsed: 37,
+    uncachedInputTokens: 1_000,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    inputTokens: 1_000,
+    outputTokens: 200,
+    totalTokens: 1_200,
+    updatedAt: 9_000,
+  };
+  const html = renderTurn([
+    { ...process[0], metadata: { turnUsage, model: 'deepseek-flash' } },
+    ...process.slice(1),
+  ], false);
+  expect(html).toContain('cowork-message-meta');
+  expect(html).toContain('37');
+  // The trailing row uses the same time, model, usage, and action layout as a reply.
+  expect(html).toContain('cowork-message-meta-full-date');
+  expect(html).toMatch(/title="deepseek-flash"|DeepSeek/i);
+  expect(html).toContain('aria-label="复制到剪贴板"');
+  expect(html).toContain(`aria-label="${i18nService.t('coworkForkFromMessage')}"`);
+
+  const live = renderTurn([
+    { ...process[0], metadata: { turnUsage } },
+    ...process.slice(1),
+  ], true);
+  expect(live).not.toContain('cowork-message-meta');
 });

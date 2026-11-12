@@ -6,7 +6,7 @@ import {
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
 } from '../../../shared/agent/constants';
-import { usageFailureCode, type UsageParams } from '../../../shared/analytics/usage';
+import { usageFailureCode, UsageOutcome, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
 import type { IMGatewayManager } from '../../im';
@@ -317,11 +317,22 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
           ...(failureCode ? { failureStage, failureCode } : {}) });
       } catch { /* Reporting must not affect expert preparation. */ }
     };
+    const fail = (error: unknown, failureCode: string = usageFailureCode(error)) => {
+      console.error('[Agents] Failed to prepare preset agent:', {
+        presetId, failureStage, prepareMode, durationMs: Date.now() - startedAt,
+      }, error);
+      report(UsageOutcome.Failed, failureCode);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message
+          : typeof error === 'string' ? error : 'Failed to add preset agent',
+      };
+    };
     try {
       const existing = getAgentManager().listAgents().find(agent => agent.source === 'preset' && agent.presetId === presetId);
       prepareMode = existing ? existing.enabled ? PresetPreparationMode.Reuse : PresetPreparationMode.Reenable : PresetPreparationMode.Install;
       const agent = await getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
-      if (!agent) { report('failed', 'preset_not_found'); return { success: false, error: 'Preset agent not found' }; }
+      if (!agent) return fail(new Error(`Preset agent not found: ${presetId}`), 'preset_not_found');
       // A reused or re-enabled instance keeps the persona its workspace already has.
       if (prepareMode === PresetPreparationMode.Install) writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);
       // The composer must not become ready before OpenClaw knows this agent.
@@ -329,19 +340,13 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       failureStage = PresetPreparationStage.ConfigSync;
       const syncResult = await syncOpenClawConfig({ reason: 'agent-preset-added' });
       if (!syncResult.success) {
-        report('failed', usageFailureCode(syncResult.error));
-        console.error('[OpenClaw] config sync after agent-preset-added failed:', syncResult.error);
-        return { success: false, error: syncResult.error || 'Failed to sync preset agent' };
+        return fail(new Error(syncResult.error || 'Failed to sync preset agent'));
       }
       notifyAgentsChanged(event.sender);
-      report('succeeded');
+      report(UsageOutcome.Succeeded);
       return { success: true, agent };
     } catch (error) {
-      report('failed', usageFailureCode(error));
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to add preset agent',
-      };
+      return fail(error);
     }
   });
 }

@@ -42,6 +42,7 @@ import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
 import AssistantMessageItem from './AssistantMessageItem';
+import AssistantTurnFooter from './AssistantTurnFooter';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
@@ -1099,7 +1100,10 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !turnUsageSlot) {
+  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
+  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
+
+  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
     return null;
   }
 
@@ -1187,10 +1191,13 @@ const AssistantTurnBlock: React.FC<{
                 )}
               </div>
             )}
-            {!turnUsageReplyId && turnUsageSlot && (
-              <div className="flex items-center text-[12px] leading-5 text-secondary" data-cowork-search-exclude="true">
-                {turnUsageSlot}
-              </div>
+            {trailingTurnUsageSlot && (
+              <AssistantTurnFooter
+                turn={turn}
+                turnUsageSlot={trailingTurnUsageSlot}
+                mapDisplayText={mapDisplayText}
+                onForkMessage={onForkMessage}
+              />
             )}
           </div>
         </div>

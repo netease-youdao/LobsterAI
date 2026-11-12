@@ -1,12 +1,23 @@
 import { CoworkTurnOutcome, getCoworkTurnOutcome } from '../../../../shared/cowork/turnOutcome';
 import { type CoworkSessionStatus, CoworkSessionStatusValue } from '../../../types/cowork';
-import type { ConversationTurn } from '../messageDisplayUtils';
+import { type ConversationTurn, isModelChangeMessage } from '../messageDisplayUtils';
 
 interface TurnSpeechContext {
   isLastTurn: boolean;
   sessionStatus: CoworkSessionStatus;
   isStreaming: boolean;
   hasRunningSubagents: boolean;
+}
+
+export function getLastMessageSpeechTurnIndex(turns: ConversationTurn[]): number {
+  // Switching models adds standalone notices, not another execution. The last
+  // legacy reply still belongs to the session's terminal completed run.
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn.userMessage || turn.assistantItems.length === 0
+      || !turn.assistantItems.every(item => item.type === 'system' && isModelChangeMessage(item.message))) return index;
+  }
+  return -1;
 }
 
 export function isMessageSpeechTurnCompleted(turn: ConversationTurn, context: TurnSpeechContext): boolean {
