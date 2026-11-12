@@ -1,11 +1,19 @@
 import { expect, test } from 'vitest';
 
 import { pptCatalogFixture } from '../../../tests/fixtures/pptCreation';
+import { ModelPresetId } from '../modelPresets/constants';
 import { isPptAssetUrl, parsePptCatalog, PptAssetKind, PptCreation } from './constants';
 
 test('accepts a complete bilingual catalog while preserving operator order and defaults', () => {
   const input = pptCatalogFixture();
   expect(parsePptCatalog(input)).toEqual(input);
+});
+test('older catalogs default to Fast while operators can change the recommended preset', () => {
+  const input = pptCatalogFixture();
+  const { recommendedModelPreset: _preset, ...legacy } = input;
+  expect(parsePptCatalog(legacy).recommendedModelPreset).toBe(ModelPresetId.Balanced);
+  expect(parsePptCatalog({ ...input, recommendedModelPreset: ModelPresetId.Ultimate }).recommendedModelPreset).toBe(ModelPresetId.Ultimate);
+  expect(() => parsePptCatalog({ ...input, recommendedModelPreset: 'removed-model' })).toThrow('recommended model');
 });
 test('accepts the NOS upload service asset host without accepting lookalike hosts', () => {
   expect(isPptAssetUrl('https://ydhardwarebusiness.nosdn.127.net/sample.pptx')).toBe(true);

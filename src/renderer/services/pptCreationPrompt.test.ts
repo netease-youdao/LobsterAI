@@ -12,6 +12,18 @@ test('custom work does not inherit fictional example content and includes the se
   expect(prompt).not.toContain('使用演示数据制作');
   expect(prompt).toContain('本季度留存分析'); expect(prompt).toContain('business.pptx');
   expect(prompt).toContain('<proposed_plan>'); expect(prompt).toContain('等待我确认');
+  expect(prompt).toContain('优先于示例的默认内容、受众、页数和修改范围');
+});
+
+test('an uploaded source deck keeps its facts instead of treating them as template placeholders', () => {
+  const options = { useDemo: false, topic: 'Only revise slide 6', audience: '', slideCount: 10,
+    workflow: PptWorkflow.Strict, templateName: 'original.pptx', sourceDeck: true };
+  const zh = buildPptCreationPrompt(pptCatalogFixture().examples[0], { ...options, language: 'zh' });
+  const en = buildPptCreationPrompt(pptCatalogFixture().examples[0], { ...options, language: 'en' });
+  expect(zh).toContain('内容、数字、图表数据与备注均作为原稿保留');
+  expect(zh).not.toContain('不作为本次事实材料');
+  expect(en).toContain('preserve the uploaded PPTX content, figures, chart data and notes');
+  expect(en).not.toContain('Do not treat its example text');
 });
 test('strict editing preserves scope without requesting another outline', () => {
   const prompt = buildPptCreationPrompt(pptCatalogFixture().examples[0], { language: 'en', useDemo: true,

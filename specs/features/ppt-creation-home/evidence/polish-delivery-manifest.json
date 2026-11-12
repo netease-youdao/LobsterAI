@@ -1,0 +1,217 @@
+{
+  "createdAt": "2026-11-12T04:16:40.047340+00:00",
+  "localSnapshotCommit": "a4909f4fa3f21fc78efda2f32760042b9a3044ef",
+  "branch": "feat/ppt-home-research",
+  "environment": "test",
+  "serviceId": 475,
+  "configId": 13244,
+  "catalogVersion": "2026-11-12.3",
+  "recommendedModelPreset": "balanced",
+  "examples": [
+    {
+      "id": "water-cycle",
+      "title": "一滴水的奇妙旅行",
+      "slides": 8,
+      "mode": "direct",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "GLM-5.3",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/cb3c995691835a1dd925651744edb25a.pptx",
+      "sha256": "c0ea07e77380b05eaec1438b543be6eec607a85a711b38f5d52efa7bc1252d5a",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/727ee3820cd3c8c573fde099971f954d.png",
+      "basis": "教学 25/117：概念、过程与课堂互动，完整提示词适合直接试做。",
+      "sourceSha256": "9be4a9f1c32112e7b6d24bde31dd473e800a6e403a488caad050c50d8d496a88",
+      "allNonCoverPartsIdentical": true
+    },
+    {
+      "id": "quarterly-review",
+      "title": "季度经营汇报",
+      "slides": 10,
+      "mode": "guided",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "MiniMax-M3.1-Flash",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/7a8f5c8058d2a2abbe98f94da0d3c4a0.pptx",
+      "sha256": "40b4368785b343c50f1182d2cb7cab4e1d98024131cce00c17c243d6274e5189",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/5d60845f799a2cc19322b7a7e8f23eb3.png",
+      "basis": "工作汇报 19/117：材料转图表，保留指标、单位与时间口径。",
+      "sourceSha256": "8f9afcf5e9916fd04b6854579a99d55057ab444b25920dbc5cbbd25b84ea855c",
+      "allNonCoverPartsIdentical": true
+    },
+    {
+      "id": "product-launch",
+      "title": "新品上市提案",
+      "slides": 8,
+      "mode": "direct",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "MiniMax-M3",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/d80379b6dd9230c5b99618361f675b33.pptx",
+      "sha256": "a170d7580ff4a553659152d630fb3d56dc3d77be3536f4c1faf68df126446d56",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/440203b69837cfe23d99c61e35497878.png",
+      "basis": "商业 18/117：给全虚构产品、受众与预算，展示方案组织。",
+      "sourceSha256": "f150506936173099ea9bc0d8b61d663ff68fbf91487ff19d56d5cc1bf3fb34ac",
+      "allNonCoverPartsIdentical": true
+    },
+    {
+      "id": "deck-refresh",
+      "title": "旧 PPT 局部焕新",
+      "slides": 10,
+      "mode": "guided",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "MiniMax-M3.1-Flash",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/79521a38f60c5548d9605a3d3c89f5a1.pptx",
+      "sha256": "f8bb953449e025dc5dbf38003d2b9f3841973f5c512dff7a17eeacd6e88582bb",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/e5d8f7ffa608a672136240aa630f4bd9.png",
+      "basis": "修改/改编 31/117；模板/参考样式 12/117 为可重叠标签，验证局部修改边界。",
+      "sourceSha256": "7cb45ba247a17915ac4497594f1dcfe4542f0f0341cec4a9e55b685a41ffd92c",
+      "allNonCoverPartsIdentical": true
+    },
+    {
+      "id": "ai-office",
+      "title": "AI 办公入门培训",
+      "slides": 8,
+      "mode": "direct",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "MiniMax-M3.1-Flash",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/2177174907d148e1c7ae1d6bd8f431e3.pptx",
+      "sha256": "30addc4d5a6ea2cc2f67a0a2fcde2c08a1fb38b0fe8aab8fa71c5c2f8f315dc4",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/bdb78a2ddf14936bbd23197b3e9805b6.png",
+      "basis": "培训分享 17/117，剔除旧示例前缀后 14 条；展示具体工作练习。",
+      "sourceSha256": "a0537758b2cc2af775181805ec33fa4309c0cc9f259c278a832a9f6a3fe6ad72",
+      "allNonCoverPartsIdentical": true
+    },
+    {
+      "id": "career-plan",
+      "title": "求职与职业规划",
+      "slides": 8,
+      "mode": "guided",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "MiniMax-M3.1-Flash",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/06e1ee316d3f78650db5d79d3890a4b3.pptx",
+      "sha256": "dc878d1206bfd75a16717420119614eff338db359e280ad9fb44d4fab4592bb8",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/91bbf10d646ef360528f45bcfde1fda4.png",
+      "basis": "求职/职业 10/117：按真实经历组织信息，演示人物完全虚构。",
+      "sourceSha256": "56df875fd4ca2137f662231c9801691e8460c47180cb0c7c2295c83259f5d45b",
+      "allNonCoverPartsIdentical": true
+    },
+    {
+      "id": "thesis-proposal",
+      "title": "论文开题答辩",
+      "slides": 12,
+      "mode": "guided",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "MiniMax-M3.1-Flash",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/7e3f05460ede1bf71d4098ac34db9d7b.pptx",
+      "sha256": "01ea9b578e4f7debfa5b8e9b96bf1e7e0bf705a682420936026ef3b2072b6e9c",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/a0d1005ff90620dbf6f900c49e1c48fd.png",
+      "basis": "学术 10/117：开题与文献汇报先确认结构，不把研究计划写成结果。",
+      "sourceSha256": "d71b3f880aad5ba5f873eb4dd89b563943190b0907958a1f168e8ed158ee96a4",
+      "allNonCoverPartsIdentical": true
+    },
+    {
+      "id": "industry-brief",
+      "title": "行业调研简报",
+      "slides": 10,
+      "mode": "guided",
+      "recommendedModelPreset": "balanced",
+      "historicalGenerationModel": "MiniMax-M3.1-Flash",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/da57177a7dd8f85ab994dedd73fa8a64.pptx",
+      "sha256": "d4e59deb9302a9c1ea09f3c40c6e3fc30cf12fc18cb352948382e36a0d2b6c78",
+      "coverUrl": "https://ydhardwarebusiness.nosdn.127.net/d6800712e413a7b55fe45f3916b3c28f.png",
+      "basis": "商业中的行业研究，以及综合需求；展示检索、证据大纲、图表和来源核对。",
+      "sourceSha256": "a739d8e244de413579cf96ee5ee29245f782927b1f7d738e50917f0ac7557536",
+      "allNonCoverPartsIdentical": true
+    }
+  ],
+  "walkthroughs": {
+    "guided": {
+      "source": "D:\\tmp\\lobster-ppt-entry-20261111\\evidence\\approved\\polish\\walkthrough\\quarterly-review.pptx",
+      "filename": "ppt-home-20261111-0abafb102b3ff2e3580a6a78.pptx",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/e3879cc4ac9d576e4cffd12deac2f5d5.pptx",
+      "sha256": "0abafb102b3ff2e3580a6a78015f2112f40aca54b6379367aadef6b7b8ff643e",
+      "bytes": 44844,
+      "uploadedAt": "2026-11-12T04:15:18.181836+00:00"
+    },
+    "strict": {
+      "source": "D:\\tmp\\lobster-ppt-entry-20261111\\evidence\\approved\\polish\\walkthrough\\single-slide-edit.pptx",
+      "filename": "ppt-home-20261111-c9383ad971fc3e008862878a.pptx",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/e5a523dae40c10a3217c1e53e08f40a4.pptx",
+      "sha256": "c9383ad971fc3e008862878a9785ebe73d142bea441641f3753d81aca56c2054",
+      "bytes": 1436821,
+      "uploadedAt": "2026-11-12T04:15:28.481809+00:00"
+    },
+    "original": {
+      "source": "D:\\tmp\\lobster-ppt-entry-20261111\\evidence\\approved\\polish\\original-deck\\original-deck.pptx",
+      "filename": "ppt-home-20261111-b302b7aaa1ab110dc50abd8d.pptx",
+      "url": "https://ydhardwarebusiness.nosdn.127.net/462d79b4778fe7011b735778672ef372.pptx",
+      "sha256": "b302b7aaa1ab110dc50abd8df83c0b59981e9fe8bf049f50e5ccbdd6e7094540",
+      "bytes": 1436502,
+      "uploadedAt": "2026-11-12T03:36:39.850869+00:00"
+    }
+  },
+  "usage": {
+    "snapshotAt": "2026-11-12T04:13:32.449Z",
+    "userId": 23204,
+    "flows": [
+      {
+        "sessionId": "ceca7723-b922-40ea-97a8-7d2d9965ca07",
+        "turns": 4,
+        "calls": 110,
+        "credits": "123.591716",
+        "displayCredits": 123.56,
+        "models": [
+          "MiniMax-M3.1-Flash",
+          "deepseek-flash"
+        ],
+        "firstRequestAt": "2026-11-12T11:45:32",
+        "lastRequestAt": "2026-11-12T12:10:25",
+        "balancedCalls": 108,
+        "heartbeatCalls": [
+          {
+            "id": 505156,
+            "model": "MiniMax-M3.1-Flash",
+            "credits": 0.12898,
+            "traceId": "04769df7e8872634d9eb4ccbab0b9934"
+          },
+          {
+            "id": 505157,
+            "model": "MiniMax-M3.1-Flash",
+            "credits": 0.07886,
+            "traceId": "2e28434a5551dea88e15baec5bd15a4e"
+          }
+        ]
+      },
+      {
+        "sessionId": "0fd94ca2-c624-43af-8244-e1c87af81af4",
+        "turns": 2,
+        "calls": 106,
+        "credits": "88.340704",
+        "displayCredits": 88.3,
+        "models": [
+          "deepseek-flash"
+        ],
+        "firstRequestAt": "2026-11-12T11:50:18",
+        "lastRequestAt": "2026-11-12T12:00:11",
+        "balancedCalls": 106,
+        "heartbeatCalls": []
+      }
+    ],
+    "newPreciseCredits": "211.932420",
+    "creditsRemaining": 13164.77
+  },
+  "scopeReview": "polish/evidence/strict-scope-review.json",
+  "configurationReview": "polish/evidence/config-scope-review.json",
+  "nativeEditorLimitation": "Native charts display placeholders; independent LibreOffice renders and OOXML data checks are retained.",
+  "wiki": {
+    "pageId": "445528698",
+    "title": "05 PPT 首页美化与完整操作验收（2026-11-12）",
+    "version": 2,
+    "parentId": "445527596",
+    "bodyVerified": true,
+    "imageWidthsVerified": true,
+    "at": "2026-11-12T04:27:08.284Z",
+    "url": "https://confluence.inner.youdao.com/pages/viewpage.action?pageId=445528698",
+    "verifiedAttachmentCount": 22,
+    "renderedImageCount": 19,
+    "noHorizontalOverflowAtViewport": 1263
+  },
+  "ownedRuntimeStoppedAt": "2026-11-12T12:22:57+08:00"
+}

@@ -1,7 +1,10 @@
+import { ModelPresetId, parseModelPresetId } from '../modelPresets/constants';
+
 export const PptCreation = {
   SchemaVersion: 1, ConfigKey: 'ppt-creation-examples', ActionId: 'pptx', HomeDraft: '__home__',
   RefreshMs: 5 * 60 * 1000, MaxAssetBytes: 20 * 1024 * 1024, MaxAttachments: 5,
 } as const;
+export const PptCreationError = { ModelUnavailable: 'ppt-model-unavailable' } as const;
 
 export const PptCreationIpc = {
   GetCatalog: 'ppt-creation:get-catalog', GetAsset: 'ppt-creation:get-asset',
@@ -25,13 +28,15 @@ export interface PptExample {
 }
 export interface PptCatalog {
   schemaVersion: 1; version: string; enabled: boolean; expertPresetId: string;
+  recommendedModelPreset: ModelPresetId;
   examples: PptExample[]; templates: PptTemplate[];
 }
 export interface PptAssetRequest { version: string; exampleId?: string; templateId?: string; assetId: string }
 export interface PptPreparedFile { name: string; mimeType: string; base64Data: string }
 
 export const emptyPptCatalog = (): PptCatalog => ({
-  schemaVersion: 1, version: 'unconfigured', enabled: false, expertPresetId: 'powerpoint-deck-builder', examples: [], templates: [],
+  schemaVersion: 1, version: 'unconfigured', enabled: false, expertPresetId: 'powerpoint-deck-builder',
+  recommendedModelPreset: ModelPresetId.Balanced, examples: [], templates: [],
 });
 const CDN_HOSTS = new Set(['shared.ydstatic.com', 'ydhardwarecommon.nosdn.127.net', 'ydhardwarebusiness.nosdn.127.net', 'ydschool-video.nosdn.127.net']);
 export function isPptAssetUrl(value: unknown): value is string {
@@ -85,6 +90,8 @@ function asset(value: unknown): PptAsset {
 export function parsePptCatalog(value: unknown): PptCatalog {
   const item = object(value);
   if (item.schemaVersion !== PptCreation.SchemaVersion || typeof item.enabled !== 'boolean') throw new Error('Invalid PPT catalog schema');
+  const recommendedModelPreset = item.recommendedModelPreset === undefined ? ModelPresetId.Balanced : parseModelPresetId(item.recommendedModelPreset);
+  if (!recommendedModelPreset) throw new Error('Invalid PPT recommended model preset');
   const templates = unique(list(item.templates, 12).map(value => {
     const template = object(value);
     const file = asset(template.file);
@@ -117,5 +124,5 @@ export function parsePptCatalog(value: unknown): PptCatalog {
     };
   }));
   if (item.enabled && !examples.length) throw new Error('Empty enabled PPT catalog');
-  return { schemaVersion: 1, version: text(item.version), enabled: item.enabled, expertPresetId: identifier(item.expertPresetId), examples, templates };
+  return { schemaVersion: 1, version: text(item.version), enabled: item.enabled, expertPresetId: identifier(item.expertPresetId), recommendedModelPreset, examples, templates };
 }

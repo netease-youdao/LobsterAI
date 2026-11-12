@@ -2,8 +2,9 @@ import { ArrowRightIcon, ArrowUpTrayIcon, XMarkIcon } from '@heroicons/react/24/
 import { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
-import { PptAssetKind, type PptCatalog, PptCreation, type PptExample, PptExampleMode, type PptPreparedFile, PptWorkflow } from '../../../shared/pptCreation/constants';
+import { PptAssetKind, type PptCatalog, PptCreation, PptCreationError, type PptExample, PptExampleMode, type PptPreparedFile, PptWorkflow } from '../../../shared/pptCreation/constants';
 import { i18nService } from '../../services/i18n';
+import { modelPresetName } from '../../services/modelPresets';
 import type { PptDraftOptions } from '../../services/pptCreationDraft';
 import { buildPptCreationPrompt, buildPptDirectPrompt } from '../../services/pptCreationPrompt';
 import type { RootState } from '../../store';
@@ -77,6 +78,7 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse }: {
     const text = direct ? buildPptDirectPrompt(prompt, language, catalog.templates.find(template => template.id === example.templateId)?.file.name) : buildPptCreationPrompt(example, {
       language, useDemo, topic, audience, slideCount, workflow,
       templateName: selectedTemplate?.file.name ?? (templateId === OWN_TEMPLATE ? t('pptCreationOwnTemplate') : undefined),
+      sourceDeck: templateId === OWN_TEMPLATE,
     });
     if (!text) return;
     setBusy(true); setError('');
@@ -86,7 +88,7 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse }: {
       if (mounted.current) { if (applied) onClose(); else setError(t('pptCreationDraftChanged')); }
     } catch (failure) {
       console.warn('[PptCreation] Could not prepare draft:', failure);
-      if (mounted.current) setError(t('pptCreationPrepareFailed'));
+      if (mounted.current) setError(t(failure instanceof Error && failure.message === PptCreationError.ModelUnavailable ? 'pptCreationModelUnavailable' : 'pptCreationPrepareFailed'));
     } finally { if (mounted.current) setBusy(false); }
   };
   const dismiss = () => { if (!busy) onClose(); };
@@ -110,7 +112,7 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse }: {
             className={`min-w-0 flex-1 rounded-lg border p-1 ${slide === index ? 'border-primary' : 'border-border-subtle'}`}>
             <PptPreviewImage url={preview.url} alt={t('pptCreationPage').replace('{page}', String(preview.slide))} className="aspect-video rounded" />
           </button>)}</div>
-          <p className="mt-3 text-xs text-muted">{t('pptCreationPages').replace('{count}', String(example.slideCount))} · {t('pptCreationModel')}{example.modelName}</p>
+          <p className="mt-3 text-xs text-muted">{t('pptCreationPages').replace('{count}', String(example.slideCount))} · {t('pptCreationModel')}{modelPresetName(catalog.recommendedModelPreset)}</p>
           <p className="mt-4 rounded-lg bg-background p-3 text-xs leading-5 text-muted">{t('pptCreationDemoHint')}</p>
         </div>
         <div className="space-y-4">

@@ -3,7 +3,7 @@ import type { LanguageType } from './i18n';
 
 export interface PptPromptOptions {
   language: LanguageType; useDemo: boolean; topic: string; audience: string; slideCount: number;
-  workflow: PptWorkflow; templateName?: string;
+  workflow: PptWorkflow; templateName?: string; sourceDeck?: boolean;
 }
 
 export function buildPptDirectPrompt(prompt: string, language: LanguageType, templateName?: string): string {
@@ -21,12 +21,20 @@ export function buildPptDirectPrompt(prompt: string, language: LanguageType, tem
 export function buildPptCreationPrompt(example: PptExample, options: PptPromptOptions): string {
   const zh = options.language === 'zh';
   const lines = [options.useDemo ? example.prompt[options.language] : example.customPrompt[options.language]];
+  lines.push(zh
+    ? '以下是本次实际设置，优先于示例的默认内容、受众、页数和修改范围；目标页数包含封面。'
+    : 'The settings below take precedence over the example defaults for content, audience, slide count and editing scope. The target slide count includes the cover.');
   if (options.topic.trim()) lines.push(`${zh ? '本次主题与内容' : 'Topic and content'}：${options.topic.trim()}`);
   if (options.audience.trim()) lines.push(`${zh ? '受众' : 'Audience'}：${options.audience.trim()}`);
   lines.push(`${zh ? '目标页数' : 'Target slide count'}：${options.slideCount}`);
-  if (options.templateName) lines.push(zh
-    ? `模板：使用附件中的「${options.templateName}」，先检查原生布局、配色和占位符；模板中的示例文字与数值不作为本次事实材料。另存新文件，保留原始模板。`
-    : `Template: inspect the native layouts, colors and placeholders in the attached "${options.templateName}". Do not treat its example text or figures as facts for this task. Save a new file and preserve the original.`);
+  if (options.templateName) {
+    const sourceDeck = options.sourceDeck || options.workflow === PptWorkflow.Strict;
+    lines.push(sourceDeck ? (zh
+      ? '原稿：沿用上传的 PPTX，内容、数字、图表数据与备注均作为原稿保留；仅按明确要求修改。另存副本，保留原始文件。'
+      : 'Source deck: preserve the uploaded PPTX content, figures, chart data and notes. Change only what was explicitly requested, save a copy and keep the original file.') : (zh
+      ? `模板：使用附件中的「${options.templateName}」，先检查原生布局、配色和占位符；模板中的示例文字与数值不作为本次事实材料。另存新文件，保留原始模板。`
+      : `Template: inspect the native layouts, colors and placeholders in the attached "${options.templateName}". Do not treat its example text or figures as facts for this task. Save a new file and preserve the original.`));
+  }
   lines.push(zh
     ? '交付可编辑的 PPTX；文字、表格及关键图表使用原生对象。检查每页的溢出、遮挡与字号，提供最终文件链接。保留原始资料，不编造来源、履历或经营事实；演示数据明确标注。已有信息足够时不重复追问。'
     : 'Deliver an editable PPTX with native text, tables and key charts. Check every slide for overflow, overlap and readable font sizes; link the final file. Preserve source files. Do not invent sources, career history or business facts. Label demonstration data. Do not repeat questions already answered.');

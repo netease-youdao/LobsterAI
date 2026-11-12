@@ -2,7 +2,7 @@ import { ArrowRightIcon, ChevronUpIcon, XMarkIcon } from '@heroicons/react/24/ou
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
-import { PptCreation, type PptExample, PptExampleMode, PptWorkflow } from '../../../shared/pptCreation/constants';
+import { PptCreation, PptCreationError, type PptExample, PptExampleMode, PptWorkflow } from '../../../shared/pptCreation/constants';
 import { i18nService } from '../../services/i18n';
 import { type PptDraftBackup, type PptDraftOptions, preparePptCreationDraft, restorePptCreationDraft } from '../../services/pptCreationDraft';
 import { buildPptDirectPrompt } from '../../services/pptCreationPrompt';
@@ -59,7 +59,7 @@ export default function HomePptCreation({ active, onClose, onDraftReady, childre
     void applyExample(example, { prompt: buildPptDirectPrompt(example.prompt[language], language, templateName), mode: PptExampleMode.Direct,
       workflow: PptWorkflow.Generate, useDemo: true, templateId: example.templateId, files: [] })
       .then(applied => { if (!applied && mounted.current) setError(t('pptCreationDraftChanged')); })
-      .catch(failure => { console.warn('[PptCreation] Could not prepare example:', failure); if (mounted.current) setError(t('pptCreationPrepareFailed')); });
+      .catch(failure => { console.warn('[PptCreation] Could not prepare example:', failure); if (mounted.current) setError(t(failure instanceof Error && failure.message === PptCreationError.ModelUnavailable ? 'pptCreationModelUnavailable' : 'pptCreationPrepareFailed')); });
   };
   const gallery = (full = false) => catalog && <PptExampleGallery examples={catalog.examples} full={full} busy={busy} onSelect={select} onPreview={setSelected} />;
   return <>

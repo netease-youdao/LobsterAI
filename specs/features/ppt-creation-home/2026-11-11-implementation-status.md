@@ -1,5 +1,7 @@
 # PPT 首页入口实施记录
 
+最新状态（2026-11-12）：此前功能已固定为提交 `a4909f4`；随后完成 8 份新封面、Overmind test `2026-11-12.3` 的快速模型推荐，以及引导定制/单页改稿真实验收。本轮新增改动按用户要求作为后续提交交付，两次提交一并推送至 `feat/ppt-home-research`，完整提交号见 Git 历史。见 [美化与完整流程记录](2026-11-12-polish-and-walkthrough.md) 和 [独立 Wiki](https://confluence.inner.youdao.com/pages/viewpage.action?pageId=445528698)。以下为历史记录。
+
 状态：2026-11-12 10:25，本轮入口验收完成。8/8 个示例、3 套模板、test 动态目录和 15 项入口检查已完成；额外回归课件文字缺失已定位为生成文件内边距单位错误，由客户端修复后，25 个文本框及全部 8 页原生预览复验通过。代码未提交，prod 未改动，自动续跑任务已取消。最新结果见 [最终验收记录](2026-11-12-acceptance.md) 和 [Confluence 报告](https://confluence.inner.youdao.com/pages/viewpage.action?pageId=445528269)。以下为按时间保留的历史检查点，未完成描述以最终记录为准。
 
 ## 2026-11-12 02:12 验收检查点
