@@ -6,6 +6,12 @@ export interface PptPromptOptions {
   workflow: PptWorkflow; templateName?: string; sourceDeck?: boolean;
 }
 
+export function buildCoverContinuationPrompt(prompt: string, fileName: string, language: LanguageType): string {
+  return `${prompt}\n\n${language === 'zh'
+    ? `已确认的封面：附件「${fileName}」是用户刚确认的单页封面。以这一页作为最终 PPT 的第 1 页，保留原生文字、插画和版式，不重新生成或重画封面，不调用生图工具。目标页数包含这一页，其余页面继承暖米白、深青与低饱和绿橙的风格。封面只有视觉与主题参考作用，正文内容以本次输入为准。在副本中追加正文，保留原始封面文件，交付前检查第 1 页与原封面一致。`
+    : `Confirmed cover: the attached "${fileName}" is the user's approved one-slide cover. Keep it as slide 1, preserving its native text, illustration and layout. Do not regenerate or redraw it or invoke image generation. The target slide count includes it. Use matching warm ivory, deep teal and muted sage/coral styling for the remaining slides. The cover supplies theme and style only; use this request for the body content. Append body slides in a copy, preserve the source cover, and verify slide 1 against it before delivery.`}`;
+}
+
 export function buildPptDirectPrompt(prompt: string, language: LanguageType, templateName?: string): string {
   const zh = language === 'zh';
   const lines = [prompt.trim()];

@@ -4,7 +4,7 @@ import { pptCatalogFixture } from '../../../tests/fixtures/pptCreation';
 import { containsPlanModePrompt } from '../../shared/cowork/planMode';
 import { PptCreation, PptWorkflow } from '../../shared/pptCreation/constants';
 import { buildPptOutlineSystemPrompt, shouldUsePptOutlinePrompt } from '../../shared/pptCreation/outline';
-import { buildPptCreationPrompt, buildPptDirectPrompt } from './pptCreationPrompt';
+import { buildCoverContinuationPrompt, buildPptCreationPrompt, buildPptDirectPrompt } from './pptCreationPrompt';
 
 test('custom work does not inherit fictional example content and includes the selected template', () => {
   const prompt = buildPptCreationPrompt(pptCatalogFixture().examples[0], { language: 'zh', useDemo: false,
@@ -30,6 +30,18 @@ test('strict editing preserves scope without requesting another outline', () => 
     topic: 'Only revise slide 3', audience: '', slideCount: 10, workflow: PptWorkflow.Strict });
   expect(prompt).toContain('Only revise slide 3'); expect(prompt).toContain('modifying only requested');
   expect(prompt).not.toContain('<proposed_plan>');
+});
+
+test('continuing from an approved cover preserves editable slide 1 without another image charge', () => {
+  const zh = buildCoverContinuationPrompt('新正文主题：植物的一生', 'cover.pptx', 'zh');
+  expect(zh).toContain('新正文主题：植物的一生');
+  expect(zh).toContain('附件「cover.pptx」');
+  expect(zh).toContain('保留原生文字、插画和版式');
+  expect(zh).toContain('不调用生图工具');
+  expect(zh).toContain('目标页数包含这一页');
+  const en = buildCoverContinuationPrompt('New topic', 'cover.pptx', 'en');
+  expect(en).toContain('preserving its native text, illustration and layout');
+  expect(en).toContain('preserve the source cover');
 });
 
 test('switching an outline example to direct creation retains edits and overrides its approval step', () => {

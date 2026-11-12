@@ -209,6 +209,7 @@ import {
   OpenClawLoopbackRepairOutcome,
 } from '../shared/openclawEngine/constants';
 import { OpenClawRepairPhase, OpenClawRepairStage } from '../shared/openclawEngine/repair';
+import type { PptCoverRequest } from '../shared/pptCreation/cover';
 import type { ProviderConfig } from '../shared/providers';
 import {
   ModelRuntimeProfile,
@@ -616,6 +617,7 @@ import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './l
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { collectOpenWithArgv, findBundledPathArg, OpenWithPathQueue } from './libs/openWithPathQueue';
+import { applyCoverMediaPolicy } from './libs/pptCoverPolicy';
 import { PptCreationStore } from './libs/pptCreationStore';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
@@ -10511,6 +10513,7 @@ if (!gotTheLock) {
         modelPresetId?: ModelPresetId;
         thinkingLevel?: string;
         mediaSelection?: MediaSelectionState;
+        pptCover?: PptCoverRequest;
         mediaReferences?: MediaAttachmentRefMain[];
         selectedTextSnippets?: CoworkSelectedTextSnippet[];
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
@@ -10614,12 +10617,13 @@ if (!gotTheLock) {
         }
 
         const turnIsPlan = containsPlanModePrompt(systemPrompt);
-        const turnMediaSelection = await mediaDefaults.turn({
+        let turnMediaSelection = await mediaDefaults.turn({
           selection: normalizeMediaSelectionState(options.mediaSelection),
           isPlan: turnIsPlan,
           explicitSkillIds: options.activeSkillIds,
           inheritedSkillIds: options.inheritedSkillIds,
         });
+        if (options.pptCover) turnMediaSelection = applyCoverMediaPolicy(await pptCreationStore.getCatalog(), options.pptCover, turnMediaSelection);
         if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
           return { success: false, error: t('authAccountChanged') };
         }
@@ -11962,10 +11966,11 @@ if (!gotTheLock) {
     getEndpoint: getImageCreationExamplesUrl,
     cacheDirectory: path.join(app.getPath('userData'), 'image-creation'),
   }));
-  registerPptCreationHandlers(new PptCreationStore({
+  const pptCreationStore = new PptCreationStore({
     getEndpoint: getPptCreationExamplesUrl,
     cacheDirectory: path.join(app.getPath('userData'), 'ppt-creation'),
-  }));
+  });
+  registerPptCreationHandlers(pptCreationStore);
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
       schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },

@@ -160,6 +160,7 @@ import type {
   OpenClawUserConfigStatus,
 } from '../../shared/openclawUserConfig/constants';
 import type { PptAssetRequest, PptCatalog, PptPreparedFile } from '../../shared/pptCreation/constants';
+import type { PptCoverExportRequest,PptCoverRequest } from '../../shared/pptCreation/cover';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -1013,6 +1014,7 @@ interface IElectronAPI {
   };
   cowork: {
     startSession: (options: {
+      pptCover?: PptCoverRequest;
       analytics?: UsageContext;
       prompt: string;
       cwd?: string;
@@ -2231,6 +2233,8 @@ interface IElectronAPI {
     getReference: (exampleId: string) => Promise<ImageExampleReference>;
   };
   pptCreation: {
+    getCoverTemplate: (request: PptCoverRequest) => Promise<{ imageBase64: string }>;
+    exportCover: (request: PptCoverExportRequest) => Promise<PptPreparedFile>;
     getCatalog: () => Promise<PptCatalog>;
     getAsset: (request: PptAssetRequest) => Promise<PptPreparedFile>;
   };

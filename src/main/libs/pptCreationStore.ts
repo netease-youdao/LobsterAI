@@ -83,7 +83,11 @@ export class PptCreationStore {
     if (!catalog.enabled || catalog.version !== request.version) throw new Error('PPT catalog changed');
     const asset = request.templateId
       ? catalog.templates.find(item => item.id === request.templateId)?.file
-      : catalog.examples.find(item => item.id === request.exampleId)?.materials.find(item => item.id === request.assetId);
+      : (() => {
+        const example = catalog.examples.find(item => item.id === request.exampleId);
+        return example?.materials.find(item => item.id === request.assetId)
+          ?? (example?.cover?.file.id === request.assetId ? example.cover.file : undefined);
+      })();
     if (!asset || asset.id !== request.assetId) throw new Error('PPT asset unavailable');
     const response = await (this.options.download ?? download)(asset.url, PptCreation.MaxAssetBytes);
     if (endpoint !== this.options.getEndpoint()) throw new Error('PPT environment changed');

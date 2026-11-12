@@ -1,4 +1,5 @@
 import { ModelPresetId, parseModelPresetId } from '../modelPresets/constants';
+import { defaultCoverStyle, PptCover, type PptCoverRecipe } from './cover';
 
 export const PptCreation = {
   SchemaVersion: 1, ConfigKey: 'ppt-creation-examples', ActionId: 'pptx', HomeDraft: '__home__',
@@ -25,10 +26,12 @@ export interface PptExample {
   materials: PptAsset[];
   templateId?: string;
   requiresMaterial: boolean;
+  cover?: PptCoverRecipe;
 }
 export interface PptCatalog {
   schemaVersion: 1; version: string; enabled: boolean; expertPresetId: string;
   recommendedModelPreset: ModelPresetId;
+  coverImageModel?: string; coverStylePrompt?: PptText;
   examples: PptExample[]; templates: PptTemplate[];
 }
 export interface PptAssetRequest { version: string; exampleId?: string; templateId?: string; assetId: string }
@@ -121,8 +124,20 @@ export function parsePptCatalog(value: unknown): PptCatalog {
       defaultMode: example.defaultMode as PptExampleMode, defaultWorkflow: example.defaultWorkflow as PptWorkflow,
       slideCount: Number(example.slideCount), modelName: text(example.modelName, 120),
       previews, materials, requiresMaterial: example.requiresMaterial, ...(templateId ? { templateId } : {}),
+      ...(example.cover === undefined ? {} : { cover: parseCoverRecipe(example.cover) }),
     };
   }));
   if (item.enabled && !examples.length) throw new Error('Empty enabled PPT catalog');
-  return { schemaVersion: 1, version: text(item.version), enabled: item.enabled, expertPresetId: identifier(item.expertPresetId), recommendedModelPreset, examples, templates };
+  const coverImageModel = item.coverImageModel === undefined ? PptCover.DefaultImageModel : text(item.coverImageModel, 120);
+  if (!/^[a-zA-Z0-9._-]+$/.test(coverImageModel)) throw new Error('Invalid cover image model');
+  return { schemaVersion: 1, version: text(item.version), enabled: item.enabled, expertPresetId: identifier(item.expertPresetId), recommendedModelPreset, examples, templates,
+    ...(examples.some(example => example.cover) || item.coverImageModel !== undefined ? {
+      coverImageModel, coverStylePrompt: item.coverStylePrompt === undefined ? defaultCoverStyle : localized(item.coverStylePrompt, 3000),
+    } : {}) };
+}
+
+function parseCoverRecipe(value: unknown): PptCoverRecipe {
+  const item = object(value), file = asset(item.file);
+  if (file.kind !== PptAssetKind.Pptx) throw new Error('Cover template must be PPTX');
+  return { file, title: localized(item.title, 50), subtitle: localized(item.subtitle, 90), footer: localized(item.footer, 50), subject: localized(item.subject, 800) };
 }

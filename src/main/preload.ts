@@ -132,6 +132,7 @@ import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
 import { type PptAssetRequest, type PptCatalog, PptCreationIpc, type PptPreparedFile } from '../shared/pptCreation/constants';
+import { type PptCoverExportRequest,PptCoverIpc, type PptCoverRequest } from '../shared/pptCreation/cover';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
   type ShareDeploymentAnalyzeProjectInput,
@@ -653,6 +654,7 @@ contextBridge.exposeInMainWorld('electron', {
   cowork: {
     // Session management
     startSession: (options: {
+      pptCover?: PptCoverRequest;
       analytics?: UsageContext;
       prompt: string;
       cwd?: string;
@@ -1569,6 +1571,8 @@ contextBridge.exposeInMainWorld('electron', {
   pptCreation: {
     getCatalog: () => ipcRenderer.invoke(PptCreationIpc.GetCatalog) as Promise<PptCatalog>,
     getAsset: (request: PptAssetRequest) => ipcRenderer.invoke(PptCreationIpc.GetAsset, request) as Promise<PptPreparedFile>,
+    getCoverTemplate: (request: PptCoverRequest) => ipcRenderer.invoke(PptCoverIpc.Template, request) as Promise<{ imageBase64: string }>,
+    exportCover: (request: PptCoverExportRequest) => ipcRenderer.invoke(PptCoverIpc.Export, request) as Promise<PptPreparedFile>,
   },
   media: {
     getPreferences: (owner: string) =>

@@ -10,6 +10,7 @@ import type { RootState } from '../../store';
 import Modal from '../common/Modal';
 import { CoworkUiEvent } from '../cowork/constants';
 import { reportPromptTemplateAction } from '../cowork/promptAnalytics';
+import PptCoverWizard, { type PptCoverSeed } from './PptCoverWizard';
 import PptExampleDialog from './PptExampleDialog';
 import PptExampleGallery from './PptExampleGallery';
 import { usePptCatalog } from './usePptCatalog';
@@ -21,6 +22,8 @@ export default function HomePptCreation({ active, onClose, onDraftReady, childre
   const { catalog, failed, retry } = usePptCatalog();
   const owner = useSelector((state: RootState) => `${state.auth.ownerAccountKey}:${state.auth.accountGeneration}`);
   const [selected, setSelected] = useState<PptExample | null>(null);
+  const [coverExample, setCoverExample] = useState<PptExample | null>(null);
+  const [coverSeed, setCoverSeed] = useState<PptCoverSeed>();
   const [showAll, setShowAll] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -29,13 +32,13 @@ export default function HomePptCreation({ active, onClose, onDraftReady, childre
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    const reset = () => { preparation.current++; setSelected(null); setShowAll(false); setBackup(null); setError(''); setBusy(false); };
+    const reset = () => { preparation.current++; setSelected(null); setCoverExample(null); setCoverSeed(undefined); setShowAll(false); setBackup(null); setError(''); setBusy(false); };
     const focus = (event: Event) => { if ((event as CustomEvent<{ clear?: boolean }>).detail?.clear) reset(); };
     window.addEventListener(CoworkUiEvent.ShortcutNewSession, reset);
     window.addEventListener(CoworkUiEvent.FocusInput, focus);
     return () => { mounted.current = false; window.removeEventListener(CoworkUiEvent.ShortcutNewSession, reset); window.removeEventListener(CoworkUiEvent.FocusInput, focus); };
   }, []);
-  useEffect(() => { preparation.current++; setSelected(null); setShowAll(false); setError(''); setBusy(false); }, [active, catalog?.version, catalog?.enabled, owner]);
+  useEffect(() => { preparation.current++; setSelected(null); setCoverExample(null); setCoverSeed(undefined); setShowAll(false); setError(''); setBusy(false); }, [active, catalog?.version, catalog?.enabled, owner]);
   useEffect(() => { setBackup(null); }, [owner]);
 
   const applyExample = async (example: PptExample, options: PptDraftOptions): Promise<boolean> => {
@@ -85,6 +88,9 @@ export default function HomePptCreation({ active, onClose, onDraftReady, childre
       </div>
     </Modal>}
     {selected && catalog?.enabled && <PptExampleDialog key={`${catalog.version}:${selected.id}`} catalog={catalog} example={selected}
-      onClose={() => { preparation.current++; setSelected(null); setBusy(false); }} onUse={applyExample} />}
+      coverSeed={coverSeed} onCover={() => { setCoverExample(selected); setSelected(null); setShowAll(false); setCoverSeed(undefined); }}
+      onClose={() => { preparation.current++; setSelected(null); setCoverSeed(undefined); setBusy(false); }} onUse={applyExample} />}
+    {coverExample && catalog?.enabled && <PptCoverWizard key={`${owner}:${catalog.version}:${coverExample.id}`} catalog={catalog} example={coverExample}
+      onClose={() => setCoverExample(null)} onContinue={seed => { setCoverSeed(seed); setSelected(coverExample); setCoverExample(null); }} />}
   </>;
 }
