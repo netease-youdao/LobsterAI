@@ -2158,7 +2158,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       hasAgentModel: Boolean(nextAgent?.model),
       agentModelId: nextAgent?.model,
     });
-    switchExpertInDraft(agentId, value);
+    void switchExpertInDraft(agentId, value, () => textareaRef.current?.value === value);
     setShowAgentMenu(false);
   }, [agents, currentAgentId, reportPromptControl, value]);
 

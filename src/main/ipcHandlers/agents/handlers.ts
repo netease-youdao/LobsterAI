@@ -5,7 +5,9 @@ import {
   AgentIpcChannel,
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
+  AgentSource,
 } from '../../../shared/agent/constants';
+import { parseAgentModelSelection } from '../../../shared/agent/modelSelection';
 import { usageFailureCode, UsageOutcome, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
@@ -307,7 +309,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     }
   });
 
-  ipcMain.handle(AgentIpcChannel.AddPreset, async (event, presetId: string) => {
+  ipcMain.handle(AgentIpcChannel.AddPreset, async (event, presetId: string, rawModelSelection?: unknown) => {
     const startedAt = Date.now();
     let failureStage: PresetPreparationStage = PresetPreparationStage.Catalog;
     let prepareMode: PresetPreparationMode = PresetPreparationMode.Install;
@@ -329,9 +331,14 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       };
     };
     try {
-      const existing = getAgentManager().listAgents().find(agent => agent.source === 'preset' && agent.presetId === presetId);
+      const existing = getAgentManager().listAgents().find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
       prepareMode = existing ? existing.enabled ? PresetPreparationMode.Reuse : PresetPreparationMode.Reenable : PresetPreparationMode.Install;
-      const agent = await getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
+      const modelSelection = parseAgentModelSelection(rawModelSelection);
+      const agent = await getAgentManager().addPresetAgent(
+        presetId,
+        modelSelection ? modelSelection.model : resolveDefaultAgentModelRef(),
+        modelSelection?.thinkingLevel,
+      );
       if (!agent) return fail(new Error(`Preset agent not found: ${presetId}`), 'preset_not_found');
       // A reused or re-enabled instance keeps the persona its workspace already has.
       if (prepareMode === PresetPreparationMode.Install) writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);

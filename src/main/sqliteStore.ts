@@ -5,7 +5,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { AgentId, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
+import { AgentId, AgentModelSelectionMode, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
 import {
   OpenClawCronRunMetadataKey,
   parseOpenClawCronSessionKey,
@@ -222,6 +222,7 @@ export class SqliteStore {
         system_prompt TEXT NOT NULL DEFAULT '',
         identity TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
+        model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}',
         thinking_level TEXT NOT NULL DEFAULT '',
         working_directory TEXT NOT NULL DEFAULT '',
         icon TEXT NOT NULL DEFAULT '',
@@ -628,7 +629,14 @@ export class SqliteStore {
       throw error;
     }
 
-    // Null preserves legacy ownership inference; explicit edits are recorded from now on.
+    // Legacy model bindings have no provenance: preserve them until the user
+    // explicitly opts into inheritance. New experts opt in when installed.
+    const modelColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+    if (!modelColumns.some(column => column.name.toLowerCase() === 'model_selection_mode')) {
+      this.db.exec(`ALTER TABLE agents ADD COLUMN model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}';`);
+    }
+
+    // Null preserves legacy avatar ownership inference; explicit edits are recorded from now on.
     const avatarColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
     if (!avatarColumns.some(column => column.name.toLowerCase() === 'icon_customized')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN icon_customized INTEGER;');

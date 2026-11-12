@@ -22,6 +22,7 @@ import { useScrollAffordance } from '../imageCreation/useScrollAffordance';
 import { expertText, filterExperts } from './catalog';
 import ExpertFeaturedScenarios from './ExpertFeaturedScenarios';
 import { useExpertImpressions } from './useExpertImpressions';
+import { useExpertLoginGate } from './useExpertLoginGate';
 
 interface ExpertPlazaViewProps {
   onSummon: (agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => void;
@@ -34,6 +35,7 @@ interface ExpertPlazaViewProps {
 
 const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPresetId, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
   const { catalog: imageCatalog } = useImageCreationCatalog();
+  const { requestLogin, loginPrompt } = useExpertLoginGate();
   const [imageExample, setImageExample] = useState<ImageCreationExample | null>(null);
   const openedInitialPreset = useRef<string>();
   const [catalog, setCatalog] = useState<ExpertCatalog | null>(null);
@@ -147,6 +149,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
 
   const summon = async (preset: PresetAgent, prompt = expertText(preset.starterPrompts[0], language), starterIndex?: number) => {
     if (summoningRef.current) return;
+    if (requestLogin(() => { void summon(preset, prompt, starterIndex); })) return;
     summoningRef.current = true;
     setSummoning(preset.id);
     setSummonFailed(false);
@@ -302,6 +305,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
         onSummon(agent, prompt, staged);
         return true;
       }} />}
+      {loginPrompt}
     </div>
   );
 };

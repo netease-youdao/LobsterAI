@@ -11,6 +11,12 @@ export const AgentSource = {
 
 export type AgentSource = typeof AgentSource[keyof typeof AgentSource];
 
+export const AgentModelSelectionMode = {
+  Inherit: 'inherit',
+  Explicit: 'explicit',
+} as const;
+export type AgentModelSelectionMode = typeof AgentModelSelectionMode[keyof typeof AgentModelSelectionMode];
+
 export const AgentIpcChannel = {
   List: 'agents:list',
   Get: 'agents:get',
