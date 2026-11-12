@@ -34,6 +34,7 @@ export interface AgentHandlerDeps {
   refreshImSessionWorkingDirectoriesForAgent: (agentId: string) => number;
   resolveAgentWorkspacePath: (agentId: string) => string;
   resolveDefaultAgentModelRef: () => string;
+  deleteAgentWithRuntime: (agentId: string, commitLocalDeletion: () => boolean) => Promise<boolean>;
   syncOpenClawConfig: SyncOpenClawConfig;
 }
 
@@ -219,13 +220,14 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
   ipcMain.handle(AgentIpcChannel.Delete, async (event, id: string) => {
     try {
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
-      const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
+      if (!agentExists) return { success: true, deleted: false, deletedSessionIds: [] };
+      const deletedSessionIds = getCoworkStore().listSessionIdsByAgent(id);
       const router = getCoworkEngineRouter();
       for (const sessionId of deletedSessionIds) {
         router.stopSession(sessionId);
       }
 
-      const result = getAgentManager().deleteAgent(id);
+      const result = await deps.deleteAgentWithRuntime(id, () => getAgentManager().deleteAgent(id));
 
       try {
         const imStore = getIMGatewayManager()?.getIMStore();
@@ -270,6 +272,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       notifyAgentsChanged(event.sender);
       return { success: true, deleted: result, deletedSessionIds: result ? deletedSessionIds : [] };
     } catch (error) {
+      console.error('[Agents] Failed to delete agent:', id, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete agent',

@@ -125,9 +125,11 @@ describe('expert preset installation', () => {
   });
 
   test('deleted experts can be summoned again and unknown IDs create nothing', async () => {
-    await manager.addPresetAgent(ExpertFixtureId.Data);
-    agents.delete(ExpertFixtureId.Data);
-    expect((await manager.addPresetAgent(ExpertFixtureId.Data))?.presetId).toBe(ExpertFixtureId.Data);
+    const first = (await manager.addPresetAgent(ExpertFixtureId.Data))!;
+    agents.delete(first.id);
+    const second = (await manager.addPresetAgent(ExpertFixtureId.Data))!;
+    expect(second.presetId).toBe(ExpertFixtureId.Data);
+    expect(second.id).not.toBe(first.id);
     expect(await manager.addPresetAgent('missing-preset')).toBeNull();
     expect(agents.size).toBe(1);
   });
