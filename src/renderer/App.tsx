@@ -788,14 +788,21 @@ const App: React.FC = () => {
 
   const handleShowExperts = useCallback((event?: Event) => {
     if (!ENABLE_EXPERT_PLAZA_UI) return;
+    // An explicit destination takes priority over the delayed login welcome.
+    consumeNewUserWelcomeAfterLoginPending();
     const presetId = (event as CustomEvent<{ presetId?: unknown }> | undefined)?.detail?.presetId;
     setInitialExpertPresetId(typeof presetId === 'string' ? presetId : undefined);
     setMainView(MainView.Experts);
   }, []);
 
   useEffect(() => {
+    const cancelPendingWelcome = () => { consumeNewUserWelcomeAfterLoginPending(); };
     window.addEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
-    return () => window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+    window.addEventListener(ExpertUiEvent.Preparing, cancelPendingWelcome);
+    return () => {
+      window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+      window.removeEventListener(ExpertUiEvent.Preparing, cancelPendingWelcome);
+    };
   }, [handleShowExperts]);
 
   // In-app links from ads and other server-configured entries (lobsterai://settings/…, lobsterai://view/…).

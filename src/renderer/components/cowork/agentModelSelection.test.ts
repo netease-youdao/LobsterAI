@@ -1,14 +1,25 @@
+import { ModelPresetId } from '@shared/modelPresets/constants';
 import { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import { ModelThinkingLevel } from '@shared/providers/modelThinking';
 import { describe, expect, test } from 'vitest';
 
 import type { Model } from '../../store/slices/modelSlice';
 import {
+  buildSessionModelSelectionPatch,
   resolveAgentModelSelection,
   resolveAgentStartModel,
   resolveEffectiveModel,
   resolveModelThinkingLevel,
 } from './agentModelSelection';
+
+test('thinking-only edits omit the model field that would recalculate a session context choice', () => {
+  expect(buildSessionModelSelectionPatch('lobsterai-server/deepseek-flash', ModelThinkingLevel.High, true))
+    .toEqual({ thinkingLevel: ModelThinkingLevel.High });
+  expect(buildSessionModelSelectionPatch('lobsterai-server/deepseek-flash', ModelThinkingLevel.Off, true))
+    .toEqual({ thinkingLevel: ModelThinkingLevel.Off });
+  expect(buildSessionModelSelectionPatch('lobsterai-server/deepseek-flash', '', false))
+    .toEqual({ model: 'lobsterai-server/deepseek-flash', thinkingLevel: null });
+});
 
 const models: Model[] = [
   { id: 'gpt-4o', name: 'GPT-4o', providerKey: 'openai' },
@@ -65,6 +76,22 @@ describe('resolveModelThinkingLevel', () => {
 });
 
 describe('resolveAgentModelSelection', () => {
+  test('a bound mode keeps current mode window policy and real-model capabilities', () => {
+    const real: Model = { id: 'deepseek-flash', name: 'Flash', providerKey: 'lobsterai-server',
+      isServerModel: true, contextWindow: 1_000_000, supportsImage: true };
+    const preset: Model = { id: 'yd-fast', name: 'Fast', presetId: ModelPresetId.Balanced,
+      providerKey: 'lobsterai-server', isServerModel: true, contextWindow: 400_000,
+      contextWindowOptions: [400_000, 1_000_000] };
+    const resolve = () => resolveAgentModelSelection({ sessionModel: 'lobsterai-server/deepseek-flash',
+      sessionPresetId: ModelPresetId.Balanced, agentModel: '', availableModels: [real, preset],
+      fallbackModel: preset, engine: 'openclaw' }).selectedModel;
+    expect(resolve()).toMatchObject({ contextWindow: 400_000, contextWindowOptions: [400_000, 1_000_000], supportsImage: true });
+    preset.contextWindow = 500_000;
+    preset.contextWindowOptions = undefined;
+    expect(resolve()?.contextWindow).toBe(500_000);
+    expect(resolve()?.contextWindowOptions).toBeUndefined();
+  });
+
   test('uses explicit agent model when present', () => {
     const result = resolveAgentModelSelection({
       agentModel: 'anthropic/claude-sonnet-4',

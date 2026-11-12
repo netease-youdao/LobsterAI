@@ -3806,6 +3806,7 @@ function createRunTurnAdapter(options: {
       sessionKey: 'agent:main:lobsterai:session-1',
       source: options.sessionModelOverride ? 'sessionOverride' : 'agentModel',
       confirmedAt: Date.now(),
+      contextWindowFingerprint: adapter.sessionContextWindowFingerprint(session.id, options.cachedModel),
     });
   }
 
@@ -4617,6 +4618,7 @@ test('continueSession patches a session override before chat.send even when the 
   expect(requests[0].params).toEqual({
     key: 'agent:main:lobsterai:session-1',
     model,
+    contextWindow: null,
     reasoningLevel: 'stream',
   });
 });

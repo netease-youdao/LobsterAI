@@ -8,7 +8,9 @@ import {
   type ActivityHostGetSlotInput,
   ActivityIpc,
 } from '../shared/activity/constants';
+import type { AgentModelSelectionMode } from '../shared/agent/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
+import type { AgentModelSelection } from '../shared/agent/modelSelection';
 import type { UsageContext } from '../shared/analytics/usage';
 import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
@@ -131,6 +133,7 @@ import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
+import { ModelContextWindowIpc, type ModelContextWindowRequest } from '../shared/providers/modelContextWindow';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
   type ShareDeploymentAnalyzeProjectInput,
@@ -597,6 +600,7 @@ contextBridge.exposeInMainWorld('electron', {
         systemPrompt?: string;
         identity?: string;
         model?: string;
+        modelSelectionMode?: AgentModelSelectionMode;
         thinkingLevel?: string;
         workingDirectory?: string;
         icon?: string;
@@ -639,8 +643,8 @@ contextBridge.exposeInMainWorld('electron', {
       if (!result?.success) throw new Error(result?.error || 'Failed to load expert catalog');
       return result.catalog;
     },
-    addPreset: async (presetId: string) => {
-      const result = await ipcRenderer.invoke(AgentIpcChannel.AddPreset, presetId);
+    addPreset: async (presetId: string, modelSelection?: AgentModelSelection) => {
+      const result = await ipcRenderer.invoke(AgentIpcChannel.AddPreset, presetId, modelSelection);
       if (!result?.success) throw new Error(result?.error || 'Failed to add preset agent');
       return result.agent;
     },
@@ -1517,6 +1521,10 @@ contextBridge.exposeInMainWorld('electron', {
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
+  },
+  modelContextWindows: {
+    get: (request: ModelContextWindowRequest) => ipcRenderer.invoke(ModelContextWindowIpc.Get, request),
+    set: (request: ModelContextWindowRequest, tokens: number | null) => ipcRenderer.invoke(ModelContextWindowIpc.Set, request, tokens),
   },
   modelPresets: {
     available: () => ipcRenderer.invoke(ModelPresetIpc.Available),

@@ -5,8 +5,9 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
-import { AgentSource } from '../shared/agent/constants';
+import { AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
+import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { AgentManager } from './agentManager';
 import { CoworkStore } from './coworkStore';
 import { presetToCreateRequest } from './presetAgents';
@@ -85,10 +86,13 @@ test.each([false, true])('resummons a deleted legacy preset with a fresh identit
   if (legacyOwnership) expect(retiredIdentity).toMatchObject({ deleted_at: expect.any(Number) });
 
   const [first, concurrent] = await Promise.all([
-    manager.addPresetAgent(ExpertFixtureId.Data, 'provider/model'),
-    manager.addPresetAgent(ExpertFixtureId.Data, 'provider/model'),
+    manager.addPresetAgent(ExpertFixtureId.Data, 'provider/model', ModelThinkingLevel.High),
+    manager.addPresetAgent(ExpertFixtureId.Data, 'provider/model', ModelThinkingLevel.High),
   ]);
-  expect(first).toMatchObject({ source: AgentSource.Preset, presetId: ExpertFixtureId.Data, model: 'provider/model' });
+  expect(first).toMatchObject({
+    source: AgentSource.Preset, presetId: ExpertFixtureId.Data, model: 'provider/model',
+    modelSelectionMode: AgentModelSelectionMode.Inherit, thinkingLevel: ModelThinkingLevel.High,
+  });
   expect(first!.id).not.toBe(legacy.id);
   expect(concurrent!.id).toBe(first!.id);
   expect(manager.listAgents().filter(agent => agent.presetId === ExpertFixtureId.Data)).toHaveLength(1);

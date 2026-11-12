@@ -2565,9 +2565,17 @@ export class OpenClawConfigSync {
             });
             collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
             const serverModel = serverSel.providerConfig.models[0];
+            // Selectable managed models keep the server's default budget even when a
+            // compatibility profile declares a larger native model capacity.
+            if (sm.contextWindowOptions?.length && isPositiveModelLimit(sm.contextWindow)) {
+              serverModel.contextWindow = sm.contextWindow;
+              serverModel.maxTokens = clampModelMaxTokens(serverModel.maxTokens, sm.contextWindow);
+            }
             Object.assign(serverModel, buildPresetContextWindows({
               contextWindow: serverModel.contextWindow,
               presetContextWindows: sm.presetContextWindows,
+              contextWindowOptions: sm.contextWindowOptions,
+              presetContextWindowOptions: sm.presetContextWindowOptions,
             }));
             collectThinkingProfile(
               candidateThinkingProfiles,

@@ -3,6 +3,7 @@ import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy
 import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { modelContextWindowTranslations } from '../../shared/providers/contextWindowCopy';
 import { configService } from './config';
 
 // 支持的语言类型
@@ -25,6 +26,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
+    ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     ...imageCreationTranslations.zh,
     officeSaved: '已自动保存',
@@ -2401,6 +2403,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentIdentity: '身份',
     agentIdentityPlaceholder: '身份描述（IDENTITY.md）...',
     agentDefaultModel: 'Agent 默认模型',
+    expertInheritModel: '召唤时继承新任务的模型',
+    expertInheritModelHint: '召唤时使用原本新任务的模型选择。手动选择模型后，专家会保留独立设置。',
     agentDefaultWorkingDirectory: 'Agent 默认工作目录',
     agentDefaultWorkingDirectoryHint: '新建会话默认在此目录执行',
     agentModelInvalidHint: '当前模型已不可用，请重新选择',
@@ -4761,6 +4765,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
+    ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     ...imageCreationTranslations.en,
     officeSaved: 'All changes saved',
@@ -7251,6 +7256,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentIdentity: 'Identity',
     agentIdentityPlaceholder: 'Identity description (IDENTITY.md)...',
     agentDefaultModel: 'Agent Default Model',
+    expertInheritModel: 'Use the new-task model when summoning',
+    expertInheritModelHint: 'Summoning inherits the model you would use for a new task. Selecting a model manually keeps an independent choice for this expert.',
     agentDefaultWorkingDirectory: 'Agent Default Working Directory',
     agentDefaultWorkingDirectoryHint: 'New sessions run in this directory by default',
     agentModelInvalidHint: 'Model unavailable. Please select another',

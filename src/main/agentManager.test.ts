@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { DefaultAgentAvatarIcon } from '../shared/agent/avatar';
-import { AgentId, AgentSource } from '../shared/agent/constants';
+import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
+import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { AgentManager } from './agentManager';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from './coworkStore';
 import { setLanguage } from './i18n';
@@ -100,6 +101,8 @@ describe('expert preset installation', () => {
 
   test('a new catalog improves new installations without rewriting an installed legacy agent', async () => {
     const installed = (await manager.addPresetAgent(ExpertFixtureId.Data, 'legacy/model'))!;
+    // Existing installations predate model provenance; migration preserves them.
+    agents.set(installed.id, { ...installed, modelSelectionMode: AgentModelSelectionMode.Explicit });
     manager.updateAgent(installed.id, { name: 'My data expert', identity: 'My identity', workingDirectory: '/my-data' });
     const before = { ...agents.get(installed.id)! };
     const catalog = createExpertCatalogFixture();
@@ -136,5 +139,35 @@ describe('expert preset installation', () => {
     expect(results[0]?.id).toBe(results[1]?.id);
     expect(agents.size).toBe(1);
     expect((await manager.getPresetAgents()).map(preset => preset.id)).toEqual([ExpertFixtureId.App]);
+  });
+
+  test('re-summoning an inherited expert updates only its model choice and re-enables it', async () => {
+    const first = (await manager.addPresetAgent(ExpertFixtureId.Data, 'custom/old'))!;
+    manager.updateAgent(first.id, { name: 'Edited name', workingDirectory: '/my-folder', skillIds: ['docx'], enabled: false });
+    loadCatalog.mockRejectedValue(new Error('Offline'));
+    expect(await manager.addPresetAgent(ExpertFixtureId.Data, 'lobsterai-server/yd-fast', ModelThinkingLevel.High)).toMatchObject({
+      id: first.id, name: 'Edited name', workingDirectory: '/my-folder', skillIds: ['docx'], enabled: true,
+      model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High, modelSelectionMode: AgentModelSelectionMode.Inherit,
+    });
+  });
+
+  test('manual model or thinking edits opt out, and an explicit opt-in restores inheritance', async () => {
+    const first = (await manager.addPresetAgent(ExpertFixtureId.Data, 'custom/model'))!;
+    manager.updateAgent(first.id, { thinkingLevel: ModelThinkingLevel.High });
+    expect(await manager.addPresetAgent(ExpertFixtureId.Data, 'lobsterai-server/yd-fast')).toMatchObject({
+      model: 'custom/model', thinkingLevel: ModelThinkingLevel.High, modelSelectionMode: AgentModelSelectionMode.Explicit,
+    });
+    manager.updateAgent(first.id, { modelSelectionMode: AgentModelSelectionMode.Inherit });
+    expect((await manager.addPresetAgent(ExpertFixtureId.Data, 'lobsterai-server/yd-fast'))?.model).toBe('lobsterai-server/yd-fast');
+  });
+
+  test('a user model edit made during catalog fetch is not overwritten by a concurrent summon', async () => {
+    let finish!: (catalog: ReturnType<typeof createExpertCatalogFixture>) => void;
+    loadCatalog.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = manager.addPresetAgent(ExpertFixtureId.Data, 'lobsterai-server/yd-fast');
+    const created = (await manager.addPresetAgent(ExpertFixtureId.Data, 'custom/initial'))!;
+    manager.updateAgent(created.id, { model: 'custom/user-choice' });
+    finish(createExpertCatalogFixture());
+    expect(await pending).toMatchObject({ id: created.id, model: 'custom/user-choice', modelSelectionMode: AgentModelSelectionMode.Explicit });
   });
 });

@@ -87,6 +87,17 @@ describe('server model metadata cache', () => {
     });
   });
 
+  test('selectable managed profiles keep the current server budget as their default', () => {
+    updateServerModelMetadata([{
+      modelId: 'kimi-k3-YoudaoInner', provider: 'moonshot', apiFormat: 'openai',
+      runtimeProfile: 'moonshot-kimi-k3', contextWindow: 400_000,
+      contextWindowOptions: [400_000, 1_000_000],
+    }]);
+    expect(getAllServerModelMetadata()[0]).toMatchObject({
+      contextWindow: 400_000, contextWindowOptions: [400_000, 1_000_000],
+    });
+  });
+
   test('treats identical metadata as unchanged', () => {
     const metadata = [{
       modelId: 'kimi-k3-YoudaoInner',
