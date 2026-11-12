@@ -1,10 +1,10 @@
 export const modelContextWindowTranslations = {
   zh: {
     modelContextWindow: '上下文长度',
-    modelContextWindowDefault: '跟随默认',
-    modelContextWindowDefaultValue: '跟随默认（当前 {window}）',
+    modelContextWindowDefault: '默认',
+    modelContextWindowDefaultValue: '默认（{window}）',
     modelContextWindowDefaultShort: '默认 · {window}',
-    modelContextWindowReset: '恢复跟随默认',
+    modelContextWindowReset: '恢复默认',
     modelContextWindowDefaultMark: '默认',
     modelContextWindowSliderHint: '拖动吸附到可用长度，松手后生效。也可用方向键调整，按 Enter 确认当前锚点。',
     modelContextWindowCostHint: '更长的上下文可能消耗更多积分。已压缩的历史不会自动恢复。',
@@ -13,10 +13,10 @@ export const modelContextWindowTranslations = {
   },
   en: {
     modelContextWindow: 'Context length',
-    modelContextWindowDefault: 'Follow default',
-    modelContextWindowDefaultValue: 'Follow default (currently {window})',
+    modelContextWindowDefault: 'Default',
+    modelContextWindowDefaultValue: 'Default ({window})',
     modelContextWindowDefaultShort: 'Default · {window}',
-    modelContextWindowReset: 'Restore follow default',
+    modelContextWindowReset: 'Restore default',
     modelContextWindowDefaultMark: 'Default',
     modelContextWindowSliderHint: 'Drag to an available length and release to apply. Use arrow keys to adjust, or Enter to confirm the current stop.',
     modelContextWindowCostHint: 'Longer context may consume more credits. Previously compacted history is not restored.',

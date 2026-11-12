@@ -20,12 +20,13 @@ const SliderKey = {
 } as const;
 const SLIDER_COMMIT_KEYS = new Set<string>(Object.values(SliderKey).filter(key => key !== SliderKey.Cancel));
 
-export default function ModelContextWindowControl({ model, sessionId, isSelected, disabled, isOpen, menuStyle, menuRef, onOpen, onSelectModel, onInteract }: {
+export default function ModelContextWindowControl({ model, sessionId, isSelected, disabled, isOpen, opensLeft, menuStyle, menuRef, onOpen, onSelectModel, onInteract }: {
   model: Model;
   sessionId?: string;
   isSelected: boolean;
   disabled: boolean;
   isOpen: boolean;
+  opensLeft: boolean;
   menuStyle: CSSProperties;
   menuRef: RefObject<HTMLDivElement>;
   onOpen: (trigger: HTMLElement) => void;
@@ -119,7 +120,7 @@ export default function ModelContextWindowControl({ model, sessionId, isSelected
         <span className="shrink-0">{i18nService.t('modelContextWindow')}</span>
         <span className="flex min-w-0 items-center gap-1 font-medium">
           <span className="truncate" title={state.override === null ? defaultLabel : undefined}>{currentValueLabel}</span>
-          <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
+          <ChevronRightIcon className={`h-3.5 w-3.5 shrink-0 text-secondary ${opensLeft ? 'rotate-180' : ''}`} />
         </span>
       </button>
       {isOpen && <div ref={menuRef} id={panelId} role="dialog" aria-label={i18nService.t('modelContextWindow')}
@@ -164,7 +165,7 @@ export default function ModelContextWindowControl({ model, sessionId, isSelected
             className="peer absolute inset-0 z-10 h-full w-full cursor-pointer appearance-none opacity-0 disabled:cursor-default [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:appearance-none"
             style={{ touchAction: 'none' }} />
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-1/2 h-5 -translate-y-1/2 rounded-full bg-border peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-500/60 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface">
-            <div className="absolute inset-y-0 left-0 rounded-full bg-emerald-600 dark:bg-emerald-400" style={{ width: `calc(12px + (100% - 24px) * ${position})` }} />
+            <div className="absolute inset-y-0 left-0 rounded-full bg-emerald-600 dark:bg-emerald-400" style={{ width: index === 0 ? 0 : `calc(12px + (100% - 24px) * ${position})` }} />
             <div className="absolute inset-x-3 top-1/2">
               {stops.map((item, stopIndex) => (
                 <span key={item.tokens} className={`absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full ${stopIndex <= index ? 'bg-white/60 dark:bg-black/40' : 'bg-foreground/30'}`}

@@ -368,28 +368,14 @@ export function resolveCascadePlacement(options: {
 }
 
 /**
- * A third cascaded panel must not flip inward across its parent and cover the
- * model dropdown. When the outward side is exhausted (notably at the 800px
- * minimum window width), overlay the hover card itself instead; its 220px
- * surface is wider than the 210px thinking menu and remains pointer-adjacent.
+ * Keep nested panels beside their parent, flipping sides when needed so the
+ * other setting rows stay reachable.
  */
 export function resolveNestedCascadePlacement(options: Parameters<typeof resolveCascadePlacement>[0]): {
   left: number;
   side: CascadeSide;
-  overlaysAnchor: boolean;
 } {
-  const placement = resolveCascadePlacement(options);
-  if (placement.side === options.preferredSide) {
-    return { ...placement, overlaysAnchor: false };
-  }
-
-  const viewportMargin = options.viewportMargin ?? HOVER_CARD_VIEWPORT_MARGIN;
-  const maxLeft = Math.max(viewportMargin, options.viewportWidth - options.width - viewportMargin);
-  return {
-    left: Math.min(Math.max(options.anchorLeft, viewportMargin), maxLeft),
-    side: options.preferredSide,
-    overlaysAnchor: true,
-  };
+  return resolveCascadePlacement(options);
 }
 
 /**
@@ -1186,12 +1172,22 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       const dropdownEl = dropdownRef.current;
       if (!dropdownEl) return;
       const dropdownRect = dropdownEl.getBoundingClientRect();
+      const nestedMenuWidth = Math.max(
+        thinkingSelectionEnabled && canConfigureModelThinking(model) ? THINKING_MENU_WIDTH : 0,
+        allowContextWindowSelection && model.isServerModel && model.contextWindowOptions?.length
+          ? CONTEXT_WINDOW_MENU_WIDTH : 0,
+      );
+      // Prefer the side that fits both panels before the pointer enters the
+      // detail card, avoiding a jump when a setting is hovered later.
+      const cascadeWidth = HOVER_CARD_WIDTH + nestedMenuWidth + HOVER_CARD_VIEWPORT_MARGIN;
+      const preferredSide = window.innerWidth - dropdownRect.right < cascadeWidth
+        && dropdownRect.left >= cascadeWidth ? CascadeSide.Left : CascadeSide.Right;
       const placement = resolveCascadePlacement({
         anchorLeft: dropdownRect.left,
         anchorRight: dropdownRect.right,
         width: HOVER_CARD_WIDTH,
         viewportWidth: window.innerWidth,
-        preferredSide: CascadeSide.Right,
+        preferredSide,
       });
       setHoverCardSide(placement.side);
       setHoverCardStyle({
@@ -1221,6 +1217,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   const openThinkingMenu = (trigger: HTMLElement) => {
+    cancelHoverClose();
     setIsContextWindowMenuOpen(false);
     if (!thinkingSelectionEnabled || !canConfigureModelThinking(hoveredModel)) {
       setIsThinkingMenuOpen(false);
@@ -1397,6 +1394,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(hoveredModel);
     const thinkingConfigurable = thinkingSelectionEnabled && canConfigureModelThinking(hoveredModel);
     const showThinkingBadge = !!hoveredModel.presetId || hoveredModel.supportsThinking;
+    const cardLeft = typeof hoverCardStyle.left === 'number' ? hoverCardStyle.left : 0;
+    const opensLeft = (width: number) => resolveNestedCascadePlacement({
+      anchorLeft: cardLeft,
+      anchorRight: cardLeft + HOVER_CARD_WIDTH,
+      width,
+      viewportWidth: window.innerWidth,
+      preferredSide: hoverCardSide,
+    }).side === CascadeSide.Left;
     const card = (
       <div
         ref={hoverCardRef}
@@ -1474,7 +1479,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="flex items-center gap-1 font-medium">
               {thinkingLabelForModel(hoveredModel)}
               {thinkingConfigurable
-                ? <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
+                ? <ChevronRightIcon className={`h-3.5 w-3.5 text-secondary ${opensLeft(THINKING_MENU_WIDTH) ? 'rotate-180' : ''}`} />
                 : <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />}
             </span>
           </button>
@@ -1484,6 +1489,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             sessionId={contextWindowSessionId} isSelected={isSelected(hoveredModel)}
             disabled={disabled || contextWindowDisabled || hoveredModel.accessible === false || hoveredModel.busy === true}
             isOpen={isContextWindowMenuOpen} menuStyle={contextWindowMenuStyle} menuRef={contextWindowMenuRef}
+            opensLeft={opensLeft(CONTEXT_WINDOW_MENU_WIDTH)}
             onOpen={openContextWindowMenu} onInteract={cancelHoverClose} onSelectModel={() => handleModelSelect(hoveredModel)} />
         )}
         {!thinkingSelectionEnabled && hasThinkingProtocol && hoveredModel.thinkingConfig && (
