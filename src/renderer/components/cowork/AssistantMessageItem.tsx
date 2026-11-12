@@ -31,7 +31,7 @@ export { MessageCopyButton as CopyButton } from './MessageActionButton';
 
 // Stays on one line: a narrow column shortens the date (assistantMessageMeta.css),
 // then the model inside the parentheses gives way; nothing wraps.
-const MESSAGE_META_CLASS_NAME = 'cowork-message-meta mt-1 flex min-w-0 items-center gap-2 whitespace-nowrap text-[12px] font-normal leading-5 text-secondary select-none';
+export const MESSAGE_META_CLASS_NAME = 'cowork-message-meta mt-1 flex min-w-0 items-center gap-2 whitespace-nowrap text-[12px] font-normal leading-5 text-secondary select-none';
 const MESSAGE_META_ACTION_CLASS_NAME = 'inline-flex h-7 w-7 shrink-0 items-center justify-center [&>svg]:h-3.5 [&>svg]:w-3.5';
 
 const ForkButton: React.FC<{
@@ -53,6 +53,37 @@ const ForkButton: React.FC<{
     <MessageForkIcon className="h-3.5 w-3.5 shrink-0" />
   </MessageActionButton>
 );
+
+/** Time and model of a turn's meta row. */
+export const MessageMetaDetails: React.FC<{
+  timestamp: number;
+  turnMetadata?: CoworkMessageMetadata | null;
+}> = ({ timestamp, turnMetadata }) => {
+  const modelLabel = getMessageModelLabelParts(turnMetadata);
+  const isBalancedPreset = parseModelPresetId(turnMetadata?.modelPresetId) === ModelPresetId.Balanced;
+  return (
+    <>
+      <span className="shrink-0 tabular-nums" title={formatMessageDateTime(timestamp)}>
+        <span className="cowork-message-meta-full-date">{formatMessageDateTime(timestamp)}</span>
+        <span className="cowork-message-meta-short-date">{formatMessageShortDateTime(timestamp)}</span>
+      </span>
+      {modelLabel && (
+        <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden" title={getMessageModelLabel(turnMetadata) ?? undefined}>
+          {isBalancedPreset && <BalancedModelIcon className="h-3.5 w-3.5 shrink-0" />}
+          {modelLabel.detail ? (
+            <span className="flex min-w-0">
+              <span className="shrink-0">{modelLabel.name}（</span>
+              <span className="min-w-0 truncate">{modelLabel.detail}</span>
+              <span className="shrink-0">）</span>
+            </span>
+          ) : (
+            <span className="min-w-0 truncate">{modelLabel.name}</span>
+          )}
+        </span>
+      )}
+    </>
+  );
+};
 
 // ── AssistantMessageItem ─────────────────────────────────────────────────────
 
@@ -94,22 +125,6 @@ const AssistantMessageItem: React.FC<{
     displayContent,
     proposedPlan.planText,
   ].filter((part): part is string => Boolean(part)).join('\n\n');
-  const modelLabel = getMessageModelLabelParts(turnMetadata);
-  const isBalancedPreset = parseModelPresetId(turnMetadata?.modelPresetId) === ModelPresetId.Balanced;
-  const modelLabelNode = modelLabel && (
-    <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden" title={getMessageModelLabel(turnMetadata) ?? undefined}>
-      {isBalancedPreset && <BalancedModelIcon className="h-3.5 w-3.5 shrink-0" />}
-      {modelLabel.detail ? (
-        <span className="flex min-w-0">
-          <span className="shrink-0">{modelLabel.name}（</span>
-          <span className="min-w-0 truncate">{modelLabel.detail}</span>
-          <span className="shrink-0">）</span>
-        </span>
-      ) : (
-        <span className="min-w-0 truncate">{modelLabel.name}</span>
-      )}
-    </span>
-  );
   const goalCompletionDuration = completedGoal
     ? formatCoworkGoalCompletionDuration(completedGoal)
     : null;
@@ -154,11 +169,7 @@ const AssistantMessageItem: React.FC<{
           <span>{goalCompletionLabel}</span>
         </span>
       )}
-      <span className="shrink-0 tabular-nums" title={formatMessageDateTime(message.timestamp)}>
-        <span className="cowork-message-meta-full-date">{formatMessageDateTime(message.timestamp)}</span>
-        <span className="cowork-message-meta-short-date">{formatMessageShortDateTime(message.timestamp)}</span>
-      </span>
-      {modelLabelNode}
+      <MessageMetaDetails timestamp={message.timestamp} turnMetadata={turnMetadata} />
       {turnUsageSlot}
       {onFork && (
         <ForkButton

@@ -4136,6 +4136,8 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('sessionStopped', (sessionId: string) => {
     getDesktopNotificationManager().handleSessionStopped(sessionId);
+    // A stopped turn emits neither complete nor error, but its requests may already have consumed credits.
+    settleCoworkTurnUsage(sessionId, { runIds: runtime.getTurnRunIds(sessionId) });
   });
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
