@@ -1,5 +1,6 @@
 const { notarize } = require('@electron/notarize');
 const path = require('path');
+const { verifyMacWebAuthnEntitlements } = require('./mac-webauthn-entitlements.cjs');
 
 // This afterSign hook owns notarization and stapling. Keep mac.notarize=false
 // in electron-builder.json so inherited APPLE_* credentials do not also trigger
@@ -21,6 +22,12 @@ exports.default = async function notarizing(context) {
     return;
   }
 
+  const appName = context.packager.appInfo.productFilename;
+  const appPath = path.join(appOutDir, `${appName}.app`);
+  // Notarization and codesign --verify do not validate restricted entitlements
+  // against a provisioning profile. Catch non-launchable apps before uploading.
+  verifyMacWebAuthnEntitlements(appPath);
+
   if (!process.env.APPLE_ID || !process.env.APPLE_APP_SPECIFIC_PASSWORD) {
     console.warn('⚠️  跳过公证: 未设置 APPLE_ID 或 APPLE_APP_SPECIFIC_PASSWORD');
     console.warn('   如需启用公证，请创建 .env 文件并配置 Apple Developer 凭据');
@@ -33,9 +40,6 @@ exports.default = async function notarizing(context) {
     console.warn('   公证需要 APPLE_TEAM_ID');
     return;
   }
-
-  const appName = context.packager.appInfo.productFilename;
-  const appPath = path.join(appOutDir, `${appName}.app`);
 
   console.log(`🔐 正在公证 ${appName}...`);
   console.log(`   应用路径: ${appPath}`);

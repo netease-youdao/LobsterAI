@@ -20,6 +20,7 @@ const appPath = path.join(appOutDir, `${config.productName}.app`);
 
 function fixture(env: Record<string, string> = credentials) {
   const notarize = vi.fn().mockResolvedValue(undefined);
+  const verifyMacWebAuthnEntitlements = vi.fn();
   const exports: { default?: (context: unknown) => Promise<void> } = {};
   const hookPath = path.resolve(__dirname, '..', config.afterSign);
   // Run the actual hook without reading local credentials or contacting Apple.
@@ -30,6 +31,7 @@ function fixture(env: Record<string, string> = credentials) {
     require: (id: string) => {
       if (id === '@electron/notarize') return { notarize };
       if (id === 'dotenv') return { config: vi.fn() };
+      if (id === './mac-webauthn-entitlements.cjs') return { verifyMacWebAuthnEntitlements };
       return require(id);
     },
   }, { filename: hookPath });
@@ -49,6 +51,7 @@ function fixture(env: Record<string, string> = credentials) {
 
   return {
     notarize,
+    verifyMacWebAuthnEntitlements,
     packager,
     hook: exports.default!,
     finishSigning: () => packager.doSignAfterPack(
@@ -69,12 +72,13 @@ afterEach(() => {
 
 describe('macOS release notarization', () => {
   test('notarizes exactly once through afterSign with inherited Apple credentials', async () => {
-    const { finishSigning, notarize, packager } = fixture();
+    const { finishSigning, notarize, packager, verifyMacWebAuthnEntitlements } = fixture();
     const builtInOptions = vi.spyOn(packager, 'getNotarizeOptions');
 
     await finishSigning();
 
     expect(builtInOptions).not.toHaveBeenCalled();
+    expect(verifyMacWebAuthnEntitlements).toHaveBeenCalledWith(appPath);
     expect(notarize).toHaveBeenCalledTimes(1);
     expect(notarize).toHaveBeenCalledWith({
       appPath,
@@ -91,6 +95,14 @@ describe('macOS release notarization', () => {
 
     await expect(finishSigning()).rejects.toBe(failure);
     expect(notarize).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects unauthorized restricted entitlements before notarization', async () => {
+    const { finishSigning, notarize, verifyMacWebAuthnEntitlements } = fixture();
+    verifyMacWebAuthnEntitlements.mockImplementation(() => { throw new Error('No matching profile'); });
+
+    await expect(finishSigning()).rejects.toThrow('No matching profile');
+    expect(notarize).not.toHaveBeenCalled();
   });
 
   test.each(Object.keys(credentials))('keeps local builds possible without %s', async name => {
