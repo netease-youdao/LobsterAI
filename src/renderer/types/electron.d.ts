@@ -2093,6 +2093,10 @@ interface IElectronAPI {
       input: ActivityHostExecuteActionInput,
     ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
+  modelContextWindows: {
+    get: (request: import('../../shared/providers/modelContextWindow').ModelContextWindowRequest) => Promise<{ success: boolean; data?: import('../../shared/providers/modelContextWindow').ModelContextWindowState; error?: string }>;
+    set: (request: import('../../shared/providers/modelContextWindow').ModelContextWindowRequest, tokens: number | null) => Promise<{ success: boolean; data?: import('../../shared/providers/modelContextWindow').ModelContextWindowState; error?: string }>;
+  };
   modelPresets: {
     available: () => Promise<{ success: boolean; data?: AvailableModelPreset[]; error?: string }>;
     getPreferences: () => Promise<{ success: boolean; data?: Record<string, ModelPresetPreference>; error?: string }>;
@@ -2150,6 +2154,7 @@ interface IElectronAPI {
         supportsToolCalling?: boolean;
         agenticReady?: boolean;
         contextWindow?: number;
+        contextWindowOptions?: number[];
         maxTokens?: number;
         explicitContextCache?: boolean;
         costMultiplier?: number;

@@ -112,6 +112,8 @@ export class SqliteStore {
         system_prompt TEXT NOT NULL DEFAULT '',
         model_override TEXT NOT NULL DEFAULT '',
         model_preset_id TEXT,
+        context_window_override INTEGER,
+        context_window_owner_key TEXT,
         thinking_level TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
         parent_session_id TEXT,
@@ -404,6 +406,15 @@ export class SqliteStore {
 
       if (!colNames.includes('model_preset_id')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN model_preset_id TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('context_window_override')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN context_window_override INTEGER;');
+        this.didRunMigration = true;
+      }
+      if (!colNames.includes('context_window_owner_key')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN context_window_owner_key TEXT;');
         this.didRunMigration = true;
       }
 

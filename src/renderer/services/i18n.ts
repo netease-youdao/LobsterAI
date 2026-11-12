@@ -3,6 +3,7 @@ import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy
 import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { modelContextWindowTranslations } from '../../shared/providers/contextWindowCopy';
 import { configService } from './config';
 
 // 支持的语言类型
@@ -25,6 +26,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
+    ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     ...imageCreationTranslations.zh,
     officeSaved: '已自动保存',
@@ -4761,6 +4763,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
+    ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     ...imageCreationTranslations.en,
     officeSaved: 'All changes saved',

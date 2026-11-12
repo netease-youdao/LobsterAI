@@ -6,6 +6,7 @@ import {
 import { useMemo } from 'react';
 import { useSelector } from 'react-redux';
 
+import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import type { ModelPresetId } from '../../../shared/modelPresets/constants';
 import { modelPresetToModel } from '../../services/modelPresets';
 import type { RootState } from '../../store';
@@ -32,6 +33,10 @@ type ResolveAgentModelSelectionResult = {
   usesFallback: boolean;
   hasInvalidExplicitModel: boolean;
 };
+
+export function buildSessionModelSelectionPatch(model: string, thinkingLevel: ModelThinkingLevel | '', keepModel: boolean): OpenClawSessionPatch {
+  return { ...(keepModel ? {} : { model }), thinkingLevel: thinkingLevel || null };
+}
 
 export function resolveModelThinkingLevel(
   model: Pick<Model, 'presetId' | 'requestCapabilities' | 'thinkingConfig'> | null | undefined,
@@ -83,6 +88,7 @@ export function resolveAgentModelSelection({
         const preset = availableModels.find(model => model.presetId === sessionPresetId);
         return { selectedModel: modelPresetToModel({
           presetId: sessionPresetId, costMultiplier: preset?.costMultiplier ?? 0,
+          contextWindow: preset?.contextWindow, contextWindowOptions: preset?.contextWindowOptions,
           accessible: explicitSessionModel.accessible !== false, supportsImage: !!explicitSessionModel.supportsImage,
         }, explicitSessionModel), usesFallback: false, hasInvalidExplicitModel: explicitSessionModel.accessible === false };
       }

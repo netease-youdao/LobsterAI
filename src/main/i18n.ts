@@ -16,6 +16,7 @@ import { messageEditTranslations } from '../shared/cowork/messageEdit';
 import { desktopCompanionTranslations } from '../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../shared/imageEditing/copy';
 import { mediaTranslations } from '../shared/media/copy';
+import { modelContextWindowTranslations } from '../shared/providers/contextWindowCopy';
 
 export type LanguageType = 'zh' | 'en';
 
@@ -33,6 +34,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
+    ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
@@ -458,6 +460,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
+    ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
     openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',

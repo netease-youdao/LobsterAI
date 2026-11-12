@@ -131,6 +131,7 @@ import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
+import { ModelContextWindowIpc, type ModelContextWindowRequest } from '../shared/providers/modelContextWindow';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
   type ShareDeploymentAnalyzeProjectInput,
@@ -1517,6 +1518,10 @@ contextBridge.exposeInMainWorld('electron', {
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
+  },
+  modelContextWindows: {
+    get: (request: ModelContextWindowRequest) => ipcRenderer.invoke(ModelContextWindowIpc.Get, request),
+    set: (request: ModelContextWindowRequest, tokens: number | null) => ipcRenderer.invoke(ModelContextWindowIpc.Set, request, tokens),
   },
   modelPresets: {
     available: () => ipcRenderer.invoke(ModelPresetIpc.Available),

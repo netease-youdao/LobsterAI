@@ -28,6 +28,14 @@ export const ASK_USER_QUESTION_TIMEOUT_MS = 15 * 60_000;
  */
 export const COWORK_TEMP_SESSION_ID_PREFIX = 'temp-';
 
+export const CoworkSessionStatusValue = {
+  Idle: 'idle',
+  Running: 'running',
+  Completed: 'completed',
+  Error: 'error',
+} as const;
+export type CoworkSessionStatus = typeof CoworkSessionStatusValue[keyof typeof CoworkSessionStatusValue];
+
 /**
  * Machine-readable codes on failed session start/continue IPC results. The
  * paired `error` text is already localized and must be shown as-is.

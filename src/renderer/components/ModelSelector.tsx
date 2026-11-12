@@ -42,6 +42,7 @@ import { CustomProviderIcon } from './icons/providers';
 import UltimateModelIcon from './icons/UltimateModelIcon';
 import VipDiamondLineIcon from './icons/VipDiamondLineIcon';
 import ModelAccessPromptPopover from './modelSelector/ModelAccessPromptPopover';
+import ModelContextWindowControl from './modelSelector/ModelContextWindowControl';
 import ModelThinkingMenu, {
   getModelThinkingLevelLabel,
 } from './modelSelector/ModelThinkingMenu';
@@ -50,6 +51,9 @@ import PurchaseOfferCountdown from './PurchaseOfferCountdown';
 import Tooltip, { TooltipPosition } from './ui/Tooltip';
 
 interface ModelSelectorProps {
+  contextWindowSessionId?: string;
+  allowContextWindowSelection?: boolean;
+  contextWindowDisabled?: boolean;
   allowPresets?: boolean;
   dropdownDirection?: 'up' | 'down' | 'auto';
   /**
@@ -100,6 +104,7 @@ const HOVER_CARD_WIDTH = 220;
 const HOVER_CARD_VIEWPORT_MARGIN = 8;
 const HOVER_CLOSE_DELAY = 180;
 const THINKING_MENU_WIDTH = 210;
+const CONTEXT_WINDOW_MENU_WIDTH = HOVER_CARD_WIDTH;
 // Cascaded popovers sit flush against their anchor: no gap that makes the stack
 // look disconnected, and no overlap that makes the panels look stacked.
 const CASCADE_OVERLAP = 0;
@@ -157,6 +162,8 @@ export const shouldRenderPlanModelLoginPrompt = (
 export interface ModelSelectorChangeMeta {
   group: ModelSelectorGroup;
   thinkingLevel?: ModelThinkingLevelType;
+  /** Editing the selected model's thinking level must preserve its session window. */
+  thinkingOnly?: boolean;
 }
 
 export const ModelAccessPromptKind = {
@@ -456,6 +463,7 @@ export function hasModelHoverDetails(
     Model,
     | 'agenticReady'
     | 'costMultiplier'
+    | 'contextWindowOptions'
     | 'description'
     | 'isServerModel'
     | 'runtimeProfile'
@@ -467,6 +475,7 @@ export function hasModelHoverDetails(
   >,
 ): boolean {
   return !!model.busy
+    || !!model.contextWindowOptions?.length
     || !!model.subscriptionPriority
     || !!model.description
     || !!model.costMultiplier
@@ -501,6 +510,9 @@ const MODEL_ICON_PROVIDER_HINTS: Array<{ pattern: RegExp; providerName: Provider
 ];
 
 const ModelSelector: React.FC<ModelSelectorProps> = ({
+  contextWindowSessionId,
+  allowContextWindowSelection = false,
+  contextWindowDisabled = false,
   dropdownDirection = 'auto',
   value,
   onChange,
@@ -539,10 +551,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [hoverCardSide, setHoverCardSide] = React.useState<CascadeSide>(CascadeSide.Right);
   const [isThinkingMenuOpen, setIsThinkingMenuOpen] = React.useState(false);
   const [thinkingMenuStyle, setThinkingMenuStyle] = React.useState<React.CSSProperties>({});
+  const [isContextWindowMenuOpen, setIsContextWindowMenuOpen] = React.useState(false);
+  const [contextWindowMenuStyle, setContextWindowMenuStyle] = React.useState<React.CSSProperties>({});
   const [restrictedPrompt, setRestrictedPrompt] = React.useState<ModelAccessPromptKind | null>(null);
   const hoverCardRef = React.useRef<HTMLDivElement>(null);
   const thinkingMenuRef = React.useRef<HTMLDivElement>(null);
   const thinkingMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const contextWindowMenuRef = React.useRef<HTMLDivElement>(null);
   const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverCloseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -564,7 +579,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const currentModelMetadata = selectedValue
     ? availableModels.find(model => isSameModelIdentity(model, selectedValue)) : undefined;
   const selectedModel = React.useMemo(() => selectedValue && currentModelMetadata
-    ? { ...selectedValue, busy: currentModelMetadata.busy, accessible: currentModelMetadata.accessible }
+    ? { ...selectedValue, busy: currentModelMetadata.busy, accessible: currentModelMetadata.accessible,
+      contextWindow: currentModelMetadata.contextWindow, contextWindowOptions: currentModelMetadata.contextWindowOptions }
     : selectedValue, [selectedValue, currentModelMetadata]);
   const isCustomModelSelected = Boolean(selectedModel?.providerKey
     && !selectedModel.isServerModel
@@ -959,6 +975,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     onChange(model, {
       group: getModelGroup(model) ?? visibleGroup,
       thinkingLevel: resolvedThinkingLevel,
+      thinkingOnly: isSelected(model),
     });
     setRestrictedPrompt(null);
   };
@@ -967,6 +984,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (!isOpen) {
       setHoveredModel(null);
       setIsThinkingMenuOpen(false);
+      setIsContextWindowMenuOpen(false);
     }
   }, [isOpen]);
 
@@ -982,15 +1000,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   React.useLayoutEffect(() => {
     if (!hoveredModel || !hoverCardRef.current) return;
-
-    const cardRect = hoverCardRef.current.getBoundingClientRect();
-    const currentTop = typeof hoverCardStyle.top === 'number'
-      ? hoverCardStyle.top
-      : cardRect.top;
-    const nextTop = resolveHoverCardTop(currentTop, cardRect.height, window.innerHeight);
-
-    if (Math.abs(nextTop - currentTop) < 0.5) return;
-    setHoverCardStyle(style => ({ ...style, top: nextTop }));
+    const card = hoverCardRef.current;
+    const reposition = () => {
+      const cardRect = card.getBoundingClientRect();
+      const currentTop = typeof hoverCardStyle.top === 'number' ? hoverCardStyle.top : cardRect.top;
+      const nextTop = resolveHoverCardTop(currentTop, cardRect.height, window.innerHeight);
+      if (Math.abs(nextTop - currentTop) >= 0.5) setHoverCardStyle(style => ({ ...style, top: nextTop }));
+    };
+    reposition();
+    const observer = new ResizeObserver(reposition);
+    observer.observe(card);
+    return () => observer.disconnect();
   }, [hoveredModel, hoverCardStyle.top]);
 
   React.useLayoutEffect(() => {
@@ -1005,19 +1025,29 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     setThinkingMenuStyle(style => ({ ...style, top: nextTop }));
   }, [isThinkingMenuOpen, thinkingMenuStyle.left]);
 
+  React.useLayoutEffect(() => {
+    if (!isContextWindowMenuOpen || !contextWindowMenuRef.current) return;
+    const menuRect = contextWindowMenuRef.current.getBoundingClientRect();
+    const nextTop = resolveHoverCardTop(menuRect.top, menuRect.height, window.innerHeight);
+    if (Math.abs(nextTop - menuRect.top) < 0.5) return;
+    setContextWindowMenuStyle(style => ({ ...style, top: nextTop }));
+  }, [isContextWindowMenuOpen, contextWindowMenuStyle.left]);
+
   React.useEffect(() => {
     if (!isOpen) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (isThinkingMenuOpen) {
         setIsThinkingMenuOpen(false);
+      } else if (isContextWindowMenuOpen) {
+        setIsContextWindowMenuOpen(false);
       } else {
         setIsOpen(false);
       }
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, isThinkingMenuOpen]);
+  }, [isOpen, isThinkingMenuOpen, isContextWindowMenuOpen]);
 
   React.useEffect(() => () => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -1171,6 +1201,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         zIndex: 10001,
       });
       setIsThinkingMenuOpen(false);
+      setIsContextWindowMenuOpen(false);
       setHoveredModel(model);
     }, delay);
   };
@@ -1184,11 +1215,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     hoverCloseTimerRef.current = setTimeout(() => {
       setHoveredModel(null);
       setIsThinkingMenuOpen(false);
+      setIsContextWindowMenuOpen(false);
       hoverCloseTimerRef.current = null;
     }, HOVER_CLOSE_DELAY);
   };
 
   const openThinkingMenu = (trigger: HTMLElement) => {
+    setIsContextWindowMenuOpen(false);
     if (!thinkingSelectionEnabled || !canConfigureModelThinking(hoveredModel)) {
       setIsThinkingMenuOpen(false);
       return;
@@ -1216,6 +1249,28 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       zIndex: 10002,
     });
     setIsThinkingMenuOpen(true);
+  };
+
+  const openContextWindowMenu = (trigger: HTMLElement) => {
+    cancelHoverClose();
+    setIsThinkingMenuOpen(false);
+    if (isContextWindowMenuOpen || !hoverCardRef.current) return;
+    const cardRect = hoverCardRef.current.getBoundingClientRect();
+    const { left } = resolveNestedCascadePlacement({
+      anchorLeft: cardRect.left,
+      anchorRight: cardRect.right,
+      width: CONTEXT_WINDOW_MENU_WIDTH,
+      viewportWidth: window.innerWidth,
+      preferredSide: hoverCardSide,
+    });
+    setContextWindowMenuStyle({
+      position: 'fixed',
+      left,
+      top: trigger.getBoundingClientRect().top,
+      width: CONTEXT_WINDOW_MENU_WIDTH,
+      zIndex: 10002,
+    });
+    setIsContextWindowMenuOpen(true);
   };
 
   const renderModelItem = (model: Model) => {
@@ -1381,7 +1436,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           </div>
         )}
         {(hoveredModel.supportsImage || showThinkingBadge) && (
-          <div className="mt-1.5 flex items-center gap-3 text-[11px] text-emerald-600">
+          <div className="mt-1.5 flex items-center gap-3 text-[11px] text-emerald-600 dark:text-emerald-400">
             {hoveredModel.supportsImage && (
               <span className="flex items-center gap-1">
                 <span>✓</span>
@@ -1423,6 +1478,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                 : <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />}
             </span>
           </button>
+        )}
+        {allowContextWindowSelection && hoveredModel.isServerModel && !!hoveredModel.contextWindowOptions?.length && (
+          <ModelContextWindowControl key={`${getModelIdentityKey(hoveredModel)}:${auth.user?.id}:${auth.user?.accountMode}:${auth.quota?.enterpriseId}`} model={hoveredModel}
+            sessionId={contextWindowSessionId} isSelected={isSelected(hoveredModel)}
+            disabled={disabled || contextWindowDisabled || hoveredModel.accessible === false || hoveredModel.busy === true}
+            isOpen={isContextWindowMenuOpen} menuStyle={contextWindowMenuStyle} menuRef={contextWindowMenuRef}
+            onOpen={openContextWindowMenu} onInteract={cancelHoverClose} onSelectModel={() => handleModelSelect(hoveredModel)} />
         )}
         {!thinkingSelectionEnabled && hasThinkingProtocol && hoveredModel.thinkingConfig && (
           <div className="mt-1.5 flex items-center justify-between py-2 text-[12px] text-foreground">
