@@ -80,6 +80,7 @@ const RETAINED_PATCHES = [
   'openclaw-tool-payload-transcript-fidelity.patch',
   'openclaw-tool-search-direct-tools.patch',
   'openclaw-transcript-replay-validation.patch',
+  'openclaw-user-context-window-selection.patch',
   'openclaw-view-image-task-cwd.patch',
   'openclaw-web-fetch-proxy.patch',
   'openclaw-web-login-channel-routing.patch',

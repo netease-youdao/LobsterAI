@@ -40,6 +40,28 @@ beforeEach(() => {
 });
 
 describe('explicit context window intent', () => {
+  test.each([600_000, 800_000])('retains an explicit %s budget through default changes until reset', async (tokens) => {
+    const harness = createHarness();
+    const model = metadata.get('model-a')!;
+    model.contextWindowOptions = [400_000, 600_000, 800_000, 1_000_000];
+    expect(await harness.invoke(ModelContextWindowIpc.Get)).toMatchObject({ data: { override: null } });
+    expect(harness.set).not.toHaveBeenCalled();
+    expect(await harness.invoke(ModelContextWindowIpc.Set, undefined, tokens)).toMatchObject({
+      success: true, data: { override: tokens },
+    });
+    expect(harness.patchSession).toHaveBeenLastCalledWith('session', { contextWindow: `user-context:${tokens}` });
+    model.contextWindow = 1_000_000;
+    expect(await harness.invoke(ModelContextWindowIpc.Get)).toMatchObject({
+      data: { override: tokens, defaultWindow: 1_000_000 },
+    });
+    await harness.invoke(ModelContextWindowIpc.Set, undefined, null);
+    expect(harness.values.size).toBe(0);
+    model.contextWindow = 400_000;
+    expect(await harness.invoke(ModelContextWindowIpc.Get)).toMatchObject({
+      data: { override: null, defaultWindow: 400_000 },
+    });
+  });
+
   test('context edits and reset leave an existing thinking strength unchanged', async () => {
     const harness = createHarness();
     harness.session.thinkingLevel = ModelThinkingLevel.Max;
