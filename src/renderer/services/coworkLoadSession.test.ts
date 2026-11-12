@@ -473,6 +473,40 @@ describe('coworkService.loadMessageWindowAroundIndex', () => {
 });
 
 describe('coworkService.loadMoreMessages', () => {
+  test('does not prepend when the view has cancelled its request', async () => {
+    const allMessages = makeMessages(120);
+    store.dispatch(setCurrentSession(makeSession(allMessages.slice(70), 70, 120)));
+    vi.stubGlobal('window', { electron: { cowork: {
+      getSessionMessages: vi.fn(async () => ({ success: true, messages: allMessages.slice(20, 70) })),
+    } } });
+    await expect(coworkService.loadMoreMessages('session-1', () => false)).resolves.toBe(false);
+    expect(store.getState().cowork.currentSession?.messagesOffset).toBe(70);
+    expect(store.getState().cowork.currentSession?.messages).toHaveLength(50);
+  });
+
+  test('captures immediately before prepend and preserves messages streamed while the page was loading', async () => {
+    const allMessages = makeMessages(121);
+    store.dispatch(setCurrentSession(makeSession(allMessages.slice(70, 120), 70, 120)));
+    let resolvePage!: (value: { success: boolean; messages: CoworkMessage[] }) => void;
+    vi.stubGlobal('window', { electron: { cowork: {
+      getSessionMessages: vi.fn(() => new Promise(resolve => { resolvePage = resolve; })),
+    } } });
+    const beforePrepend = vi.fn(() => {
+      expect(store.getState().cowork.currentSession?.messagesOffset).toBe(70);
+      const latestMessages = store.getState().cowork.currentSession?.messages ?? [];
+      expect(latestMessages[latestMessages.length - 1]?.id).toBe('message-120');
+    });
+    const pending = coworkService.loadMoreMessages('session-1', beforePrepend);
+    expect(beforePrepend).not.toHaveBeenCalled();
+    store.dispatch(addMessage({ sessionId: 'session-1', message: allMessages[120] }));
+    resolvePage({ success: true, messages: allMessages.slice(20, 70) });
+    await expect(pending).resolves.toBe(true);
+    expect(beforePrepend).toHaveBeenCalledExactlyOnceWith(20);
+    expect(store.getState().cowork.currentSession?.messages.map(message => message.id)).toEqual(
+      allMessages.slice(20).map(message => message.id),
+    );
+  });
+
   test('records where the turn of the prepended page began', async () => {
     const allMessages = makeMessages(120);
     store.dispatch(setCurrentSession({
@@ -527,7 +561,8 @@ describe('coworkService.loadMoreMessages', () => {
       electron: { cowork: { getSessionMessages } },
     });
 
-    const olderPagePromise = coworkService.loadMoreMessages('session-1');
+    const beforePrepend = vi.fn();
+    const olderPagePromise = coworkService.loadMoreMessages('session-1', beforePrepend);
     await expect(coworkService.loadMessageWindowAroundIndex('session-1', 20)).resolves.toBe(true);
     resolveOlderPage({
       success: true,
@@ -537,6 +572,7 @@ describe('coworkService.loadMoreMessages', () => {
     });
 
     await expect(olderPagePromise).resolves.toBe(false);
+    expect(beforePrepend).not.toHaveBeenCalled();
     expect(store.getState().cowork.currentSession?.messagesOffset).toBe(0);
     expect(store.getState().cowork.currentSession?.messages.map(message => message.id)).toEqual(
       allMessages.slice(0, 50).map(message => message.id),

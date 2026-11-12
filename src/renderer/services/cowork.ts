@@ -2103,7 +2103,7 @@ class CoworkService {
   }
 
   /** Load older messages for the current session (for scroll-up history). */
-  async loadMoreMessages(sessionId: string): Promise<boolean> {
+  async loadMoreMessages(sessionId: string, beforePrepend?: (newOffset: number) => boolean | void): Promise<boolean> {
     const editGeneration = this.messageWindowRequestGeneration;
     const cowork = window.electron?.cowork;
     if (!cowork?.getSessionMessages) return false;
@@ -2120,6 +2120,7 @@ class CoworkService {
     const currentMessageCount = state.currentSession.messages.length;
     const totalMessages = state.currentSession.totalMessages;
     const expectedFirstMessageId = state.currentSession.messages[0]?.id ?? null;
+    const expectedLastMessageId = state.currentSession.messages[currentMessageCount - 1]?.id ?? null;
 
     this.logDiagnostic(
       'info',
@@ -2134,8 +2135,9 @@ class CoworkService {
       if (
         latestSession?.id !== sessionId
         || latestSession.messagesOffset !== currentOffset
-        || latestSession.messages.length !== currentMessageCount
+        || latestSession.messages.length < currentMessageCount
         || latestFirstMessageId !== expectedFirstMessageId
+        || (latestSession.messages[currentMessageCount - 1]?.id ?? null) !== expectedLastMessageId
       ) {
         this.logDiagnostic(
           'debug',
@@ -2143,6 +2145,9 @@ class CoworkService {
         );
         return false;
       }
+      // The view may have cancelled its request while another navigation left
+      // the store on an otherwise matching window. Do not commit in that case.
+      if (beforePrepend?.(newOffset) === false) return false;
       store.dispatch(prependMessages({
         sessionId,
         messages: result.messages,

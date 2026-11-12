@@ -20,6 +20,7 @@ import UserMessageItem from './UserMessageItem';
 
 export interface ConversationTurnsViewProps {
   messages: CoworkMessage[];
+  scrollContainerRef: React.RefObject<HTMLElement | null>;
   isStreaming?: boolean;
   skills?: Skill[];
   marketplaceKits?: MarketplaceKit[];
@@ -47,6 +48,7 @@ const EMPTY_ARTIFACTS: Artifact[] = [];
 
 const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
   messages,
+  scrollContainerRef,
   isStreaming = false,
   skills = EMPTY_SKILLS,
   marketplaceKits = EMPTY_KITS,
@@ -108,7 +110,8 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
         );
 
         const turnContent = (
-          <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
+          <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}
+            scrollContainerRef={scrollContainerRef} lastMessageId={Array.from(turnMessageIds).pop() ?? turn.userMessage?.id}>
             {turn.userMessage && (
               <div data-export-role="user-message" className={isLastTurn ? 'animate-message-in' : undefined}>
                 <UserMessageItem
