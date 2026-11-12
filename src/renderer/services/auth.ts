@@ -19,6 +19,7 @@ import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles
 
 import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
 import { parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
+import { parseContextWindowOptions } from '../../shared/providers/modelContextWindow';
 import {
   applyEnterpriseAccountContext,
   refreshEnterpriseAccountContext,
@@ -99,6 +100,7 @@ export interface PricingCatalogTextModel extends PricingCatalogBaseModel {
   supportsThinking?: boolean;
   thinkingConfig?: ModelThinkingConfig;
   contextWindow?: number | null;
+  contextWindowOptions?: number[] | null;
   costMultiplier?: number;
   moreModel?: boolean;
 }
@@ -133,6 +135,7 @@ export interface AvailableServerModelEntry {
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
+  contextWindowOptions?: number[];
   maxTokens?: number;
   explicitContextCache?: boolean;
   costMultiplier?: number;
@@ -295,6 +298,7 @@ export function mapAvailableServerModelsToModels(
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
+      contextWindowOptions: parseContextWindowOptions(model.contextWindowOptions),
       maxTokens: model.maxTokens,
       explicitContextCache: model.explicitContextCache ?? false,
       description: model.description,

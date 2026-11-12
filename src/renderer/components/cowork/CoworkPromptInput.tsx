@@ -112,7 +112,7 @@ import type { Model } from '../../store/slices/modelSlice';
 import { isSameModelIdentity } from '../../store/slices/modelSlice';
 import { setActiveSkillIds, setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import type { CoworkSession } from '../../types/cowork';
-import { CoworkCollaborationMode, CoworkImageAttachment } from '../../types/cowork';
+import { CoworkCollaborationMode, CoworkImageAttachment, CoworkSessionStatusValue } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
 import { getAgentDisplayName, usesManagedPresetAvatar } from '../../utils/agentDisplay';
@@ -147,6 +147,7 @@ import ModelSelector, {
 import { SkillsPopover } from '../skills';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import {
+  buildSessionModelSelectionPatch,
   resolveAgentModelSelection,
   resolveAgentStartModel,
   resolveEffectiveModel,
@@ -3052,6 +3053,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     <div className="flex flex-col items-start gap-1">
       <ModelSelector
         allowPresets={!sessionId || !currentSession || isChatPresetSession(currentSession)}
+        allowContextWindowSelection={!sessionId || !!currentSession && isChatPresetSession(currentSession)}
+        contextWindowSessionId={sessionId ?? undefined}
+        contextWindowDisabled={isStreaming || currentSession?.status === CoworkSessionStatusValue.Running}
         compact={useHomeContextLayout}
         iconOnly={narrow}
         anchorAccessPrompt={narrow}
@@ -3106,6 +3110,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           const modelRef = keepsBoundPreset ? currentSession!.modelOverride
             : selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
           if (sessionId) {
+            const keepsSessionModel = keepsBoundPreset || meta.thinkingOnly === true
+              || (!currentSession?.modelPresetId && currentSession?.modelOverride === modelRef);
             const requestId = modelPatchRequestIdRef.current + 1;
             modelPatchRequestIdRef.current = requestId;
             const previousModelOverride = currentSession?.id === sessionId
@@ -3127,10 +3133,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             }));
 
             try {
-              const patchedSession = await coworkService.patchSession(sessionId, {
-                ...(keepsBoundPreset ? {} : { model: modelRef }),
-                thinkingLevel: nextThinkingLevel || null,
-              });
+              const patchedSession = await coworkService.patchSession(sessionId,
+                buildSessionModelSelectionPatch(modelRef, nextThinkingLevel, keepsSessionModel));
               if (requestId !== modelPatchRequestIdRef.current) return;
 
               if (!patchedSession) {

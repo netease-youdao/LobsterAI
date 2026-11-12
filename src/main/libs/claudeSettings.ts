@@ -15,6 +15,7 @@ import {
   type LobsterAIRequestCapability,
   parseLobsterAIRequestCapabilities,
 } from '../../shared/providers/lobsterAIRequestOptions';
+import { parseContextWindowOptions } from '../../shared/providers/modelContextWindow';
 import {
   applyModelRuntimeProfileMetadata,
   ModelRuntimeProfile,
@@ -88,6 +89,8 @@ type ProviderModelInputConfig = {
 };
 
 export type ServerModelMetadata = {
+  contextWindowOptions?: number[];
+  presetContextWindowOptions?: Partial<Record<ModelPresetId, number[]>>;
   modelId: string;
   modelName?: string;
   provider?: string;
@@ -226,6 +229,8 @@ const serializeServerModelMetadata = (
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
       presetContextWindows: model.presetContextWindows,
+      contextWindowOptions: parseContextWindowOptions(model.contextWindowOptions),
+      presetContextWindowOptions: model.presetContextWindowOptions,
       maxTokens: model.maxTokens,
       explicitContextCache: model.explicitContextCache,
     }))
@@ -249,6 +254,8 @@ const getComparableServerModelMetadata = (
   agenticReady: meta.agenticReady,
   contextWindow: meta.contextWindow,
   presetContextWindows: meta.presetContextWindows,
+  contextWindowOptions: parseContextWindowOptions(meta.contextWindowOptions),
+  presetContextWindowOptions: meta.presetContextWindowOptions,
   maxTokens: meta.maxTokens,
   explicitContextCache: meta.explicitContextCache,
 }));
@@ -283,6 +290,7 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       ? parseModelThinkingConfig(model.thinkingConfig)
       : undefined;
     const requestCapabilities = parseLobsterAIRequestCapabilities(model.requestCapabilities);
+    const contextWindowOptions = parseContextWindowOptions(model.contextWindowOptions);
 
     nextCache.set(modelId, {
       modelName: model.modelName,
@@ -299,8 +307,10 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       requestCapabilities,
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
-      contextWindow: runtimeMetadata.contextWindow,
+      contextWindow: contextWindowOptions && model.contextWindow ? model.contextWindow : runtimeMetadata.contextWindow,
       presetContextWindows: model.presetContextWindows,
+      contextWindowOptions,
+      presetContextWindowOptions: model.presetContextWindowOptions,
       maxTokens: runtimeMetadata.maxTokens,
       explicitContextCache: model.explicitContextCache,
     });
@@ -323,7 +333,10 @@ export function updateServerModelMetadataFromResponse(models: ServerModelRespons
   const presetContextWindows = Object.fromEntries(models
     .filter(model => model.presetId)
     .map(model => [model.presetId!, model.contextWindow]));
-  return updateServerModelMetadata(models.map(model => ({ ...model, presetContextWindows })));
+  const presetContextWindowOptions = Object.fromEntries(models
+    .filter(model => model.presetId)
+    .map(model => [model.presetId!, parseContextWindowOptions(model.contextWindowOptions)]));
+  return updateServerModelMetadata(models.map(model => ({ ...model, presetContextWindows, presetContextWindowOptions })));
 }
 
 export function clearServerModelMetadata(): void {
@@ -346,6 +359,8 @@ export function getAllServerModelMetadata(): ServerModelMetadata[] {
     agenticReady: meta.agenticReady,
     contextWindow: meta.contextWindow,
     presetContextWindows: meta.presetContextWindows,
+    contextWindowOptions: parseContextWindowOptions(meta.contextWindowOptions),
+    presetContextWindowOptions: meta.presetContextWindowOptions,
     maxTokens: meta.maxTokens,
     explicitContextCache: meta.explicitContextCache,
   }));
@@ -371,6 +386,8 @@ export function getServerModelMetadata(modelId: string): ServerModelMetadata | n
     agenticReady: metadata.agenticReady,
     contextWindow: metadata.contextWindow,
     presetContextWindows: metadata.presetContextWindows,
+    contextWindowOptions: parseContextWindowOptions(metadata.contextWindowOptions),
+    presetContextWindowOptions: metadata.presetContextWindowOptions,
     maxTokens: metadata.maxTokens,
     explicitContextCache: metadata.explicitContextCache,
   };
