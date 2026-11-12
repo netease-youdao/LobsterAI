@@ -12,7 +12,6 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
-import { getCoworkTurnUsage } from '../../../shared/cowork/llmTurnUsage';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
 import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
@@ -43,6 +42,7 @@ import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
 import AssistantMessageItem from './AssistantMessageItem';
+import AssistantTurnFooter from './AssistantTurnFooter';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
@@ -99,6 +99,7 @@ import ModelReconnectStatusLine from './ModelReconnectStatusLine';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
 import TurnUsageChip from './TurnUsageChip';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useStreamStall } from './useStreamStall';
 
 // ── ContextCompressionIcon ───────────────────────────────────────────────────
@@ -689,9 +690,7 @@ const AssistantTurnBlock: React.FC<{
     ? turnEndTimestamp - turnStartTimestamp
     : null;
   // The user message may be outside the loaded page of a long turn.
-  const turnUsage = isStreamingTurn
-    ? null
-    : getCoworkTurnUsage(turn.userMessage?.metadata) ?? turn.inheritedTurnUsage?.turnUsage;
+  const turnUsage = isStreamingTurn ? null : getConversationTurnUsage(turn);
   const turnUsageMessageId = turn.userMessage?.id ?? turn.inheritedTurnUsage?.userMessageId;
   const turnUsageSlot = showCopyButtons && turnUsage && turnUsageMessageId ? (
     <TurnUsageChip
@@ -700,7 +699,7 @@ const AssistantTurnBlock: React.FC<{
       durationMs={processDurationMs}
     />
   ) : null;
-  // Show usage only with the final visible text reply.
+  // Prefer the final visible text reply; interrupted turns may need a footer.
   let turnUsageReplyId: string | null = null;
   for (let index = consolidatedItems.length - 1; index >= 0; index--) {
     const item = consolidatedItems[index];
@@ -1101,7 +1100,10 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length) {
+  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
+  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
+
+  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
     return null;
   }
 
@@ -1188,6 +1190,14 @@ const AssistantTurnBlock: React.FC<{
                   </div>
                 )}
               </div>
+            )}
+            {trailingTurnUsageSlot && (
+              <AssistantTurnFooter
+                turn={turn}
+                turnUsageSlot={trailingTurnUsageSlot}
+                mapDisplayText={mapDisplayText}
+                onForkMessage={onForkMessage}
+              />
             )}
           </div>
         </div>

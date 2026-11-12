@@ -78,6 +78,7 @@ import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selector
 import { SkinProvider } from './providers/SkinProvider';
 import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
+import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
@@ -787,15 +788,40 @@ const App: React.FC = () => {
 
   const handleShowExperts = useCallback((event?: Event) => {
     if (!ENABLE_EXPERT_PLAZA_UI) return;
+    // An explicit destination takes priority over the delayed login welcome.
+    consumeNewUserWelcomeAfterLoginPending();
     const presetId = (event as CustomEvent<{ presetId?: unknown }> | undefined)?.detail?.presetId;
     setInitialExpertPresetId(typeof presetId === 'string' ? presetId : undefined);
     setMainView(MainView.Experts);
   }, []);
 
   useEffect(() => {
+    const cancelPendingWelcome = () => { consumeNewUserWelcomeAfterLoginPending(); };
     window.addEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
-    return () => window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+    window.addEventListener(ExpertUiEvent.Preparing, cancelPendingWelcome);
+    return () => {
+      window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+      window.removeEventListener(ExpertUiEvent.Preparing, cancelPendingWelcome);
+    };
   }, [handleShowExperts]);
+
+  // In-app links from ads and other server-configured entries (lobsterai://settings/…, lobsterai://view/…).
+  useEffect(() => {
+    const handleDeepLink = (event: Event) => {
+      const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
+      if (!target) return;
+      if (target.kind === 'settings') {
+        handleShowSettings({ initialTab: target.tab });
+        return;
+      }
+      setShowSettings(false);
+      if (target.view === MainView.Experts) handleShowExperts();
+      else if (target.view === MainView.Library) handleShowLibrary();
+      else setMainView(target.view);
+    };
+    window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+    return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
 
   const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);

@@ -4,6 +4,7 @@ import type {
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
   CoworkForkMode,
+  CoworkSessionStatus,
 } from '../../shared/cowork/constants';
 import type { CoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../shared/cowork/goal';
@@ -40,16 +41,7 @@ import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 // Cowork image attachment for vision-capable models
 export type CoworkImageAttachment = CoworkImageAttachmentPayload;
 
-// Cowork session status
-export const CoworkSessionStatusValue = {
-  Idle: 'idle',
-  Running: 'running',
-  Completed: 'completed',
-  Error: 'error',
-} as const;
-
-export type CoworkSessionStatus =
-  typeof CoworkSessionStatusValue[keyof typeof CoworkSessionStatusValue];
+export { type CoworkSessionStatus,CoworkSessionStatusValue } from '../../shared/cowork/constants';
 
 // Cowork message types
 export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
@@ -191,6 +183,7 @@ export interface CoworkSession {
   systemPrompt: string;
   modelOverride: string;
   modelPresetId?: ModelPresetId | null;
+  contextWindowOverride?: number | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];

@@ -5,7 +5,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { AgentId, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
+import { AgentId, AgentModelSelectionMode, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
 import {
   OpenClawCronRunMetadataKey,
   parseOpenClawCronSessionKey,
@@ -112,6 +112,8 @@ export class SqliteStore {
         system_prompt TEXT NOT NULL DEFAULT '',
         model_override TEXT NOT NULL DEFAULT '',
         model_preset_id TEXT,
+        context_window_override INTEGER,
+        context_window_owner_key TEXT,
         thinking_level TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
         parent_session_id TEXT,
@@ -220,6 +222,7 @@ export class SqliteStore {
         system_prompt TEXT NOT NULL DEFAULT '',
         identity TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
+        model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}',
         thinking_level TEXT NOT NULL DEFAULT '',
         working_directory TEXT NOT NULL DEFAULT '',
         icon TEXT NOT NULL DEFAULT '',
@@ -404,6 +407,15 @@ export class SqliteStore {
 
       if (!colNames.includes('model_preset_id')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN model_preset_id TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('context_window_override')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN context_window_override INTEGER;');
+        this.didRunMigration = true;
+      }
+      if (!colNames.includes('context_window_owner_key')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN context_window_owner_key TEXT;');
         this.didRunMigration = true;
       }
 
@@ -617,7 +629,14 @@ export class SqliteStore {
       throw error;
     }
 
-    // Null preserves legacy ownership inference; explicit edits are recorded from now on.
+    // Legacy model bindings have no provenance: preserve them until the user
+    // explicitly opts into inheritance. New experts opt in when installed.
+    const modelColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+    if (!modelColumns.some(column => column.name.toLowerCase() === 'model_selection_mode')) {
+      this.db.exec(`ALTER TABLE agents ADD COLUMN model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}';`);
+    }
+
+    // Null preserves legacy avatar ownership inference; explicit edits are recorded from now on.
     const avatarColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
     if (!avatarColumns.some(column => column.name.toLowerCase() === 'icon_customized')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN icon_customized INTEGER;');

@@ -7,6 +7,7 @@ import {
   markLaunchAdShown,
   normalizeLaunchAdState,
   pickLaunchAd,
+  resolveLaunchAdWidth,
 } from './launchAdFrequency';
 import type { ClientBanner } from './sidebarAdBannerState';
 
@@ -65,5 +66,15 @@ describe('launch ad frequency', () => {
     expect(normalizeLaunchAdState(null)).toEqual({ versions: {} });
     expect(normalizeLaunchAdState({ versions: { '1:v': { lastShownAt: 'x', dismissedAt: 5 } } }))
       .toEqual({ versions: { '1:v': { dismissedAt: 5 } } });
+  });
+
+  test('launch modal width follows the banner and falls back to 400 when missing or out of range', () => {
+    expect(resolveLaunchAdWidth({})).toBe(400);
+    expect(resolveLaunchAdWidth({ modalWidth: null })).toBe(400);
+    expect(resolveLaunchAdWidth({ modalWidth: 760 })).toBe(760);
+    expect(resolveLaunchAdWidth({ modalWidth: 320 })).toBe(320);
+    expect(resolveLaunchAdWidth({ modalWidth: 960 })).toBe(960);
+    expect(resolveLaunchAdWidth({ modalWidth: 100 })).toBe(400);
+    expect(resolveLaunchAdWidth({ modalWidth: 5000 })).toBe(400);
   });
 });

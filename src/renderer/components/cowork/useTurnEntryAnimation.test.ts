@@ -51,4 +51,16 @@ describe('entry animation of the newest turn', () => {
     expect(settled).toBe(swapped);
     expect(settled.skipTurnId).not.toBe('follow-up');
   });
+
+  test('does not replay when history pages replace an orphan turn with its complete turn', () => {
+    let state = initial('session');
+    for (const turnId of ['orphan-message-62', 'orphan-message-12', 'user-message-0']) {
+      state = nextEntryAnimationState(state, 'session', turnId, true);
+      expect(state.skipTurnId).toBe(turnId);
+      state = nextEntryAnimationState(state, 'session', turnId, false);
+      expect(state.skipTurnId).toBe(turnId);
+    }
+    const followUp = nextEntryAnimationState(state, 'session', 'new-user-message', false);
+    expect(followUp.skipTurnId).not.toBe('new-user-message');
+  });
 });

@@ -2,9 +2,9 @@ import { XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ClientBannerPlacement } from '../../shared/clientBanner/constants';
-import { getClientBannerTargetUrl } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
 import { localStore } from '../services/store';
+import { openClientBannerLink } from './clientBannerLink';
 import Modal from './common/Modal';
 import {
   LAUNCH_AD_MAX_DELAY_MS,
@@ -14,6 +14,7 @@ import {
   markLaunchAdShown,
   normalizeLaunchAdState,
   pickLaunchAd,
+  resolveLaunchAdWidth,
 } from './launchAdFrequency';
 import SidebarAdBannerHtml from './SidebarAdBannerHtml';
 import { type ClientBanner, isHtmlSidebarBanner } from './sidebarAdBannerState';
@@ -79,9 +80,7 @@ const LaunchAdModal: React.FC<LaunchAdModalProps> = ({ enabled, onOpenChange }) 
 
   const openLink = useCallback(() => {
     if (!banner) return;
-    void window.electron.shell.openExternal(
-      getClientBannerTargetUrl(banner.linkUrl, banner.activityDescription),
-    );
+    void openClientBannerLink(banner);
     close();
   }, [banner, close]);
 
@@ -97,9 +96,16 @@ const LaunchAdModal: React.FC<LaunchAdModalProps> = ({ enabled, onOpenChange }) 
       onClose={close}
       onEscape={close}
       overlayClassName="fixed inset-0 z-[220] flex items-center justify-center bg-black/45 p-4"
-      className="relative w-[400px] max-w-[90vw]"
+      className="relative max-w-[90vw]"
     >
-      <div role="dialog" aria-modal="true" aria-label={banner.activityDescription} data-launch-ad>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={banner.activityDescription}
+        data-launch-ad
+        className="max-w-full"
+        style={{ width: resolveLaunchAdWidth(banner) }}
+      >
         <div
           role="button"
           tabIndex={0}

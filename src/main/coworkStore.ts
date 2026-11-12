@@ -7,7 +7,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
-import { AgentId, normalizeAgentAvatarIcon } from '../shared/agent';
+import { AgentId, AgentModelSelectionMode, normalizeAgentAvatarIcon } from '../shared/agent';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
@@ -18,6 +18,7 @@ import {
   COWORK_SESSION_PAGE_SIZE,
   CoworkForkMode,
   type CoworkForkMode as CoworkForkModeType,
+  type CoworkSessionStatus,
 } from '../shared/cowork/constants';
 import type { CoworkErrorDetail } from '../shared/cowork/errorDetail';
 import {
@@ -418,7 +419,7 @@ function shouldAutoDeleteMemoryText(text: string): boolean {
 }
 
 // Types mirroring src/types/cowork.ts for main process use
-export type CoworkSessionStatus = 'idle' | 'running' | 'completed' | 'error';
+export type { CoworkSessionStatus } from '../shared/cowork/constants';
 export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type CoworkAgentEngine = 'openclaw';
@@ -432,6 +433,7 @@ export interface Agent {
   systemPrompt: string;
   identity: string;
   model: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   icon: string;
@@ -456,6 +458,7 @@ export interface CreateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
@@ -471,6 +474,7 @@ export interface UpdateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
@@ -575,6 +579,8 @@ export interface CoworkSession {
   systemPrompt: string;
   modelOverride: string;
   modelPresetId?: ModelPresetId | null;
+  contextWindowOverride?: number | null;
+  contextWindowOwnerKey?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
@@ -1096,6 +1102,8 @@ export class CoworkStore {
       system_prompt: string;
       model_override?: string | null;
       model_preset_id?: string | null;
+      context_window_override?: number | null;
+      context_window_owner_key?: string | null;
       thinking_level?: string | null;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
@@ -1107,7 +1115,7 @@ export class CoworkStore {
 
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, thinking_level, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -1150,6 +1158,8 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       modelOverride: row.model_override || '',
       modelPresetId: parseModelPresetId(row.model_preset_id),
+      contextWindowOverride: row.context_window_override ?? null,
+      contextWindowOwnerKey: row.context_window_owner_key ?? null,
       thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       activeSkillIds,
@@ -1372,7 +1382,8 @@ export class CoworkStore {
         now,
       );
 
-      this.db.prepare('UPDATE cowork_sessions SET model_preset_id = ? WHERE id = ?').run(source.modelPresetId ?? null, id);
+      this.db.prepare('UPDATE cowork_sessions SET model_preset_id = ?, context_window_override = ?, context_window_owner_key = ? WHERE id = ?')
+        .run(source.modelPresetId ?? null, source.contextWindowOverride ?? null, source.contextWindowOwnerKey ?? null, id);
 
       for (const contextMessage of contextMessages) {
         const content = contextMessage.content.trim();
@@ -1622,7 +1633,7 @@ export class CoworkStore {
     updates: Partial<
       Pick<
         CoworkSession,
-        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'modelPresetId' | 'thinkingLevel' | 'executionMode' | 'goal'
+        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'modelPresetId' | 'contextWindowOverride' | 'contextWindowOwnerKey' | 'thinkingLevel' | 'executionMode' | 'goal'
       >
     >,
     options: { touchUpdatedAt?: boolean } = {},
@@ -1677,6 +1688,14 @@ export class CoworkStore {
     if (updates.thinkingLevel !== undefined) {
       setClauses.push('thinking_level = ?');
       values.push(updates.thinkingLevel);
+    }
+    if (updates.contextWindowOverride !== undefined) {
+      setClauses.push('context_window_override = ?');
+      values.push(updates.contextWindowOverride);
+    }
+    if (updates.contextWindowOwnerKey !== undefined) {
+      setClauses.push('context_window_owner_key = ?');
+      values.push(updates.contextWindowOwnerKey);
     }
     if (updates.executionMode !== undefined) {
       setClauses.push('execution_mode = ?');
@@ -3594,8 +3613,8 @@ export class CoworkStore {
       this.db
         .prepare(
           `
-        INSERT INTO agents (id, name, description, system_prompt, identity, model, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
+        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -3605,6 +3624,7 @@ export class CoworkStore {
           request.systemPrompt || '',
           request.identity || '',
           request.model || '',
+          request.modelSelectionMode ?? AgentModelSelectionMode.Explicit,
           normalizeAgentThinkingLevel(request.thinkingLevel),
           request.workingDirectory || '',
           normalizeAgentAvatarIcon(request.icon),
@@ -3630,8 +3650,8 @@ export class CoworkStore {
     if (!normalizedModelId) return 0;
 
     const result = this.db
-      .prepare("UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, '')) = ''")
-      .run(normalizedModelId, Date.now());
+      .prepare("UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, '')) = '' AND model_selection_mode != ?")
+      .run(normalizedModelId, Date.now(), AgentModelSelectionMode.Inherit);
 
     return result.changes;
   }
@@ -3663,6 +3683,10 @@ export class CoworkStore {
     if (updates.model !== undefined) {
       setClauses.push('model = ?');
       values.push(updates.model);
+    }
+    if (updates.modelSelectionMode !== undefined) {
+      setClauses.push('model_selection_mode = ?');
+      values.push(updates.modelSelectionMode);
     }
     if (updates.thinkingLevel !== undefined) {
       setClauses.push('thinking_level = ?');
@@ -3776,6 +3800,7 @@ export class CoworkStore {
     system_prompt: string;
     identity: string;
     model: string;
+    model_selection_mode?: string;
     thinking_level?: string | null;
     working_directory?: string | null;
     icon: string;
@@ -3801,6 +3826,8 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       identity: row.identity,
       model: row.model,
+      modelSelectionMode: row.model_selection_mode === AgentModelSelectionMode.Inherit
+        ? AgentModelSelectionMode.Inherit : AgentModelSelectionMode.Explicit,
       thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       workingDirectory: row.working_directory || '',
       icon: row.icon,

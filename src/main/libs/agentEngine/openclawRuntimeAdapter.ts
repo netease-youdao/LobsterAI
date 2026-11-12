@@ -100,7 +100,7 @@ import {
 } from '../../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyStatus } from '../../../shared/openclawTranscript/constants';
 import { buildPptOutlineSystemPrompt, isPptOutlineSystemPrompt, PPT_OUTLINE_CONTENT_GUIDANCE } from '../../../shared/pptCreation/outline';
-import { ProviderName } from '../../../shared/providers';
+import { OpenClawProviderId, ProviderName } from '../../../shared/providers';
 import type { Agent, CoworkExecutionMode, CoworkMessage, CoworkMessageMetadata, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import { MediaGenerationTool } from '../../mediaGenerationPolicy';
@@ -110,7 +110,7 @@ import { getServerModelMetadata } from '../claudeSettings';
 import { getServerApiBaseUrl } from '../endpoints';
 import { createCoworkLlmTrace, createLlmTraceparent } from '../llmTrace';
 import { registerLlmUsageContext } from '../llmUsageContext';
-import { presetContextWindowSelection } from '../modelPresetContext';
+import { sessionContextWindowSelection } from '../modelContextWindows';
 import type { ProviderModelCatalog } from '../openclawAgentModels';
 import { extractOpenClawAssistantStreamParts,extractOpenClawAssistantStreamText } from '../openclawAssistantText';
 import {
@@ -548,6 +548,7 @@ type OpenClawRuntimeAdapterOptions = {
   normalizeModelRef?: (modelRef: string) => string;
   /** Providers and models synced into openclaw.json; enables stale session override cleanup. */
   getModelCatalog?: () => ProviderModelCatalog;
+  getContextWindowOwnerKey?: () => string | null;
   onChannelPromptSubmit?: (event: {
     agentId: string;
     conversationState: PromptAnalyticsConversationStateValue;
@@ -568,6 +569,7 @@ const SessionModelPatchSource = {
 type SessionModelPatchSource = typeof SessionModelPatchSource[keyof typeof SessionModelPatchSource];
 
 type SessionModelPatchState = {
+  contextWindowFingerprint?: string;
   model: string;
   confirmedAt: number;
   source: SessionModelPatchSource;
@@ -3347,6 +3349,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     };
   }
 
+  private sessionContextWindowFingerprint(sessionId: string, modelRef: string): string {
+    const session = this.store.getSession(sessionId);
+    const metadata = getServerModelMetadata(modelRef.slice(modelRef.indexOf('/') + 1));
+    return JSON.stringify([session && sessionContextWindowSelection(session, metadata, this.options.getContextWindowOwnerKey?.() ?? null),
+      metadata?.contextWindow, metadata?.presetContextWindows]);
+  }
+
   private getConfirmedSessionModelPatch(
     sessionId: string,
     sessionKey: string,
@@ -3355,7 +3364,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   ): SessionModelPatchState | null {
     const state = this.sessionModelPatchStateBySession.get(sessionId);
     if (!state) return null;
-    if (state.model !== model || state.sessionKey !== sessionKey || state.source !== source) {
+    if (state.model !== model || state.sessionKey !== sessionKey || state.source !== source
+      || state.contextWindowFingerprint !== this.sessionContextWindowFingerprint(sessionId, model)) {
       return null;
     }
     if (Date.now() - state.confirmedAt > OpenClawRuntimeAdapter.SESSION_MODEL_PATCH_CONFIRMED_TTL_MS) {
@@ -3376,6 +3386,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       sessionKey,
       source,
       confirmedAt: Date.now(),
+      contextWindowFingerprint: this.sessionContextWindowFingerprint(sessionId, model),
     });
   }
 
@@ -5518,8 +5529,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         });
         this.markGatewayRpcSuccess();
         if (normalizedPatch.model) this.assertSessionModelRoute(sessionId, targetSessionKey, normalizedPatch.model, response);
+        if (gatewayPatch.contextWindow !== undefined) {
+          const entry = isRecord(response?.entry) ? response.entry : null;
+          if (!entry || (entry.contextWindow ?? null) !== gatewayPatch.contextWindow) {
+            throw new Error(t('modelContextWindowSaveFailed'));
+          }
+        }
         return response;
       } catch (error) {
+        if (gatewayPatch.contextWindow !== undefined) this.sessionModelPatchStateBySession.delete(sessionId);
         this.recordGatewayRpcFailure('sessions.patch', error);
         throw error;
       }
@@ -5551,7 +5569,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       };
     }
 
-    await sendPatch();
+    await this.enqueueSessionModelPatch(sessionId, async () => { await sendPatch(); });
+    if (normalizedPatch.contextWindow !== undefined) {
+      this.sessionModelPatchStateBySession.delete(sessionId);
+      this.sessionContextTokensCache.delete(targetSessionKey);
+    }
     return patchedThinkingLevel !== undefined
       ? { thinkingLevel: patchedThinkingLevel }
       : {};
@@ -5561,6 +5583,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.configRestartImWorkloads.forgetSession(sessionId);
     const turn = this.activeTurns.get(sessionId);
     const yielded = this.yieldedSessions.get(sessionId);
+    const stoppedTurn = turn ? {
+      userMessageId: turn.userMessageId,
+      traceId: turn.llmTraceId,
+      runIds: [...turn.knownRunIds],
+      startedAt: turn.startedAtMs,
+    } : yielded ? { runIds: [yielded.runId] } : undefined;
     this.yieldedSessions.delete(sessionId);
     this.pendingGoalContinuations.delete(sessionId);
     if (yielded && this.gatewayClient) {
@@ -5608,7 +5636,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.questionController.cancelBySession(sessionId);
     this.store.updateSession(sessionId, { status: 'idle' });
     this.emitSessionStatus(sessionId, 'idle');
-    this.emit('sessionStopped', sessionId);
+    this.emit('sessionStopped', sessionId, stoppedTurn);
     this.resolveTurn(sessionId);
   }
 
@@ -5789,16 +5817,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         const openClawThinkingLevel = thinkingLevel
           ? resolveOpenClawThinkingLevelForModel(model, thinkingLevel)
           : undefined;
-        const presetId = this.store.getSession(sessionId)?.modelPresetId;
+        const contextSession = this.store.getSession(sessionId);
+        const contextModel = getServerModelMetadata(model.slice(model.indexOf('/') + 1));
         const response = await this.requestSessionPatchWithProfile({
           sessionId,
           sessionKey,
           patch: {
             model,
-            ...(presetId ? {
-              contextWindow: presetContextWindowSelection(
-                getServerModelMetadata(model.slice(model.indexOf('/') + 1)), presetId,
-              ),
+            ...(contextSession && model.startsWith(`${OpenClawProviderId.LobsteraiServer}/`) ? {
+              contextWindow: sessionContextWindowSelection(contextSession, contextModel,
+                this.options.getContextWindowOwnerKey?.() ?? null),
             } : {}),
             ...(openClawThinkingLevel
               ? { thinkingLevel: openClawThinkingLevel }

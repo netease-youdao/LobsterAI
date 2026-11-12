@@ -31,7 +31,7 @@ export { MessageCopyButton as CopyButton } from './MessageActionButton';
 
 // Stays on one line: a narrow column shortens the date (assistantMessageMeta.css),
 // then the model inside the parentheses gives way; nothing wraps.
-const MESSAGE_META_CLASS_NAME = 'cowork-message-meta mt-1 flex min-w-0 items-center gap-2 whitespace-nowrap text-[12px] font-normal leading-5 text-secondary select-none';
+export const MESSAGE_META_CLASS_NAME = 'cowork-message-meta mt-1 flex min-w-0 items-center gap-2 whitespace-nowrap text-[12px] font-normal leading-5 text-secondary select-none';
 const MESSAGE_META_ACTION_CLASS_NAME = 'inline-flex h-7 w-7 shrink-0 items-center justify-center [&>svg]:h-3.5 [&>svg]:w-3.5';
 
 const ForkButton: React.FC<{
@@ -53,6 +53,83 @@ const ForkButton: React.FC<{
     <MessageForkIcon className="h-3.5 w-3.5 shrink-0" />
   </MessageActionButton>
 );
+
+/** Time and model of a turn's meta row. */
+export const MessageMetaDetails: React.FC<{
+  timestamp: number;
+  turnMetadata?: CoworkMessageMetadata | null;
+}> = ({ timestamp, turnMetadata }) => {
+  const modelLabel = getMessageModelLabelParts(turnMetadata);
+  const isBalancedPreset = parseModelPresetId(turnMetadata?.modelPresetId) === ModelPresetId.Balanced;
+  return (
+    <>
+      <span className="shrink-0 tabular-nums" title={formatMessageDateTime(timestamp)}>
+        <span className="cowork-message-meta-full-date">{formatMessageDateTime(timestamp)}</span>
+        <span className="cowork-message-meta-short-date">{formatMessageShortDateTime(timestamp)}</span>
+      </span>
+      {modelLabel && (
+        <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden" title={getMessageModelLabel(turnMetadata) ?? undefined}>
+          {isBalancedPreset && <BalancedModelIcon className="h-3.5 w-3.5 shrink-0" />}
+          {modelLabel.detail ? (
+            <span className="flex min-w-0">
+              <span className="shrink-0">{modelLabel.name}（</span>
+              <span className="min-w-0 truncate">{modelLabel.detail}</span>
+              <span className="shrink-0">）</span>
+            </span>
+          ) : (
+            <span className="min-w-0 truncate">{modelLabel.name}</span>
+          )}
+        </span>
+      )}
+    </>
+  );
+};
+
+/** Shared by a text reply and a stopped turn that has no final text reply. */
+export const AssistantMessageMeta: React.FC<{
+  message: CoworkMessage;
+  copyContent: string;
+  timestamp?: number;
+  turnMetadata?: CoworkMessageMetadata | null;
+  turnUsageSlot?: React.ReactNode;
+  onFork?: (messageId: string) => void;
+  enableMessageSpeech?: boolean;
+  goalCompletionLabel?: string | null;
+}> = ({ message, copyContent, timestamp = message.timestamp, turnMetadata, turnUsageSlot, onFork,
+  enableMessageSpeech = false, goalCompletionLabel }) => (
+  <div className={MESSAGE_META_CLASS_NAME} data-cowork-search-exclude="true">
+    {goalCompletionLabel && (
+      <span className="inline-flex shrink-0 items-center gap-1 text-secondary">
+        <GoalIcon className="h-3.5 w-3.5" />
+        <span>{goalCompletionLabel}</span>
+      </span>
+    )}
+    <MessageMetaDetails timestamp={timestamp} turnMetadata={turnMetadata} />
+    {turnUsageSlot}
+    {onFork && <ForkButton message={message} onFork={() => onFork(message.id)} />}
+    <MessageCopyButton
+      className={MESSAGE_META_ACTION_CLASS_NAME}
+      content={copyContent}
+      disabled={!copyContent.trim()}
+      onCopy={(result) => reportConversationMessageAction({
+        actionType: 'copy_message',
+        message,
+        params: {
+          result,
+          copySource: 'assistant_message',
+          copiedLength: copyContent.length,
+        },
+      })}
+    />
+    {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
+  </div>
+);
+
+export const getAssistantMessageCopyContent = (content: string): string => {
+  const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(content));
+  return [proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd(), proposedPlan.planText]
+    .filter((part): part is string => Boolean(part)).join('\n\n');
+};
 
 // ── AssistantMessageItem ─────────────────────────────────────────────────────
 
@@ -90,26 +167,7 @@ const AssistantMessageItem: React.FC<{
   const rawContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
   const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(rawContent));
   const displayContent = proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd();
-  const copyContent = [
-    displayContent,
-    proposedPlan.planText,
-  ].filter((part): part is string => Boolean(part)).join('\n\n');
-  const modelLabel = getMessageModelLabelParts(turnMetadata);
-  const isBalancedPreset = parseModelPresetId(turnMetadata?.modelPresetId) === ModelPresetId.Balanced;
-  const modelLabelNode = modelLabel && (
-    <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden" title={getMessageModelLabel(turnMetadata) ?? undefined}>
-      {isBalancedPreset && <BalancedModelIcon className="h-3.5 w-3.5 shrink-0" />}
-      {modelLabel.detail ? (
-        <span className="flex min-w-0">
-          <span className="shrink-0">{modelLabel.name}（</span>
-          <span className="min-w-0 truncate">{modelLabel.detail}</span>
-          <span className="shrink-0">）</span>
-        </span>
-      ) : (
-        <span className="min-w-0 truncate">{modelLabel.name}</span>
-      )}
-    </span>
-  );
+  const copyContent = getAssistantMessageCopyContent(rawContent);
   const goalCompletionDuration = completedGoal
     ? formatCoworkGoalCompletionDuration(completedGoal)
     : null;
@@ -144,43 +202,15 @@ const AssistantMessageItem: React.FC<{
     );
   }, [message.id, proposedPlan.ignoredInlineOpenTagCount]);
   const metaRow = showCopyButton ? (
-    <div
-      className={MESSAGE_META_CLASS_NAME}
-      data-cowork-search-exclude="true"
-    >
-      {goalCompletionLabel && (
-        <span className="inline-flex shrink-0 items-center gap-1 text-secondary">
-          <GoalIcon className="h-3.5 w-3.5" />
-          <span>{goalCompletionLabel}</span>
-        </span>
-      )}
-      <span className="shrink-0 tabular-nums" title={formatMessageDateTime(message.timestamp)}>
-        <span className="cowork-message-meta-full-date">{formatMessageDateTime(message.timestamp)}</span>
-        <span className="cowork-message-meta-short-date">{formatMessageShortDateTime(message.timestamp)}</span>
-      </span>
-      {modelLabelNode}
-      {turnUsageSlot}
-      {onFork && (
-        <ForkButton
-          message={message}
-          onFork={() => onFork(message.id)}
-        />
-      )}
-      <MessageCopyButton
-        className={MESSAGE_META_ACTION_CLASS_NAME}
-        content={copyContent}
-        onCopy={(result) => reportConversationMessageAction({
-          actionType: 'copy_message',
-          message,
-          params: {
-            result,
-            copySource: 'assistant_message',
-            copiedLength: copyContent.length,
-          },
-        })}
-      />
-      {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
-    </div>
+    <AssistantMessageMeta
+      message={message}
+      copyContent={copyContent}
+      turnMetadata={turnMetadata}
+      turnUsageSlot={turnUsageSlot}
+      onFork={onFork}
+      enableMessageSpeech={enableMessageSpeech}
+      goalCompletionLabel={goalCompletionLabel}
+    />
   ) : null;
   return (
     <div

@@ -1,3 +1,4 @@
+import { usesInheritedAgentModel } from '../../shared/agent/modelSelection';
 import { UsageEntry } from '../../shared/analytics/usage';
 import { type PptCatalog, PptCreation, PptCreationError, type PptExample, type PptExampleMode, type PptPreparedFile, PptWorkflow } from '../../shared/pptCreation/constants';
 import { store } from '../store';
@@ -26,6 +27,10 @@ export async function preparePptCreationDraft(
   if (!options.prompt.trim() || attachmentCount > PptCreation.MaxAttachments) throw new Error('Invalid PPT draft');
   const agent = await agentService.addPreset(catalog.expertPresetId);
   if (!agent) throw new Error('PPT expert preparation failed');
+  // Preparing an inherited expert clears its old override. Allow that expected
+  // cleanup while still rejecting model changes made during preparation.
+  const expectedModels = { ...previousModels };
+  if (usesInheritedAgentModel(agent)) delete expectedModels[agent.id];
   const files = [...options.files];
   if (options.useDemo) {
     for (const material of example.materials) files.push(await window.electron.pptCreation.getAsset({
@@ -44,7 +49,7 @@ export async function preparePptCreationDraft(
     attachments.push({ path: result.path, name: file.name, isImage: false });
   }
   if (!isCurrent() || store.getState().cowork.currentSessionId
-    || JSON.stringify(store.getState().model.selectedModelByAgent) !== JSON.stringify(previousModels)
+    || JSON.stringify(store.getState().model.selectedModelByAgent) !== JSON.stringify(expectedModels)
     || JSON.stringify(store.getState().model.defaultSelectedModel) !== JSON.stringify(previousDefault)
     || JSON.stringify(captureImageCreationDraft()) !== JSON.stringify(backup)) return null;
   const recommended = store.getState().model.availableModels.find(model => model.isServerModel

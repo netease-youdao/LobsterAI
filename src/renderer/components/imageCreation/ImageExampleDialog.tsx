@@ -2,11 +2,14 @@ import './imageCreationScroll.css';
 
 import { ArrowRightIcon, ArrowUpTrayIcon, ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useEffect, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 
 import { ImageCreation, type ImageCreationExample, type ImageExampleReference } from '../../../shared/imageCreation/constants';
 import { i18nService } from '../../services/i18n';
+import type { RootState } from '../../store';
 import Modal from '../common/Modal';
 import { computeMediaLabels } from '../cowork/mediaMentionUtils';
+import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
 import { useScrollAffordance } from './useScrollAffordance';
 
 interface Props {
@@ -23,6 +26,9 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
   const [reference, setReference] = useState<ImageExampleReference>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const needsLogin = useSelector((state: RootState) => !state.auth.isLoggedIn
+    && !state.model.availableModels.some(model => !model.isServerModel && model.accessible !== false));
   const mounted = useRef(true);
   const fileInput = useRef<HTMLInputElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -36,7 +42,9 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
 
   const handleUseExample = async (useDemo: boolean) => {
     if (busy || !prompt.trim()) return;
-    setBusy(true); setError('');
+    setError('');
+    if (needsLogin) { setShowLoginPrompt(true); return; }
+    setBusy(true);
     try {
       const selectedReference = useDemo ? await window.electron.imageCreation.getReference(example.id) : reference;
       if (!mounted.current) return;
@@ -66,7 +74,7 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
     if (mounted.current) { setReference({ name: file.name, mimeType: file.type, base64Data: dataUrl.split(',')[1] }); setError(''); }
   };
 
-  return <Modal onClose={busy ? () => undefined : onClose} onEscape={busy ? undefined : onClose}
+  return <><Modal onClose={busy ? () => undefined : onClose} onEscape={busy ? undefined : onClose}
     className="w-[min(960px,calc(100vw-48px))] max-h-[calc(100vh-64px)] overflow-y-auto rounded-2xl border border-border bg-surface shadow-popover">
     <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="image-example-title" className="relative grid md:grid-cols-2"
       onKeyDown={event => {
@@ -121,5 +129,9 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
         <p className="mt-auto pt-5 text-[11px] text-muted">{t('imageCreationModelLabel')} {example.modelName}</p>
       </div>
     </div>
-  </Modal>;
+  </Modal>
+    {showLoginPrompt && needsLogin && <ModelAccessPromptModal promptKind={ModelAccessPromptKind.Login}
+      titleKey="imageCreationLoginTitle" descriptionKey="imageCreationLoginDescription" showLearnMore={false}
+      onClose={() => setShowLoginPrompt(false)} />}
+  </>;
 }

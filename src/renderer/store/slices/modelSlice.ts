@@ -25,6 +25,7 @@ export interface Model {
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
+  contextWindowOptions?: number[];
   maxTokens?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")

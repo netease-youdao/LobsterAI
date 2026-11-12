@@ -194,7 +194,7 @@ import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
-import { type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
+import { isChatPresetSession, type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
 import {
   normalizeNotificationSettings,
   type NotificationSettings,
@@ -217,6 +217,7 @@ import {
   parseModelThinkingLevel,
   ProviderName,
 } from '../shared/providers';
+import { selectableContextWindows, userContextWindowSelection } from '../shared/providers/modelContextWindow';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentCreateNodeInput,
@@ -516,8 +517,10 @@ import {
 } from './libs/mediaTaskStore';
 import { MediaUsageAnalytics } from './libs/mediaUsageAnalytics';
 import { MediaUsageStore } from './libs/mediaUsageStore';
+import { modelContextWindowOwnerKey, registerModelContextWindowIpc, rememberedContextWindow } from './libs/modelContextWindows';
 import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
 import { bindNativeRunUsageOwner, claimNativeRunTurnUsage, configureNativeUsageSessionTitleResolver, getNativeRunMediaUsageContext, recordNativeRunMediaTask } from './libs/nativeRunTurnUsage';
+import { deleteOpenClawAgent } from './libs/openclawAgentDeletion';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -4139,8 +4142,11 @@ const bindCoworkRuntimeForwarder = (): void => {
     }
   });
 
-  runtime.on('sessionStopped', (sessionId: string) => {
+  runtime.on('sessionStopped', (sessionId, turn) => {
     getDesktopNotificationManager().handleSessionStopped(sessionId);
+    void coworkTurnUsageService?.settleStoppedTurn(sessionId, turn).catch((error) => {
+      console.warn(`[TurnUsage] settlement failed for stopped session ${sessionId}.`, error);
+    });
   });
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
@@ -4230,6 +4236,10 @@ const getCoworkEngineRouter = () => {
         {
           normalizeModelRef: normalizeOpenClawModelRef,
           getModelCatalog: buildAvailableOpenClawProviders,
+          getContextWindowOwnerKey: () => {
+            const owner = resolveCurrentMediaAccountScope()?.ownerAccountKey;
+            return owner ? modelContextWindowOwnerKey(owner, getServerApiBaseUrl()) : null;
+          },
           onChannelPromptSubmit: (event, sessionId) => {
             getTaskUsageAnalytics().begin(sessionId, {},
               event.conversationState === PromptAnalyticsConversationState.ContinueSession, UsageOrigin.Im);
@@ -8904,8 +8914,21 @@ if (!gotTheLock) {
     }
   });
 
+  const getContextWindowOwnerKey = () => {
+    const owner = getCurrentMediaAccountScope()?.ownerAccountKey;
+    return owner ? modelContextWindowOwnerKey(owner, getServerApiBaseUrl()) : null;
+  };
+  const modelContextWindows = registerModelContextWindowIpc({
+    ipcMain, getStore, getSessions: getCoworkStore, getRuntime: getCoworkEngineRouter,
+    ownerKey: getContextWindowOwnerKey,
+    resolveSessionModel: session => normalizeOpenClawModelRef(session.modelOverride
+      || getCoworkStore().getAgent(session.agentId)?.model || resolveDefaultAgentModelRef()),
+    ensureModelsReady: () => loadAvailableServerModels({ reason: 'context-window-selection', awaitConfigSync: true }),
+    t,
+  });
   const modelPresetSelection = registerModelPresetIpc({
     ipcMain, client: modelPresetClient, getStore, getSessions: getCoworkStore,
+    contextWindowOwnerKey: getContextWindowOwnerKey,
     getRuntime: getCoworkEngineRouter,
     ownerAccountKey: () => getCurrentMediaAccountScope()?.ownerAccountKey ?? null,
     ensureModelsReady: () => loadAvailableServerModels({ reason: 'chat-model-preset', awaitConfigSync: true }),
@@ -10660,6 +10683,8 @@ if (!gotTheLock) {
           }
         }
 
+        modelContextWindows.restoreForSession(session.id);
+        session = coworkStoreInstance.getSession(session.id)!;
         if (options.modelOverride) {
           console.log(
             '[Cowork:StartSession] session created with modelOverride:',
@@ -11981,6 +12006,18 @@ if (!gotTheLock) {
     refreshImSessionWorkingDirectoriesForAgent,
     resolveAgentWorkspacePath,
     resolveDefaultAgentModelRef,
+    deleteAgentWithRuntime: (agentId, commitLocalDeletion) => {
+      const deletion = deleteOpenClawAgent({
+        agentId, commitLocalDeletion, previousConfigSync: openClawConfigApplyQueue,
+        getGatewayState: () => ({
+          phase: getOpenClawEngineManager().getStatus().phase,
+          processId: getOpenClawEngineManager().getGatewayProcessPid(),
+        }),
+        ensureRpcClient: async () => openClawRuntimeAdapter?.ensureGatewayRpcClient() ?? null,
+      });
+      openClawConfigApplyQueue = deletion.then(() => {}, () => {});
+      return deletion;
+    },
     syncOpenClawConfig,
   });
 
@@ -12316,8 +12353,13 @@ if (!gotTheLock) {
         patch.model = normalizeOpenClawModelRef(patch.model);
       }
       const previousSession = getCoworkStore().getSession(sessionId);
-      if (patch.model !== undefined && previousSession?.modelPresetId) {
-        patch.contextWindow = null;
+      const contextOwner = getContextWindowOwnerKey();
+      const targetModelId = patch.model?.slice(patch.model.indexOf('/') + 1) ?? '';
+      const contextOverride = patch.model !== undefined && isChatPresetSession(previousSession ?? {})
+        ? rememberedContextWindow(getStore(), contextOwner, targetModelId, undefined,
+          selectableContextWindows(getServerModelMetadata(targetModelId))) : null;
+      if (patch.model !== undefined) {
+        patch.contextWindow = contextOverride ? userContextWindowSelection(contextOverride) : null;
       }
       const runtime = getCoworkEngineRouter();
       const patchResult = await runtime.patchSession(sessionId, patch);
@@ -12326,10 +12368,14 @@ if (!gotTheLock) {
         const sessionUpdates: {
           modelOverride?: string;
           modelPresetId?: ModelPresetId | null;
+          contextWindowOverride?: number | null;
+          contextWindowOwnerKey?: string | null;
           thinkingLevel?: ReturnType<typeof parseModelThinkingLevel> | '';
         } = {};
         if (patch.model !== undefined) {
           sessionUpdates.modelPresetId = null;
+          sessionUpdates.contextWindowOverride = contextOverride;
+          sessionUpdates.contextWindowOwnerKey = contextOverride ? contextOwner : null;
           sessionUpdates.modelOverride =
             patchResult && typeof patchResult.modelOverride === 'string'
               ? patchResult.modelOverride

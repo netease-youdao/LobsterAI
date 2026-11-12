@@ -9,6 +9,8 @@ import type {
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
+import type { AgentModelSelectionMode } from '../../shared/agent/constants';
+import type { AgentModelSelection } from '../../shared/agent/modelSelection';
 import type { ExpertCatalog } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
@@ -652,6 +654,7 @@ interface ClientBannerData {
   htmlContent?: string | null;
   audiences?: string | null;
   displayFrequency?: 'every_launch' | 'daily' | 'once';
+  modalWidth?: number | null;
   updatedAt?: string;
 }
 
@@ -854,6 +857,7 @@ interface IElectronAPI {
         systemPrompt?: string;
         identity?: string;
         model?: string;
+        modelSelectionMode?: AgentModelSelectionMode;
         thinkingLevel?: Agent['thinkingLevel'];
         workingDirectory?: string;
         icon?: string;
@@ -870,7 +874,7 @@ interface IElectronAPI {
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
     expertCatalog: () => Promise<ExpertCatalog>;
-    addPreset: (presetId: string) => Promise<Agent>;
+    addPreset: (presetId: string, modelSelection?: AgentModelSelection) => Promise<Agent>;
     /** Another window changed agents; reload them. */
     onChanged?: (callback: () => void) => () => void;
   };
@@ -2096,6 +2100,10 @@ interface IElectronAPI {
       input: ActivityHostExecuteActionInput,
     ) => Promise<ActivityResult<ActivityActionResponse>>;
   };
+  modelContextWindows: {
+    get: (request: import('../../shared/providers/modelContextWindow').ModelContextWindowRequest) => Promise<{ success: boolean; data?: import('../../shared/providers/modelContextWindow').ModelContextWindowState; error?: string }>;
+    set: (request: import('../../shared/providers/modelContextWindow').ModelContextWindowRequest, tokens: number | null) => Promise<{ success: boolean; data?: import('../../shared/providers/modelContextWindow').ModelContextWindowState; error?: string }>;
+  };
   modelPresets: {
     available: () => Promise<{ success: boolean; data?: AvailableModelPreset[]; error?: string }>;
     getPreferences: () => Promise<{ success: boolean; data?: Record<string, ModelPresetPreference>; error?: string }>;
@@ -2153,6 +2161,7 @@ interface IElectronAPI {
         supportsToolCalling?: boolean;
         agenticReady?: boolean;
         contextWindow?: number;
+        contextWindowOptions?: number[];
         maxTokens?: number;
         explicitContextCache?: boolean;
         costMultiplier?: number;

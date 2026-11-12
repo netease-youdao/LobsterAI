@@ -1,5 +1,48 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Stable timestamps for assistant-first history bootstraps
+
+`zzzz-openclaw-bootstrap-prefix-cache.patch` fixes a prompt-cache miss when
+replaying the same assistant-first history. The turn-order repair prepends a
+synthetic user message, `(session bootstrap)`. Its old `Date.now()` timestamp
+was stamped into the model-visible text by `normalizeMessagesForLlmBoundary`,
+so reopening unchanged history in a later minute changed the request prefix.
+This affects both Google and strict OpenAI-compatible replay paths.
+
+The bootstrap now inherits the first retained assistant message's persisted
+timestamp. The repair stays idempotent, and real user messages retain their
+own timestamps. Changing the retained history can still change the prefix;
+this patch removes only the variation caused by the time of replay.
+
+Regression coverage exercises:
+
+- The real OpenAI completions serializer with identical history reconstructed
+  at two different wall-clock times, including a real user message.
+- SQLite byte truncation of a long turn, followed by reopening the same
+  assistant-first tail at different times.
+- Failed byte-triggered preflight compaction, both a failure result and an
+  exception, followed by bounded-history fallback and a retry under backoff.
+
+Apply the complete patch set, then run in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+node scripts/run-vitest.mjs run src/auto-reply/reply/agent-runner-memory.test.ts -t "model-context byte bound"
+```
+
+Windows acceptance also exercised the real Electron client through Playwright/CDP
+against a recording localhost provider. The common request prefix stayed
+byte-identical across minute boundaries and a full client/gateway restart, while
+real user timestamps remained intact. A separate long-history scenario verified
+that failed byte-triggered summarization still completed the user turn without
+installing a compaction boundary. This checks request bytes, not provider billing.
+
+The patch sorts after the bounded-history and session-prefix patches whose
+test coverage it extends. The patch applier verifies both the production fix
+and the regression tests. Rebuild the bundled runtime to ship the fix. Remove
+this patch when the pinned upstream derives bootstrap time from retained
+history rather than the clock.
+
 ## Sign-out without a config clobber restart
 
 `openclaw-config-apply-size-drop-allowance.patch` lets the full-config owner
@@ -1716,3 +1759,58 @@ written. On the next start the gateway log should show `reused clean-close
 integrity proof` (debug) instead of `slow OpenClaw agent database open`, and the
 startup trace should show a much shorter `startup.maintenance`. Remove this patch
 when the pinned upstream reaches v2026.10.10, which ships its own seal.
+
+## Explicit user context windows
+
+`openclaw-user-context-window-selection.patch` allows a declared, explicitly
+selected LobsterAI window to exceed the model's server-controlled default budget.
+The existing scalar `contextWindow` still owns the direct model's default. Managed
+mode IDs `yd-fast` / `yd-ultra` and their legacy `model-preset:balanced` /
+`model-preset:ultimate` equivalents use their current declared profile budget.
+For example, a direct model can default to 400,000 tokens while a mode defaults
+to 500,000 and offers a 1,000,000-token session choice.
+
+The `user-context:` option namespace is a LobsterAI integration contract. A
+selection must exactly match a catalog option on `lobsterai-server`, and its
+resolved budget must be an integer from 400,000 through 1,000,000 tokens. Unknown
+or removed user options fall back to the current declared default. Mode selections
+use their current server profile without becoming a manual window preference.
+Other providers retain their existing behavior. Configured options must only be
+advertised after the model and all of its fallback routes are verified to support
+the corresponding context length.
+
+The same resolver is used by embedded runtime setup, preflight/memory-flush
+budgeting, fork admission, and session-row projection. This avoids a 1M UI selection still
+compacting at 400K, and prevents older 400K telemetry from masking an active 1M
+choice. Output limits and upstream request protocols are unchanged. Clearing the
+selection returns to the current server default; the patch does not persist a
+resolved default as a user preference. Managed session rows use the current
+budget even if older locked/runtime telemetry recorded 1M or a previous default.
+Other providers keep their existing context-token provenance rules.
+
+LobsterAI currently keeps `contextWindowDefault: model-default` and sends the
+mode ID (for example `yd-fast`) for a mode with no manual window preference.
+Resetting a manual mode window must restore that mode ID. If its explicit option
+is withdrawn, the gateway falls back to `model-default` until LobsterAI patches
+the session back to the current mode ID; a 400K direct default and 500K mode
+default therefore remain distinguishable during that interval.
+
+An explicit fork may carry its parent's user selection and copy history up to
+that budget. An automatically parented non-fork session does not inherit a
+`user-context:` choice; it follows its own default unless its create request
+explicitly selected a window. Legacy window options retain their inheritance.
+
+Verify in the pinned source after applying patches:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/model-user-context-window.test.ts src/gateway/session-utils.user-context-window.test.ts src/gateway/server.sessions.user-context-window.test.ts src/agents/embedded-agent-runner/run/setup.test.ts src/auto-reply/reply/memory-flush.test.ts src/agents/model-preset-context-window.test.ts
+```
+
+The new regression cases fail against the previous 400K runtime policy and cover
+400K -> explicit 1M -> default 400K, preset selections, default changes, missing
+options, unrelated providers, session projection, and unchanged output caps. Mode
+regressions additionally cover a fixed 400K direct scalar with a 400K -> 500K
+mode default, resetting explicit 1M to that 500K default, and fork admission.
+Rebuild the bundled runtime before desktop acceptance. Remove this patch when
+the pinned runtime can distinguish the managed default budget from a validated
+explicit session budget across these paths.

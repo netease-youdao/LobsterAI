@@ -1,0 +1,889 @@
+diff --git a/src/agents/model-context-window.ts b/src/agents/model-context-window.ts
+--- a/src/agents/model-context-window.ts
++++ b/src/agents/model-context-window.ts
+@@ -30,3 +30,40 @@
+     contextTokens: effective?.contextWindow ?? params.catalogEntry?.contextWindow,
+   };
+ }
++
++const LOBSTERAI_PROVIDER = "lobsterai-server";
++export const LOBSTERAI_USER_CONTEXT_WINDOW_PREFIX = "user-context:";
++const LOBSTERAI_PRESET_CONTEXT_WINDOWS = new Set([
++  "yd-fast",
++  "yd-ultra",
++  "model-preset:balanced",
++  "model-preset:ultimate",
++]);
++
++/** Declared managed presets own their current mode budget, independently of the
++ * direct model's scalar. User windows additionally require an explicit selection. */
++export function resolveLobsterAIContextTokens(params: {
++  provider?: string;
++  selected?: string;
++  contextWindow?: string;
++  contextTokens?: number;
++}): number | undefined {
++  const selected = params.selected?.trim();
++  const tokens = params.contextTokens;
++  if (
++    params.provider !== LOBSTERAI_PROVIDER ||
++    typeof tokens !== "number" ||
++    !Number.isFinite(tokens) ||
++    tokens <= 0
++  ) {
++    return undefined;
++  }
++  return LOBSTERAI_PRESET_CONTEXT_WINDOWS.has(params.contextWindow ?? "") ||
++    (selected?.startsWith(LOBSTERAI_USER_CONTEXT_WINDOW_PREFIX) &&
++      params.contextWindow === selected &&
++      Number.isInteger(tokens) &&
++      tokens >= 400_000 &&
++      tokens <= 1_000_000)
++    ? tokens
++    : undefined;
++}
+diff --git a/src/agents/embedded-agent-runner/run/setup.ts b/src/agents/embedded-agent-runner/run/setup.ts
+--- a/src/agents/embedded-agent-runner/run/setup.ts
++++ b/src/agents/embedded-agent-runner/run/setup.ts
+@@ -29,7 +29,10 @@
+ } from "../../context-window-guard.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+ import { FailoverError } from "../../failover-error.js";
+-import { resolveModelContextWindowProfile } from "../../model-context-window.js";
++import {
++  resolveLobsterAIContextTokens,
++  resolveModelContextWindowProfile,
++} from "../../model-context-window.js";
+ import { log } from "../logger.js";
+ import { readAgentModelContextTokens } from "../model-context-tokens.js";
+ 
+@@ -223,11 +226,13 @@
+     catalogEntry: params.runtimeModel,
+     selected: params.contextWindow,
+   });
+-  // Admin preset windows are isolated from the ordinary model's default.
+-  const isLobsterAIPreset =
+-    params.provider === "lobsterai-server" &&
+-    (params.contextWindow === "model-preset:balanced" ||
+-      params.contextWindow === "model-preset:ultimate");
++  // Managed mode defaults are independent of the direct model's scalar budget.
++  const managedContextTokens = resolveLobsterAIContextTokens({
++    provider: params.provider,
++    selected: params.contextWindow,
++    ...contextWindowProfile,
++  });
++  const overridesDefaultBudget = managedContextTokens !== undefined;
+   const resolvedCtxInfo = resolveContextWindowInfo({
+     cfg: params.cfg,
+     provider: params.contextConfigProvider ?? params.provider,
+@@ -243,14 +248,14 @@
+   const ctxInfo =
+     contextWindowProfile.contextWindow &&
+     contextWindowProfile.contextTokens !== undefined &&
+-    (isLobsterAIPreset || resolvedCtxInfo.tokens > contextWindowProfile.contextTokens)
++    (overridesDefaultBudget || resolvedCtxInfo.tokens > contextWindowProfile.contextTokens)
+       ? { ...resolvedCtxInfo, tokens: contextWindowProfile.contextTokens, source: "model" as const }
+       : resolvedCtxInfo;
+ 
+   // Apply contextTokens cap to model so session runtime's auto-compaction
+   // threshold uses the effective limit, not the native context window.
+   const effectiveModel =
+-    isLobsterAIPreset || ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
++    overridesDefaultBudget || ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
+       ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
+       : params.runtimeModel;
+   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
+diff --git a/src/auto-reply/reply/memory-flush.ts b/src/auto-reply/reply/memory-flush.ts
+--- a/src/auto-reply/reply/memory-flush.ts
++++ b/src/auto-reply/reply/memory-flush.ts
+@@ -3,7 +3,10 @@
+ import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+ import { resolveContextTokensForModel } from "../../agents/context.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+-import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
++import {
++  resolveLobsterAIContextTokens,
++  resolveModelContextWindowProfile,
++} from "../../agents/model-context-window.js";
+ import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
+ import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
+ import { normalizeProviderId } from "../../agents/model-selection.js";
+@@ -28,26 +31,34 @@
+     model: params.modelId,
+     allowAsyncLoad: false,
+   });
+-  // The embedded run budgets against the selected option; preflight must use the same window or
+-  // the session compacts against the native one. Like the run, never exceed a known native window,
+-  // and use the selection instead of the generic default when the model declares none.
+-  const selectedTokens = resolveSelectedContextWindowTokens(params);
++  // Managed mode defaults and explicit user windows own their declared budget;
++  // other provider selections continue to cap the model limit.
++  const profile = resolveConfiguredContextWindowProfile(params);
++  const managedContextTokens = resolveLobsterAIContextTokens({
++    provider: params.provider,
++    selected: params.contextWindow,
++    ...profile,
++  });
++  if (managedContextTokens !== undefined) return managedContextTokens;
++  const selected = params.contextWindow?.trim();
++  const selectedTokens =
++    selected && profile?.contextWindow === selected ? profile.contextTokens : undefined;
+   if (selectedTokens === undefined) {
+     return modelTokens ?? DEFAULT_CONTEXT_TOKENS;
+   }
+   return modelTokens === undefined ? selectedTokens : Math.min(selectedTokens, modelTokens);
+ }
+ 
+-function resolveSelectedContextWindowTokens(params: {
++function resolveConfiguredContextWindowProfile(params: {
+   modelId?: string;
+   cfg?: OpenClawConfig;
+   provider?: string;
+   contextWindow?: string;
+-}): number | undefined {
++}) {
+   const selected = params.contextWindow?.trim();
+   const provider = params.provider?.trim();
+   const modelId = params.modelId?.trim();
+-  if (!selected || !provider || !modelId) {
++  if (!provider || !modelId) {
+     return undefined;
+   }
+   const normalizedProvider = normalizeProviderId(provider);
+@@ -57,8 +68,7 @@
+     models: resolveMergedModelProviderConfig(params.cfg, provider)?.models,
+     normalizeModelId,
+   }).get(normalizeModelId(modelId));
+-  const profile = resolveModelContextWindowProfile({ catalogEntry: configuredModel, selected });
+-  return profile.contextWindow === selected ? profile.contextTokens : undefined;
++  return resolveModelContextWindowProfile({ catalogEntry: configuredModel, selected });
+ }
+ 
+ export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
+diff --git a/src/gateway/session-utils-row.ts b/src/gateway/session-utils-row.ts
+--- a/src/gateway/session-utils-row.ts
++++ b/src/gateway/session-utils-row.ts
+@@ -6,7 +6,10 @@
+ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+ import { resolveFastModeState } from "../agents/fast-mode.js";
+ import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
+-import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
++import {
++  resolveLobsterAIContextTokens,
++  resolveModelContextWindowProfile,
++} from "../agents/model-context-window.js";
+ import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
+ import {
+   countActiveDescendantRuns,
+@@ -405,13 +408,16 @@
+       model: rowModel,
+     }),
+   );
+-  const isLobsterAIPreset =
+-    rowModelProvider === "lobsterai-server" &&
+-    (entry?.contextWindow === "model-preset:balanced" ||
+-      entry?.contextWindow === "model-preset:ultimate");
++  const isLobsterAIManagedModel = rowModelProvider === "lobsterai-server";
++  const managedContextTokens = resolveLobsterAIContextTokens({
++    provider: rowModelProvider,
++    selected: entry?.contextWindow,
++    ...contextWindowProfile,
++  });
+   const contextTokens =
+-    isLobsterAIPreset && contextWindowProfile.contextTokens !== undefined
+-      ? contextWindowProfile.contextTokens
++    managedContextTokens ??
++    (isLobsterAIManagedModel && resolvedCurrentContextTokens !== undefined
++      ? resolvedCurrentContextTokens
+       : resolveProjectedSessionContextTokens({
+           entry,
+           provider: rowModelProvider,
+@@ -419,7 +425,7 @@
+           agentHarnessId: thinkingProjection.agentRuntime.id,
+           resolvedContextTokens: resolvedCurrentContextTokens,
+           authoredContextTokens,
+-        });
++        }));
+   const fastModeState = resolveFastModeState({
+     cfg,
+     provider: selectedModelProvider,
+diff --git a/src/gateway/session-create-service.ts b/src/gateway/session-create-service.ts
+--- a/src/gateway/session-create-service.ts
++++ b/src/gateway/session-create-service.ts
+@@ -24,7 +24,11 @@
+ } from "../agents/inherited-tool-deny.js";
+ import { findModelCatalogEntry } from "../agents/model-catalog.js";
+ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+-import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
++import {
++  LOBSTERAI_USER_CONTEXT_WINDOW_PREFIX,
++  resolveLobsterAIContextTokens,
++  resolveModelContextWindowProfile,
++} from "../agents/model-context-window.js";
+ import {
+   resolveDefaultModelForAgent,
+   resolveSubagentConfiguredModelSelection,
+@@ -1297,6 +1301,15 @@
+           // replace it after the canonical patch has validated and stored it.
+           delete inheritedSelection.fastMode;
+         }
++        // A new automatic child follows its own default. Human forks may retain
++        // explicit user context, while validated create-time choices always win.
++        if (
++          requestedContextWindow ||
++          (params.fork !== true &&
++            inheritedSelection.contextWindow?.startsWith(LOBSTERAI_USER_CONTEXT_WINDOW_PREFIX))
++        ) {
++          delete inheritedSelection.contextWindow;
++        }
+         const entry: SessionEntry = {
+           ...initializedEntry,
+           ...inheritedSelection,
+@@ -1336,12 +1349,19 @@
+           allowAsyncLoad: false,
+           allowUnscopedModelLookup: false,
+         });
+-        const forkMaxTokens = childContextWindow.contextTokens
+-          ? Math.min(
+-              resolvedForkMaxTokens ?? childContextWindow.contextTokens,
+-              childContextWindow.contextTokens,
+-            )
+-          : resolvedForkMaxTokens;
++        const managedContextTokens = resolveLobsterAIContextTokens({
++          provider: childModel.provider,
++          selected: entry.contextWindow,
++          ...childContextWindow,
++        });
++        const forkMaxTokens =
++          managedContextTokens ??
++          (childContextWindow.contextTokens
++            ? Math.min(
++                resolvedForkMaxTokens ?? childContextWindow.contextTokens,
++                childContextWindow.contextTokens,
++              )
++            : resolvedForkMaxTokens);
+         // The storage owner selects one source for both size admission and copying,
+         // so an active tail cannot make a smaller stable prefix fail the cap.
+         const forkResult = await forkSessionFromParentWithDecision({
+diff --git a/src/auto-reply/reply/memory-flush.test.ts b/src/auto-reply/reply/memory-flush.test.ts
+--- a/src/auto-reply/reply/memory-flush.test.ts
++++ b/src/auto-reply/reply/memory-flush.test.ts
+@@ -327,7 +327,7 @@
+     expect(resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId })).toBe(1_000_000);
+   });
+ 
+-  it("keeps the model window for unknown selections and never raises it", () => {
++  it("keeps unknown selections on the model default and honors declared managed mode budgets", () => {
+     expect(
+       resolveMemoryFlushContextWindowTokens({
+         cfg: buildConfig(1_000_000),
+@@ -343,7 +343,7 @@
+         modelId,
+         contextWindow: "yd-fast",
+       }),
+-    ).toBe(262_144);
++    ).toBe(400_000);
+   });
+ 
+   it("uses the selected window like the run when the model declares no native window", () => {
+diff --git a/src/agents/model-user-context-window.test.ts b/src/agents/model-user-context-window.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/model-user-context-window.test.ts
+@@ -0,0 +1,221 @@
++import { describe, expect, it } from "vitest";
++import { resolveMemoryFlushContextWindowTokens } from "../auto-reply/reply/memory-flush.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
++import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
++
++const modelId = "context-window-test-model";
++const selectedWindow = "user-context:1000000";
++
++function fixture(provider = "lobsterai-server", defaultWindow = 400_000) {
++  const runtimeModel: ProviderRuntimeModel = {
++    provider,
++    id: modelId,
++    name: modelId,
++    baseUrl: "http://127.0.0.1:9/v1",
++    api: "openai-completions",
++    reasoning: false,
++    input: ["text"],
++    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++    contextWindow: defaultWindow,
++    maxTokens: 32_768,
++    contextWindows: [
++      { id: "model-default", label: "Default", contextWindow: defaultWindow },
++      { id: "yd-fast", label: "Fast", contextWindow: 400_000 },
++      { id: selectedWindow, label: "1M", contextWindow: 1_000_000 },
++      { id: "user-context:yd-fast:1000000", label: "Fast 1M", contextWindow: 1_000_000 },
++    ],
++    contextWindowDefault: "model-default",
++  };
++  const cfg: OpenClawConfig = {
++    models: {
++      providers: { [provider]: { baseUrl: runtimeModel.baseUrl, models: [runtimeModel] } },
++    },
++  };
++  return { provider, runtimeModel, cfg };
++}
++
++describe("LobsterAI explicit user context budgets", () => {
++  it("keeps run and preflight at 400K, then 1M, then the current default without changing output limits", () => {
++    const { provider, runtimeModel, cfg } = fixture();
++    for (const [contextWindow, expected] of [
++      [undefined, 400_000],
++      [selectedWindow, 1_000_000],
++      [undefined, 400_000],
++    ] as const) {
++      const run = resolveEmbeddedRuntimeModelPolicy({
++        cfg,
++        provider,
++        modelId,
++        runtimeModel,
++        nativeModelOwned: false,
++        contextWindow,
++      });
++      expect(run.contextTokenBudget).toBe(expected);
++      expect(run.effectiveModel.contextWindow).toBe(expected);
++      expect(run.effectiveModel.maxTokens).toBe(32_768);
++      expect(resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow })).toBe(
++        expected,
++      );
++    }
++    expect(runtimeModel.contextWindow).toBe(400_000);
++  });
++
++  it("uses the same explicit budget for a selected preset", () => {
++    const { provider, runtimeModel, cfg } = fixture();
++    const contextWindow = "user-context:yd-fast:1000000";
++    expect(
++      resolveEmbeddedRuntimeModelPolicy({
++        cfg,
++        provider,
++        modelId,
++        runtimeModel,
++        nativeModelOwned: false,
++        contextWindow,
++      }).contextTokenBudget,
++    ).toBe(1_000_000);
++    expect(resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow })).toBe(
++      1_000_000,
++    );
++    expect(
++      resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow: "yd-fast" }),
++    ).toBe(400_000);
++  });
++
++  it.each(["user-context:900000", "retired-option"])(
++    "does not raise a window for undeclared selection %s",
++    (contextWindow) => {
++      const { provider, runtimeModel, cfg } = fixture();
++      expect(
++        resolveEmbeddedRuntimeModelPolicy({
++          cfg,
++          provider,
++          modelId,
++          runtimeModel,
++          nativeModelOwned: false,
++          contextWindow,
++        }).contextTokenBudget,
++      ).toBe(400_000);
++      expect(resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow })).toBe(
++        400_000,
++      );
++    },
++  );
++
++  it("leaves other providers capped even when they declare the same option id", () => {
++    const { provider, runtimeModel, cfg } = fixture("custom-provider");
++    expect(
++      resolveEmbeddedRuntimeModelPolicy({
++        cfg,
++        provider,
++        modelId,
++        runtimeModel,
++        nativeModelOwned: false,
++        contextWindow: selectedWindow,
++      }).contextTokenBudget,
++    ).toBe(400_000);
++    expect(
++      resolveMemoryFlushContextWindowTokens({
++        cfg,
++        provider,
++        modelId,
++        contextWindow: selectedWindow,
++      }),
++    ).toBe(400_000);
++  });
++
++  it("follows a changed default only when there is no explicit selection", () => {
++    const { provider, runtimeModel, cfg } = fixture("lobsterai-server", 500_000);
++    expect(
++      resolveEmbeddedRuntimeModelPolicy({
++        cfg,
++        provider,
++        modelId,
++        runtimeModel,
++        nativeModelOwned: false,
++      }).contextTokenBudget,
++    ).toBe(500_000);
++    expect(resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId })).toBe(500_000);
++    expect(
++      resolveEmbeddedRuntimeModelPolicy({
++        cfg,
++        provider,
++        modelId,
++        runtimeModel,
++        nativeModelOwned: false,
++        contextWindow: selectedWindow,
++      }).contextTokenBudget,
++    ).toBe(1_000_000);
++  });
++
++  it.each(["yd-fast", "yd-ultra", "model-preset:balanced", "model-preset:ultimate"])(
++    "follows declared preset %s from 400K to 500K and resets explicit 1M to 500K",
++    (presetId) => {
++      const { provider, runtimeModel, cfg } = fixture();
++      const preset = runtimeModel.contextWindows!.find((option) => option.id === "yd-fast")!;
++      preset.id = presetId;
++      const userPreset = `user-context:${presetId}:1000000`;
++      runtimeModel.contextWindows!.push({
++        id: userPreset,
++        label: "Preset 1M",
++        contextWindow: 1_000_000,
++      });
++      const expectBudget = (contextWindow: string | undefined, expected: number) => {
++        const run = resolveEmbeddedRuntimeModelPolicy({
++          cfg,
++          provider,
++          modelId,
++          runtimeModel,
++          nativeModelOwned: false,
++          contextWindow,
++        });
++        expect(run.contextTokenBudget).toBe(expected);
++        expect(run.effectiveModel.contextWindow).toBe(expected);
++        expect(run.effectiveModel.maxTokens).toBe(32_768);
++        expect(
++          resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow }),
++        ).toBe(expected);
++      };
++      expectBudget(presetId, 400_000);
++      preset.contextWindow = 500_000;
++      expectBudget(presetId, 500_000);
++      expectBudget(undefined, 400_000);
++      expectBudget(userPreset, 1_000_000);
++      expectBudget(presetId, 500_000);
++      runtimeModel.contextWindows = runtimeModel.contextWindows!.filter(
++        (option) => option.id !== userPreset,
++      );
++      expectBudget(userPreset, 400_000);
++      expectBudget(presetId, 500_000);
++      expect(runtimeModel.contextWindow).toBe(400_000);
++      expect(runtimeModel.contextWindowDefault).toBe("model-default");
++    },
++  );
++
++  it("does not raise foreign-provider budgets for declared modern or legacy presets", () => {
++    for (const presetId of [
++      "yd-fast",
++      "yd-ultra",
++      "model-preset:balanced",
++      "model-preset:ultimate",
++    ]) {
++      const { provider, runtimeModel, cfg } = fixture("custom-provider");
++      runtimeModel.contextWindows![1] = { id: presetId, label: "Preset", contextWindow: 500_000 };
++      for (const contextWindow of [undefined, presetId]) {
++        expect(
++          resolveEmbeddedRuntimeModelPolicy({
++            cfg,
++            provider,
++            modelId,
++            runtimeModel,
++            nativeModelOwned: false,
++            contextWindow,
++          }).contextTokenBudget,
++        ).toBe(400_000);
++        expect(
++          resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow }),
++        ).toBe(400_000);
++      }
++    }
++  });
++});
+diff --git a/src/gateway/session-utils.user-context-window.test.ts b/src/gateway/session-utils.user-context-window.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/gateway/session-utils.user-context-window.test.ts
+@@ -0,0 +1,143 @@
++import { describe, expect, it } from "vitest";
++import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
++import type { SessionEntry } from "../config/sessions.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import { buildGatewaySessionRow } from "./session-utils-row.js";
++
++describe("LobsterAI explicit user context projection", () => {
++  const modelId = "context-window-test-model";
++  const selectedWindow = "user-context:1000000";
++  function row(
++    provider: string,
++    contextWindow?: string,
++    defaultWindow = 400_000,
++    persistedContextTokens = 400_000,
++    locked = false,
++    presetWindow = 400_000,
++    presetId = "yd-fast",
++    withdrawnUserWindow = false,
++  ) {
++    const model: ModelCatalogEntry = {
++      provider,
++      id: modelId,
++      name: modelId,
++      contextWindow: defaultWindow,
++      contextWindows: [
++        { id: "model-default", label: "Default", contextWindow: defaultWindow },
++        { id: presetId, label: "Preset", contextWindow: presetWindow },
++        ...(withdrawnUserWindow
++          ? []
++          : [
++              { id: selectedWindow, label: "1M", contextWindow: 1_000_000 },
++              {
++                id: `user-context:${presetId}:1000000`,
++                label: "Preset 1M",
++                contextWindow: 1_000_000,
++              },
++            ]),
++      ],
++      contextWindowDefault: "model-default",
++    };
++    const cfg = {
++      agents: { defaults: { model: { primary: `${provider}/${modelId}` } } },
++      models: { providers: { [provider]: { baseUrl: "http://127.0.0.1:9/v1", models: [model] } } },
++    } as OpenClawConfig;
++    const entry: SessionEntry = {
++      sessionId: "context-test",
++      updatedAt: 1,
++      contextWindow,
++      modelProvider: provider,
++      model: modelId,
++      contextTokens: persistedContextTokens,
++      contextTokensSource: "runtime",
++      agentHarnessId: "openclaw",
++      modelSelectionLocked: locked,
++    };
++    return buildGatewaySessionRow({
++      cfg,
++      storePath: "",
++      store: {},
++      key: "agent:main:main",
++      entry,
++      modelCatalog: [model],
++      lightweightListRow: true,
++    });
++  }
++
++  it("projects 400K -> explicit 1M -> default 400K despite older 400K telemetry", () => {
++    expect(row("lobsterai-server").contextTokens).toBe(400_000);
++    expect(row("lobsterai-server", selectedWindow)).toMatchObject({
++      contextWindow: selectedWindow,
++      contextTokens: 1_000_000,
++    });
++    expect(row("lobsterai-server").contextTokens).toBe(400_000);
++  });
++
++  it("keeps unknown selections and other providers on the existing cap", () => {
++    expect(row("lobsterai-server", "user-context:900000").contextTokens).toBe(400_000);
++    expect(row("custom-provider", selectedWindow).contextTokens).toBe(400_000);
++  });
++
++  it("immediately clears old 1M telemetry when returning to a managed default", () => {
++    for (const locked of [false, true]) {
++      expect(
++        row("lobsterai-server", selectedWindow, 400_000, 1_000_000, locked).contextTokens,
++      ).toBe(1_000_000);
++      expect(row("lobsterai-server", undefined, 400_000, 1_000_000, locked).contextTokens).toBe(
++        400_000,
++      );
++      expect(row("lobsterai-server", "yd-fast", 1_000_000, 1_000_000, locked).contextTokens).toBe(
++        400_000,
++      );
++    }
++  });
++
++  it("uses a changed managed default for existing sessions while preserving explicit 1M", () => {
++    for (const persistedContextTokens of [400_000, 1_000_000]) {
++      for (const locked of [false, true]) {
++        expect(
++          row("lobsterai-server", undefined, 500_000, persistedContextTokens, locked).contextTokens,
++        ).toBe(500_000);
++        expect(
++          row("lobsterai-server", selectedWindow, 500_000, persistedContextTokens, locked)
++            .contextTokens,
++        ).toBe(1_000_000);
++      }
++    }
++    expect(row("custom-provider", undefined, 500_000, 400_000, true).contextTokens).toBe(400_000);
++  });
++
++  it.each(["yd-fast", "yd-ultra", "model-preset:balanced", "model-preset:ultimate"])(
++    "projects the current declared preset %s independently of the 400K scalar",
++    (presetId) => {
++      for (const locked of [false, true]) {
++        for (const persistedContextTokens of [400_000, 1_000_000]) {
++          const project = (selected: string | undefined, presetWindow: number, withdrawn = false) =>
++            row(
++              "lobsterai-server",
++              selected,
++              400_000,
++              persistedContextTokens,
++              locked,
++              presetWindow,
++              presetId,
++              withdrawn,
++            ).contextTokens;
++          expect(project(presetId, 400_000)).toBe(400_000);
++          expect(project(presetId, 500_000)).toBe(500_000);
++          expect(project(undefined, 500_000)).toBe(400_000);
++          const userPreset = `user-context:${presetId}:1000000`;
++          expect(project(userPreset, 500_000)).toBe(1_000_000);
++          expect(project(presetId, 500_000)).toBe(500_000);
++          // The gateway cannot infer the current mode from a withdrawn ID.
++          // Main must patch back to presetId before its 500K default applies.
++          expect(project(userPreset, 500_000, true)).toBe(400_000);
++          expect(project(presetId, 500_000, true)).toBe(500_000);
++        }
++      }
++      expect(
++        row("custom-provider", presetId, 400_000, 400_000, true, 500_000, presetId).contextTokens,
++      ).toBe(400_000);
++    },
++  );
++});
+diff --git a/src/gateway/server.sessions.user-context-window.test.ts b/src/gateway/server.sessions.user-context-window.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/gateway/server.sessions.user-context-window.test.ts
+@@ -0,0 +1,222 @@
++import { afterEach, expect, test } from "vitest";
++import { getRuntimeConfig } from "../config/io.js";
++import type { ModelDefinitionConfig } from "../config/types.models.js";
++import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
++import {
++  createCheckpointFixture,
++  directSessionReq,
++  sessionStoreEntry,
++  setupGatewaySessionsHandlerTestHarness,
++} from "./test/server-sessions.test-helpers.js";
++
++const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
++// The handler-only fixture has no server.close to release SQLite before its
++// tracked session-store directories are removed on Windows.
++afterEach(() => {
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++});
++const userWindow = "user-context:1000000";
++const cases: Array<{
++  name: string;
++  provider: string;
++  selected?: string;
++  parentWindow?: string;
++  inherited?: boolean;
++  fork?: boolean;
++  expected: boolean;
++  expectedWindow?: string;
++  presetId?: string;
++  presetWindow?: number;
++  parentTokens?: number;
++  expectedTokens?: number;
++}> = [
++  {
++    name: "explicit 1M",
++    provider: "lobsterai-server",
++    selected: userWindow,
++    expected: true,
++    expectedWindow: userWindow,
++  },
++  {
++    name: "inherited explicit 1M",
++    provider: "lobsterai-server",
++    selected: userWindow,
++    inherited: true,
++    expected: true,
++    expectedWindow: userWindow,
++  },
++  { name: "unselected default", provider: "lobsterai-server", expected: false },
++  { name: "ordinary preset", provider: "lobsterai-server", selected: "yd-fast", expected: false },
++  {
++    name: "unrelated provider",
++    provider: "custom-provider",
++    selected: userWindow,
++    expected: false,
++  },
++  {
++    name: "automatic child",
++    provider: "lobsterai-server",
++    parentWindow: userWindow,
++    fork: false,
++    expected: true,
++  },
++  {
++    name: "explicit child 1M",
++    provider: "lobsterai-server",
++    parentWindow: userWindow,
++    selected: userWindow,
++    fork: false,
++    expected: true,
++    expectedWindow: userWindow,
++  },
++  {
++    name: "explicit child 400K",
++    provider: "lobsterai-server",
++    parentWindow: userWindow,
++    selected: "user-context:400000",
++    fork: false,
++    expected: true,
++    expectedWindow: "user-context:400000",
++  },
++  {
++    name: "legacy child preset",
++    provider: "lobsterai-server",
++    parentWindow: "yd-fast",
++    fork: false,
++    expected: true,
++    expectedWindow: "yd-fast",
++  },
++  ...["yd-fast", "yd-ultra", "model-preset:balanced", "model-preset:ultimate"].map((presetId) => ({
++    name: `declared 500K preset ${presetId}`,
++    provider: "lobsterai-server",
++    selected: presetId,
++    parentWindow: `user-context:${presetId}:1000000`,
++    presetId,
++    presetWindow: 500_000,
++    parentTokens: 450_000,
++    expected: true,
++    expectedWindow: presetId,
++    expectedTokens: 500_000,
++  })),
++  {
++    name: "explicit mode 1M with current mode default 500K",
++    provider: "lobsterai-server",
++    selected: "user-context:yd-fast:1000000",
++    presetWindow: 500_000,
++    expected: true,
++    expectedWindow: "user-context:yd-fast:1000000",
++    expectedTokens: 1_000_000,
++  },
++  {
++    name: "foreign declared 500K preset stays capped",
++    provider: "custom-provider",
++    selected: "yd-fast",
++    presetWindow: 500_000,
++    parentTokens: 450_000,
++    expected: false,
++  },
++];
++
++test.each(cases)(
++  "LobsterAI explicit fork budget: $name",
++  async ({
++    provider,
++    selected,
++    inherited,
++    parentWindow,
++    fork = true,
++    expected,
++    expectedWindow,
++    presetId = "yd-fast",
++    presetWindow = 400_000,
++    parentTokens = 600_000,
++    expectedTokens = expectedWindow === userWindow ? 1_000_000 : 400_000,
++  }) => {
++    const { dir } = await createSessionStoreDir();
++    const modelId = "context-window-test-model";
++    const model: ModelDefinitionConfig & { provider: string } = {
++      id: modelId,
++      name: "Context test",
++      provider,
++      api: "openai-completions",
++      reasoning: false,
++      input: ["text"],
++      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++      maxTokens: 32_768,
++      contextWindow: 400_000,
++      contextWindows: [
++        { id: "model-default", label: "Default", contextWindow: 400_000 },
++        { id: presetId, label: "Preset", contextWindow: presetWindow },
++        { id: "user-context:400000", label: "400K", contextWindow: 400_000 },
++        { id: userWindow, label: "1M", contextWindow: 1_000_000 },
++        { id: `user-context:${presetId}:1000000`, label: "Preset 1M", contextWindow: 1_000_000 },
++      ],
++      contextWindowDefault: "model-default",
++    };
++    testState.sessionConfig = { scope: "per-sender" };
++    agentDiscoveryMock.models = [model];
++    try {
++      const parent = await createCheckpointFixture(dir);
++      const inheritedWindow = inherited ? selected : parentWindow;
++      await writeSessionStore({
++        entries: {
++          main: sessionStoreEntry(parent.sessionId, {
++            sessionFile: parent.sessionFile,
++            providerOverride: provider,
++            modelOverride: modelId,
++            ...(inheritedWindow ? { contextWindow: inheritedWindow } : {}),
++            totalTokens: parentTokens,
++            totalTokensFresh: true,
++            totalTokensVersion: 1,
++          }),
++        },
++      });
++      const cfg = getRuntimeConfig();
++      const selection = { primary: `${provider}/${modelId}` };
++      const created = await directSessionReq<{ key: string; entry?: { contextWindow?: string } }>(
++        "sessions.create",
++        {
++          agentId: "main",
++          parentSessionKey: "main",
++          fork,
++          ...(!inherited && selected ? { contextWindow: selected } : {}),
++        },
++        {
++          context: {
++            getRuntimeConfig: () => ({
++              ...cfg,
++              agents: {
++                ...cfg.agents,
++                defaults: { ...cfg.agents?.defaults, model: selection },
++                entries: {
++                  ...cfg.agents?.entries,
++                  main: { ...cfg.agents?.entries?.main, model: selection },
++                },
++              },
++              models: {
++                providers: { [provider]: { baseUrl: "http://127.0.0.1:9/v1", models: [model] } },
++              },
++            }),
++          },
++        },
++      );
++      expect(created.ok, JSON.stringify(created.error)).toBe(expected);
++      if (!expected) expect(created.error?.message).toContain(`${parentTokens}/400000 tokens`);
++      else {
++        expect(created.payload?.entry?.contextWindow).toBe(expectedWindow);
++        const listed = await directSessionReq<{
++          sessions: Array<{ key: string; contextTokens?: number }>;
++        }>("sessions.list", {});
++        expect(
++          listed.payload?.sessions.find((row) => row.key === created.payload?.key)?.contextTokens,
++        ).toBe(expectedTokens);
++      }
++    } finally {
++      agentDiscoveryMock.models = [];
++      testState.sessionConfig = undefined;
++    }
++  },
++);
