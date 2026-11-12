@@ -423,6 +423,27 @@ export function buildOpenClawCompileCacheEnv(compileCacheDir: string): NodeJS.Pr
   };
 }
 
+/**
+ * Runtimes built with scripts/openclaw-dist-package-scope.cjs carry a small
+ * dist/package.json. OpenClaw's agent runtime takes the nearest package.json as
+ * its package directory (docs, README, version), which for code loaded from
+ * dist/ would then be dist/ itself. Pin it to the runtime root, where the
+ * same lookup ends without that file.
+ */
+export function buildOpenClawPackageDirEnv(runtimeRoot: string): NodeJS.ProcessEnv {
+  if (!fs.existsSync(path.join(runtimeRoot, 'dist', 'package.json'))) {
+    return {};
+  }
+  let packageDir = runtimeRoot;
+  try {
+    // Modules report their real location, so match it through a linked runtime.
+    packageDir = fs.realpathSync(runtimeRoot);
+  } catch {
+    // Keep the unresolved root; the gateway reports a missing runtime itself.
+  }
+  return { OPENCLAW_PACKAGE_DIR: packageDir };
+}
+
 export class OpenClawEngineManager extends EventEmitter {
   private readonly baseDir: string;
   private readonly logsDir: string;
@@ -1215,6 +1236,7 @@ export class OpenClawEngineManager extends EventEmitter {
       // Enable V8 compile cache for both CJS and ESM modules.
       // This env var works for import() (ESM), unlike enableCompileCache() which is CJS-only.
       ...buildOpenClawCompileCacheEnv(compileCacheDir),
+      ...buildOpenClawPackageDirEnv(runtime.root),
       LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath.replace(/\\/g, '/'),
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
       // Inject secret values for ${VAR} placeholders in openclaw.json.

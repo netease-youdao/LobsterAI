@@ -3154,18 +3154,77 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(sync.sync('provider-added-again').changed).toBe(false);
   });
 
-  test('declares and allowlists the bundled xai plugin so its compat hooks load', async () => {
+  const xaiProvider = (authType?: 'oauth') => ({
+    providerName: ProviderName.Xai,
+    baseURL: 'https://api.x.ai/v1',
+    apiKey: authType ? '' : 'xai-key',
+    apiType: 'openai' as const,
+    ...(authType ? { authType } : {}),
+    codingPlanEnabled: false,
+    models: [{ id: 'grok-4.3', name: 'Grok 4.3' }],
+  });
+
+  test.each([
+    ['an API key', xaiProvider()],
+    ['OAuth', xaiProvider('oauth')],
+  ])('declares and allowlists the bundled xai plugin for an xAI provider using %s', async (_label, provider) => {
+    mockRuntimeState.enabledProviders = [provider];
     const sync = await createSync();
 
     const result = sync.sync('xai-plugin-declared');
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.models.providers[OpenClawProviderId.Xai]).toBeDefined();
     expect(config.plugins.entries.xai).toEqual({ enabled: true });
     // plugins.allow is a strict allowlist once non-empty — without this entry
     // the xai plugin never loads and grok models lose their reasoningEffort
     // compat (xAI rejects the parameter for every model except grok-4.3).
     expect(config.plugins.allow).toContain('xai');
+  });
+
+  test('keeps the bundled xai plugin off while no xAI provider is configured', async () => {
+    // What every sync wrote before the plugin became conditional.
+    fs.writeFileSync(configPath, JSON.stringify({
+      plugins: { entries: { xai: { enabled: true } }, allow: ['xai'] },
+    }));
+    const sync = await createSync();
+
+    expect(sync.sync('xai-plugin-off').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: false });
+    expect(config.plugins.allow).not.toContain('xai');
+    expect(sync.sync('xai-plugin-off-again').changed).toBe(false);
+  });
+
+  test('turns the bundled xai plugin on and off with the xAI provider', async () => {
+    const sync = await createSync();
+    expect(sync.sync('before-xai').ok).toBe(true);
+
+    mockRuntimeState.enabledProviders = [xaiProvider()];
+    expect(sync.sync('xai-added').ok).toBe(true);
+    let config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: true });
+    expect(config.plugins.allow).toContain('xai');
+
+    mockRuntimeState.enabledProviders = [];
+    expect(sync.sync('xai-removed').ok).toBe(true);
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: false });
+    expect(config.plugins.allow).not.toContain('xai');
+  });
+
+  test('leaves the xai plugin undeclared when the runtime does not bundle it', async () => {
+    mockRuntimeState.runtimeBundledExtensions = new Set();
+    mockRuntimeState.enabledProviders = [xaiProvider()];
+    const sync = await createSync();
+
+    expect(sync.sync('xai-plugin-missing').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toBeUndefined();
+    expect(config.plugins.allow).not.toContain('xai');
   });
 
   test('keeps memory-core selected and explicitly disables dreaming when dreaming is off', async () => {
