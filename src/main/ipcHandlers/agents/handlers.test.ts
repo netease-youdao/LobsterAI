@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { AgentIpcChannel } from '../../../shared/agent/constants';
 import { ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
+import { ModelThinkingLevel } from '../../../shared/providers/modelThinking';
 import { type AgentHandlerDeps,registerAgentHandlers } from './handlers';
 
 vi.mock('electron', () => ({
@@ -39,6 +40,7 @@ function setup(
   existingAgents: unknown[] = [],
 ) {
   const addPresetAgent = vi.fn().mockResolvedValue(agent);
+  const resolveDefaultAgentModelRef = vi.fn(() => 'provider/model');
   const sender = { id: 1, send: vi.fn() };
   const otherWindowSend = vi.fn();
   vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
@@ -48,17 +50,43 @@ function setup(
   registerAgentHandlers({
     getAgentManager: () => ({ addPresetAgent, listAgents: () => existingAgents }),
     resolveAgentWorkspacePath,
-    resolveDefaultAgentModelRef: () => 'provider/model',
+    resolveDefaultAgentModelRef,
     syncOpenClawConfig,
   } as unknown as AgentHandlerDeps);
   const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.AddPreset)![1];
   return {
-    invoke: () => handler({ sender } as unknown as Electron.IpcMainInvokeEvent, ExpertFixtureId.Data),
+    invoke: (selection?: unknown) => handler({ sender } as unknown as Electron.IpcMainInvokeEvent, ExpertFixtureId.Data, selection),
     addPresetAgent,
+    resolveDefaultAgentModelRef,
     otherWindowSend,
     senderSend: sender.send,
   };
 }
+
+test('summon uses the renderer new-task selection instead of re-resolving a global custom model', async () => {
+  const { invoke, addPresetAgent, resolveDefaultAgentModelRef } = setup(vi.fn().mockResolvedValue({ success: true }));
+  expect(await invoke({ model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High })).toMatchObject({ success: true });
+  expect(addPresetAgent).toHaveBeenCalledExactlyOnceWith(ExpertFixtureId.Data, 'lobsterai-server/yd-fast', ModelThinkingLevel.High);
+  expect(resolveDefaultAgentModelRef).not.toHaveBeenCalled();
+});
+
+test('an explicitly empty new-task selection is not replaced with a global custom default', async () => {
+  const { invoke, addPresetAgent, resolveDefaultAgentModelRef } = setup(vi.fn().mockResolvedValue({ success: true }));
+  await invoke({ model: '', thinkingLevel: '' });
+  expect(addPresetAgent).toHaveBeenCalledExactlyOnceWith(ExpertFixtureId.Data, '', '');
+  expect(resolveDefaultAgentModelRef).not.toHaveBeenCalled();
+});
+
+test('invalid model selection fails before saving an expert or synchronizing OpenClaw', async () => {
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const sync = vi.fn();
+  const { invoke, addPresetAgent } = setup(sync);
+  expect(await invoke({ model: 123 })).toMatchObject({ success: false });
+  expect(await invoke({ model: 'provider/model', thinkingLevel: 'invalid' })).toMatchObject({ success: false });
+  expect(addPresetAgent).not.toHaveBeenCalled();
+  expect(sync).not.toHaveBeenCalled();
+  errorLog.mockRestore();
+});
 
 test('summon waits for OpenClaw synchronization before reporting success and notifying other windows', async () => {
   let resolveSync!: (result: { success: boolean; changed: boolean }) => void;
