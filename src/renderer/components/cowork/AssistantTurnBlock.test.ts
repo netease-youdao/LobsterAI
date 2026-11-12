@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Provider } from 'react-redux';
 import { expect, test } from 'vitest';
 
+import { CoworkTurnUsageStatus } from '../../../shared/cowork/llmTurnUsage';
 import type { CoworkMessage } from '../../types/cowork';
 import AssistantTurnBlock from './AssistantTurnBlock';
 import { buildConversationTurns, buildDisplayItems } from './messageDisplayUtils';
@@ -16,7 +17,8 @@ const renderTurn = (
   const store = configureStore({
     reducer: {
       auth: () => ({ creditQuotaSnapshot: null }),
-      cowork: () => ({ isStreaming: isStreamingTurn }),
+      cowork: () => ({ isStreaming: isStreamingTurn, currentSession: null }),
+      enterpriseAccount: () => ({ context: null }),
     },
   });
   const turn = buildConversationTurns(buildDisplayItems(messages))[0];
@@ -146,4 +148,39 @@ test('a running turn spends no step line on progress card updates once they fini
   expect(running).not.toContain('更新了任务进度');
   expect(running).not.toContain('progress_card');
   expect(running.match(/data-activity-step-kind="command"/g)).toHaveLength(3);
+});
+
+test('a turn stopped during a tool step still shows its credits after usage settles', () => {
+  const turnUsage = {
+    traceId: '0123456789abcdef0123456789abcdef',
+    status: CoworkTurnUsageStatus.Settled,
+    requestCount: 2,
+    failedRequestCount: 1,
+    models: ['deepseek-flash'],
+    creditsUsed: 37,
+    displayCreditsUsed: 37,
+    uncachedInputTokens: 1_000,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    inputTokens: 1_000,
+    outputTokens: 200,
+    totalTokens: 1_200,
+    updatedAt: 9_000,
+  };
+  const html = renderTurn([
+    { ...process[0], metadata: { turnUsage, model: 'deepseek-flash' } },
+    ...process.slice(1),
+  ], false);
+  expect(html).toContain('cowork-message-meta');
+  expect(html).toContain('37');
+  // The trailing row carries the turn's time and model, but no copy or fork action.
+  expect(html).toContain('cowork-message-meta-full-date');
+  expect(html).toMatch(/title="deepseek-flash"|DeepSeek/i);
+  expect(html).not.toContain('aria-label="复制"');
+
+  const live = renderTurn([
+    { ...process[0], metadata: { turnUsage } },
+    ...process.slice(1),
+  ], true);
+  expect(live).not.toContain('cowork-message-meta');
 });

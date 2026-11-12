@@ -42,7 +42,7 @@ import PurchaseOfferCountdown from '../PurchaseOfferCountdown';
 import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
-import AssistantMessageItem from './AssistantMessageItem';
+import AssistantMessageItem, { MESSAGE_META_CLASS_NAME, MessageMetaDetails } from './AssistantMessageItem';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
@@ -69,6 +69,7 @@ import {
   getConsolidatedItemKey,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
+  getMessageModelLabelParts,
   getModelReconnectMessageLabel,
   getRetainedMediaPollCount,
   getStreamingTextSignature,
@@ -1101,7 +1102,18 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length) {
+  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
+  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
+  const lastAssistantItem = [...turn.assistantItems].reverse().find(item => item.type === 'assistant');
+  const trailingMetaTimestamp = turnEndTimestamp ?? turn.userMessage?.timestamp ?? null;
+  const turnUserMetadata = turn.userMessage?.metadata as CoworkMessageMetadata | undefined;
+  const lastAssistantMetadata = withTurnModelPreset(
+    lastAssistantItem?.type === 'assistant' ? lastAssistantItem.message.metadata as CoworkMessageMetadata : undefined,
+    turnUserMetadata,
+  );
+  const trailingMetaMetadata = getMessageModelLabelParts(lastAssistantMetadata) ? lastAssistantMetadata : turnUserMetadata;
+
+  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
     return null;
   }
 
@@ -1187,6 +1199,14 @@ const AssistantTurnBlock: React.FC<{
                     )}
                   </div>
                 )}
+              </div>
+            )}
+            {trailingTurnUsageSlot && (
+              <div className={MESSAGE_META_CLASS_NAME} data-cowork-search-exclude="true">
+                {trailingMetaTimestamp != null && (
+                  <MessageMetaDetails timestamp={trailingMetaTimestamp} turnMetadata={trailingMetaMetadata} />
+                )}
+                {trailingTurnUsageSlot}
               </div>
             )}
           </div>
