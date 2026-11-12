@@ -39,7 +39,7 @@ beforeEach(() => {
   store.dispatch(setDraftSkillIds({ draftKey: key, skillIds: ['old-skill'], inheritedSkillIds: ['old-skill'] }));
   store.dispatch(setDraftCollaborationMode({ draftKey: key, mode: CoworkCollaborationMode.Plan }));
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 test('preparing a referenced example leaves tasks untouched and can restore the entire previous draft', async () => {
   const before = captureImageCreationDraft();
@@ -68,6 +68,17 @@ test('a failed expert installation preserves the original draft', async () => {
   const before = captureImageCreationDraft();
   await expect(prepareImageCreationDraft(expert.presetId!, 'Example', undefined, () => true)).rejects.toThrow();
   expect(captureImageCreationDraft()).toEqual(before);
+});
+
+test('the original preparation error reaches the example caller without changing its draft', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  const error = new Error('Expert catalog integrity check failed');
+  addPreset.mockRejectedValueOnce(error);
+  const before = captureImageCreationDraft();
+
+  await expect(prepareImageCreationDraft(expert.presetId!, 'Example', undefined, () => true)).rejects.toBe(error);
+  expect(captureImageCreationDraft()).toEqual(before);
+  expect(saveInlineFile).not.toHaveBeenCalled();
 });
 
 test('a failed reference save preserves the previous draft instead of sending an in-memory-only image', async () => {
