@@ -12,7 +12,6 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
-import { getCoworkTurnUsage } from '../../../shared/cowork/llmTurnUsage';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
 import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
@@ -42,7 +41,8 @@ import PurchaseOfferCountdown from '../PurchaseOfferCountdown';
 import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
-import AssistantMessageItem, { MESSAGE_META_CLASS_NAME, MessageMetaDetails } from './AssistantMessageItem';
+import AssistantMessageItem from './AssistantMessageItem';
+import AssistantTurnFooter from './AssistantTurnFooter';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
@@ -69,7 +69,6 @@ import {
   getConsolidatedItemKey,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
-  getMessageModelLabelParts,
   getModelReconnectMessageLabel,
   getRetainedMediaPollCount,
   getStreamingTextSignature,
@@ -100,6 +99,7 @@ import ModelReconnectStatusLine from './ModelReconnectStatusLine';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
 import TurnUsageChip from './TurnUsageChip';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useStreamStall } from './useStreamStall';
 
 // ── ContextCompressionIcon ───────────────────────────────────────────────────
@@ -690,9 +690,7 @@ const AssistantTurnBlock: React.FC<{
     ? turnEndTimestamp - turnStartTimestamp
     : null;
   // The user message may be outside the loaded page of a long turn.
-  const turnUsage = isStreamingTurn
-    ? null
-    : getCoworkTurnUsage(turn.userMessage?.metadata) ?? turn.inheritedTurnUsage?.turnUsage;
+  const turnUsage = isStreamingTurn ? null : getConversationTurnUsage(turn);
   const turnUsageMessageId = turn.userMessage?.id ?? turn.inheritedTurnUsage?.userMessageId;
   const turnUsageSlot = showCopyButtons && turnUsage && turnUsageMessageId ? (
     <TurnUsageChip
@@ -701,7 +699,7 @@ const AssistantTurnBlock: React.FC<{
       durationMs={processDurationMs}
     />
   ) : null;
-  // Show usage only with the final visible text reply.
+  // Prefer the final visible text reply; interrupted turns may need a footer.
   let turnUsageReplyId: string | null = null;
   for (let index = consolidatedItems.length - 1; index >= 0; index--) {
     const item = consolidatedItems[index];
@@ -1104,14 +1102,6 @@ const AssistantTurnBlock: React.FC<{
 
   // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
   const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
-  const lastAssistantItem = [...turn.assistantItems].reverse().find(item => item.type === 'assistant');
-  const trailingMetaTimestamp = turnEndTimestamp ?? turn.userMessage?.timestamp ?? null;
-  const turnUserMetadata = turn.userMessage?.metadata as CoworkMessageMetadata | undefined;
-  const lastAssistantMetadata = withTurnModelPreset(
-    lastAssistantItem?.type === 'assistant' ? lastAssistantItem.message.metadata as CoworkMessageMetadata : undefined,
-    turnUserMetadata,
-  );
-  const trailingMetaMetadata = getMessageModelLabelParts(lastAssistantMetadata) ? lastAssistantMetadata : turnUserMetadata;
 
   if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
     return null;
@@ -1202,12 +1192,12 @@ const AssistantTurnBlock: React.FC<{
               </div>
             )}
             {trailingTurnUsageSlot && (
-              <div className={MESSAGE_META_CLASS_NAME} data-cowork-search-exclude="true">
-                {trailingMetaTimestamp != null && (
-                  <MessageMetaDetails timestamp={trailingMetaTimestamp} turnMetadata={trailingMetaMetadata} />
-                )}
-                {trailingTurnUsageSlot}
-              </div>
+              <AssistantTurnFooter
+                turn={turn}
+                turnUsageSlot={trailingTurnUsageSlot}
+                mapDisplayText={mapDisplayText}
+                onForkMessage={onForkMessage}
+              />
             )}
           </div>
         </div>

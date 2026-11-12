@@ -85,6 +85,52 @@ export const MessageMetaDetails: React.FC<{
   );
 };
 
+/** Shared by a text reply and a stopped turn that has no final text reply. */
+export const AssistantMessageMeta: React.FC<{
+  message: CoworkMessage;
+  copyContent: string;
+  timestamp?: number;
+  turnMetadata?: CoworkMessageMetadata | null;
+  turnUsageSlot?: React.ReactNode;
+  onFork?: (messageId: string) => void;
+  enableMessageSpeech?: boolean;
+  goalCompletionLabel?: string | null;
+}> = ({ message, copyContent, timestamp = message.timestamp, turnMetadata, turnUsageSlot, onFork,
+  enableMessageSpeech = false, goalCompletionLabel }) => (
+  <div className={MESSAGE_META_CLASS_NAME} data-cowork-search-exclude="true">
+    {goalCompletionLabel && (
+      <span className="inline-flex shrink-0 items-center gap-1 text-secondary">
+        <GoalIcon className="h-3.5 w-3.5" />
+        <span>{goalCompletionLabel}</span>
+      </span>
+    )}
+    <MessageMetaDetails timestamp={timestamp} turnMetadata={turnMetadata} />
+    {turnUsageSlot}
+    {onFork && <ForkButton message={message} onFork={() => onFork(message.id)} />}
+    <MessageCopyButton
+      className={MESSAGE_META_ACTION_CLASS_NAME}
+      content={copyContent}
+      disabled={!copyContent.trim()}
+      onCopy={(result) => reportConversationMessageAction({
+        actionType: 'copy_message',
+        message,
+        params: {
+          result,
+          copySource: 'assistant_message',
+          copiedLength: copyContent.length,
+        },
+      })}
+    />
+    {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
+  </div>
+);
+
+export const getAssistantMessageCopyContent = (content: string): string => {
+  const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(content));
+  return [proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd(), proposedPlan.planText]
+    .filter((part): part is string => Boolean(part)).join('\n\n');
+};
+
 // ── AssistantMessageItem ─────────────────────────────────────────────────────
 
 const AssistantMessageItem: React.FC<{
@@ -121,10 +167,7 @@ const AssistantMessageItem: React.FC<{
   const rawContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
   const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(rawContent));
   const displayContent = proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd();
-  const copyContent = [
-    displayContent,
-    proposedPlan.planText,
-  ].filter((part): part is string => Boolean(part)).join('\n\n');
+  const copyContent = getAssistantMessageCopyContent(rawContent);
   const goalCompletionDuration = completedGoal
     ? formatCoworkGoalCompletionDuration(completedGoal)
     : null;
@@ -159,39 +202,15 @@ const AssistantMessageItem: React.FC<{
     );
   }, [message.id, proposedPlan.ignoredInlineOpenTagCount]);
   const metaRow = showCopyButton ? (
-    <div
-      className={MESSAGE_META_CLASS_NAME}
-      data-cowork-search-exclude="true"
-    >
-      {goalCompletionLabel && (
-        <span className="inline-flex shrink-0 items-center gap-1 text-secondary">
-          <GoalIcon className="h-3.5 w-3.5" />
-          <span>{goalCompletionLabel}</span>
-        </span>
-      )}
-      <MessageMetaDetails timestamp={message.timestamp} turnMetadata={turnMetadata} />
-      {turnUsageSlot}
-      {onFork && (
-        <ForkButton
-          message={message}
-          onFork={() => onFork(message.id)}
-        />
-      )}
-      <MessageCopyButton
-        className={MESSAGE_META_ACTION_CLASS_NAME}
-        content={copyContent}
-        onCopy={(result) => reportConversationMessageAction({
-          actionType: 'copy_message',
-          message,
-          params: {
-            result,
-            copySource: 'assistant_message',
-            copiedLength: copyContent.length,
-          },
-        })}
-      />
-      {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
-    </div>
+    <AssistantMessageMeta
+      message={message}
+      copyContent={copyContent}
+      turnMetadata={turnMetadata}
+      turnUsageSlot={turnUsageSlot}
+      onFork={onFork}
+      enableMessageSpeech={enableMessageSpeech}
+      goalCompletionLabel={goalCompletionLabel}
+    />
   ) : null;
   return (
     <div

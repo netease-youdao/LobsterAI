@@ -21,7 +21,7 @@ export const CoworkTurnUsageStatus = {
   Pending: 'pending',
   /** The server ledger covers every request the client saw complete. */
   Settled: 'settled',
-  /** The ledger has fewer requests than the client saw complete. */
+  /** The ledger is still missing observed requests or pending media usage. */
   Partial: 'partial',
   /** The summary could not be fetched; the user can retry. */
   Failed: 'failed',
@@ -110,6 +110,8 @@ export interface CoworkTurnUsage {
   totalTokens: number;
   /** Model requests the local token proxy saw complete for this trace. */
   observedCompletedRequests?: number;
+  /** Requests forwarded for a stopped turn, including streams cancelled before completion. */
+  observedRequests?: number;
   updatedAt: number;
 }
 
@@ -316,7 +318,7 @@ export const mergeLlmTraceUsageSummaries = (traceId: string, summaries: unknown[
  */
 export const buildCoworkTurnUsage = (
   summary: unknown,
-  options: { traceId: string; observedCompletedRequests?: number; now: number },
+  options: { traceId: string; observedCompletedRequests?: number; observedRequests?: number; now: number },
 ): CoworkTurnUsage | null => {
   if (!summary || typeof summary !== 'object') return null;
   const raw = summary as Record<string, unknown>;
@@ -334,7 +336,7 @@ export const buildCoworkTurnUsage = (
     : CoworkTurnUsageBillingScope.Personal;
   return {
     traceId: options.traceId,
-    status: raw.mediaPending === true || (typeof observed === 'number' && requestCount < observed)
+    status: raw.mediaPending === true || requestCount < Math.max(observed ?? 0, options.observedRequests ?? 0)
       ? CoworkTurnUsageStatus.Partial
       : CoworkTurnUsageStatus.Settled,
     billingScope,
@@ -354,6 +356,7 @@ export const buildCoworkTurnUsage = (
     outputTokens,
     totalTokens: inputTokens + outputTokens,
     ...(typeof observed === 'number' ? { observedCompletedRequests: observed } : {}),
+    ...(typeof options.observedRequests === 'number' ? { observedRequests: options.observedRequests } : {}),
     updatedAt: options.now,
   };
 };

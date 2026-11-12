@@ -2,9 +2,16 @@ import {
   type CoworkTurnUsage,
   CoworkTurnUsageBillingScope,
   CoworkTurnUsageStatus,
+  getCoworkTurnUsage,
   type TurnModelUsage,
   TurnUsageModelType,
 } from '../../../shared/cowork/llmTurnUsage';
+import type { ConversationTurn } from './messageDisplayUtils';
+
+/** Includes a user message outside the currently loaded history window. */
+export const getConversationTurnUsage = (turn: ConversationTurn): CoworkTurnUsage | null => (
+  getCoworkTurnUsage(turn.userMessage?.metadata) ?? turn.inheritedTurnUsage?.turnUsage ?? null
+);
 
 export const TurnUsageTokenRowKey = {
   UncachedInput: 'uncachedInput',

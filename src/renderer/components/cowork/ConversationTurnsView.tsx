@@ -16,6 +16,7 @@ import {
   buildConversationTurns,
   buildDisplayItems,
 } from './messageDisplayUtils';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import UserMessageItem from './UserMessageItem';
 
 export interface ConversationTurnsViewProps {
@@ -90,7 +91,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
       {turns.map((turn, index) => {
         const isLastTurn = index === turns.length - 1;
         const showActivityIndicator = isStreaming && isLastTurn;
-        const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator;
+        const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator || Boolean(getConversationTurnUsage(turn));
         const alwaysRender = index >= turns.length - 3;
 
         // Compute per-turn artifacts

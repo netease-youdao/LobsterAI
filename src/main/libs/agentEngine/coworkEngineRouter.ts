@@ -336,9 +336,9 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.emit('error', sessionId, error);
     });
 
-    runtime.on('sessionStopped', (sessionId) => {
+    runtime.on('sessionStopped', (sessionId, turn) => {
       this.analytics?.end(sessionId, UsageOutcome.Cancelled);
-      this.emit('sessionStopped', sessionId);
+      this.emit('sessionStopped', sessionId, turn);
     });
   }
 
