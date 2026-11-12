@@ -54,6 +54,7 @@ import {
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { tryAcquireOpenClawLockCoordinator } from './openclawLockCoordinator';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
+import { configureMacGatewayNpmEnv } from './openclawNpmEnv';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { describeStartupMigrationCheckpoint, readStartupMigrationCheckpointStamp } from './openclawStartupCheckpoint';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
@@ -1225,6 +1226,7 @@ export class OpenClawEngineManager extends EventEmitter {
       // This keeps plaintext credentials out of the config file on disk.
       ...spawnSecretEnvVars,
     };
+    configureMacGatewayNpmEnv(env, this.baseDir);
 
     // Ensure the gateway process uses the host's local timezone for logging.
     // macOS does not set TZ in the environment by default (it uses NSTimeZone/ICU),
