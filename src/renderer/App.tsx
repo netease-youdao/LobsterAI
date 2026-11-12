@@ -77,6 +77,7 @@ import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selector
 import { SkinProvider } from './providers/SkinProvider';
 import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
+import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
@@ -790,6 +791,24 @@ const App: React.FC = () => {
     window.addEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
     return () => window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
   }, [handleShowExperts]);
+
+  // In-app links from ads and other server-configured entries (lobsterai://settings/…, lobsterai://view/…).
+  useEffect(() => {
+    const handleDeepLink = (event: Event) => {
+      const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
+      if (!target) return;
+      if (target.kind === 'settings') {
+        handleShowSettings({ initialTab: target.tab });
+        return;
+      }
+      setShowSettings(false);
+      if (target.view === MainView.Experts) handleShowExperts();
+      else if (target.view === MainView.Library) handleShowLibrary();
+      else setMainView(target.view);
+    };
+    window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+    return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
 
   const handleExpertSummon = useCallback((agent: Agent, prompt: string) => {
     openExpertDraft(agent, prompt);

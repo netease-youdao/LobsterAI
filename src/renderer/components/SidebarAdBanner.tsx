@@ -1,8 +1,8 @@
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
-import { getClientBannerTargetUrl } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
+import { openClientBannerLink } from './clientBannerLink';
 import SidebarAdBannerHtml from './SidebarAdBannerHtml';
 import { type ClientBanner, isHtmlSidebarBanner } from './sidebarAdBannerState';
 
@@ -23,9 +23,7 @@ const SidebarAdBanner: React.FC<SidebarAdBannerProps> = ({
   };
 
   const openBanner = async () => {
-    await window.electron.shell.openExternal(
-      getClientBannerTargetUrl(banner.linkUrl, banner.activityDescription),
-    );
+    await openClientBannerLink(banner);
   };
 
   const htmlBanner = isHtmlSidebarBanner(banner);

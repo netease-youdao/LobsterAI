@@ -14,6 +14,8 @@ export interface ClientBanner {
   weight?: number;
   /** Launch-modal pop-up frequency: every_launch, daily or once. */
   displayFrequency?: string;
+  /** Desktop launch-modal width in CSS px, configured per banner in Admin; absent means the default width. */
+  modalWidth?: number | null;
   minClientVersion?: string | null;
   onlineAt?: string;
   offlineAt?: string;

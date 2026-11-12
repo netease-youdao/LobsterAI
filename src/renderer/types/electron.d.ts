@@ -648,6 +648,7 @@ interface ClientBannerData {
   htmlContent?: string | null;
   audiences?: string | null;
   displayFrequency?: 'every_launch' | 'daily' | 'once';
+  modalWidth?: number | null;
   updatedAt?: string;
 }
 
