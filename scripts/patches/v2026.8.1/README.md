@@ -1,5 +1,48 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Stable timestamps for assistant-first history bootstraps
+
+`zzzz-openclaw-bootstrap-prefix-cache.patch` fixes a prompt-cache miss when
+replaying the same assistant-first history. The turn-order repair prepends a
+synthetic user message, `(session bootstrap)`. Its old `Date.now()` timestamp
+was stamped into the model-visible text by `normalizeMessagesForLlmBoundary`,
+so reopening unchanged history in a later minute changed the request prefix.
+This affects both Google and strict OpenAI-compatible replay paths.
+
+The bootstrap now inherits the first retained assistant message's persisted
+timestamp. The repair stays idempotent, and real user messages retain their
+own timestamps. Changing the retained history can still change the prefix;
+this patch removes only the variation caused by the time of replay.
+
+Regression coverage exercises:
+
+- The real OpenAI completions serializer with identical history reconstructed
+  at two different wall-clock times, including a real user message.
+- SQLite byte truncation of a long turn, followed by reopening the same
+  assistant-first tail at different times.
+- Failed byte-triggered preflight compaction, both a failure result and an
+  exception, followed by bounded-history fallback and a retry under backoff.
+
+Apply the complete patch set, then run in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+node scripts/run-vitest.mjs run src/auto-reply/reply/agent-runner-memory.test.ts -t "model-context byte bound"
+```
+
+Windows acceptance also exercised the real Electron client through Playwright/CDP
+against a recording localhost provider. The common request prefix stayed
+byte-identical across minute boundaries and a full client/gateway restart, while
+real user timestamps remained intact. A separate long-history scenario verified
+that failed byte-triggered summarization still completed the user turn without
+installing a compaction boundary. This checks request bytes, not provider billing.
+
+The patch sorts after the bounded-history and session-prefix patches whose
+test coverage it extends. The patch applier verifies both the production fix
+and the regression tests. Rebuild the bundled runtime to ship the fix. Remove
+this patch when the pinned upstream derives bootstrap time from retained
+history rather than the clock.
+
 ## Sign-out without a config clobber restart
 
 `openclaw-config-apply-size-drop-allowance.patch` lets the full-config owner
