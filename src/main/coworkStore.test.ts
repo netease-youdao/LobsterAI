@@ -281,6 +281,91 @@ test('getSession returns all messages when one has corrupt metadata', () => {
   expect(nullMsg.metadata).toBeUndefined();
 });
 
+test('paged metadata: getSession opens a long session with corrupt metadata in the latest page', () => {
+  const sid = 'paged-corrupt-session';
+  const corruptId = 'paged-corrupt-message';
+  insertSession(sid);
+  insertMessage('earlier-user', sid, 'user', 'earlier message', '{}', 1, 1000);
+  for (let index = 1; index <= COWORK_MESSAGE_PAGE_SIZE; index++) {
+    const corrupt = index === COWORK_MESSAGE_PAGE_SIZE;
+    insertMessage(
+      corrupt ? corruptId : `page-message-${index}`,
+      sid,
+      corrupt ? 'tool_use' : 'assistant',
+      corrupt ? 'preserved tool content' : `reply ${index}`,
+      corrupt ? '{broken' : JSON.stringify({ index }),
+      index + 1,
+      1000 + index,
+    );
+  }
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const session = store.getSession(sid);
+    expect(session).not.toBeNull();
+    expect(session).toMatchObject({ messagesOffset: 1, totalMessages: COWORK_MESSAGE_PAGE_SIZE + 1 });
+    expect(session!.messages).toHaveLength(COWORK_MESSAGE_PAGE_SIZE);
+    expect(session!.messages[0]).toMatchObject({ id: 'page-message-1', metadata: { index: 1 } });
+    expect(session!.messages.at(-1)).toEqual({
+      id: corruptId,
+      type: 'tool_use',
+      content: 'preserved tool content',
+      timestamp: 1000 + COWORK_MESSAGE_PAGE_SIZE,
+      metadata: undefined,
+    });
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message ${corruptId} in session ${sid}, discarding metadata`,
+    );
+    expect(db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get(corruptId))
+      .toEqual({ metadata: '{broken' });
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('paged metadata: direct paging preserves order and content when one selected row is corrupt', () => {
+  const sid = 'paged-mixed-session';
+  const corruptId = 'selected-corrupt';
+  insertSession(sid);
+  insertMessage('excluded-corrupt', sid, 'tool_use', 'outside this page', '{broken', 1, 1000);
+  insertMessage('selected-valid', sid, 'user', 'valid content', '{"keep":true}', 2, 2000);
+  insertMessage(corruptId, sid, 'tool_use', 'corrupt metadata content', '{broken', 3, 3000);
+  insertMessage('selected-null', sid, 'assistant', 'null metadata content', null, 4, 4000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(store.getPagedSessionMessages(sid, 3, 1)).toEqual([
+      { id: 'selected-valid', type: 'user', content: 'valid content', timestamp: 2000, metadata: { keep: true } },
+      { id: corruptId, type: 'tool_use', content: 'corrupt metadata content', timestamp: 3000, metadata: undefined },
+      { id: 'selected-null', type: 'assistant', content: 'null metadata content', timestamp: 4000, metadata: undefined },
+    ]);
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message ${corruptId} in session ${sid}, discarding metadata`,
+    );
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('paged metadata: valid and null metadata and empty pages remain unchanged without warnings', () => {
+  const sid = 'paged-valid-session';
+  insertSession(sid);
+  insertMessage('valid', sid, 'user', 'valid content', '{"nested":{"keep":true}}', 1, 1000);
+  insertMessage('null', sid, 'assistant', 'null content', null, 2, 2000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(store.getPagedSessionMessages(sid, 2, 0)).toEqual([
+      { id: 'valid', type: 'user', content: 'valid content', timestamp: 1000, metadata: { nested: { keep: true } } },
+      { id: 'null', type: 'assistant', content: 'null content', timestamp: 2000, metadata: undefined },
+    ]);
+    expect(store.getPagedSessionMessages(sid, 2, 2)).toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
 test('getSessionSearchMessagePage keeps absolute mixed-message offsets without returning metadata or tool content', () => {
   const sid = 'search-page-session';
   insertSession(sid);
