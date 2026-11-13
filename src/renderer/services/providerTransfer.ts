@@ -36,7 +36,8 @@ export type ParsedProvidersImport =
 
 const MODEL_FLAGS = ['supportsImage', 'supportsVideo', 'supportsThinking'] as const;
 const MODEL_NUMBERS = ['contextWindow', 'maxTokens'] as const;
-const MODEL_FIELDS = ['id', 'name', ...MODEL_FLAGS, ...MODEL_NUMBERS, 'customParams'];
+const MODEL_CAPABILITY_OVERRIDE_KEYS = ['image', 'thinking'] as const;
+const MODEL_FIELDS = ['id', 'name', ...MODEL_FLAGS, ...MODEL_NUMBERS, 'customParams', 'capabilityOverrides'];
 const PROVIDER_FIELDS = ['enabled', 'apiKey', 'baseUrl', 'apiFormat', 'openaiApiMode', 'codingPlanEnabled', 'models', 'displayName'];
 const knownProviders = new Set<string>(providerKeys);
 
@@ -61,6 +62,18 @@ const validateModels = (value: unknown, includeSecrets: boolean, strict: boolean
     if (model.customParams !== undefined) {
       requireTransfer(includeSecrets && isTransferRecord(model.customParams));
       result.customParams = model.customParams;
+    }
+    if (model.capabilityOverrides !== undefined) {
+      const overrides = model.capabilityOverrides;
+      requireTransfer(isTransferRecord(overrides));
+      const parsedOverrides: NonNullable<Model['capabilityOverrides']> = {};
+      for (const [key, value] of Object.entries(overrides)) {
+        requireTransfer(
+          (MODEL_CAPABILITY_OVERRIDE_KEYS as readonly string[]).includes(key) && typeof value === 'boolean',
+        );
+        parsedOverrides[key as typeof MODEL_CAPABILITY_OVERRIDE_KEYS[number]] = value as boolean;
+      }
+      if (Object.keys(parsedOverrides).length > 0) result.capabilityOverrides = parsedOverrides;
     }
     return result;
   });
@@ -164,6 +177,8 @@ export const buildProvidersExport = async (
         supportsThinking: model.supportsThinking,
         contextWindow: model.contextWindow,
         maxTokens: model.maxTokens,
+        // Written only when set, for the same strict-schema reason as openaiApiMode.
+        ...(model.capabilityOverrides ? { capabilityOverrides: model.capabilityOverrides } : {}),
         ...(includeSecrets ? { customParams: model.customParams } : {}),
       })),
     }];

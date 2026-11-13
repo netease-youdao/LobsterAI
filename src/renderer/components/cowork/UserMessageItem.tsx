@@ -10,10 +10,10 @@ import {
 import { expandPastedTextBlocks, extractPastedTextBlocks } from '../../../shared/cowork/pastedText';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import type { InstalledKitRecord, KitReference } from '../../../shared/kit/constants';
-import { copyTextToClipboard } from '../../services/clipboard';
 import { i18nService } from '../../services/i18n';
 import { useImageEditSnapshots } from '../../services/imageEditSnapshots';
 import { buildKitReferences } from '../../services/kitCapability';
+import { copyMessageToClipboard, type MessageImageSource } from '../../services/messageClipboard';
 import { resolveLocalizedText, skillService } from '../../services/skill';
 import type { CoworkImageAttachment, CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import type { MarketplaceKit } from '../../types/kit';
@@ -45,6 +45,7 @@ import {
   COWORK_DETAIL_GUTTER_CLASS,
   messageMetaClassName,
 } from './messageDisplayUtils';
+import MessageVersionSwitcher from './MessageVersionSwitcher';
 import { UserMessagePastedTexts } from './PastedTextCards';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
 import { useKitDetailCatalog } from './useKitDetailCatalog';
@@ -56,14 +57,15 @@ import UserMessageFileAttachments from './UserMessageFileAttachments';
 
 const CopyButton: React.FC<{
   content: string;
+  images: MessageImageSource[];
   onCopy?: (result: 'success' | 'failed') => void;
   visible: boolean;
-}> = ({ content, onCopy, visible }) => {
+}> = ({ content, images, onCopy, visible }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const copiedToClipboard = await copyTextToClipboard(content);
+    const copiedToClipboard = await copyMessageToClipboard(content, images);
     if (copiedToClipboard) {
       onCopy?.('success');
       setCopied(true);
@@ -116,10 +118,12 @@ const CopyButton: React.FC<{
 
 const ReEditButton: React.FC<{
   visible: boolean;
+  disabled?: boolean;
   onClick: () => void;
-}> = ({ visible, onClick }) => {
+}> = ({ visible, disabled, onClick }) => {
   return (
     <button
+      disabled={disabled}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
@@ -128,7 +132,7 @@ const ReEditButton: React.FC<{
         visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
       }`}
       tabIndex={visible ? 0 : -1}
-      title={i18nService.t('coworkReEdit')}
+      title={i18nService.t(disabled ? 'coworkEditBusy' : 'coworkReEdit')}
     >
       <EditIcon className="w-4 h-4 text-[var(--icon-secondary)]" />
     </button>
@@ -278,10 +282,14 @@ const UserMessageItem: React.FC<{
   /** Session the message belongs to; used to resolve browser annotation screenshot assets. */
   sessionId?: string;
   onReEdit?: (message: CoworkMessage) => void;
+  reEditDisabled?: boolean;
+  /** Shows another version of an edited message; `targetIndex` is 1-based. */
+  onSwitchVersion?: (message: CoworkMessage, targetIndex: number) => void;
+  versionSwitchDisabled?: boolean;
   onLocateSelectedText?: (sourceMessageId: string) => void;
   /** Opens the annotation restore view in the artifact panel. */
   onOpenAnnotation?: (message: CoworkMessage, payload: BrowserAnnotationAttachmentOpenPayload) => void;
-}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, onLocateSelectedText, onOpenAnnotation }) => {
+}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, reEditDisabled, onSwitchVersion, versionSwitchDisabled, onLocateSelectedText, onOpenAnnotation }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
   const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
@@ -339,10 +347,12 @@ const UserMessageItem: React.FC<{
     ? imageAttachmentPreviews
     : legacyImageAttachments;
   // Annotation transport screenshots already render as numbered annotation
-  // cards; keep them out of the regular attachment row.
-  const displayImageAttachments = allImageAttachments.filter(image =>
+  // cards; keep them out of the regular attachment row and the copied message.
+  const userImageAttachments = allImageAttachments.filter(image =>
     !(browserAnnotationCount > 0 && isBrowserAnnotationTransportImage(image))
-    && !imageEdits.some(snapshot => snapshot.source.filePath === image.localPath)
+  );
+  const displayImageAttachments = userImageAttachments.filter(image =>
+    !imageEdits.some(snapshot => snapshot.source.filePath === image.localPath)
   );
   const hasCapabilityBadges = messageKitReferences.length > 0 || messageSkills.length > 0;
   const capabilityChips = hasCapabilityBadges
@@ -490,6 +500,7 @@ const UserMessageItem: React.FC<{
                   <span>{formatMessageDateTime(message.timestamp)}</span>
                   <CopyButton
                     content={copyContent}
+                    images={userImageAttachments}
                     onCopy={(result) => reportConversationMessageAction({
                       actionType: 'copy_message',
                       message,
@@ -497,6 +508,7 @@ const UserMessageItem: React.FC<{
                         result,
                         copySource: 'user_message',
                         copiedLength: copyContent.length,
+                        copiedImageCount: userImageAttachments.length,
                       },
                     })}
                     visible={isHovered}
@@ -504,10 +516,18 @@ const UserMessageItem: React.FC<{
                   {onReEdit && (
                     <ReEditButton
                       visible={isHovered}
+                      disabled={reEditDisabled}
                       onClick={handleReEditClick}
                     />
                   )}
                 </div>
+                {onSwitchVersion && metadata?.messageVersion && metadata.messageVersion.count > 1 && (
+                  <MessageVersionSwitcher
+                    info={metadata.messageVersion}
+                    disabled={versionSwitchDisabled}
+                    onSwitch={targetIndex => onSwitchVersion(message, targetIndex)}
+                  />
+                )}
                 {isGoalSettingMessage && (
                   <div className="mt-1 inline-flex h-5 shrink-0 items-center gap-1 text-[11px] leading-none text-zinc-400 dark:text-zinc-500 select-none">
                     <GoalIcon className="h-4 w-4 text-[var(--icon-secondary)]" />

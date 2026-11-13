@@ -7,7 +7,9 @@ import {
   SLIDES_AGENT_MCP_SERVER_NAME, SLIDES_AGENT_PROMPT, SLIDES_AGENT_TIMEOUT_MS, SLIDES_AGENT_TOOL_DEFINITIONS,
 } from './slides/slidesAgent';
 import { type SlidesFileBridge, SlidesFileIpc } from './slides/slidesFile';
-import { WORD_AGENT_MCP_SERVER_NAME, WORD_AGENT_TIMEOUT_MS, WORD_AGENT_TOOL_DEFINITIONS } from './word/wordAgent';
+import {
+  WORD_AGENT_MCP_SERVER_NAME, WORD_AGENT_PROMPT, WORD_AGENT_TIMEOUT_MS, WORD_AGENT_TOOL_DEFINITIONS,
+} from './word/wordAgent';
 import { type WordFileBridge, WordFileIpc } from './word/wordFile';
 
 /**
@@ -21,7 +23,12 @@ export const WORD_EDITOR = {
   editorName: 'Word',
   extension: '.docx',
   channels: WordFileIpc,
-  agent: { serverName: WORD_AGENT_MCP_SERVER_NAME, tools: WORD_AGENT_TOOL_DEFINITIONS, timeoutMs: WORD_AGENT_TIMEOUT_MS },
+  agent: {
+    serverName: WORD_AGENT_MCP_SERVER_NAME,
+    tools: WORD_AGENT_TOOL_DEFINITIONS,
+    timeoutMs: WORD_AGENT_TIMEOUT_MS,
+    prompt: WORD_AGENT_PROMPT,
+  },
 } as const satisfies OfficeEditorSpec;
 
 export const SHEET_EDITOR = {

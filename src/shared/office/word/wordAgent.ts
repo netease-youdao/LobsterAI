@@ -65,6 +65,7 @@ export const WORD_AGENT_TOOL_DEFINITIONS = [
       'format_paragraph {paragraph, style?, alignment? (left|center|right|justify), lineSpacing?, spaceBefore?, spaceAfter?, firstLineIndent?, leftIndent?} with lengths in points;',
       'insert_table {anchor, position, rows: string[][]}. A newline in text starts a new paragraph.',
       'Style names are the document\'s paragraph style names, e.g. "Normal", "Heading 1", "Title".',
+      'The reply lists every changed paragraph with its new text, read back from the open document after the change, and whether the file saved. word_read reads that same open document, so the reply is already the check: when the user asks you to verify or confirm the change, report from it instead of calling word_read again.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -113,3 +114,12 @@ export const WORD_AGENT_TOOL_DEFINITIONS = [
     },
   },
 ] as const;
+
+/** Guidance for the managed AGENTS.md section: prefer live edits over rewriting the file. */
+export const WORD_AGENT_PROMPT = [
+  '## Editing Existing Documents',
+  '',
+  `- When the user wants to change an existing \`.docx\` and \`${WordAgentTool.Read}\` / \`${WordAgentTool.Edit}\` are available, use them instead of rewriting the file with scripts: edits appear live in LobsterAI's editor, keep styles and other content, and can be undone.`,
+  `- After a successful \`${WordAgentTool.Edit}\`, answer from its reply (the changed paragraphs as they now read, save status) and your earlier read, also when the user asks you to verify or check the change: the reply comes from the same open document a read would return, so another read verifies nothing and costs a full extra model request.`,
+  '- The editor tools open the file and report whether it saved; do not check the file with shell commands before or after editing.',
+].join('\n');

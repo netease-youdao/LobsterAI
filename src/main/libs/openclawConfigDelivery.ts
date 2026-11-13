@@ -19,6 +19,11 @@ import {
   ConfigRecoveryAction,
   ConfigRecoveryEvidence,
 } from './openclawConfigObservation';
+import {
+  isUnsupportedOpenClawSizeDropAllowance,
+  OPENCLAW_CONFIG_APPLY_SIZE_DROP_PARAM,
+  resolveOpenClawConfigSizeDropAllowance,
+} from './openclawConfigSizeDrop';
 
 /**
  * Running-Gateway writes use config.apply's application receipt. A successful
@@ -251,9 +256,22 @@ async function requestConfigApply(
   }));
   if (isOpenClawConfigApplied(snapshot, payload)) return ConfigRecoveryEvidence.Applied;
   if (!baseHash) throw new Error('config.get returned no revision for a conditional write');
+  const sizeDrop = resolveOpenClawConfigSizeDropAllowance(
+    typeof snapshot?.raw === 'string' ? snapshot.raw : snapshot?.parsed,
+    payload,
+  );
+  if (sizeDrop.allow) {
+    console.log(
+      `[ConfigDelivery] claiming the size-drop waiver for a models-only shrink: ${sizeDrop.currentBytes}->${sizeDrop.nextBytes} bytes`,
+    );
+  }
   const receipt = await request<{ hash?: string }>(
     OpenClawConfigRpcMethod.Apply,
-    { raw: payload, ...(baseHash ? { baseHash } : {}) },
+    {
+      raw: payload,
+      ...(baseHash ? { baseHash } : {}),
+      ...(sizeDrop.allow ? { [OPENCLAW_CONFIG_APPLY_SIZE_DROP_PARAM]: true } : {}),
+    },
     CONFIG_APPLY_TIMEOUT_MS,
   );
   const applied = await confirmOpenClawConfigApplied({
@@ -419,6 +437,14 @@ export async function deliverOpenClawConfigToGateway(
     } catch (error) {
       diagnoseLockFailure(error);
       if (!isBaseHashConflict(error)) {
+        // A gateway built without the waiver patch: recover as before it existed.
+        if (isUnsupportedOpenClawSizeDropAllowance(error)) {
+          return fallback(
+            `config.apply does not support the size-drop waiver: ${describeError(error)}`,
+            undefined,
+            classifyDiagnosticError(error),
+          );
+        }
         if (isConfigValidationRejection(error)) {
           return finish(
             OpenClawConfigDeliveryMode.Rejected,

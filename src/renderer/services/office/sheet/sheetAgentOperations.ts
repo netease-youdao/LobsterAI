@@ -19,6 +19,8 @@ export class SheetAgentError extends Error {}
 
 const DEFAULT_READ_CELLS = 2000;
 const MAX_READ_CELLS = 10_000;
+/** Cells an excel_edit reply echoes back; enough to check an edit, small enough to stay cheap. */
+const MAX_EDIT_REPLY_CELLS = 200;
 const MAX_EDIT_CELLS = 50_000;
 const MAX_TEXT = 32_767;
 const PX_PER_POINT = 96 / 72;
@@ -67,6 +69,8 @@ export interface SheetReadResult {
 export interface SheetEditResult {
   applied: number;
   changed: string[];
+  /** Where the content edits' cells are after every edit ran (structural edits followed). */
+  contentChanged: string[];
   /** The first edited sheet and range, to bring into view. */
   focus?: { sheet: string; range: CellRange };
 }
@@ -97,6 +101,42 @@ function rangeOf(sheet: FWorksheet, range: CellRange): FRange {
   return sheet.getRange(range.startRow, range.startColumn, range.endRow - range.startRow + 1, range.endColumn - range.startColumn + 1);
 }
 
+/**
+ * Add the non-empty cells of a range to `into`, keyed by `prefix` + address: plain values stay
+ * plain, formulas and formatted text are spelled out. Stops after `limit` cells; `complete` is
+ * false when a non-empty cell was left out.
+ */
+function collectCells(
+  sheet: FWorksheet,
+  range: CellRange,
+  into: Record<string, unknown>,
+  prefix = '',
+  limit = Number.POSITIVE_INFINITY,
+): { added: number; complete: boolean } {
+  const target = rangeOf(sheet, range);
+  // Raw values: with number formats loaded, getValues() returns formatted text.
+  const values = target.getRawValues();
+  const formulas = target.getFormulas();
+  const display = target.getDisplayValues();
+  let added = 0;
+  for (let row = 0; row < values.length; row++) {
+    for (let column = 0; column < values[row].length; column++) {
+      const value = values[row][column];
+      const formula = formulas[row]?.[column];
+      if ((value === null || value === undefined || value === '') && !formula) continue;
+      if (added >= limit) return { added, complete: false };
+      const text = display[row]?.[column] ?? '';
+      const address = rangeReference({ startRow: range.startRow + row, startColumn: range.startColumn + column, endRow: range.startRow + row, endColumn: range.startColumn + column });
+      const plain = value === null || value === undefined ? '' : String(value);
+      into[`${prefix}${address}`] = formula || (text && text !== plain)
+        ? { value: value ?? null, ...(formula ? { formula } : {}), ...(text && text !== plain ? { text } : {}) }
+        : value;
+      added++;
+    }
+  }
+  return { added, complete: true };
+}
+
 /** Cells of a sheet range, keyed by address; plain values stay plain, formulas and formatted text are spelled out. */
 export function readSheet(workbook: FWorkbook, options: { sheet?: unknown; range?: unknown; maxCells?: unknown }): SheetReadResult {
   const sheet = resolveSheet(workbook, options.sheet);
@@ -122,24 +162,7 @@ export function readSheet(workbook: FWorkbook, options: { sheet?: unknown; range
     result.truncated = { nextRange: rangeReference({ ...bounded, startRow: range.endRow + 1, endRow: Math.min(bounded.endRow, range.endRow + rows) }) };
   }
   result.range = rangeReference(range);
-  const target = rangeOf(sheet, range);
-  // Raw values: with number formats loaded, getValues() returns formatted text.
-  const values = target.getRawValues();
-  const formulas = target.getFormulas();
-  const display = target.getDisplayValues();
-  for (let row = 0; row < values.length; row++) {
-    for (let column = 0; column < values[row].length; column++) {
-      const value = values[row][column];
-      const formula = formulas[row]?.[column];
-      if ((value === null || value === undefined || value === '') && !formula) continue;
-      const text = display[row]?.[column] ?? '';
-      const address = rangeReference({ startRow: range.startRow + row, startColumn: range.startColumn + column, endRow: range.startRow + row, endColumn: range.startColumn + column });
-      const plain = value === null || value === undefined ? '' : String(value);
-      result.cells[address] = formula || (text && text !== plain)
-        ? { value: value ?? null, ...(formula ? { formula } : {}), ...(text && text !== plain ? { text } : {}) }
-        : value;
-    }
-  }
+  collectCells(sheet, range, result.cells);
   result.merged = sheet.getMergedRanges().map(merge => merge.getRange())
     .filter(merge => merge.startRow <= range.endRow && merge.endRow >= range.startRow && merge.startColumn <= range.endColumn && merge.endColumn >= range.startColumn)
     .map(merge => rangeReference(merge));
@@ -160,6 +183,11 @@ function cellInput(value: unknown, where: string): ICellData {
   return { v: value, f: null, si: null, p: null };
 }
 
+/**
+ * A row or column span. Callers pass `rows`/`columns`, falling back to `range`: agents often
+ * write `{type: "insert_rows", range: "4:4"}`, which means the same, and refusing it cost a
+ * whole extra model request to retry.
+ */
 function parseSpan(reference: unknown, field: 'columns' | 'rows'): { start: number; count: number } {
   if (typeof reference === 'number' && field === 'rows' && Number.isInteger(reference) && reference > 0) return { start: reference - 1, count: 1 };
   if (typeof reference !== 'string' || !reference.trim()) throw new SheetAgentError(`"${field}" must be like ${field === 'columns' ? '"B" or "B:D"' : '"3" or "3:5"'}.`);
@@ -177,6 +205,8 @@ interface PreparedEdit {
   label: string;
   sheet: FWorksheet;
   range?: CellRange;
+  /** The edit writes cell contents (values, formulas, clearing), so the reply reports the result. */
+  content?: true;
   apply: () => void;
 }
 
@@ -245,7 +275,7 @@ function prepare(workbook: FWorkbook, api: FUniver, edit: SheetAgentEdit, index:
       if (range.endRow >= EXCEL_MAX_ROWS || range.endColumn >= EXCEL_MAX_COLUMNS) throw new SheetAgentError(`${where}: the values run past the sheet's last row or column.`);
       if (rangeCellCount(range) > MAX_EDIT_CELLS) throw new SheetAgentError(`${where}: at most ${MAX_EDIT_CELLS} cells per edit.`);
       const cells = edit.values.map((row, r) => row.map((value, c) => cellInput(value, `${where} ${rangeReference({ startRow: range.startRow + r, startColumn: range.startColumn + c, endRow: range.startRow + r, endColumn: range.startColumn + c })}`)));
-      return { label: label(range), sheet, range, apply: () => { rangeOf(sheet, range).setValues(cells); } };
+      return { label: label(range), sheet, range, content: true, apply: () => { rangeOf(sheet, range).setValues(cells); } };
     }
     case SheetEditType.SetFormula: {
       const range = parseRange(edit.range);
@@ -261,7 +291,7 @@ function prepare(workbook: FWorkbook, api: FUniver, edit: SheetAgentEdit, index:
         }
         formulas.push(line);
       }
-      return { label: label(range), sheet, range, apply: () => { rangeOf(sheet, range).setFormulas(formulas); } };
+      return { label: label(range), sheet, range, content: true, apply: () => { rangeOf(sheet, range).setFormulas(formulas); } };
     }
     case SheetEditType.Clear: {
       const range = parseRange(edit.range);
@@ -269,6 +299,7 @@ function prepare(workbook: FWorkbook, api: FUniver, edit: SheetAgentEdit, index:
       if (!(Object.values(SheetClearTarget) as string[]).includes(what)) throw new SheetAgentError(`${where}: "what" must be contents, formats or all.`);
       return {
         label: label(range), sheet, range,
+        ...(what === SheetClearTarget.Formats ? {} : { content: true as const }),
         apply: () => {
           const target = rangeOf(sheet, range);
           if (what === SheetClearTarget.Contents) target.clearContent();
@@ -320,7 +351,7 @@ function prepare(workbook: FWorkbook, api: FUniver, edit: SheetAgentEdit, index:
       };
     }
     case SheetEditType.SetColumnWidth: {
-      const span = parseSpan(edit.columns, 'columns');
+      const span = parseSpan(edit.columns ?? edit.range, 'columns');
       if (typeof edit.width !== 'number' || !(edit.width > 0) || edit.width > 255) throw new SheetAgentError(`${where}: "width" must be 0–255 characters.`);
       // Excel's column width counts characters of the default font plus 5 pixels of padding.
       const pixels = Math.round(edit.width * mdw + 5);
@@ -328,7 +359,7 @@ function prepare(workbook: FWorkbook, api: FUniver, edit: SheetAgentEdit, index:
       return { label: `${name}!${rangeReference(range).replace(/\d+/g, '')}`, sheet, apply: () => { sheet.setColumnWidths(span.start, span.count, pixels); } };
     }
     case SheetEditType.SetRowHeight: {
-      const span = parseSpan(edit.rows, 'rows');
+      const span = parseSpan(edit.rows ?? edit.range, 'rows');
       if (typeof edit.height !== 'number' || !(edit.height > 0) || edit.height > 409) throw new SheetAgentError(`${where}: "height" must be 0–409 points.`);
       const pixels = Math.round(edit.height * PX_PER_POINT);
       return { label: `${name}!${span.start + 1}:${span.start + span.count}`, sheet, apply: () => { sheet.setRowHeights(span.start, span.count, pixels); } };
@@ -348,7 +379,7 @@ function prepare(workbook: FWorkbook, api: FUniver, edit: SheetAgentEdit, index:
     }
     case SheetEditType.InsertRows:
     case SheetEditType.DeleteRows: {
-      const span = parseSpan(edit.rows, 'rows');
+      const span = parseSpan(edit.rows ?? edit.range, 'rows');
       if (span.count > MAX_STRUCTURE_COUNT) throw new SheetAgentError(`${where}: at most ${MAX_STRUCTURE_COUNT} rows per edit.`);
       const insert = edit.type === SheetEditType.InsertRows;
       const range = { startRow: span.start, endRow: span.start + span.count - 1, startColumn: 0, endColumn: 0 };
@@ -364,7 +395,7 @@ function prepare(workbook: FWorkbook, api: FUniver, edit: SheetAgentEdit, index:
     }
     case SheetEditType.InsertColumns:
     case SheetEditType.DeleteColumns: {
-      const span = parseSpan(edit.columns, 'columns');
+      const span = parseSpan(edit.columns ?? edit.range, 'columns');
       if (span.count > MAX_STRUCTURE_COUNT) throw new SheetAgentError(`${where}: at most ${MAX_STRUCTURE_COUNT} columns per edit.`);
       const insert = edit.type === SheetEditType.InsertColumns;
       const range = { startRow: 0, endRow: 0, startColumn: span.start, endColumn: span.start + span.count - 1 };
@@ -459,17 +490,84 @@ export function applySheetEdits(workbook: FWorkbook, api: FUniver, edits: unknow
   const firstStructural = list.findIndex(edit => structural.has(edit?.type));
   const upfront = (firstStructural < 0 ? list : list.slice(0, firstStructural + 1)).map((edit, index) => prepare(workbook, api, edit, index, options));
   const prepared: PreparedEdit[] = [];
+  let written: ContentTarget[] = [];
   list.forEach((edit, index) => {
     const ready = index < upfront.length ? upfront[index] : prepare(workbook, api, edit, index, options);
     ready.apply();
     prepared.push(ready);
+    if (ready.content && ready.range) written.push({ sheet: ready.sheet, sheetId: ready.sheet.getSheetId(), range: ready.range });
+    else if (structural.has(edit?.type)) written = followStructuralEdit(written, edit.type, ready);
   });
   const first = prepared.find(edit => edit.range);
+  const liveSheets = new Set(workbook.getSheets().map(sheet => sheet.getSheetId()));
   return {
     applied: prepared.length,
     changed: prepared.map(edit => edit.label),
+    // Read the name from the sheet object so a later rename is reflected.
+    contentChanged: written
+      .filter(target => liveSheets.has(target.sheetId))
+      .map(target => `${target.sheet.getSheetName()}!${rangeReference(target.range)}`),
     ...(first?.range ? { focus: { sheet: first.sheet.getSheetName(), range: first.range } } : {}),
   };
+}
+
+interface ContentTarget {
+  sheet: FWorksheet;
+  sheetId: string;
+  range: CellRange;
+}
+
+/**
+ * Move the cells earlier content edits wrote through a later structural edit, so the reply names
+ * where they are now: inserted rows/columns shift or widen them, deleted ones shift them back, and
+ * a target the deletion cut into (or whose sheet was deleted) is dropped rather than misreported.
+ */
+function followStructuralEdit(targets: ContentTarget[], type: unknown, edit: PreparedEdit): ContentTarget[] {
+  const sheetId = edit.sheet.getSheetId();
+  if (type === SheetEditType.DeleteSheet) return targets.filter(target => target.sheetId !== sheetId);
+  const rows = type === SheetEditType.InsertRows || type === SheetEditType.DeleteRows;
+  const columns = type === SheetEditType.InsertColumns || type === SheetEditType.DeleteColumns;
+  if ((!rows && !columns) || !edit.range) return targets;
+  const start = rows ? edit.range.startRow : edit.range.startColumn;
+  const count = (rows ? edit.range.endRow - edit.range.startRow : edit.range.endColumn - edit.range.startColumn) + 1;
+  const inserted = type === SheetEditType.InsertRows || type === SheetEditType.InsertColumns;
+  return targets.flatMap(target => {
+    if (target.sheetId !== sheetId) return [target];
+    const [first, last] = rows ? [target.range.startRow, target.range.endRow] : [target.range.startColumn, target.range.endColumn];
+    let moved: [number, number];
+    if (inserted) {
+      moved = first >= start ? [first + count, last + count] : last >= start ? [first, last + count] : [first, last];
+    } else if (last < start) {
+      moved = [first, last];
+    } else if (first >= start + count) {
+      moved = [first - count, last - count];
+    } else {
+      return [];
+    }
+    const range = rows
+      ? { ...target.range, startRow: moved[0], endRow: moved[1] }
+      : { ...target.range, startColumn: moved[0], endColumn: moved[1] };
+    return [{ ...target, range }];
+  });
+}
+
+/**
+ * The cells the edits wrote, as `excel_read` would report them after recalculation, so the agent
+ * does not need another read to check its own edit. Bounded; `truncated` tells it to read for more.
+ */
+export function editedCellValues(workbook: FWorkbook, labels: string[], limit = MAX_EDIT_REPLY_CELLS): { cells: Record<string, unknown>; truncated?: true } {
+  const cells: Record<string, unknown> = {};
+  let remaining = limit;
+  for (const label of labels) {
+    const separator = label.lastIndexOf('!');
+    const sheet = separator > 0 ? workbook.getSheetByName(label.slice(0, separator)) : null;
+    const range = separator > 0 ? parseRangeReference(label.slice(separator + 1)) : null;
+    if (!sheet || !range) continue;
+    const { added, complete } = collectCells(sheet, range, cells, `${sheet.getSheetName()}!`, remaining);
+    if (!complete) return { cells, truncated: true };
+    remaining -= added;
+  }
+  return { cells };
 }
 
 /** Formula cells in the edited ranges whose result is an error, so the agent can fix them. */

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect } from 'react';
 
+import { SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME } from '../agentSidebar/sidebarHeaderTooltip';
 import SidebarTaskFilterButton from '../agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from '../agentSidebar/SidebarTaskSearchButton';
+import type { SidebarTaskFilter } from '../agentSidebar/taskFilter';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from './WindowTitleBar';
@@ -20,9 +22,9 @@ interface WindowsAppTitleBarProps {
   searchLabel: string;
   showFilterIcon?: boolean;
   filterLabel?: string;
-  isFilterActive?: boolean;
+  taskFilter?: SidebarTaskFilter;
   hasFilterNotice?: boolean;
-  onToggleFilter?: () => void;
+  onTaskFilterChange?: (filter: SidebarTaskFilter) => void;
   newChatLabel?: string;
   updateBadge?: React.ReactNode;
 }
@@ -39,9 +41,9 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   searchLabel,
   showFilterIcon = false,
   filterLabel,
-  isFilterActive = false,
+  taskFilter,
   hasFilterNotice = false,
-  onToggleFilter,
+  onTaskFilterChange,
   newChatLabel,
   updateBadge,
 }) => {
@@ -101,7 +103,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={sidebarToggleLabel}
                 title={sidebarToggleLabel}
               >
@@ -114,19 +116,19 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
                 label={searchLabel}
               />
             )}
-            {showFilterIcon && onToggleFilter && (
+            {showFilterIcon && taskFilter && onTaskFilterChange && (
               <SidebarTaskFilterButton
-                isActive={isFilterActive}
+                filter={taskFilter}
+                onChange={onTaskFilterChange}
                 hasUnreadCompletedTasks={hasFilterNotice}
                 label={filterLabel ?? ''}
-                onClick={onToggleFilter}
               />
             )}
             {onNewChat && (
               <button
                 type="button"
                 onClick={handleNewChatClick}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={newChatLabel}
                 title={newChatLabel}
               >

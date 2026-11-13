@@ -10,6 +10,13 @@ export const ComputerUseSkillId = {
 } as const;
 export type ComputerUseSkillId = typeof ComputerUseSkillId[keyof typeof ComputerUseSkillId];
 
+/** The MCP server name; OpenClaw names its tools `computer-use__<tool>`. */
+export const ComputerUseMcpServerName = {
+  BuiltIn: 'computer-use',
+} as const;
+export type ComputerUseMcpServerName =
+  typeof ComputerUseMcpServerName[keyof typeof ComputerUseMcpServerName];
+
 // The macOS skill bundle only carries SKILL.md, so the arm64 and x64 runtimes share it.
 export const ComputerUseKitBundle = {
   MacOS: 'https://ydschool-video.nosdn.127.net/1791322104350lobsterai-computer-use-skill-mac-arm64-0.2.2.zip',

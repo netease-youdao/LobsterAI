@@ -141,6 +141,177 @@ describe('CoworkTurnUsageService', () => {
     });
   });
 
+  test('settles a stop during tool execution without another model completion', async () => {
+    const harness = createHarness();
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+
+    await harness.service.settleStoppedTurn(SESSION_ID, {
+      userMessageId: MESSAGE_ID, traceId: TRACE_ID, runIds: ['stopped-run'],
+    });
+
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(harness.events.map(event => event.turnUsage.status)).toEqual([
+      CoworkTurnUsageStatus.Pending, CoworkTurnUsageStatus.Settled,
+    ]);
+    expect(harness.message.metadata).toMatchObject({
+      skillIds: ['docx'],
+      turnUsage: { creditsUsed: 12.5, observedRequests: 3 },
+    });
+  });
+
+  test('waits for cancelled requests to reach the ledger even when all successful requests are billed', async () => {
+    const harness = createHarness();
+    harness.stats = { requests: 3, completed: 2 };
+    harness.fetchWithAuth
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(2, 8) }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(2, 8) }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+
+    const settling = harness.service.settleStoppedTurn(SESSION_ID);
+    expect(harness.message.metadata?.turnUsage).toMatchObject({
+      status: CoworkTurnUsageStatus.Pending, observedRequests: 3,
+    });
+    await settling;
+
+    expect(harness.sleep.mock.calls).toEqual([[1_500], [3_000]]);
+    expect(harness.events.some(event => event.turnUsage.status === CoworkTurnUsageStatus.Partial
+      && event.turnUsage.creditsUsed === 8)).toBe(true);
+    expect(harness.message.metadata?.turnUsage).toMatchObject({
+      status: CoworkTurnUsageStatus.Settled, requestCount: 3, creditsUsed: 12.5,
+      observedCompletedRequests: 2, observedRequests: 3,
+    });
+  });
+
+  test('bounds stop retries and keeps the missing request count for refresh after restart', async () => {
+    const harness = createHarness();
+    harness.stats = { requests: 3, completed: 2 };
+    harness.fetchWithAuth
+      .mockImplementation(async () => jsonResponse({ code: 0, data: summary(2) }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(2) }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(1) }));
+
+    await harness.service.settleStoppedTurn(SESSION_ID);
+
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(4);
+    expect(harness.sleep.mock.calls).toEqual([[1_500], [3_000], [5_000]]);
+    expect(harness.message.metadata?.turnUsage).toMatchObject({
+      status: CoworkTurnUsageStatus.Partial, requestCount: 2, observedRequests: 3,
+    });
+    expect(harness.events.filter(event => event.turnUsage.status === CoworkTurnUsageStatus.Partial)
+      .every(event => event.turnUsage.requestCount === 2)).toBe(true);
+    harness.stats = null;
+    await harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    expect(harness.message.metadata?.turnUsage?.status).toBe(CoworkTurnUsageStatus.Partial);
+
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+    await harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    expect(harness.message.metadata?.turnUsage).toMatchObject({
+      status: CoworkTurnUsageStatus.Settled, requestCount: 3, observedRequests: 3,
+    });
+  });
+
+  test('uses the stopped trace when the next prompt is already the latest user message', async () => {
+    const harness = createHarness();
+    harness.latestMessage = { ...harness.message, id: 'next-turn', metadata: {
+      llmTrace: { traceId: RELATED_TRACE_ID, startedAt: 2000 },
+    } };
+    harness.message = { ...harness.message, id: 'reconciled-stopped-message' };
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+
+    await harness.service.settleStoppedTurn(SESSION_ID, {
+      userMessageId: MESSAGE_ID, traceId: TRACE_ID, runIds: ['stopped-run'],
+    });
+
+    expect(harness.events.at(-1)?.messageId).toBe('reconciled-stopped-message');
+    expect(harness.message.metadata?.turnUsage?.creditsUsed).toBe(12.5);
+    expect(harness.latestMessage.metadata?.turnUsage).toBeUndefined();
+  });
+
+  test('binds a stopped native run using the run ids captured before cleanup', async () => {
+    const harness = createHarness({ metadata: {} });
+    harness.claimNativeRunTurnUsage.mockReturnValueOnce({
+      trace: { traceId: TRACE_ID, startedAt: 1_000 }, mediaTaskIds: [],
+    });
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+
+    await harness.service.settleStoppedTurn(SESSION_ID, { runIds: ['native-run'], startedAt: 1_000 });
+
+    expect(harness.claimNativeRunTurnUsage).toHaveBeenCalledWith(['native-run']);
+    expect(harness.message.metadata).toMatchObject({
+      llmTrace: { traceId: TRACE_ID }, turnUsage: { creditsUsed: 12.5 },
+    });
+  });
+
+  test('does not fall back to another prompt when the stopped trace has been deleted', async () => {
+    const harness = createHarness();
+    harness.message = { ...harness.message, id: 'next-turn', metadata: {
+      llmTrace: { traceId: RELATED_TRACE_ID, startedAt: 2_000 },
+    } };
+
+    await harness.service.settleStoppedTurn(SESSION_ID, {
+      userMessageId: MESSAGE_ID, traceId: TRACE_ID, runIds: ['stopped-run'],
+    });
+
+    expect(harness.fetchWithAuth).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+  });
+
+  test('stops retrying a cancelled turn when the signed-in account changes', async () => {
+    const harness = createHarness();
+    harness.stats = { requests: 3, completed: 2 };
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(2, 8) }));
+    harness.sleep.mockImplementationOnce(async () => { harness.owner = 'account-b:2'; });
+
+    await harness.service.settleStoppedTurn(SESSION_ID);
+
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(harness.events.at(-1)?.turnUsage).toMatchObject({
+      status: CoworkTurnUsageStatus.Partial, creditsUsed: 8, observedRequests: 3,
+    });
+  });
+
+  test('does not report zero credits when a stop has no ledger rows yet', async () => {
+    const harness = createHarness();
+    harness.stats = { requests: 1, completed: 0 };
+    harness.fetchWithAuth.mockImplementation(async () => jsonResponse({ code: 0, data: {
+      traceId: TRACE_ID, requestCount: 0, creditsUsed: 0,
+    } }));
+
+    await harness.service.settleStoppedTurn(SESSION_ID);
+
+    expect(harness.message.metadata?.turnUsage).toMatchObject({
+      status: CoworkTurnUsageStatus.Failed, observedRequests: 1,
+    });
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(1) }));
+    await harness.service.refreshExactTrace({ traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner });
+    expect(harness.message.metadata?.turnUsage?.status).toBe(CoworkTurnUsageStatus.Settled);
+  });
+
+  test('skips a stop before any package-model request was sent', async () => {
+    const harness = createHarness();
+    harness.stats = null;
+    await harness.service.settleStoppedTurn(SESSION_ID);
+    expect(harness.fetchWithAuth).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+  });
+
+  test('a stop during a summary fetch still records cancelled requests in the trailing refresh', async () => {
+    const harness = createHarness();
+    harness.stats = { requests: 3, completed: 2 };
+    let resolveFetch!: (response: Response) => void;
+    harness.fetchWithAuth
+      .mockReturnValueOnce(new Promise(resolve => { resolveFetch = resolve; }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+    const first = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    const stopped = harness.service.settleStoppedTurn(SESSION_ID);
+    resolveFetch(jsonResponse({ code: 0, data: summary(2) }));
+    await Promise.all([first, stopped]);
+
+    expect(harness.message.metadata?.turnUsage).toMatchObject({
+      status: CoworkTurnUsageStatus.Settled, observedRequests: 3, requestCount: 3,
+    });
+  });
+
   test('binds the traces an IM/cron run reported to its synced user message', async () => {
     const harness = createHarness({ metadata: { localMediaAttachments: [] } });
     harness.claimNativeRunTurnUsage.mockReturnValueOnce({

@@ -1,4 +1,5 @@
 import { OpenClawApi, OpenClawProviderId } from './constants';
+import { CONTEXT_WINDOW_SELECTION_CAPABILITY } from './modelContextWindow';
 
 export const ModelRuntimeProfile = {
   MoonshotKimiK3: 'moonshot-kimi-k3',
@@ -18,10 +19,13 @@ export const LOBSTERAI_CLIENT_CAPABILITIES_HEADER = 'X-LobsterAI-Client-Capabili
 export const LOBSTERAI_CLIENT_VERSION_HEADER = 'X-LobsterAI-Client-Version';
 export const KIMI_K3_AGENTIC_CAPABILITY = 'kimi-k3-agentic-v1';
 export const THINKING_LEVEL_CONTROL_CAPABILITY = 'thinking-level-control-v1';
+export const UPSTREAM_ERROR_DETAILS_CAPABILITY = 'upstream-error-details-v1';
 export const LOBSTERAI_CLIENT_CAPABILITIES = [
   'virtual-models-v1',
   KIMI_K3_AGENTIC_CAPABILITY,
   THINKING_LEVEL_CONTROL_CAPABILITY,
+  UPSTREAM_ERROR_DETAILS_CAPABILITY,
+  CONTEXT_WINDOW_SELECTION_CAPABILITY,
 ].join(',');
 
 const KIMI_K3_REASONING_EFFORTS = [

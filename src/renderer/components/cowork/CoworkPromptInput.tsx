@@ -50,8 +50,7 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
-import { isChatPresetSession } from '../../../shared/modelPresets/constants';
-import { agentService } from '../../services/agent';
+import { isChatPresetSession, modelPresetModelId } from '../../../shared/modelPresets/constants';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
@@ -71,6 +70,7 @@ import {
   LogReporterEntry,
   reportYdAnalyzer,
 } from '../../services/logReporter';
+import { modelPresetName } from '../../services/modelPresets';
 import { getOnboardingErrorCode, reportOnboardingAction } from '../../services/onboardingAnalytics';
 import { resolveLocalizedText, skillService } from '../../services/skill';
 import { getDraftAnalytics } from '../../services/usageAnalytics';
@@ -112,13 +112,15 @@ import type { Model } from '../../store/slices/modelSlice';
 import { isSameModelIdentity } from '../../store/slices/modelSlice';
 import { setActiveSkillIds, setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import type { CoworkSession } from '../../types/cowork';
-import { CoworkCollaborationMode, CoworkImageAttachment } from '../../types/cowork';
+import { CoworkCollaborationMode, CoworkImageAttachment, CoworkSessionStatusValue } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
 import { getAgentDisplayName, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
-import { toOpenClawModelRef } from '../../utils/openclawModelRef';
+import { getModelRefBillingSide, ModelBillingSide, toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getCompactFolderName } from '../../utils/path';
+import { AccountConnectionNotice } from '../AccountConnectionNotice';
+import { getModelConnectionState } from '../accountConnectionState';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
 import { ImageEditDraftCard } from '../artifacts/imageEditor/ImageEditDraftCard';
 import { useImageEditSubmission } from '../artifacts/imageEditor/useImageEditSubmission';
@@ -147,6 +149,7 @@ import ModelSelector, {
 import { SkillsPopover } from '../skills';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import {
+  buildSessionModelSelectionPatch,
   resolveAgentModelSelection,
   resolveAgentStartModel,
   resolveEffectiveModel,
@@ -157,7 +160,7 @@ import AttachmentCard from './AttachmentCard';
 import { isImagePath } from './attachmentPaths';
 import BrowserAnnotationAttachmentBadge from './BrowserAnnotationAttachmentBadge';
 import ChatLoginExperienceModal from './ChatLoginExperienceModal';
-import { getClipboardAttachmentFiles } from './clipboardAttachments';
+import { getClipboardAttachmentFiles, getCopiedMessageImageFiles } from './clipboardAttachments';
 import { CoworkUiEvent } from './constants';
 import { ContextChipTone } from './ContextChip';
 import FolderSelectorPopover from './FolderSelectorPopover';
@@ -192,6 +195,7 @@ import {
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
+import { matchesSendShortcut } from './sendShortcut';
 import { buildPlanModeSystemPrompt } from './skillSystemPrompt';
 import { usePersistAgentModelSelection } from './usePersistAgentModelSelection';
 import { useCoworkVoiceInput } from './voiceInput/useCoworkVoiceInput';
@@ -555,8 +559,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const agents = useSelector((state: RootState) => state.agent.agents);
     const coworkAgentEngine = useSelector((state: RootState) => state.cowork.config.agentEngine);
     const availableModels = useSelector((state: RootState) => state.model.availableModels);
+    const serverModelLoadStatus = useSelector((state: RootState) => state.model.serverModelLoadStatus);
     const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
-    const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+    const auth = useSelector((state: RootState) => state.auth);
+    const { isLoggedIn } = auth;
     const authQuota = useSelector((state: RootState) => state.auth.quota);
     const authOwnerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
     const authAccountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
@@ -695,7 +701,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   });
   const {
     selectedModel: agentSelectedModel,
-    hasInvalidExplicitModel: agentModelIsInvalid,
+    hasInvalidExplicitModel: sessionModelIsInvalid,
   } = resolveAgentModelSelection({
     sessionModel: currentSession && currentSession.id === sessionId ? currentSession.modelOverride : '',
     sessionPresetId: currentSession && currentSession.id === sessionId ? currentSession.modelPresetId : null,
@@ -711,10 +717,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }), [availableModels, currentAgent?.model, currentAgentSelectedModel]);
   // A new session must not silently start on the other billing side of the agent's model.
   const homeModelCrossesBillingSide = !sessionId && homeStartModel.crossesBillingSide;
-  const selectedModelUnavailable = agentModelIsInvalid || homeModelCrossesBillingSide;
-  const unavailableModelRef = agentModelIsInvalid
+  const selectedModelUnavailable = sessionModelIsInvalid || homeModelCrossesBillingSide;
+  const unavailableModelRef = sessionModelIsInvalid
     ? currentSession?.modelOverride ?? ''
     : (homeModelCrossesBillingSide ? homeStartModel.unavailableModelRef ?? '' : '');
+  const invalidSessionPresetId = sessionModelIsInvalid && currentSession?.id === sessionId
+    ? currentSession?.modelPresetId : null;
+  const unavailableModelIsServer = !!invalidSessionPresetId
+    || getModelRefBillingSide(unavailableModelRef) === ModelBillingSide.Plan;
+  const unavailableModelConnectionState = selectedModelUnavailable && unavailableModelIsServer
+    ? getModelConnectionState(auth, serverModelLoadStatus, availableModels.some(model => model.isServerModel))
+    : null;
 
   const isCompact = size === 'compact';
   const isLarge = size === 'large' || isCompact;
@@ -803,9 +816,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       'debug',
       `${source} primary action clicked; starting login handoff`,
     );
+    // With a login link, the login modal offers it inline instead of a toast.
+    let loginLinkOffered = false;
     try {
       const result = await authService.login();
       if (!result.success) {
+        loginLinkOffered = Boolean(result.redirectUrl);
         throw new Error(result.error || i18nService.t('welcomeLoginFailed'));
       }
       logPromptModelSelection(
@@ -832,7 +848,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           errorCode: getOnboardingErrorCode(error),
         });
       }
-      showToast(i18nService.t('welcomeLoginFailed'));
+      if (!loginLinkOffered) showToast(i18nService.t('welcomeLoginFailed'));
       setChatLoginExperiencePending(false);
     }
   }, [chatLoginExperiencePending]);
@@ -2153,7 +2169,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       hasAgentModel: Boolean(nextAgent?.model),
       agentModelId: nextAgent?.model,
     });
-    switchExpertInDraft(agentId, value);
+    void switchExpertInDraft(agentId, value, () => textareaRef.current?.value === value);
     setShowAgentMenu(false);
   }, [agents, currentAgentId, reportPromptControl, value]);
 
@@ -2186,32 +2202,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Use synced state (kept up-to-date via config-updated event) so that
     // changes made in the Settings panel are reflected immediately without
     // requiring a configService read at event time.
-    const sendKey = currentSendShortcut;
-
-    let isSendCombo = false;
-    switch (sendKey) {
-      case '':
-        isSendCombo = false;
-        break;
-      case 'Enter':
-        isSendCombo = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-        break;
-      case 'Shift+Enter':
-        isSendCombo = event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-        break;
-      case 'Ctrl+Enter':
-        isSendCombo = isMacPlatform
-          ? event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
-          : event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
-        break;
-      case 'Alt+Enter':
-        isSendCombo = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
-        break;
-      default:
-        // Unknown config value — fall back to bare Enter so the user can always send
-        isSendCombo = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-        break;
-    }
+    const isSendCombo = matchesSendShortcut(currentSendShortcut, event, isMacPlatform);
 
     const goalCommandCanRunWhileStreaming = goalInputActive && !!sessionId && !!onGoalCommand;
     const followUpCanQueueWhileStreaming = !!sessionId && !remoteManaged;
@@ -2968,6 +2959,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       void handleIncomingFiles(files, 'paste');
       return;
     }
+    // A message copied with its copy button carries its images in the HTML
+    // flavor; attach them and let the message text paste as usual.
+    const copiedMessageImages = getCopiedMessageImageFiles(event.clipboardData);
+    if (copiedMessageImages.length > 0) {
+      void handleIncomingFiles(copiedMessageImages, 'paste');
+    }
     // Steers and goal objectives are sent as plain text, so keep pastes inline there.
     if (steerInputActive || goalInputActive) return;
     const pastedText = event.clipboardData.getData('text/plain');
@@ -3067,6 +3064,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     <div className="flex flex-col items-start gap-1">
       <ModelSelector
         allowPresets={!sessionId || !currentSession || isChatPresetSession(currentSession)}
+        allowContextWindowSelection={!sessionId || !!currentSession && isChatPresetSession(currentSession)}
+        contextWindowSessionId={sessionId ?? undefined}
+        contextWindowDisabled={isStreaming || currentSession?.status === CoworkSessionStatusValue.Running}
         compact={useHomeContextLayout}
         iconOnly={narrow}
         anchorAccessPrompt={narrow}
@@ -3076,10 +3076,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         hideCustomProviderName={useLargeToolbarCompactLayout}
-        disabled={isPatchingModel || isPersistingAgentModel || modelSelectionRefreshPending}
+        disabled={isPatchingModel || isPersistingAgentModel}
         thinkingLevel={effectiveThinkingLevel ?? null}
         value={selectedModelUnavailable && unavailableModelRef
-          ? { id: '__invalid__', name: unavailableModelRef.split('/').pop() || unavailableModelRef } as Model
+          ? { id: invalidSessionPresetId ? modelPresetModelId(invalidSessionPresetId) : '__invalid__',
+            presetId: invalidSessionPresetId ?? undefined, isServerModel: unavailableModelIsServer,
+            providerKey: unavailableModelIsServer ? ProviderName.LobsteraiServer : undefined,
+            name: invalidSessionPresetId ? modelPresetName(invalidSessionPresetId)
+              : unavailableModelRef.split('/').pop() || unavailableModelRef }
           : effectiveSelectedModel}
         onChange={async (nextModel, meta: ModelSelectorChangeMeta) => {
           if (isPatchingModel || isPersistingAgentModel) return;
@@ -3094,7 +3098,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             ));
             if (notice) onModelSwitch?.(updatedSession.id, notice.id);
           };
-          const keepsBoundPreset = !!(sessionId && nextModel.presetId && currentSession && currentSession.id === sessionId
+          // Reuse only a valid binding. Reselecting a stale preset must resolve it again.
+          const keepsBoundPreset = !!(!sessionModelIsInvalid && sessionId && nextModel.presetId && currentSession && currentSession.id === sessionId
             && currentSession.modelPresetId === nextModel.presetId && currentSession.modelOverride);
           if (keepsBoundPreset) return;
           const selectedModel = !keepsBoundPreset && meta.group === ModelSelectorGroup.Server
@@ -3121,6 +3126,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           const modelRef = keepsBoundPreset ? currentSession!.modelOverride
             : selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
           if (sessionId) {
+            const keepsSessionModel = keepsBoundPreset || meta.thinkingOnly === true
+              || (!currentSession?.modelPresetId && currentSession?.modelOverride === modelRef);
             const requestId = modelPatchRequestIdRef.current + 1;
             modelPatchRequestIdRef.current = requestId;
             const previousModelOverride = currentSession?.id === sessionId
@@ -3142,10 +3149,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             }));
 
             try {
-              const patchedSession = await coworkService.patchSession(sessionId, {
-                ...(keepsBoundPreset ? {} : { model: modelRef }),
-                thinkingLevel: nextThinkingLevel || null,
-              });
+              const patchedSession = await coworkService.patchSession(sessionId,
+                buildSessionModelSelectionPatch(modelRef, nextThinkingLevel, keepsSessionModel));
               if (requestId !== modelPatchRequestIdRef.current) return;
 
               if (!patchedSession) {
@@ -3164,12 +3169,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               logPromptModelSelection('debug', `switched session ${sessionId} to ${patchedSession.modelOverride || modelRef}`);
               notifyModelSwitch(patchedSession);
               reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, sessionId);
-              if (currentAgent && agentModelIsInvalid) {
-                void agentService.updateAgent(currentAgent.id, {
-                  model: modelRef,
-                  thinkingLevel: nextThinkingLevel,
-                });
-              }
               void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
             } catch (error) {
               if (requestId === modelPatchRequestIdRef.current) {
@@ -3201,9 +3200,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           }
         }}
       />
-      {selectedModelUnavailable && (
+      {unavailableModelConnectionState ? (
+        availableModels.length > 0 && (
+          <AccountConnectionNotice state={unavailableModelConnectionState} className="max-w-60 text-[11px] leading-4" />
+        )
+      ) : selectedModelUnavailable && (
         <span className="max-w-60 text-[11px] leading-4 text-red-500">
-          {i18nService.t('agentModelInvalidHint')}
+          {invalidSessionPresetId
+            ? i18nService.t('sessionModelPresetInvalidHint').replace('{preset}', modelPresetName(invalidSessionPresetId))
+            : i18nService.t('agentModelInvalidHint')}
         </span>
       )}
     </div>

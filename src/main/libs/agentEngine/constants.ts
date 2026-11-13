@@ -34,6 +34,10 @@ export const OpenClawGatewayMethod = {
   ChatAbort: 'chat.abort',
   ChatMessageGet: 'chat.message.get',
   ChatSend: 'chat.send',
+  ChatHistory: 'chat.history',
+  SessionsRewind: 'sessions.rewind',
+  SessionsBranchesList: 'sessions.branches.list',
+  SessionsBranchesSwitch: 'sessions.branches.switch',
   SessionsSubscribe: 'sessions.subscribe',
   SessionsAbort: 'sessions.abort',
 } as const;

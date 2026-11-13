@@ -45,8 +45,9 @@ import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
 import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import HomeImageCreation from '../imageCreation/HomeImageCreation';
 import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
-import { PromptPanel, QuickActionBar } from '../quick-actions';
+import { PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
 import HomeSkinEmblem from '../skin/HomeSkinEmblem';
 import SkinAmbientEffects from '../skin/SkinAmbientEffects';
@@ -1003,25 +1004,33 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                 />
               </div>
 
-              {/* Quick Actions */}
+              {/* Quick Actions. Stays `relative`: the home image examples anchor
+                  to this block and hang below it without taking part in the
+                  vertical centering. */}
               <div
                 className="relative z-0 mt-8 flex w-full max-w-3xl flex-col items-center animate-fade-in-up"
                 style={{ animationDelay: '260ms', animationFillMode: 'both' }}
               >
-                <QuickActionBar
+                <HomeImageCreation
                   actions={quickActions}
                   selectedActionId={selectedActionId}
                   onActionSelect={handleActionSelect}
-                />
-                {selectedAction && (
-                  <div className="mt-4 w-full">
-                    <PromptPanel
-                      action={selectedAction}
-                      onPromptSelect={handleQuickActionPromptSelect}
-                      onClose={handleQuickActionDeselect}
-                    />
-                  </div>
-                )}
+                  onDeselect={handleQuickActionDeselect}
+                  onDraftReady={prompt => {
+                    promptInputRef.current?.setValue(prompt, 'template');
+                    promptInputRef.current?.focus();
+                  }}
+                >
+                  {selectedAction && (
+                    <div className="mt-4 w-full">
+                      <PromptPanel
+                        action={selectedAction}
+                        onPromptSelect={handleQuickActionPromptSelect}
+                        onClose={handleQuickActionDeselect}
+                      />
+                    </div>
+                  )}
+                </HomeImageCreation>
                 <CreditsResetCampaignFloat />
               </div>
 

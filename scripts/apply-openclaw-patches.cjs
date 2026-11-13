@@ -1040,6 +1040,53 @@ const v20260801StrongPatchValidators = {
       snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
     },
   ],
+  'openclaw-tool-call-result-projection.patch': [
+    {
+      file: 'src/agents/tool-search.ts',
+      snippets: [
+        '{ tool: { id: callResult.tool.id, name: callResult.tool.name }, result: textOnlyResult },',
+        'function splitToolCallResultImages(result: AgentToolResult<unknown>)',
+      ],
+    },
+    {
+      file: 'src/agents/tool-search.mcp-error.test.ts',
+      snippets: [
+        'The model sees only the tool identity; details keep the full catalog entry.',
+        'returns native image blocks from a deferred MCP tool behind the untrusted wrapper',
+      ],
+    },
+  ],
+  'openclaw-tool-search-direct-tools.patch': [
+    {
+      file: 'src/agents/tool-search-config.ts',
+      snippets: ['function readDirectToolNames(value: unknown)', '...readDirectToolNames(raw.direct),'],
+    },
+    {
+      file: 'src/agents/tool-search-catalog.ts',
+      snippets: [
+        'export function createOperatorPinnedToolMatcher(',
+        'if (params.minDeferredChars && deferredChars < params.minDeferredChars) {',
+      ],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.ts',
+      snippets: ['operatorDirectToolNames: toolSearchConfig.directToolNames,'],
+    },
+    {
+      file: 'src/config/zod-schema.agent-runtime.ts',
+      snippets: [
+        'direct: z.array(z.string()).optional(),',
+        'minDeferredChars: z.number().int().nonnegative().optional(),',
+      ],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.test.ts',
+      snippets: [
+        'does not pin a duplicated name, so a lookalike cannot take its place',
+        'skips compaction when the deferred schemas fall below minDeferredChars',
+      ],
+    },
+  ],
   'openclaw-tool-payload-transcript-fidelity.patch': [
     {
       file: 'src/agents/transcript-redact.ts',
@@ -1257,6 +1304,15 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-memory-knn-child-electron-node-env.patch': [
+    {
+      file: 'extensions/memory-core/src/memory/manager-search-knn-subprocess.ts',
+      snippets: [
+        'if (typeof process.versions.electron === "string") {',
+        'childEnv.ELECTRON_RUN_AS_NODE = "1";',
+      ],
+    },
+  ],
   'openclaw-memory-sidecar-archive-generations.patch': [
     {
       file: 'extensions/memory-core/src/migration/doctor-memory-sidecar.ts',
@@ -1368,6 +1424,53 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-bounded-history-chunked-window.patch': [
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-active-context.ts',
+      snippets: [
+        'const BOUNDED_CONTEXT_STEP_DIVISOR = 4;',
+        'function resolveBoundedContextStart(',
+        'function readBoundedContextBytes(',
+        'const boundaryOmitted = boundary !== undefined && headerBytes + boundaryBytes > maxBytes;',
+      ],
+    },
+  ],
+  'openclaw-bounded-history-compaction.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/session-context-limits.ts',
+      snippets: ['export function resolveEmbeddedSessionContextLimits('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-session-prepare.ts',
+      snippets: ['resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget)'],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-memory.ts',
+      snippets: [
+        'function shouldCompactByModelContextBytes(',
+        'const compactionOptional = compactionTrigger === "model_context_bytes";',
+      ],
+    },
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-reset-window.ts',
+      snippets: ['export function readVisibleTranscriptRetainedPrefixBytes('],
+    },
+  ],
+  'openclaw-session-window-preflight-compaction.patch': [
+    {
+      file: 'src/auto-reply/reply/memory-flush.ts',
+      snippets: [
+        // openclaw-user-context-window-selection.patch replaces this resolver;
+        // validate the final source after both patches have been applied.
+        'function resolveConfiguredContextWindowProfile(',
+        'const profile = resolveConfiguredContextWindowProfile(params);',
+      ],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-memory.ts',
+      snippets: ['contextWindow: entry.contextWindow,', 'contextWindow: entry?.contextWindow,'],
+    },
+  ],
 };
 
 v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
@@ -1465,6 +1568,26 @@ v20260801StrongPatchValidators['zz-openclaw-plan-completion-check.patch'] = [
   {
     file: 'src/agents/tools/progress-card-tool.ts',
     snippets: ['options.onPlanSaved?.('],
+  },
+];
+
+v20260801StrongPatchValidators['zzzz-openclaw-bootstrap-prefix-cache.patch'] = [
+  {
+    file: 'src/shared/google-turn-ordering.ts',
+    snippets: ['timestamp: first.timestamp,'],
+    forbiddenSnippets: ['Date.now()'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts',
+    snippets: ['keeps reconstructed bootstrap messages byte-identical across runs'],
+  },
+  {
+    file: 'src/config/sessions/session-accessor.sqlite-bounded-context.test.ts',
+    snippets: ['keeps bootstrap stable across reopens after a long turn is byte-truncated'],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-memory.test.ts',
+    snippets: ['keeps bootstrap stable on bounded fallback after a compaction %s failure'],
   },
 ];
 
@@ -1619,6 +1742,104 @@ v20260801StrongPatchValidators['zzz-openclaw-stream-drop-reconnect.patch'] = [
   {
     file: 'src/agents/embedded-agent-runner/run/context-recovery-state.ts',
     snippets: ['transportDropRetryPending: false,'],
+  },
+];
+v20260801StrongPatchValidators['openclaw-plugin-realpath-parent-cache.patch'] = [
+  {
+    file: 'src/plugins/realpath-through-parent.ts',
+    snippets: [
+      'export function realpathThroughParentSync(',
+      'export function safeRealpathWithParentsSync(',
+    ],
+  },
+  {
+    file: 'src/plugins/plugin-cache-files.ts',
+    snippets: ['realpathThroughParentSync(targetPath, (parentPath) =>'],
+  },
+  {
+    file: 'src/plugins/plugin-registry-snapshot.ts',
+    snippets: ['const realCursor = safeRealpathWithParentsSync(cursor, cache);'],
+    forbiddenSnippets: ['safeRealpathSync('],
+  },
+];
+v20260801StrongPatchValidators['openclaw-windows-native-plugin-require.patch'] = [
+  {
+    file: 'src/plugins/native-module-require.ts',
+    snippets: [
+      'function toRequirePath(modulePath: string): string {',
+      'const requirePath = toRequirePath(modulePath);',
+      'nodeRequire.resolve(toRequirePath(modulePath))',
+    ],
+  },
+];
+v20260801StrongPatchValidators['openclaw-windows-registry-codepage-native.patch'] = [
+  {
+    file: 'src/infra/windows-install-roots.ts',
+    snippets: [
+      'function loadNativeRegistryReader(): NativeRegistryReader | null {',
+      '"int32_t __stdcall RegGetValueW(intptr_t key, str16 subKey, str16 valueName, uint32_t flags, _Out_ uint32_t *type, _Out_ void *data, _Inout_ uint32_t *size)"',
+      'const nativeValue = readNativeRegistryValue(key, valueName);',
+      'export function queryWindowsRegistryDwordNative(key: string, valueName: string): number | null {',
+    ],
+    orderedSnippets: [
+      'function defaultQueryRegistryValue(key: string, valueName: string): string | null {',
+      'const nativeValue = readNativeRegistryValue(key, valueName);',
+      'const regExe = locateWindowsRegExe();',
+    ],
+  },
+  {
+    file: 'src/infra/windows-encoding.ts',
+    snippets: [
+      'function loadNativeConsoleCodePageReader(): NativeConsoleCodePageReader | null {',
+      'kernel32.func("uint32_t __stdcall GetConsoleOutputCP()")',
+      'queryWindowsRegistryDwordNative("HKCU\\\\Console", "CodePage")',
+    ],
+    orderedSnippets: [
+      'export function resolveWindowsConsoleEncoding(): string | null {',
+      'const nativeCodePage = readNativeConsoleCodePage();',
+      '["/d", "/s", "/c", "chcp"]',
+    ],
+  },
+];
+v20260801StrongPatchValidators['zz-openclaw-windows-process-start-native.patch'] = [
+  {
+    file: 'src/infra/windows-process-start.ts',
+    snippets: [
+      'function loadNativeStartTimeReader(): NativeStartTimeReader | null {',
+      'kernel32.func("__stdcall", "GetProcessTimes", "int32_t", [',
+      'const nativeStartTime = readNativeStartTime(pid);',
+    ],
+  },
+];
+v20260801StrongPatchValidators['openclaw-chrome-mcp-windows-native-snapshot.patch'] = [
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-windows-processes.ts',
+    snippets: [
+      'function loadNativeProcessTableReader(): ChromeMcpWindowsProcessTableReader | null {',
+      '"intptr_t __stdcall CreateToolhelp32Snapshot(uint32_t flags, uint32_t processId)"',
+      'export function listChromeMcpWindowsProcessesNative(): ChromeMcpProcessSnapshot[] | undefined {',
+    ],
+  },
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-process.ts',
+    snippets: [
+      'const CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS = 10_000;',
+      'timeoutMs: windows ? CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS : 2_000,',
+    ],
+    orderedSnippets: [
+      'const windows = platform === "win32";',
+      'const nativeSnapshots = listChromeMcpWindowsProcessesNative();',
+      'windows ? "powershell.exe" : "ps",',
+    ],
+  },
+];
+v20260801StrongPatchValidators['zz-openclaw-dreaming-cleanup-only-when-enabled.patch'] = [
+  {
+    file: 'extensions/memory-core/src/dreaming.ts',
+    snippets: [
+      'const isStartupDreamingEnabled = (startupCfg: OpenClawConfig): boolean => {',
+      'if (isStartupDreamingEnabled(startupConfig)) {',
+    ],
   },
 ];
 

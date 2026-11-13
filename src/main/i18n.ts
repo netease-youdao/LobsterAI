@@ -12,15 +12,18 @@
  *   const msg = t('imMissingCredentials', { fields: 'appId, appSecret' });
  */
 
+import { messageEditTranslations } from '../shared/cowork/messageEdit';
 import { desktopCompanionTranslations } from '../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../shared/imageEditing/copy';
 import { mediaTranslations } from '../shared/media/copy';
 import { neteaseMailTranslations } from '../shared/neteaseMail/copy';
+import { modelContextWindowTranslations } from '../shared/providers/contextWindowCopy';
 
 export type LanguageType = 'zh' | 'en';
 
 const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
+    ...messageEditTranslations.zh,
     modelPresetBalanced: '快速',
     modelPresetUltimate: '旗舰',
     modelPresetPricingHint: '按候选模型权重选择，当前会话保持固定。实际积分按底层模型扣费。',
@@ -33,6 +36,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
     ...neteaseMailTranslations.zh,
+    ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     browserPasskeyChooseAccountTitle: '使用通行密钥',
     browserPasskeyChooseAccountMessage: '选择用于登录 {site} 的账号',
@@ -63,7 +67,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Quit confirmation (native dialog shown on user-initiated quit)
     appQuitConfirmTitle: '退出 LobsterAI？',
-    appQuitConfirmDetail: 'LobsterAI 关闭期间，定时任务不会运行，也无法回复 IM 消息。',
+    appQuitConfirmDetail: '退出后，定时任务和 IM 回复将暂停。',
     appQuitConfirmUnsafeMarkdown: '有文档修改尚未保存，也尚未备份。退出后这些修改将丢失。请取消退出，返回文档保存修改。',
     appQuitConfirmQuit: '退出',
     appQuitConfirmCancel: '取消',
@@ -132,6 +136,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     feishuVerifyCredentialsFailed: '凭证验证失败，请检查 App ID 和 App Secret 是否正确',
     feishuVerifyFailed: '验证失败',
 
+    // Cowork working directory checks
+    coworkWorkingDirectoryMissing:
+      '工作目录不可用：{path}。外接磁盘可能未连接，或文件夹已被移动、重命名或删除。请重新连接磁盘或恢复该文件夹，或改用其他文件夹。',
+    coworkWorkingDirectoryNotFolder: '所选工作目录是文件而不是文件夹：{path}。请选择其他文件夹。',
+    coworkWorkingDirectoryDriveRoot: '不能将磁盘根目录用作工作目录（{path}）。请选择其中的子文件夹，例如：{example}',
+
     // Cowork error messages (shared with renderer via classifyErrorKey)
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请检查配置。',
     coworkErrorSubagentSummaryFailed: '子任务已完成，但主 Agent 未能恢复汇总。请继续对话以重试汇总。',
@@ -151,6 +161,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelServiceUnavailable: '该模型服务暂不可用，请切换模型或稍后重试。',
     coworkErrorProviderCooldown: '模型凭据暂时处于冷却期，请稍后重试或切换其他服务商。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
+    coworkErrorContextRecoveryFailed: '上下文超出模型限制，自动压缩未能恢复本轮，会话记录已保留。请缩短本次输入，或在新会话中分批发送。',
     coworkErrorMessageTooLarge:
       '本次消息过大，请减少附件、压缩图片或拆分提交。（单次整体需小于 30MB）',
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。',
@@ -439,6 +450,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
+    ...messageEditTranslations.en,
     modelPresetBalanced: 'Fast',
     modelPresetUltimate: 'Flagship',
     modelPresetPricingHint: 'Weighted model selection stays fixed for this conversation. Credits are charged at the underlying model rate.',
@@ -451,6 +463,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
     ...neteaseMailTranslations.en,
+    ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',
     openClawRepairCommandFailed: 'Repair command {command} did not complete. Diagnostics: {path}',
@@ -481,7 +494,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Quit confirmation (native dialog shown on user-initiated quit)
     appQuitConfirmTitle: 'Quit LobsterAI?',
-    appQuitConfirmDetail: 'While LobsterAI is closed, scheduled tasks will not run and IM messages will not be answered.',
+    appQuitConfirmDetail: 'Quitting pauses scheduled tasks and IM replies.',
     appQuitConfirmUnsafeMarkdown: 'Some document changes have not been saved or backed up. Quitting will lose these changes. Cancel and return to the document to save your changes.',
     appQuitConfirmQuit: 'Quit',
     appQuitConfirmCancel: 'Cancel',
@@ -559,6 +572,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Credential validation failed. Please check your App ID and App Secret.',
     feishuVerifyFailed: 'Verification failed',
 
+    // Cowork working directory checks
+    coworkWorkingDirectoryMissing:
+      'The working folder is unavailable: {path}. An external drive may be disconnected, or the folder was moved, renamed or deleted. Reconnect the drive or restore the folder, or use a different folder.',
+    coworkWorkingDirectoryNotFolder: 'The selected working folder is a file, not a folder: {path}. Choose another folder.',
+    coworkWorkingDirectoryDriveRoot:
+      'A drive root cannot be used as the working folder ({path}). Choose a subfolder instead, for example: {example}',
+
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check your configuration.',
     coworkErrorSubagentSummaryFailed: 'Subtasks finished, but the main agent could not resume the summary. Send a follow-up to retry.',
@@ -579,6 +599,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorModelServiceUnavailable: 'This model service is temporarily unavailable. Switch models or try again later.',
     coworkErrorProviderCooldown: 'The model credentials are temporarily in cooldown. Try again later or switch providers.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
+    coworkErrorContextRecoveryFailed: 'The context exceeds the model limit and automatic compaction could not recover this turn. Your conversation history has been kept. Shorten this input, or split it across a new conversation.',
     coworkErrorMessageTooLarge:
       'This message is too large. Reduce attachments, compress images, or split it up. (Keep each message under about 30 MB.)',
     coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file.',

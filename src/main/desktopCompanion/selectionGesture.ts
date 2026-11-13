@@ -12,6 +12,12 @@ interface Mark {
   at: number;
 }
 
+/** Where a selecting press and its release happened. */
+export interface SelectionGesture {
+  start: CompanionPoint;
+  end: CompanionPoint;
+}
+
 const distance = (a: CompanionPoint, b: CompanionPoint): number => Math.hypot(a.x - b.x, a.y - b.y);
 
 /** Recognizes the left-button drags and double-clicks that selection-hook treats as selecting text. */
@@ -23,23 +29,25 @@ export class SelectionGestureTracker {
     this.press = { point, at };
   }
 
-  /** Whether this release ends a drag or a double-click. */
-  up(point: CompanionPoint, at: number): boolean {
+  /** The drag or double-click this release ends, or null for any other release. */
+  up(point: CompanionPoint, at: number): SelectionGesture | null {
     const { press, release: previous } = this;
     this.press = null;
     if (!press) {
       this.release = null;
-      return false;
+      return null;
     }
     const held = at - press.at;
     const quick = held <= DOUBLE_CLICK_MS;
     this.release = { point, at, quick };
-    if (held > MAX_PRESS_MS) return false;
+    if (held > MAX_PRESS_MS) return null;
+    const gesture = { start: press.point, end: point };
     const moved = distance(point, press.point);
-    if (moved >= MIN_DRAG_DISTANCE) return true;
-    return quick && !!previous?.quick
+    if (moved >= MIN_DRAG_DISTANCE) return gesture;
+    const doubleClick = quick && !!previous?.quick
       && moved <= DOUBLE_CLICK_DISTANCE
       && distance(point, previous.point) <= DOUBLE_CLICK_DISTANCE
       && press.at - previous.at <= DOUBLE_CLICK_MS;
+    return doubleClick ? gesture : null;
   }
 }

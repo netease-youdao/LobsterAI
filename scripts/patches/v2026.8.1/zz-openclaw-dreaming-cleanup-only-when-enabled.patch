@@ -1,0 +1,150 @@
+diff --git a/extensions/memory-core/src/dreaming-startup-cleanup.test.ts b/extensions/memory-core/src/dreaming-startup-cleanup.test.ts
+--- a/extensions/memory-core/src/dreaming-startup-cleanup.test.ts
++++ b/extensions/memory-core/src/dreaming-startup-cleanup.test.ts
+@@ -36,9 +36,18 @@ afterEach(async () => {
+ });
+ 
+ function createGateway(
+-  params: { agentIds?: string[]; failCronReconciliation?: boolean; sessionStore?: string } = {},
++  params: {
++    agentIds?: string[];
++    dreamingEnabled?: boolean;
++    failCronReconciliation?: boolean;
++    sessionStore?: string;
++  } = {},
+ ) {
+   const agentIds = params.agentIds ?? ["main"];
++  const dreaming =
++    params.dreamingEnabled === false
++      ? { enabled: false }
++      : { enabled: true, frequency: "0 2 * * *" };
+   const config = {
+     agents: {
+       list: agentIds.map((id, index) => ({
+@@ -49,7 +58,7 @@ function createGateway(
+     },
+     plugins: {
+       entries: {
+-        "memory-core": { config: { dreaming: { enabled: true, frequency: "0 2 * * *" } } },
++        "memory-core": { config: { dreaming } },
+       },
+     },
+     ...(params.sessionStore ? { session: { store: params.sessionStore } } : {}),
+@@ -364,6 +373,50 @@ describe("dreaming gateway restart cleanup", () => {
+     expect(hasSession(interrupted)).toBe(true);
+   });
+ 
++  it("skips the startup and deferred scrubs while dreaming is disabled", async () => {
++    vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
++    const stale = await seedSession({
++      suffix: "dreaming-narrative-light-interrupted",
++      pluginOwnerId: "memory-core",
++      updatedAt: Date.now() - ORPHAN_AGE_MS - 1,
++      transcriptAt: Date.now() - ORPHAN_AGE_MS - 1,
++    });
++    const fresh = await seedSession({
++      suffix: "dreaming-narrative-deep-interrupted",
++      updatedAt: Date.now() - 1,
++      transcriptAt: Date.now() - 1,
++    });
++    const gateway = createGateway({ dreamingEnabled: false });
++
++    await gateway.start();
++    expect([stale, fresh].map(hasSession)).toEqual([true, true]);
++
++    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS);
++    expect([stale, fresh].map(hasSession)).toEqual([true, true]);
++  });
++
++  it("reclaims leftovers on the first start after dreaming is enabled again", async () => {
++    const now = Date.now();
++    const stale = await seedSession({
++      suffix: "dreaming-narrative-rem-interrupted",
++      updatedAt: now - ORPHAN_AGE_MS - 1,
++      transcriptAt: now - ORPHAN_AGE_MS - 1,
++    });
++    const gateway = createGateway({ dreamingEnabled: false });
++
++    await gateway.start();
++    expect(hasSession(stale)).toBe(true);
++
++    const memoryCore = gateway.config.plugins?.entries?.["memory-core"] as {
++      config: { dreaming: Record<string, unknown> };
++    };
++    memoryCore.config.dreaming = { enabled: true, frequency: "0 2 * * *" };
++    await gateway.stop();
++    await gateway.start();
++
++    expect(hasSession(stale)).toBe(false);
++  });
++
+   it("still cleans interrupted dreaming sessions when cron startup reconciliation fails", async () => {
+     const now = Date.now();
+     const interrupted = await seedSession({
+diff --git a/extensions/memory-core/src/dreaming.ts b/extensions/memory-core/src/dreaming.ts
+--- a/extensions/memory-core/src/dreaming.ts
++++ b/extensions/memory-core/src/dreaming.ts
+@@ -897,6 +897,27 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
+       config.storage?.separateReports ? "separate" : "inline",
+     ].join("|");
+ 
++  const resolveStartupDreamingPluginConfig = (startupCfg: OpenClawConfig) =>
++    resolveMemoryDreamingPluginConfig(startupCfg) ??
++    resolveMemoryDreamingPluginConfig(api.config) ??
++    api.pluginConfig;
++
++  // The startup narrative scrub opens every configured agent database for writing
++  // (lease, integrity and schema checks), which blocks the gateway for ~100 ms per
++  // agent on Windows right after it reports ready. Without dreaming no narrative
++  // runs start, so skip it; leftovers from an earlier enabled period are reclaimed
++  // on the first start after dreaming is enabled again.
++  const isStartupDreamingEnabled = (startupCfg: OpenClawConfig): boolean => {
++    try {
++      return resolveShortTermPromotionDreamingConfig({
++        pluginConfig: resolveStartupDreamingPluginConfig(startupCfg),
++        cfg: startupCfg,
++      }).enabled;
++    } catch {
++      return true;
++    }
++  };
++
+   const reconcileManagedDreamingCron = async (params: {
+     reason: "startup" | "startup_retry" | "runtime";
+     startupConfig?: OpenClawConfig;
+@@ -906,9 +927,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
+       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
+     const pluginConfig =
+       params.reason === "startup"
+-        ? (resolveMemoryDreamingPluginConfig(startupCfg) ??
+-          resolveMemoryDreamingPluginConfig(api.config) ??
+-          api.pluginConfig)
++        ? resolveStartupDreamingPluginConfig(startupCfg)
+         : resolveMemoryDreamingPluginConfig(startupCfg);
+     const config = resolveShortTermPromotionDreamingConfig({
+       pluginConfig,
+@@ -1123,15 +1142,16 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
+     } finally {
+       startRuntimeCronReconcileTimer();
+       scheduleStartupCronRetry();
+-      await startDreamingSessionCleanup(
+-        ctx.config ?? api.config,
+-        generation,
+-        startupStartedAtMs,
+-      ).catch((error: unknown) => {
+-        api.logger.warn(
+-          `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
++      const startupConfig = ctx.config ?? api.config;
++      if (isStartupDreamingEnabled(startupConfig)) {
++        await startDreamingSessionCleanup(startupConfig, generation, startupStartedAtMs).catch(
++          (error: unknown) => {
++            api.logger.warn(
++              `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
++            );
++          },
+         );
+-      });
++      }
+     }
+   });
+ 

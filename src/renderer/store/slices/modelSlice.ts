@@ -25,6 +25,7 @@ export interface Model {
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
+  contextWindowOptions?: number[];
   maxTokens?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")
@@ -76,7 +77,11 @@ function selectPreferredAccessibleModel(
   currentModel: Model,
 ): Model {
   const matchedModel = allAvailableModels.find(m => isSameModelIdentity(m, currentModel));
-  if (isModelAccessible(matchedModel)) {
+  // A locked current model was never chosen by the user (setDefaultSelectedModel
+  // rejects locked models): it is only the entry displayed while nothing is
+  // usable, e.g. the logged-out public catalog. Once the account's own catalog
+  // arrives it must not pin the default; the first accessible model wins.
+  if (isModelAccessible(matchedModel) && isModelAccessible(currentModel)) {
     return matchedModel;
   }
   return allAvailableModels.find(model => isModelAccessible(model))

@@ -8,6 +8,14 @@ export interface ClientBanner {
   imageUrl: string;
   imageWidth?: number;
   imageHeight?: number;
+  /** image (default) or html; html banners may keep imageUrl as a fallback for older clients. */
+  contentType?: 'image' | 'html';
+  htmlContent?: string | null;
+  weight?: number;
+  /** Launch-modal pop-up frequency: every_launch, daily or once. */
+  displayFrequency?: string;
+  /** Desktop launch-modal width in CSS px, configured per banner in Admin; absent means the default width. */
+  modalWidth?: number | null;
   minClientVersion?: string | null;
   onlineAt?: string;
   offlineAt?: string;
@@ -20,6 +28,12 @@ export interface SidebarBannerDismissState {
 }
 
 export const SIDEBAR_BANNER_PLACEMENT = 'desktop_sidebar';
+
+export const isHtmlSidebarBanner = (banner: ClientBanner): boolean => (
+  banner.contentType === 'html'
+  && typeof banner.htmlContent === 'string'
+  && banner.htmlContent.trim().length > 0
+);
 const SIDEBAR_BANNER_DISMISS_STATE_VERSION = 'dismissed_versions_v2';
 
 export const getSidebarBannerVersion = (banner: ClientBanner): string => (

@@ -17,6 +17,7 @@ import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { DesktopCompanionMainPage } from '../shared/desktopCompanion/constants';
 import { ENABLE_EXPERT_PLAZA_UI } from '../shared/featureFlags';
 import { FeedbackUiEvent } from '../shared/feedback/constants';
+import { ImageCreation } from '../shared/imageCreation/constants';
 import {
   LibraryNavigationEvent,
   LibrarySourceFilter,
@@ -25,6 +26,7 @@ import type { LibrarySessionRef } from '../shared/library/types';
 import { OpenClawEnginePhase } from '../shared/openclawEngine/constants';
 import { ProviderName, ProviderRegistry } from '../shared/providers';
 import { SIDEBAR_TASK_FILTER_ENABLED } from './components/agentSidebar/SidebarTaskFilterButton';
+import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './components/agentSidebar/taskFilter';
 import { CoworkView } from './components/cowork';
 import {
   CoworkShortcutDirection,
@@ -43,6 +45,7 @@ import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import ExpertPlazaView from './components/experts/ExpertPlazaView';
 import FeedbackDialog from './components/feedback/FeedbackDialog';
+import LaunchAdModal from './components/LaunchAdModal';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import NewUserOnboardingOverlay, {
@@ -76,11 +79,13 @@ import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selector
 import { SkinProvider } from './providers/SkinProvider';
 import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
+import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
 import { openExpertDraft } from './services/expertOnboarding';
 import { i18nService } from './services/i18n';
+import type { PreparedImageExampleReference } from './services/imageCreationDraft';
 import {
   beginLatestAsyncRequest,
   invalidateLatestAsyncRequest,
@@ -105,6 +110,7 @@ import {
   addDraftAttachment,
   clearDraftAttachments,
   clearDraftSelectedTextSnippets,
+  setDraftAttachments,
   setDraftCollaborationMode,
   setDraftKitIds,
   setDraftPrompt,
@@ -236,6 +242,7 @@ const App: React.FC = () => {
   const [showFeedback, setShowFeedback] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
   const [mainView, setMainView] = useState<MainView>(MainView.Cowork);
+  const [initialExpertPresetId, setInitialExpertPresetId] = useState<string | undefined>();
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
     requestId: number;
@@ -248,7 +255,7 @@ const App: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<ToastEventDetail | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
+  const [taskFilter, setTaskFilter] = useState<SidebarTaskFilter>(DEFAULT_SIDEBAR_TASK_FILTER);
   const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const initialOpenClawEngineStatusRef = useRef(coworkService.getOpenClawEngineStatusSnapshot());
@@ -272,6 +279,7 @@ const App: React.FC = () => {
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [isLaunchAdOpen, setIsLaunchAdOpen] = useState(false);
   const [trialTaskCreatedSignal, setTrialTaskCreatedSignal] = useState(0);
   const [newUserOnboardingStep, setNewUserOnboardingStep] =
     useState<NewUserOnboardingStepType>(NewUserOnboardingStep.NewTask);
@@ -779,25 +787,58 @@ const App: React.FC = () => {
     setMainView(MainView.Kits);
   }, []);
 
-  const handleShowExperts = useCallback(() => {
+  const handleShowExperts = useCallback((event?: Event) => {
     if (!ENABLE_EXPERT_PLAZA_UI) return;
+    // An explicit destination takes priority over the delayed login welcome.
+    consumeNewUserWelcomeAfterLoginPending();
+    const presetId = (event as CustomEvent<{ presetId?: unknown }> | undefined)?.detail?.presetId;
+    setInitialExpertPresetId(typeof presetId === 'string' ? presetId : undefined);
     setMainView(MainView.Experts);
   }, []);
 
   useEffect(() => {
+    const cancelPendingWelcome = () => { consumeNewUserWelcomeAfterLoginPending(); };
     window.addEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
-    return () => window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+    window.addEventListener(ExpertUiEvent.Preparing, cancelPendingWelcome);
+    return () => {
+      window.removeEventListener(ExpertUiEvent.OpenPlaza, handleShowExperts);
+      window.removeEventListener(ExpertUiEvent.Preparing, cancelPendingWelcome);
+    };
   }, [handleShowExperts]);
 
-  const handleExpertSummon = useCallback((agent: Agent, prompt: string) => {
+  // In-app links from ads and other server-configured entries (lobsterai://settings/…, lobsterai://view/…).
+  useEffect(() => {
+    const handleDeepLink = (event: Event) => {
+      const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
+      if (!target) return;
+      if (target.kind === 'settings') {
+        handleShowSettings({ initialTab: target.tab });
+        return;
+      }
+      setShowSettings(false);
+      if (target.view === MainView.Experts) handleShowExperts();
+      else if (target.view === MainView.Library) handleShowLibrary();
+      else setMainView(target.view);
+    };
+    window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+    return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
+  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
+
+  const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);
+    if (reference) {
+      dispatch(setDraftAttachments({ draftKey: ImageCreation.HomeDraft, attachments: [{
+        path: reference.localPath, name: reference.name, isImage: true,
+        dataUrl: `data:${reference.mimeType};base64,${reference.base64Data}`,
+      }] }));
+    }
     setMainView(MainView.Cowork);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(CoworkUiEvent.FocusInput, {
         detail: { resetCollaborationMode: true, text: prompt },
       }));
     }, 0);
-  }, []);
+  }, [dispatch]);
 
   const handleSkillsConnectorsSectionChange = useCallback((section: SkillsConnectorsSection) => {
     if (section === SkillsConnectorsSection.Connectors) {
@@ -872,25 +913,26 @@ const App: React.FC = () => {
     setIsSidebarCollapsed((prev) => !prev);
   }, [isSidebarCollapsed, mainView]);
 
-  const handleToggleTaskFilter = useCallback(() => {
-    const nextActive = !isTaskFilterActive;
-    const message = `task activity toggle requested activeView=${mainView} nextActive=${nextActive} hasUnreadCompleted=${hasUnreadCompletedTasks} platform=${window.electron.platform}`;
-    console.debug(`[TaskActivity] ${message}`);
+  const handleTaskFilterChange = useCallback((nextFilter: SidebarTaskFilter) => {
+    if (nextFilter.status === taskFilter.status && nextFilter.time === taskFilter.time) return;
+    const message = `task filter change requested activeView=${mainView} status=${nextFilter.status} time=${nextFilter.time} platform=${window.electron.platform}`;
+    console.debug(`[TaskFilter] ${message}`);
     try {
-      window.electron?.log?.fromRenderer?.('debug', 'TaskActivity', message);
+      window.electron?.log?.fromRenderer?.('debug', 'TaskFilter', message);
     } catch {
       // Diagnostics must never block the sidebar interaction.
     }
     void reportYdAnalyzer({
       action: LogReporterAction.SidebarAction,
       source: 'home_sidebar',
-      actionType: 'task_filter_toggle',
+      actionType: 'task_filter_change',
       activeView: mainView,
       isCollapsed: isSidebarCollapsed,
-      targetSelected: nextActive,
+      filterStatus: nextFilter.status,
+      filterTime: nextFilter.time,
     });
-    setIsTaskFilterActive(nextActive);
-  }, [hasUnreadCompletedTasks, isSidebarCollapsed, isTaskFilterActive, mainView]);
+    setTaskFilter(nextFilter);
+  }, [isSidebarCollapsed, mainView, taskFilter]);
 
   const handleOpenTaskSearch = useCallback(() => {
     void reportYdAnalyzer({
@@ -1437,7 +1479,8 @@ const App: React.FC = () => {
             errorCode: result.error ? 'login_redirect_failed' : 'unknown',
           });
           consumeNewUserWelcomeAfterLoginPending();
-          showToast(i18nService.t('welcomeLoginFailed'));
+          // With a login link, the introduction offers it inline instead.
+          if (!result.redirectUrl) showToast(i18nService.t('welcomeLoginFailed'));
           return;
         }
         console.log('[Onboarding] login handoff from new user onboarding succeeded');
@@ -1579,6 +1622,16 @@ const App: React.FC = () => {
       if (showUpdateModal || isPermissionModalOpen || isUpdateInteractionBlocked) return;
 
       if (matchesAction(ShortcutAction.Search)) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent<CoworkTaskSearchRequestEventDetail>(
+          CoworkUiEvent.ShortcutSearch,
+          { detail: { source: CoworkTaskSearchRequestSource.KeyboardShortcut } },
+        ));
+        return;
+      }
+
+      // Find in the open conversation; anywhere else it falls back to task search.
+      if (matchesAction(ShortcutAction.ConversationSearch)) {
         const shortcutTarget = resolveConversationSearchShortcutTarget({
           isCoworkView: mainView === MainView.Cowork,
           hasCurrentSession: Boolean(currentSessionId),
@@ -2081,11 +2134,11 @@ const App: React.FC = () => {
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
       searchLabel={i18nService.t('search')}
-      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === MainView.Cowork}
+      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed}
       filterLabel={i18nService.t('sidebarFilter')}
-      isFilterActive={isTaskFilterActive}
+      taskFilter={taskFilter}
       hasFilterNotice={hasUnreadCompletedTasks}
-      onToggleFilter={handleToggleTaskFilter}
+      onTaskFilterChange={handleTaskFilterChange}
       newChatLabel={i18nService.t('newChat')}
       updateBadge={canUseWindowsCollapsedTopBarActions ? updateBadge : null}
     />
@@ -2174,8 +2227,13 @@ const App: React.FC = () => {
         taskCreatedSignal={trialTaskCreatedSignal}
         enabled={privacyAgreed === true && !isOverlayActive && hasResolvedEngineStartupOverlayState && !isEngineStartupOverlayVisible}
       />
+      <LaunchAdModal
+        enabled={privacyAgreed === true && !isOverlayActive}
+        onOpenChange={setIsLaunchAdOpen}
+      />
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
+        deferred={isLaunchAdOpen}
       />
       {windowsStandaloneTitleBar}
       <div
@@ -2196,9 +2254,9 @@ const App: React.FC = () => {
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
-          isTaskFilterActive={isTaskFilterActive}
+          taskFilter={taskFilter}
           hasUnreadCompletedTasks={hasUnreadCompletedTasks}
-          onToggleTaskFilter={handleToggleTaskFilter}
+          onTaskFilterChange={handleTaskFilterChange}
           onTaskFilterSummaryChange={setHasUnreadCompletedTasks}
           onWidthChange={setSidebarWidth}
           updateNotice={!isSidebarCollapsed && !isUpdateInteractionBlocked ? updateCard : null}
@@ -2242,6 +2300,7 @@ const App: React.FC = () => {
               />
             ) : ENABLE_EXPERT_PLAZA_UI && mainView === MainView.Experts ? (
               <ExpertPlazaView
+                initialPresetId={initialExpertPresetId}
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}

@@ -1,0 +1,457 @@
+diff --git a/src/agents/embedded-agent-runner/compact.types.ts b/src/agents/embedded-agent-runner/compact.types.ts
+index b038ee4cdc1..4a1f2e58e3c 100644
+--- a/src/agents/embedded-agent-runner/compact.types.ts
++++ b/src/agents/embedded-agent-runner/compact.types.ts
+@@ -124,7 +124,7 @@ export type CompactEmbeddedAgentSessionParams = {
+   /** Alias for forcePreflight used by preflight budget gates. */
+   preflightRequired?: boolean;
+   /** Diagnostic trigger that made preflight compaction mandatory. */
+-  preflightCompactionTrigger?: "tokens" | "transcript_bytes";
++  preflightCompactionTrigger?: "tokens" | "transcript_bytes" | "model_context_bytes";
+   trigger?: "budget" | "overflow" | "manual";
+   /**
+    * Preflight callers can allow native/current-session harness compaction but
+diff --git a/src/agents/embedded-agent-runner/run/attempt-session-prepare.ts b/src/agents/embedded-agent-runner/run/attempt-session-prepare.ts
+index 4560edaab30..9bb65eca4e5 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-session-prepare.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-session-prepare.ts
+@@ -55,6 +55,7 @@ import { buildCodeModeRecoveryCandidate } from "./code-mode-reconciliation.js";
+ import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
+ import { reconcilePrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
+ import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
++import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
+ import { notifyToolActivity } from "./tool-activity-heartbeat.js";
+ import {
+   createToolLoopBatchAdmission,
+@@ -471,13 +472,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
+         ? SessionManager.open(
+             attempt.sessionTarget as SessionTranscriptRuntimeTarget,
+             input.effectiveCwd,
+-            {
+-              maxBytes: Math.min(
+-                64 * 1024 * 1024,
+-                Math.max(1024, (attempt.contextTokenBudget ?? 128_000) * 8),
+-              ),
+-              maxEvents: 10_000,
+-            },
++            resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget),
+           )
+         : SessionManager.inMemory(input.effectiveCwd)),
+     {
+diff --git a/src/agents/embedded-agent-runner/run/session-context-limits.ts b/src/agents/embedded-agent-runner/run/session-context-limits.ts
+new file mode 100644
+index 00000000000..65e873db375
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run/session-context-limits.ts
+@@ -0,0 +1,14 @@
++/**
++ * Byte and event limits for hydrating one embedded attempt's model-context history.
++ * Preflight compaction measures against the same byte limit, so history is summarized
++ * before the bounded load would silently omit it (openclaw/openclaw#159799).
++ */
++export function resolveEmbeddedSessionContextLimits(contextTokenBudget: number | undefined): {
++  maxBytes: number;
++  maxEvents: number;
++} {
++  return {
++    maxBytes: Math.min(64 * 1024 * 1024, Math.max(1024, (contextTokenBudget ?? 128_000) * 8)),
++    maxEvents: 10_000,
++  };
++}
+diff --git a/src/auto-reply/reply/agent-runner-memory.test.ts b/src/auto-reply/reply/agent-runner-memory.test.ts
+index 45c7b136aa0..fe1299753f8 100644
+--- a/src/auto-reply/reply/agent-runner-memory.test.ts
++++ b/src/auto-reply/reply/agent-runner-memory.test.ts
+@@ -2970,7 +2970,9 @@ describe("runMemoryFlushIfNeeded", () => {
+       const storePath = path.join(rootDir, "sessions.json");
+       const sessionKey = "agent:main:telegram:default:direct:12345";
+       const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+-      const output = "x".repeat(8_192);
++      // Stored mirrors stay below the 128k model's hydration bytes, so only token
++      // pressure decides here; double-counted mirrors would still exceed the threshold.
++      const output = "x".repeat(5_000);
+       await writeTestSessionTranscript({
+         rootDir,
+         sessionKey,
+@@ -3509,6 +3511,106 @@ describe("runMemoryFlushIfNeeded", () => {
+     expect(compactCall.sessionFile).toBe("main");
+   });
+ 
++  describe("model-context byte bound", () => {
++    // A 100k-token model hydrates at most 800 kB of history per attempt.
++    const modelContextTokens = 100_000;
++    const imageHeavyEvents = (count: number) =>
++      Array.from({ length: count }, (_, index) => ({
++        type: "message" as const,
++        id: `screenshot-${index}`,
++        parentId: index === 0 ? null : `screenshot-${index - 1}`,
++        message: { role: "user" as const, content: `${index} ${"b".repeat(100_000)}` },
++      }));
++    const runBytePreflight = async (sessionEntry: SessionEntry) =>
++      await runSessionCompactionIfNeeded({
++        cfg: {},
++        followupRun: createTestFollowupRun({ sessionId: "session", sessionKey: "main" }),
++        defaultModel: "anthropic/claude-opus-4-6",
++        modelContextTokens,
++        sessionEntry,
++        sessionStore: { main: sessionEntry },
++        sessionKey: "main",
++        storePath: path.join(rootDir, "sessions.json"),
++        isHeartbeat: false,
++        ...createCompactionLifecycle(createReplyOperation()),
++      });
++    const freshEntry = (): SessionEntry => ({
++      sessionId: "session",
++      updatedAt: Date.now(),
++      totalTokens: 10,
++      totalTokensFresh: true,
++      totalTokensVersion: 1,
++      compactionCount: 0,
++    });
++
++    it("compacts before stored history reaches the hydration bound below token pressure", async () => {
++      await writeTestSessionTranscript({ rootDir, events: imageHeavyEvents(7) });
++
++      const entry = await runBytePreflight(freshEntry());
++
++      expect(entry?.compactionCount).toBe(1);
++      const compactCall = requireCompactEmbeddedAgentSessionCall();
++      expect(compactCall.preflightCompactionTrigger).toBe("model_context_bytes");
++      expect(compactCall.currentTokenCount).toBe(12);
++    });
++
++    it("leaves history below the hydration trigger to token pressure", async () => {
++      await writeTestSessionTranscript({ rootDir, events: imageHeavyEvents(5) });
++
++      const sessionEntry = freshEntry();
++      expect(await runBytePreflight(sessionEntry)).toBe(sessionEntry);
++      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
++    });
++
++    it("keeps the turn running after a failed byte compaction and retries only after a step", async () => {
++      await writeTestSessionTranscript({ rootDir, events: imageHeavyEvents(7) });
++      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
++        ok: false,
++        compacted: false,
++        reason: "guard_blocked",
++      });
++      const sessionEntry = freshEntry();
++
++      expect(await runBytePreflight(sessionEntry)).toBe(sessionEntry);
++      expect(await runBytePreflight(sessionEntry)).toBe(sessionEntry);
++      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
++
++      // Another quarter of the bound (200 kB) of new history allows one more attempt.
++      await writeTestSessionTranscript({ rootDir, events: imageHeavyEvents(9) });
++      await runBytePreflight(sessionEntry);
++      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
++    });
++
++    it("does not re-compact a boundary whose retained tail alone fills the trigger", async () => {
++      const retained = imageHeavyEvents(7);
++      await writeTestSessionTranscript({
++        rootDir,
++        events: [
++          ...retained,
++          {
++            type: "compaction",
++            id: "boundary",
++            parentId: "screenshot-6",
++            timestamp: "2026-08-25T00:00:00.000Z",
++            summary: "earlier work",
++            firstKeptEntryId: "screenshot-0",
++            tokensBefore: 10_000,
++          },
++          {
++            type: "message",
++            id: "after-boundary",
++            parentId: "boundary",
++            message: { role: "user", content: "next question" },
++          },
++        ],
++      });
++
++      const sessionEntry = freshEntry();
++      expect(await runBytePreflight(sessionEntry)).toBe(sessionEntry);
++      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
++    });
++  });
++
+   it.each([
+     ["fresh session selected from the outset", "fresh", "codex"],
+     ["upgraded session with historical embedded ownership", "upgraded", "openclaw"],
+diff --git a/src/auto-reply/reply/agent-runner-memory.ts b/src/auto-reply/reply/agent-runner-memory.ts
+index 31aeb9a5fef..c419c9d843d 100644
+--- a/src/auto-reply/reply/agent-runner-memory.ts
++++ b/src/auto-reply/reply/agent-runner-memory.ts
+@@ -18,6 +18,7 @@ import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-ru
+ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+ import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
++import { resolveEmbeddedSessionContextLimits } from "../../agents/embedded-agent-runner/run/session-context-limits.js";
+ import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+ import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
+ import { isCliProvider } from "../../agents/model-selection.js";
+@@ -48,6 +49,7 @@ import {
+ import {
+   readRecentSessionTranscriptActiveEvents,
+   readSessionTranscriptActiveStats,
++  readSessionTranscriptRetainedPrefixBytes,
+   updateSessionEntry,
+ } from "../../config/sessions/session-accessor.js";
+ import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+@@ -730,6 +732,55 @@ async function estimatePromptTokensFromSessionTranscript(params: {
+   }
+ }
+ 
++// Image- and tool-heavy history can reach the embedded runner's model-context byte bound
++// while prompt tokens stay below the compaction threshold. The bounded load then drops the
++// oldest history unsummarized and rewrites the cached prefix (openclaw/openclaw#159799), so
++// compact before the bound instead. A boundary whose retained tail alone is this large cannot
++// shrink further; new history must first grow by one step, and so must a retry after a miss.
++const MODEL_CONTEXT_BYTES_COMPACTION_RATIO = 0.8;
++const MODEL_CONTEXT_BYTES_STEP_DIVISOR = 4;
++const MAX_MODEL_CONTEXT_BYTES_RETRY_SESSIONS = 256;
++const modelContextBytesCompactionRetryFloor = new Map<string, number>();
++
++function shouldCompactByModelContextBytes(params: {
++  retryKey: string;
++  activeTranscriptBytes: number | undefined;
++  contextHydrationMaxBytes: number;
++  readRetainedPrefixBytes: () => number;
++}): boolean {
++  const { activeTranscriptBytes, contextHydrationMaxBytes } = params;
++  if (
++    typeof activeTranscriptBytes !== "number" ||
++    activeTranscriptBytes < contextHydrationMaxBytes * MODEL_CONTEXT_BYTES_COMPACTION_RATIO
++  ) {
++    return false;
++  }
++  const step = contextHydrationMaxBytes / MODEL_CONTEXT_BYTES_STEP_DIVISOR;
++  const retryFloor = modelContextBytesCompactionRetryFloor.get(params.retryKey);
++  if (retryFloor !== undefined && activeTranscriptBytes < retryFloor + step) {
++    return false;
++  }
++  try {
++    return activeTranscriptBytes - params.readRetainedPrefixBytes() >= step;
++  } catch {
++    return false;
++  }
++}
++
++function recordModelContextBytesCompactionMiss(retryKey: string, bytes: number | undefined): void {
++  if (typeof bytes !== "number") {
++    return;
++  }
++  modelContextBytesCompactionRetryFloor.delete(retryKey);
++  modelContextBytesCompactionRetryFloor.set(retryKey, bytes);
++  if (modelContextBytesCompactionRetryFloor.size > MAX_MODEL_CONTEXT_BYTES_RETRY_SESSIONS) {
++    const oldest = modelContextBytesCompactionRetryFloor.keys().next().value;
++    if (oldest !== undefined) {
++      modelContextBytesCompactionRetryFloor.delete(oldest);
++    }
++  }
++}
++
+ /** Compacts session context before a reply or after a completed direct command. */
+ export async function runSessionCompactionIfNeeded(params: {
+   cfg: OpenClawConfig;
+@@ -854,7 +905,8 @@ export async function runSessionCompactionIfNeeded(params: {
+           contextWindowTokens,
+         });
+   const transcriptSizeSnapshot =
+-    shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
++    (shouldCheckActiveTranscriptBytes || !isCodexRuntime) &&
++    transcriptUsageTokens?.transcriptByteSize === undefined
+       ? readSessionLogSnapshot({
+           agentId: compactionAgentId,
+           sessionId: entry.sessionId,
+@@ -910,6 +962,24 @@ export async function runSessionCompactionIfNeeded(params: {
+     Number.isFinite(projectedTokenCount) && projectedTokenCount > 0
+       ? projectedTokenCount
+       : undefined;
++  const compactionSessionId = entry.sessionId;
++  const contextBytesRetryKey = `${compactionStorePath}\0${compactionSessionId}`;
++  const contextHydrationMaxBytes =
++    resolveEmbeddedSessionContextLimits(contextWindowTokens).maxBytes;
++  const shouldCompactByContextBytes =
++    !shouldCompactByTranscriptBytes &&
++    shouldCompactByModelContextBytes({
++      retryKey: contextBytesRetryKey,
++      activeTranscriptBytes,
++      contextHydrationMaxBytes,
++      readRetainedPrefixBytes: () =>
++        readSessionTranscriptRetainedPrefixBytes({
++          agentId: compactionAgentId,
++          sessionId: compactionSessionId,
++          sessionKey: compactionSessionKey,
++          storePath: compactionStorePath,
++        }),
++    });
+ 
+   logVerbose(
+     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
+@@ -923,7 +993,9 @@ export async function runSessionCompactionIfNeeded(params: {
+       `promptTokensEst=${promptTokenEstimate ?? "undefined"} ` +
+       `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+       `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"} ` +
+-      `sizeTrigger=${shouldCompactByTranscriptBytes}`,
++      `sizeTrigger=${shouldCompactByTranscriptBytes} ` +
++      `contextHydrationMaxBytes=${contextHydrationMaxBytes} ` +
++      `contextBytesTrigger=${shouldCompactByContextBytes}`,
+   );
+ 
+   const shouldCompactByTokens = shouldRunPreflightCompaction({
+@@ -931,12 +1003,19 @@ export async function runSessionCompactionIfNeeded(params: {
+     tokenCount: tokenCountForCompaction,
+     threshold,
+   });
+-  const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
++  const shouldCompact =
++    shouldCompactByTokens || shouldCompactByTranscriptBytes || shouldCompactByContextBytes;
+   if (!shouldCompact) {
+     return entry ?? params.sessionEntry;
+   }
+ 
+-  const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
++  const compactionTrigger = shouldCompactByTranscriptBytes
++    ? "transcript_bytes"
++    : shouldCompactByTokens
++      ? "tokens"
++      : "model_context_bytes";
++  // The bounded load still serves a usable tail, so this trigger never fails the turn.
++  const compactionOptional = compactionTrigger === "model_context_bytes";
+   logVerbose(
+     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
+       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
+@@ -973,6 +1052,7 @@ export async function runSessionCompactionIfNeeded(params: {
+   };
+   // Provider work can outlive the caller; never account against a replacement session row.
+   let expectedSession = entry;
++  let compactionCommitted = false;
+   const compactionStore = params.sessionStore ?? { [compactionSessionKey]: entry };
+   try {
+     await notifyStartCompaction();
+@@ -1041,6 +1121,7 @@ export async function runSessionCompactionIfNeeded(params: {
+       {
+         assertActive,
+         onCommitted: (accepted) => {
++          compactionCommitted = true;
+           expectedSession = accepted.entry;
+           entry = accepted.entry;
+           compactionStore[compactionSessionKey] = accepted.entry;
+@@ -1055,10 +1136,17 @@ export async function runSessionCompactionIfNeeded(params: {
+       if (result && isBenignCompactionSkipResult(result)) {
+         await notifyTerminalCompaction("skipped");
+         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
++        if (compactionOptional) {
++          recordModelContextBytesCompactionMiss(contextBytesRetryKey, activeTranscriptBytes);
++        }
+         return entry ?? params.sessionEntry;
+       }
+       await notifyTerminalCompaction("incomplete");
+       logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
++      if (compactionOptional) {
++        recordModelContextBytesCompactionMiss(contextBytesRetryKey, activeTranscriptBytes);
++        return entry ?? params.sessionEntry;
++      }
+       throw new Error(`Preflight compaction required but failed: ${reason}`);
+     }
+ 
+@@ -1068,12 +1156,20 @@ export async function runSessionCompactionIfNeeded(params: {
+       if (isBenignCompactionSkipResult(result)) {
+         await notifyTerminalCompaction("skipped");
+         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
++        if (compactionOptional) {
++          recordModelContextBytesCompactionMiss(contextBytesRetryKey, activeTranscriptBytes);
++        }
+         return entry ?? params.sessionEntry;
+       }
+       await notifyTerminalCompaction("incomplete");
+       logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
++      if (compactionOptional) {
++        recordModelContextBytesCompactionMiss(contextBytesRetryKey, activeTranscriptBytes);
++        return entry ?? params.sessionEntry;
++      }
+       throw new Error(`Preflight compaction required but failed: ${reason}`);
+     }
++    modelContextBytesCompactionRetryFloor.delete(contextBytesRetryKey);
+ 
+     const compactionCount = await deps.incrementCompactionCount({
+       agentId: compactionAgentId,
+@@ -1123,6 +1219,19 @@ export async function runSessionCompactionIfNeeded(params: {
+     if (startedCompactionNotice && !terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
+       await notifyCompaction("incomplete");
+     }
++    if (
++      compactionOptional &&
++      !compactionCommitted &&
++      !params.abortSignal?.aborted &&
++      params.authorize?.() !== false
++    ) {
++      logVerbose(
++        `preflightCompaction failed: sessionKey=${params.sessionKey} ` +
++          `trigger=${compactionTrigger} error=${formatErrorMessage(err)}`,
++      );
++      recordModelContextBytesCompactionMiss(contextBytesRetryKey, activeTranscriptBytes);
++      return entry ?? params.sessionEntry;
++    }
+     throw err;
+   }
+ }
+diff --git a/src/config/sessions/session-accessor.sqlite-active-events.ts b/src/config/sessions/session-accessor.sqlite-active-events.ts
+index 77d6d41ae08..777f92c86ad 100644
+--- a/src/config/sessions/session-accessor.sqlite-active-events.ts
++++ b/src/config/sessions/session-accessor.sqlite-active-events.ts
+@@ -17,6 +17,7 @@ import type {
+ import {
+   readTranscriptProjectionGeneration,
+   readVisibleMessageRange,
++  readVisibleTranscriptRetainedPrefixBytes,
+   readVisibleTranscriptStats,
+   resolveVisibleMessagePositionRange,
+   resolveVisibleMessagePositions,
+@@ -168,6 +169,13 @@ export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadSco
+   return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
+ }
+ 
++/** Reads the bytes of the latest context boundary plus the tail it retains. */
++export function readSessionTranscriptRetainedPrefixBytes(
++  scope: SessionTranscriptReadScope,
++): number {
++  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptRetainedPrefixBytes);
++}
++
+ /** Reads one append-stable forward page from the materialized active-message projection. */
+ export function readSessionTranscriptVisibleMessageDeltaCore(
+   scope: SessionTranscriptReadScope,
+diff --git a/src/config/sessions/session-accessor.sqlite-reset-window.ts b/src/config/sessions/session-accessor.sqlite-reset-window.ts
+index 13a53fef90b..a5e3e68d35e 100644
+--- a/src/config/sessions/session-accessor.sqlite-reset-window.ts
++++ b/src/config/sessions/session-accessor.sqlite-reset-window.ts
+@@ -395,6 +395,13 @@ export function resolveVisibleMessagePositionRange(
+   return positions;
+ }
+ 
++/** Bytes of the latest context boundary and the tail it retains; zero without a boundary. */
++export function readVisibleTranscriptRetainedPrefixBytes(
++  projection: ResetWindowProjection,
++): number {
++  return resolveResetMessageWindow(projection, "context")?.contextPrefixSizeBytes ?? 0;
++}
++
+ /** Reads logical transcript bytes, reusing cached retained-tail facts after resets. */
+ export function readVisibleTranscriptStats(projection: ResetWindowProjection): {
+   eventCount: number;
+diff --git a/src/config/sessions/session-accessor.ts b/src/config/sessions/session-accessor.ts
+index b47c6336238..aa179086e38 100644
+--- a/src/config/sessions/session-accessor.ts
++++ b/src/config/sessions/session-accessor.ts
+@@ -275,6 +275,7 @@ export {
+   readRecentSessionTranscriptActiveEvents,
+   readSessionTranscriptActiveStats,
+   readSessionTranscriptBoundedMessageTailPage,
++  readSessionTranscriptRetainedPrefixBytes,
+   readRecentSessionTranscriptMessageEvents,
+   readSessionTranscriptActivePathEntryRelation,
+   readSessionTranscriptMessageEventPage,

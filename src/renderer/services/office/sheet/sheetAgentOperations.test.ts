@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import { makeSheetFixture } from '../../../../../tests/fixtures/sheet';
 import { SheetEditType } from '../../../../shared/office/sheet/sheetAgent';
-import { applySheetEdits, formulaErrors, readSheet, SheetAgentError } from './sheetAgentOperations';
+import { applySheetEdits, editedCellValues, formulaErrors, readSheet, SheetAgentError } from './sheetAgentOperations';
 import { editorImport } from './sheetEditorImport';
 import { StructureTracker } from './sheetStructureTracker';
 import { createHeadlessSheetUniver, registerWorkbookTables } from './sheetUniverEngine';
@@ -158,5 +158,60 @@ describe('agent edits', () => {
     const result = applySheetEdits(workbook, api, [{ type: SheetEditType.SetValues, range: 'F2', values: [['=1/0'], ['=B2+1']] }], { mdw });
     await api.getFormula().onCalculationResultApplied(5000);
     expect(formulaErrors(workbook, result.changed)).toEqual({ '数据!F2': '#DIV/0!' });
+  });
+
+  test('echo the written cells after recalculation so no read is needed to check them', async () => {
+    const { api, workbook, mdw } = await open();
+    const result = applySheetEdits(workbook, api, [
+      { type: SheetEditType.SetValues, range: 'F2', values: [[7], ['=F2*2']] },
+      { type: SheetEditType.Format, range: 'A1:E6', bold: true },
+    ], { mdw });
+    await api.getFormula().onCalculationResultApplied(5000);
+    // Format-only edits are not echoed; content edits are, with formulas spelled out.
+    expect(result.contentChanged).toEqual(['数据!F2:F3']);
+    expect(editedCellValues(workbook, result.contentChanged)).toEqual({
+      cells: { '数据!F2': 7, '数据!F3': { value: 14, formula: '=F2*2' } },
+    });
+    expect(editedCellValues(workbook, result.contentChanged, 1)).toEqual({ cells: { '数据!F2': 7 }, truncated: true });
+  });
+
+  test('accept "range" as the rows or columns of a structural edit', async () => {
+    const { api, workbook, mdw } = await open();
+    const before = workbook.getSheetByName('数据')!.getMaxRows();
+    const result = applySheetEdits(workbook, api, [
+      { type: SheetEditType.InsertRows, sheet: '数据', range: '4:4' },
+      { type: SheetEditType.InsertColumns, sheet: '数据', range: 'B' },
+    ], { mdw });
+    expect(result.changed).toEqual(['数据!4:4', '数据!B']);
+    expect(workbook.getSheetByName('数据')!.getMaxRows()).toBe(before + 1);
+  });
+
+  test('follow earlier content edits through later structural edits', async () => {
+    const { api, workbook, mdw } = await open();
+    const result = applySheetEdits(workbook, api, [
+      { type: SheetEditType.SetValues, range: 'F1', values: [['above']] },
+      { type: SheetEditType.SetValues, range: 'F3', values: [['below']] },
+      { type: SheetEditType.SetValues, range: 'H5', values: [['dropped']] },
+      { type: SheetEditType.InsertRows, rows: '2' },
+      { type: SheetEditType.DeleteRows, rows: '6' },
+      { type: SheetEditType.SetValues, range: 'G2', values: [['after']] },
+    ], { mdw });
+    // F1 sits above the insert; F3 moved to F4; H5 moved to H6 and was then deleted.
+    expect(result.contentChanged).toEqual(['数据!F1', '数据!F4', '数据!G2']);
+    expect(editedCellValues(workbook, result.contentChanged).cells).toEqual({
+      '数据!F1': 'above',
+      '数据!F4': 'below',
+      '数据!G2': 'after',
+    });
+  });
+
+  test('report written cells under a sheet\'s new name after a rename', async () => {
+    const { api, workbook, mdw } = await open();
+    const result = applySheetEdits(workbook, api, [
+      { type: SheetEditType.SetValues, sheet: 'Summary', range: 'C1', values: [['x']] },
+      { type: SheetEditType.RenameSheet, sheet: 'Summary', name: 'Totals' },
+    ], { mdw });
+    expect(result.contentChanged).toEqual(['Totals!C1']);
+    expect(editedCellValues(workbook, result.contentChanged).cells).toEqual({ 'Totals!C1': 'x' });
   });
 });

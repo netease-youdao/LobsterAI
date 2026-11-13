@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import { parseAgentAvatarImageUrl } from '../shared/agent/avatar';
-import { AgentSource } from '../shared/agent/constants';
+import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
+import { usesInheritedAgentModel } from '../shared/agent/modelSelection';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
 import type { ExpertCatalog, PresetAgent } from '../shared/agent/presets';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from './coworkStore';
@@ -38,8 +41,21 @@ export class AgentManager {
   }
 
   updateAgent(agentId: string, updates: UpdateAgentRequest): Agent | null {
+    if (updates.modelSelectionMode !== undefined
+      && !Object.values(AgentModelSelectionMode).includes(updates.modelSelectionMode)) {
+      throw new Error('Invalid agent model selection mode.');
+    }
+    if (updates.modelSelectionMode === AgentModelSelectionMode.Inherit
+      && (agentId === AgentId.Main || this.store.getAgent(agentId)?.source !== AgentSource.Preset)) {
+      throw new Error('Only preset experts can inherit a new-task model.');
+    }
     return this.store.updateAgent(agentId, {
       ...updates,
+      // Explicit edits opt out; automatic preset refreshes write to the store
+      // directly so they do not turn an inherited binding into a user choice.
+      ...(updates.modelSelectionMode === undefined
+        && (updates.model !== undefined || updates.thinkingLevel !== undefined)
+        ? { modelSelectionMode: AgentModelSelectionMode.Explicit } : {}),
       ...(updates.workingDirectory !== undefined
         ? { workingDirectory: updates.workingDirectory.trim() }
         : {}),
@@ -86,25 +102,38 @@ export class AgentManager {
     return (await this.getExpertCatalog()).experts;
   }
 
-  async addPresetAgent(presetId: string, defaultModel?: string): Promise<Agent | null> {
+  async addPresetAgent(presetId: string, defaultModel?: string, thinkingLevel: Agent['thinkingLevel'] = ''): Promise<Agent | null> {
     // Reuse the user's instance, including their edits. Summoning also re-enables it.
     const findExisting = () => this.store.listAgents().find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
+    const reuse = (agent: Agent): Agent | null => {
+      const updates: UpdateAgentRequest = {};
+      if (!agent.enabled) updates.enabled = true;
+      if (usesInheritedAgentModel(agent) && defaultModel !== undefined) {
+        const model = defaultModel.trim();
+        if (agent.model !== model) updates.model = model;
+        if (agent.thinkingLevel !== thinkingLevel) updates.thinkingLevel = thinkingLevel;
+      }
+      return Object.keys(updates).length > 0 ? this.store.updateAgent(agent.id, updates) : agent;
+    };
     const existing = findExisting();
     if (existing) {
-      return existing.enabled ? existing : this.store.updateAgent(existing.id, { enabled: true });
+      return reuse(existing);
     }
 
     const preset = (await this.getAllPresetAgents()).find(p => p.id === presetId);
     if (!preset) return null;
     // Concurrent callers can complete the same fetch before the first IPC returns.
     const createdMeanwhile = findExisting();
-    if (createdMeanwhile) return createdMeanwhile.enabled ? createdMeanwhile : this.store.updateAgent(createdMeanwhile.id, { enabled: true });
+    if (createdMeanwhile) return reuse(createdMeanwhile);
 
     return this.store.createAgent({
       ...presetToCreateRequest(preset),
-      // A custom/imported agent may already own the legacy preset ID.
-      id: this.store.getAgent(preset.id) ? undefined : preset.id,
+      // Historical ownership triggers can keep deleted IDs reserved.
+      // presetId identifies the template; each new instance needs its own ID.
+      id: randomUUID(),
       model: defaultModel?.trim() || '',
+      modelSelectionMode: AgentModelSelectionMode.Inherit,
+      thinkingLevel,
       workingDirectory: '',
     });
   }

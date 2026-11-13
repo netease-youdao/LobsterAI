@@ -9,7 +9,7 @@ import {
 } from '../../shared/desktopCompanion/geometry';
 import {
   LanguageTool, LanguageToolCode, type LanguageToolInput,
-  type LanguageToolRequest, LanguageToolsIpc, SpeechCommand, SpeechStatus,
+  type LanguageToolRequest, type LanguageToolResume, LanguageToolsIpc, SpeechCommand, SpeechStatus,
 } from '../../shared/desktopCompanion/languageTools';
 import type { CompanionAnalytics } from './companionAnalytics';
 import type { CompanionLanguageClient } from './languageToolClient';
@@ -25,6 +25,7 @@ interface Host {
   abortFollowUp(id: number): void;
   /** A screenshot shortcut is waiting for its shot; the card keeps showing when it loses focus to it. */
   isCapturing(): boolean;
+  beforeSpeech?(): void;
 }
 
 /** How often a card that lost focus to a screenshot checks whether the shot is done. */
@@ -35,6 +36,7 @@ export class CompanionLanguageToolsController {
   private window: BrowserWindow | null = null;
   private input: LanguageToolInput | null = null;
   private status: SpeechStatus = SpeechStatus.Idle;
+  private speechRequestId: string | null = null;
   private anchor: CompanionSelectionAnchor | null = null;
   private toolbarBounds: CompanionRect | null = null;
   private size: CompanionSize = { ...DesktopCompanionSize.Answer };
@@ -44,6 +46,8 @@ export class CompanionLanguageToolsController {
   /** The window height the card may grow to beside the selection. */
   private cardHeight: number = DesktopCompanionSize.Answer.height;
   private captureTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The card a browser sign-in interrupted. It outlives the session reset that the login itself causes. */
+  private loginResume: { input: LanguageToolInput; moved: boolean } | null = null;
   constructor(private readonly host: Host, private readonly client?: CompanionLanguageClient) {
     const handle = (channel: string, callback: (value: unknown) => unknown, toolsOnly = false) => {
       ipcMain.handle(channel, (event, value: unknown) => {
@@ -57,7 +61,8 @@ export class CompanionLanguageToolsController {
     handle(LanguageToolsIpc.Open, value => this.open(value as LanguageToolInput));
     handle(LanguageToolsIpc.GetInput, () => this.input, true);
     handle(LanguageToolsIpc.Hide, () => this.window?.hide(), true);
-    handle(LanguageToolsIpc.Close, () => this.reset(), true);
+    // Closing the card also gives up on continuing it after a sign-in.
+    handle(LanguageToolsIpc.Close, () => { this.loginResume = null; this.reset(); }, true);
     handle(LanguageToolsIpc.Pin, value => { this.pinned = value === true; }, true);
     handle(LanguageToolsIpc.PassThrough, value => this.window?.setIgnoreMouseEvents(value === true, { forward: true }), true);
     handle(LanguageToolsIpc.Start, value => {
@@ -66,11 +71,20 @@ export class CompanionLanguageToolsController {
       if (request?.tool === LanguageTool.Tts && (!this.input || !this.window?.isVisible())) {
         return { success: false, code: LanguageToolCode.Unavailable };
       }
-      return this.client?.start(request, event => {
+      const result = this.client?.start(request, event => {
         if (this.window && !this.window.isDestroyed()) this.window.webContents.send(LanguageToolsIpc.Event, event);
       }) ?? { success: false, code: LanguageToolCode.Unavailable };
+      if (result.success && request.tool === LanguageTool.Tts) {
+        this.speechRequestId = request.requestId;
+        this.host.beforeSpeech?.();
+      }
+      return result;
     }, true);
-    handle(LanguageToolsIpc.Abort, value => { if (typeof value === 'string') this.client?.abort(value); }, true);
+    handle(LanguageToolsIpc.Abort, value => {
+      if (typeof value !== 'string') return;
+      this.client?.abort(value);
+      if (value === this.speechRequestId) this.speechRequestId = null;
+    }, true);
     handle(LanguageToolsIpc.Quota, value => this.client?.quota(value as LanguageTool) ?? { success: false, code: LanguageToolCode.Unavailable });
     handle(LanguageToolsIpc.SpeechStatus, value => {
       if (!this.input || !this.window?.isVisible() || !Object.values(SpeechStatus).includes(value as SpeechStatus)) return;
@@ -95,6 +109,8 @@ export class CompanionLanguageToolsController {
       return;
     }
     if (typeof input.text !== 'string' || !input.text.trim()) return;
+    // A new request replaces whatever an unfinished sign-in was going to pick up again.
+    this.loginResume = null;
     this.host.analytics?.report({ action: CompanionAnalyticsAction.Action, source: CompanionAnalyticsSource.Selection,
       interactionType: Interaction.Run, tool: input.tool });
     const cursor = screen.getCursorScreenPoint();
@@ -108,7 +124,7 @@ export class CompanionLanguageToolsController {
     };
     this.pinned = false;
     this.moved = false;
-    this.size = { width: DesktopCompanionSize.Answer.width, height: Math.min(this.cardHeight, input.tool === LanguageTool.Tts ? 290 : 330) };
+    this.size = this.openingSize(input.tool);
     if (!this.window || this.window.isDestroyed()) {
       const win = this.host.createWindow();
       const ownerId = win.webContents.id;
@@ -121,13 +137,14 @@ export class CompanionLanguageToolsController {
       // Only a drag by the user emits will-move; a card moved out of the way stays open.
       win.on('will-move', () => {
         this.moved = true;
+        if (this.loginResume) this.loginResume.moved = true;
         if (this.pinned) return;
         this.pinned = true;
         win.webContents.send(LanguageToolsIpc.Pinned, true);
       });
       win.on('closed', () => {
         this.client?.reset(); this.host.abortFollowUp(ownerId);
-        this.window = null; this.input = null; this.status = SpeechStatus.Idle; this.host.publish();
+        this.window = null; this.input = null; this.loginResume = null; this.status = SpeechStatus.Idle; this.host.publish();
       });
     }
     this.place();
@@ -136,6 +153,42 @@ export class CompanionLanguageToolsController {
     this.window.webContents.send(LanguageToolsIpc.Input, this.input);
     this.window.show();
     this.window.focus();
+  }
+  /** Pins the card through a browser sign-in and remembers what to pick up again afterwards. */
+  holdForLogin(resume?: LanguageToolResume): void {
+    const input = this.input;
+    const win = this.window;
+    if (!input?.text || !win || win.isDestroyed()) return;
+    this.loginResume = { input: { tool: input.tool, text: input.text, ...(resume ? { resume } : {}) }, moved: this.moved };
+    if (this.pinned) return;
+    this.pinned = true;
+    win.webContents.send(LanguageToolsIpc.Pinned, true);
+  }
+  /**
+   * Brings back the card the sign-in interrupted, pinned and in its old place, and runs its request
+   * again under the new account. Call after the login's session reset, which cleared the old results.
+   */
+  resumeAfterLogin(): void {
+    const pending = this.loginResume;
+    this.loginResume = null;
+    const win = this.window;
+    if (!pending?.input.text || !win || win.isDestroyed() || !this.anchor) return;
+    const { resume, ...input } = pending.input;
+    this.input = { ...input, ...(resume?.targetLanguage ? { targetLanguage: resume.targetLanguage } : {}),
+      id: randomUUID(), cardMaxHeight: this.cardHeight - DesktopCompanionSize.SurfacePad * 2, pinned: true };
+    this.pinned = true;
+    this.moved = pending.moved;
+    this.size = this.openingSize(pending.input.tool);
+    this.place();
+    win.setIgnoreMouseEvents(true, { forward: true });
+    // The waiting question goes out once: a renderer that reloads later reads the card without it.
+    win.webContents.send(LanguageToolsIpc.Input, resume?.question ? { ...this.input, resume: { question: resume.question } } : this.input);
+    // Focus stays with the browser or main window the sign-in ended in.
+    win.showInactive();
+  }
+  dropLoginResume(): void { this.loginResume = null; }
+  private openingSize(tool: LanguageTool): CompanionSize {
+    return { width: DesktopCompanionSize.Answer.width, height: Math.min(this.cardHeight, tool === LanguageTool.Tts ? 290 : 330) };
   }
   setContentSize(size: CompanionSize): void {
     if (!this.input || !Number.isFinite(size.width) || !Number.isFinite(size.height)) return;
@@ -176,10 +229,19 @@ export class CompanionLanguageToolsController {
       interactionType: command, tool: LanguageTool.Tts });
     this.window?.webContents.send(LanguageToolsIpc.SpeechCommand, command);
   }
+  stopSpeech(): void {
+    if (!this.speechRequestId && this.status === SpeechStatus.Idle) return;
+    if (this.speechRequestId) this.client?.abort(this.speechRequestId);
+    this.speechRequestId = null;
+    if (this.window && !this.window.isDestroyed()) this.window.webContents.send(LanguageToolsIpc.SpeechCommand, SpeechCommand.Stop);
+    this.status = SpeechStatus.Idle;
+    this.host.publish();
+  }
   reset(): void {
     clearTimeout(this.captureTimer);
     this.captureTimer = undefined;
     this.client?.reset();
+    this.speechRequestId = null;
     if (this.window) this.host.abortFollowUp(this.window.webContents.id);
     this.input = null;
     this.pinned = false;

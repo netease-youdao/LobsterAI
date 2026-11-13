@@ -22,7 +22,7 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
-import { AgentId, AgentSource } from '../shared/agent/constants';
+import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
@@ -32,6 +32,7 @@ import {
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { ModelPresetId } from '../shared/modelPresets/constants';
+import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
@@ -60,6 +61,8 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
       model_preset_id TEXT,
+      context_window_override INTEGER,
+      context_window_owner_key TEXT,
       thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,
@@ -133,6 +136,7 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
+      model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}',
       thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
@@ -361,6 +365,72 @@ test('getSessionSearchMessagePage treats corrupt assistant metadata as non-think
   }]);
 });
 
+test('getSessionMessageRailIndex numbers visible messages by full message order', () => {
+  const sid = 'rail-index-session';
+  insertSession(sid);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_order
+    ON cowork_messages(session_id, COALESCE(sequence, created_at), created_at)`);
+
+  insertMessage('user-0', sid, 'user', 'first question', null, 1);
+  insertMessage('tool-1', sid, 'tool_use', 'tool call', JSON.stringify({ large: 'x'.repeat(100_000) }), 2);
+  insertMessage('thinking-2', sid, 'assistant', 'private chain of thought', '{"isThinking":true}', 3);
+  insertMessage('assistant-3', sid, 'assistant', 'visible answer', '{"isThinking":false}', 4);
+  insertMessage('corrupt-4', sid, 'assistant', 'answer with corrupt metadata', '{broken', 5);
+  insertMessage('blank-5', sid, 'assistant', '   ', null, 6);
+  insertMessage('user-6', sid, 'user', 'follow up', null, 7);
+
+  expect(store.getSessionMessageRailIndex(sid).map(item => [item.messageId, item.messageOffset, item.sequence]))
+    .toEqual([['user-0', 0, 1], ['assistant-3', 3, 4], ['corrupt-4', 4, 5], ['user-6', 6, 7]]);
+  expect(store.getSessionMessageRailIndex(sid)[1]).toMatchObject({
+    type: 'assistant',
+    preview: 'visible answer',
+    contentLen: 'visible answer'.length,
+  });
+});
+
+test('findMediaTaskMessages finds the call, its result and status checks of one task', () => {
+  const sid = 'media-task-session';
+  insertSession(sid);
+  insertSession('other-session');
+  insertMessage('generate-call', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-1', toolInput: { prompt: 'cat' } }), 1);
+  insertMessage('generate-result', sid, 'tool_result', '', JSON.stringify({ toolUseId: 'call-1', toolResultDetails: { taskId: '133' } }), 2);
+  insertMessage('status-call', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-2', toolInput: { action: 'status', taskId: 133 } }), 3);
+  insertMessage('status-card', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-3', mediaStatusDetails: { taskId: '133' } }), 4);
+  insertMessage('similar-task', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-4', toolInput: { taskId: '1334' } }), 5);
+  insertMessage('corrupt', sid, 'tool_result', '', '{"toolUseId":"call-1"', 6);
+  insertMessage('assistant', sid, 'assistant', 'call-1 133', JSON.stringify({ toolUseId: 'call-1' }), 7);
+  insertMessage('other-session-call', 'other-session', 'tool_use', '', JSON.stringify({ toolUseId: 'call-1' }), 1);
+
+  const found = store.findMediaTaskMessages(sid, 'call-1', '133');
+
+  expect(found.map(row => row.id).sort()).toEqual(['generate-call', 'generate-result', 'status-call', 'status-card']);
+  expect(found.find(row => row.id === 'status-call')?.metadata.toolUseId).toBe('call-2');
+});
+
+test('message writes keep generated media as file references', () => {
+  const sid = 'media-metadata-session';
+  insertSession(sid);
+  const dataUrl = `data:image/png;base64,${'A'.repeat(200_000)}`;
+  const asset = { type: 'image', url: dataUrl, originalUrl: dataUrl, filePath: '/tmp/generated.png' };
+
+  const added = store.addMessage(sid, {
+    type: 'tool_result',
+    content: 'Task ID: 1',
+    metadata: { toolResultDetails: { mediaType: 'image', resultUrls: [dataUrl], assets: [asset] } },
+  });
+  store.updateMessage(sid, added.id, {
+    metadata: { ...added.metadata, mediaStatusDetails: { mediaType: 'image', resultUrls: [dataUrl], assets: [asset] } },
+  });
+
+  const stored = db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get(added.id) as { metadata: string };
+  expect(stored.metadata).not.toContain('base64');
+  expect(stored.metadata.length).toBeLessThan(2_000);
+  expect(JSON.stringify(added.metadata)).not.toContain('base64');
+  expect(store.getSession(sid)?.messages[0].metadata?.toolResultDetails).toMatchObject({
+    assets: [{ filePath: '/tmp/generated.png', url: expect.stringMatching(/^file:/) }],
+  });
+});
+
 test('getSessionSearchMessagePage bounds user and assistant content while preserving an over-limit sentinel', () => {
   const sid = 'search-content-limit-session';
   insertSession(sid);
@@ -467,6 +537,69 @@ test('getSessionSearchMessagePage keyset cursor preserves ROWID order for legacy
     ['tie-4', 4],
   ]);
   expect(thirdPage.nextOffset).toBe(5);
+});
+
+test('listFilteredSessions combines status, session ids and time across all agents', () => {
+  insertSession('running-old', 'main', 'Running old', 1000);
+  insertSession('running-new', 'writer', 'Running new', 3000);
+  insertSession('failed', 'main', 'Failed', 2000);
+  insertSession('done', 'main', 'Done', 4000);
+  db.prepare("UPDATE cowork_sessions SET status = 'running' WHERE id IN ('running-old', 'running-new')").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'error' WHERE id = 'failed'").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'completed' WHERE id = 'done'").run();
+
+  const ids = (sessions: { id: string }[]) => sessions.map(session => session.id);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'] }))).toEqual(['running-new', 'running-old']);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'], updatedSince: 2000 }))).toEqual(['running-new']);
+  expect(ids(store.listFilteredSessions({ sessionIds: ['done', 'failed', 'missing'] }))).toEqual(['done', 'failed']);
+  expect(ids(store.listFilteredSessions({ updatedSince: 2500 }))).toEqual(['done', 'running-new']);
+  expect(ids(store.listFilteredSessions({ limit: 1 }))).toEqual(['done']);
+  expect(store.listFilteredSessions({ statuses: [] })).toEqual([]);
+  expect(store.listFilteredSessions({ sessionIds: [] })).toEqual([]);
+});
+
+test('searchSessionContent returns one hit per session from user and visible assistant messages', () => {
+  insertSession('older', 'main', 'Ski poster', 1000);
+  insertSession('newer', 'main', 'Jacket edit', 2000);
+  insertSession('thinking-only', 'main', 'Thinking only', 3000);
+  insertSession('tool-only', 'main', 'Tool only', 4000);
+  insertSession('other-agent', 'writer', 'Other agent', 5000);
+
+  insertMessage('older-user', 'older', 'user', 'Remove the zipper on the left arm', null, 1, 100);
+  insertMessage('newer-user', 'newer', 'user', 'Keep the zipper', null, 1, 200);
+  insertMessage('newer-reply', 'newer', 'assistant', 'Done: the ZIPPER now matches.', '{"isFinal":true}', 2, 300);
+  insertMessage('newer-unrelated', 'newer', 'assistant', 'Anything else?', null, 3, 400);
+  insertMessage('thinking', 'thinking-only', 'assistant', 'zipper reasoning', '{"isThinking":true}', 1, 500);
+  insertMessage('tool', 'tool-only', 'tool_result', 'zipper.png', null, 1, 600);
+  insertMessage('other', 'other-agent', 'user', 'zipper on another agent', '{broken', 1, 700);
+
+  const results = store.searchSessionContent({ query: 'zipper' });
+  expect(results.map(result => result.session.id)).toEqual(['other-agent', 'newer', 'older']);
+
+  const newer = results.find(result => result.session.id === 'newer');
+  expect(newer?.match).toMatchObject({
+    messageId: 'newer-reply',
+    messageType: 'assistant',
+    matchCount: 2,
+    matchedAt: 300,
+  });
+  const snippet = newer?.match.snippet ?? '';
+  const highlightStart = newer?.match.highlightStart ?? -1;
+  expect(snippet.slice(highlightStart, highlightStart + 6)).toBe('ZIPPER');
+
+  expect(store.searchSessionContent({ query: 'zipper', agentId: 'writer' }).map(result => result.session.id))
+    .toEqual(['other-agent']);
+  expect(store.searchSessionContent({ query: 'zipper', limit: 1 })).toHaveLength(1);
+  expect(store.searchSessionContent({ query: '   ' })).toEqual([]);
+});
+
+test('searchSessionContent treats LIKE wildcards in the query literally', () => {
+  insertSession('percent', 'main', 'Percent', 1000);
+  insertSession('plain', 'main', 'Plain', 2000);
+  insertMessage('percent-msg', 'percent', 'user', 'Discount is 50% off', null, 1, 100);
+  insertMessage('plain-msg', 'plain', 'user', 'Discount is 500 off', null, 1, 200);
+
+  expect(store.searchSessionContent({ query: '50%' }).map(result => result.session.id)).toEqual(['percent']);
 });
 
 test('searchSessions finds matching titles beyond the recent page', () => {
@@ -1385,6 +1518,18 @@ test('agent CRUD stores model preferences and working directory independently', 
   expect(updated?.workingDirectory).toBe('/tmp/docs-next');
   expect(store.getAgent(agent.id)?.thinkingLevel).toBe('max');
   expect(store.getAgent(agent.id)?.workingDirectory).toBe('/tmp/docs-next');
+});
+
+test('inherited expert bindings persist independently and startup backfill does not freeze an empty inheritance', () => {
+  const expert = store.createAgent({ name: 'Inherited expert', source: AgentSource.Preset, modelSelectionMode: AgentModelSelectionMode.Inherit });
+  const custom = store.createAgent({ name: 'Custom agent' });
+  expect(store.backfillEmptyAgentModels('custom/fallback')).toBe(1);
+  expect(store.getAgent(expert.id)).toMatchObject({ model: '', modelSelectionMode: AgentModelSelectionMode.Inherit });
+  expect(store.getAgent(custom.id)).toMatchObject({ model: 'custom/fallback', modelSelectionMode: AgentModelSelectionMode.Explicit });
+  store.updateAgent(expert.id, { model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High });
+  expect(store.listAgents().find(agent => agent.id === expert.id)).toMatchObject({
+    model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High, modelSelectionMode: AgentModelSelectionMode.Inherit,
+  });
 });
 
 test('deleteAgent removes its task history before an agent with the same name is recreated', () => {

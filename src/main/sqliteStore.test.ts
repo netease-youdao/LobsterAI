@@ -4,8 +4,9 @@ import os from 'os';
 import path from 'path';
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { AgentAvatarSvg, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
+import { AgentAvatarSvg, AgentModelSelectionMode, AgentSource, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
+import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 
 vi.mock('electron', () => ({
   app: {
@@ -85,6 +86,27 @@ const createLegacyDatabase = (userDataPath: string): void => {
 
   db.close();
 };
+
+test('model inheritance migration preserves legacy expert choices and survives a restart after opting in', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  legacyDb.prepare('UPDATE agents SET source = ?, preset_id = ?, model = ? WHERE id = ?')
+    .run(AgentSource.Preset, 'legacy-expert', 'custom/user-choice', 'docs');
+  legacyDb.close();
+
+  const store = await SqliteStore.create(userDataPath);
+  const coworkers = new CoworkStore(store.getDatabase());
+  expect(coworkers.getAgent('docs')).toMatchObject({ model: 'custom/user-choice', modelSelectionMode: AgentModelSelectionMode.Explicit });
+  coworkers.updateAgent('docs', { modelSelectionMode: AgentModelSelectionMode.Inherit, model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High });
+  store.close();
+
+  const reopened = await SqliteStore.create(userDataPath);
+  expect(new CoworkStore(reopened.getDatabase()).getAgent('docs')).toMatchObject({
+    modelSelectionMode: AgentModelSelectionMode.Inherit, model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High,
+  });
+  reopened.close();
+});
 
 test('backfills agent working directories from legacy cowork config only once', async () => {
   const userDataPath = createTempUserDataPath();

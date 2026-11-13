@@ -20,6 +20,7 @@ import {
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
   applyModelRuntimeProfileMetadata,
+  buildModelCapabilityOverrides,
   findKimiK3ReservedCustomParamKeys,
   ModelRuntimeProfileSource,
   OpenClawApi,
@@ -835,6 +836,7 @@ const SHORTCUT_COMMAND_GROUPS: Array<{
       { key: ShortcutAction.VoiceInput, labelKey: 'shortcutVoiceInput', descriptionKey: 'shortcutDescVoiceInput' },
       { key: ShortcutAction.StopCurrentTask, labelKey: 'shortcutStopCurrentTask', descriptionKey: 'shortcutDescStopCurrentTask' },
       { key: ShortcutAction.Search, labelKey: 'search', descriptionKey: 'shortcutDescSearch' },
+      { key: ShortcutAction.ConversationSearch, labelKey: 'shortcutConversationSearch', descriptionKey: 'shortcutDescConversationSearch' },
       { key: ShortcutAction.ToggleArtifacts, labelKey: 'shortcutToggleArtifacts', descriptionKey: 'shortcutDescToggleArtifacts' },
       {
         key: ShortcutAction.SendMessage,
@@ -2256,6 +2258,7 @@ const Settings: React.FC<SettingsProps> = ({
                     providerKey,
                     id,
                     model.supportsImage,
+                    model.capabilityOverrides?.image,
                   ),
                 };
               });
@@ -4047,11 +4050,19 @@ const Settings: React.FC<SettingsProps> = ({
     }
 
     const editingModel = currentModels.find(model => model.id === editingModelId);
+    // Runtime profiles fix the capabilities, so there is nothing to override.
+    const capabilityOverrides = runtimeProfile
+      ? undefined
+      : buildModelCapabilityOverrides(activeProvider, modelId, {
+        supportsImage: newModelSupportsImage,
+        supportsThinking: newModelSupportsThinking,
+      });
     const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
         activeProvider,
         modelId,
         newModelSupportsImage,
+        capabilityOverrides?.image,
       ),
       supportsVideo: ProviderRegistry.resolveModelSupportsVideo(
         activeProvider,
@@ -4062,6 +4073,7 @@ const Settings: React.FC<SettingsProps> = ({
         activeProvider,
         modelId,
         newModelSupportsThinking,
+        capabilityOverrides?.thinking,
       ),
       contextWindow: newModelContextWindow,
       // An empty field falls back to the registry default instead of the
@@ -4086,6 +4098,7 @@ const Settings: React.FC<SettingsProps> = ({
       ...(parsedCustomParams && Object.keys(parsedCustomParams).length > 0
         ? { customParams: parsedCustomParams }
         : {}),
+      ...(capabilityOverrides ? { capabilityOverrides } : {}),
     };
     const updatedModels = isEditingModel && editingModelId
       ? currentModels.map(model => (model.id === editingModelId ? nextModel : model))

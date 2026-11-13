@@ -47,6 +47,8 @@ const PATTERNS_TO_DELETE = [
   // Test files
   /\.test\.\w+$/i,
   /\.spec\.\w+$/i,
+  // Native debug symbols (node-pty ships 10 MB of them next to conpty.node)
+  /\.pdb$/i,
 ];
 
 const DIRS_TO_DELETE = new Set([
@@ -88,6 +90,65 @@ function shouldKeepBundledExtension(extensionId) {
   return BUNDLED_EXTENSIONS_TO_KEEP.has(extensionId);
 }
 
+// ─── Strategy 2b: Remove unused bundled skills ───
+// OpenClaw loads every directory under <runtime>/skills as an "openclaw-bundled"
+// skill and <runtime>/custodian-skills as "openclaw-custodian" skills. LobsterAI
+// hides both from its skill manager, yet the gateway still:
+//   - probes PATH for each skill's required binaries while building the model
+//     runtime sidecar: one accessSync per PATH dir x PATHEXT entry, about 12,700
+//     calls and 5 s of sync I/O at startup on Windows for the binaries that are
+//     missing (macOS/overseas CLIs such as blu, codex, spotify_player);
+//   - injects every eligible one into the agent prompt (clawhub, healthcheck,
+//     notion, taskflow, spike, ... plus custodian skills that edit OpenClaw's
+//     config and channels, which LobsterAI owns);
+//   - lets bundled skills beat LobsterAI's own SKILLs of the same name
+//     (skill-creator, weather), because bundled skills load after extraDirs.
+// skills.allowBundled cannot fix the shadowing: collisions resolve before that
+// filter runs, so a filtered-out bundled winner removes both copies. Removing
+// the directories makes those skills absent instead.
+//
+// Allowlist approach: new skills from OpenClaw upgrades are pruned unless added
+// here. Never add a name that LobsterAI ships in SKILLs/ (see the test).
+
+const BUNDLED_SKILLS_TO_KEEP = new Set([
+  'diagram-maker', // SVG / Excalidraw diagrams, no external binaries
+]);
+
+const BUNDLED_SKILLS_DIR = 'skills';
+const CUSTODIAN_SKILLS_DIR = 'custodian-skills';
+
+function shouldKeepBundledSkill(skillId) {
+  return BUNDLED_SKILLS_TO_KEEP.has(skillId);
+}
+
+/**
+ * Remove bundled skill directories outside BUNDLED_SKILLS_TO_KEEP and the whole
+ * custodian skills directory. Loose files in skills/ (e.g. pyproject.toml) are
+ * not skills and stay. Safe to run repeatedly.
+ */
+function pruneBundledSkills(runtimeRoot, stats) {
+  const removed = [];
+  const skillsDir = path.join(runtimeRoot, BUNDLED_SKILLS_DIR);
+  if (fs.existsSync(skillsDir)) {
+    for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || shouldKeepBundledSkill(entry.name)) continue;
+      const fullPath = path.join(skillsDir, entry.name);
+      stats.bytesFreed += getDirSize(fullPath);
+      fs.rmSync(fullPath, { recursive: true, force: true });
+      stats.dirsRemoved++;
+      removed.push(entry.name);
+    }
+  }
+  const custodianDir = path.join(runtimeRoot, CUSTODIAN_SKILLS_DIR);
+  if (fs.existsSync(custodianDir)) {
+    stats.bytesFreed += getDirSize(custodianDir);
+    fs.rmSync(custodianDir, { recursive: true, force: true });
+    stats.dirsRemoved++;
+    removed.push(CUSTODIAN_SKILLS_DIR);
+  }
+  return removed;
+}
+
 // ─── Strategy 3: Stub replacements ───
 // Packages not needed in headless gateway mode, replaced with lightweight stubs.
 // The stub allows require/import to succeed but throws when actually called.
@@ -116,6 +177,9 @@ const WINDOWS_RUNTIME_TARGET_PREFIX = 'win-';
 // Build-only koffi content that its runtime loader never reads.
 const KOFFI_BUILD_ONLY_PATHS = ['doc', 'vendor', 'CHANGELOG.md', 'cnoke.cjs'];
 
+// tsc --locale message catalogs; the compiler API never loads them.
+const TYPESCRIPT_DIAGNOSTIC_LOCALES = ['cs', 'de', 'es', 'fr', 'it', 'ja', 'ko', 'pl', 'pt-br', 'ru', 'tr', 'zh-cn', 'zh-tw'];
+
 // Paths under node_modules that the gateway never loads.
 const RUNTIME_UNUSED_PATHS = [
   // OpenClaw loads only tree-sitter-bash.wasm (via web-tree-sitter); the
@@ -125,6 +189,11 @@ const RUNTIME_UNUSED_PATHS = [
   // Type-only packages with no runtime code.
   '@cloudflare/workers-types',
   'bun-types',
+  // OpenClaw uses the compiler API (lib/typescript.js) for createSourceFile
+  // and transpileModule. The tsc CLI bundle is only reached through bin/tsc,
+  // which the Windows payload never exposes (node_modules/.bin is excluded).
+  'typescript/lib/_tsc.js',
+  ...TYPESCRIPT_DIAGNOSTIC_LOCALES.map(locale => `typescript/lib/${locale}`),
 ];
 
 function readRuntimeTarget(runtimeRoot) {
@@ -175,11 +244,43 @@ function removeRuntimeUnusedPaths(nodeModulesDir, stats) {
   for (const relative of RUNTIME_UNUSED_PATHS) {
     const target = path.join(nodeModulesDir, relative);
     if (!fs.existsSync(target)) continue;
+    const isDirectory = fs.statSync(target).isDirectory();
     stats.bytesFreed += getPathSize(target);
     fs.rmSync(target, { recursive: true, force: true });
-    stats.dirsRemoved++;
+    if (isDirectory) stats.dirsRemoved++; else stats.filesRemoved++;
     removed.push(relative);
   }
+  return removed;
+}
+
+// Only the bundled feishu extension imports the root copy of the Lark SDK
+// (install-openclaw-channel-deps.cjs put it there for that extension's dist
+// chunks). openclaw-lark ships its own copy under its node_modules.
+const LARK_SDK_PACKAGE = '@larksuiteoapi/node-sdk';
+
+/**
+ * Prefer external openclaw-lark over the bundled feishu extension when both
+ * are present, then drop the root Lark SDK that only feishu loaded. Keep the
+ * current runtime-code path intact; this trims packaging/runtime output only.
+ */
+function preferExternalLark(runtimeRoot, stats) {
+  const removed = [];
+  if (!fs.existsSync(path.join(runtimeRoot, 'third-party-extensions', 'openclaw-lark'))) return removed;
+  const bundledFeishuDir = path.join(runtimeRoot, 'dist', 'extensions', 'feishu');
+  const rootLarkSdkDir = path.join(runtimeRoot, 'node_modules', LARK_SDK_PACKAGE);
+  for (const [label, target] of [['bundled feishu', bundledFeishuDir], [`root ${LARK_SDK_PACKAGE}`, rootLarkSdkDir]]) {
+    if (!fs.existsSync(target)) continue;
+    const size = getDirSize(target);
+    fs.rmSync(target, { recursive: true, force: true });
+    stats.bytesFreed += size;
+    stats.dirsRemoved++;
+    removed.push(label);
+    console.log(
+      `[prune-openclaw-runtime] Removed ${label} because openclaw-lark is present (${(size / 1024 / 1024).toFixed(1)} MB)`
+    );
+  }
+  const scopeDir = path.dirname(rootLarkSdkDir);
+  if (fs.existsSync(scopeDir) && fs.readdirSync(scopeDir).length === 0) fs.rmdirSync(scopeDir);
   return removed;
 }
 
@@ -344,23 +445,23 @@ function main() {
     }
   }
 
-  // Step 1a: Prefer external openclaw-lark over bundled feishu when both are
-  // present. Keep the current runtime-code path intact and trim the duplicate
-  // bundled feishu extension only for packaging/runtime output.
-  const thirdPartyDir = path.join(runtimeRoot, 'third-party-extensions');
-  const externalLarkDir = path.join(thirdPartyDir, 'openclaw-lark');
-  const bundledFeishuDir = path.join(distExtDir, 'feishu');
-  if (fs.existsSync(externalLarkDir) && fs.existsSync(bundledFeishuDir)) {
-    const size = getDirSize(bundledFeishuDir);
-    fs.rmSync(bundledFeishuDir, { recursive: true, force: true });
-    stats.bytesFreed += size;
-    stats.dirsRemoved++;
-    console.log(
-      `[prune-openclaw-runtime] Removed bundled feishu because openclaw-lark is present (${(size / 1024 / 1024).toFixed(1)} MB)`
-    );
+  // Step 1-skills: Keep only allowlisted bundled skills; drop custodian skills.
+  try {
+    const skillsPruned = pruneBundledSkills(runtimeRoot, stats);
+    if (skillsPruned.length > 0) {
+      console.log(
+        `[prune-openclaw-runtime] Pruned ${skillsPruned.length} bundled skill dir(s); kept: ${[...BUNDLED_SKILLS_TO_KEEP].join(', ')}`
+      );
+    }
+  } catch (err) {
+    console.warn(`[prune-openclaw-runtime] Failed to prune bundled skills: ${err.message}`);
   }
 
+  // Step 1a: Prefer external openclaw-lark over bundled feishu and its root SDK.
+  preferExternalLark(runtimeRoot, stats);
+
   // Step 1b: Remove stale external qqbot payloads from older builds.
+  const thirdPartyDir = path.join(runtimeRoot, 'third-party-extensions');
   const staleExternalQqbotDir = path.join(thirdPartyDir, 'openclaw-qqbot');
   if (fs.existsSync(staleExternalQqbotDir)) {
     const size = getDirSize(staleExternalQqbotDir);
@@ -497,15 +598,21 @@ function main() {
 
 module.exports = {
   BUNDLED_EXTENSIONS_TO_KEEP,
+  BUNDLED_SKILLS_TO_KEEP,
   KOFFI_BUILD_ONLY_PATHS,
   KOFFI_PACKAGE,
+  LARK_SDK_PACKAGE,
   PACKAGES_TO_STUB,
   RUNTIME_UNUSED_PATHS,
   isWindowsRuntimeTarget,
+  preferExternalLark,
+  pruneBundledSkills,
   readRuntimeTarget,
   removeRuntimeUnusedPaths,
   resolvePackagesToStub,
+  shouldDeleteFile,
   shouldKeepBundledExtension,
+  shouldKeepBundledSkill,
   trimKoffiBuildFiles,
 };
 

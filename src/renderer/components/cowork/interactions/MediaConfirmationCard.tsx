@@ -7,6 +7,7 @@ import {
   ConfirmationBehavior,
   MediaConfirmationAction,
   type MediaConfirmationCommand,
+  MediaConfirmationGrant,
   MediaConfirmationKind,
   MediaConfirmationStatus,
   readMediaConfirmationState,
@@ -101,7 +102,7 @@ export default function MediaConfirmationCard({
 
   const visible = state.status === MediaConfirmationStatus.Visible;
   const repricing = state.status === MediaConfirmationStatus.Refreshing;
-  const act = async (action: MediaConfirmationAction, approve?: boolean) => {
+  const act = async (action: MediaConfirmationAction, approve?: boolean, grant?: MediaConfirmationGrant) => {
     if (flight.current) return;
     const api = window.electron?.cowork?.mediaConfirmation;
     if (!api) {
@@ -121,6 +122,7 @@ export default function MediaConfirmationCard({
         ? {
             behavior: ConfirmationBehavior.Allow,
             answers: { [question.title]: question.options[0].label },
+            ...(grant ? { grant } : {}),
           }
         : { behavior: ConfirmationBehavior.Deny };
     try {
@@ -246,6 +248,18 @@ export default function MediaConfirmationCard({
         >
           {t('mediaVideoConfirmCancel')}
         </button>
+        {state.turnGrant && (
+          <button
+            type="button"
+            className={`${buttonClass} border border-border hover:bg-surface-raised`}
+            disabled={busy || !visible}
+            onClick={() => {
+              void act(MediaConfirmationAction.Respond, true, MediaConfirmationGrant.Turn);
+            }}
+          >
+            {t('mediaImageConfirmTurn')}
+          </button>
+        )}
         <button
           type="button"
           className={`${buttonClass} bg-foreground text-background hover:bg-foreground/90`}
@@ -259,6 +273,9 @@ export default function MediaConfirmationCard({
           {repricing ? t('mediaVideoConfirmRepricing') : question.options[0].label}
         </button>
       </footer>
+      {state.turnGrant && (
+        <p className="cowork-question-hint !pt-2">{t('mediaImageConfirmTurnHint')}</p>
+      )}
       {failed && (
         <p className="cowork-question-hint !text-red-500" role="alert">
           {t('mediaVideoConfirmActionFailed')}

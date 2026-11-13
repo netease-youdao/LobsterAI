@@ -1,10 +1,12 @@
-import { ArrowRightIcon, ChevronLeftIcon, ChevronRightIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowRightIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import type { ExpertCatalog, PresetAgent } from '@shared/agent/presets';
 import { UsageEntry, usageFailureCode,UsageOutcome, UsageStage } from '@shared/analytics/usage';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { ImageCreationExample } from '../../../shared/imageCreation/constants';
 import { agentService } from '../../services/agent';
 import { i18nService } from '../../services/i18n';
+import { captureImageCreationDraft, type PreparedImageExampleReference, stageImageCreationReference } from '../../services/imageCreationDraft';
 import { beginLatestAsyncRequest, invalidateLatestAsyncRequest, isLatestAsyncRequest } from '../../services/latestAsyncRequest';
 import { prepareExpertAnalytics, reportExpertJourney } from '../../services/usageAnalytics';
 import type { Agent } from '../../types/agent';
@@ -13,19 +15,29 @@ import { MANAGEMENT_META_TEXT, MANAGEMENT_PAGE_TITLE_TEXT } from '../common/mana
 import Modal from '../common/Modal';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import ImageExampleDialog from '../imageCreation/ImageExampleDialog';
+import ImageExampleGallery from '../imageCreation/ImageExampleGallery';
+import { useImageCreationCatalog } from '../imageCreation/useImageCreationCatalog';
+import { useScrollAffordance } from '../imageCreation/useScrollAffordance';
 import { expertText, filterExperts } from './catalog';
 import ExpertFeaturedScenarios from './ExpertFeaturedScenarios';
 import { useExpertImpressions } from './useExpertImpressions';
+import { useExpertLoginGate } from './useExpertLoginGate';
 
 interface ExpertPlazaViewProps {
-  onSummon: (agent: Agent, prompt: string) => void;
+  onSummon: (agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => void;
+  initialPresetId?: string;
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
 }
 
-const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
+const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPresetId, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
+  const { catalog: imageCatalog } = useImageCreationCatalog();
+  const { requestLogin, loginPrompt } = useExpertLoginGate();
+  const [imageExample, setImageExample] = useState<ImageCreationExample | null>(null);
+  const openedInitialPreset = useRef<string>();
   const [catalog, setCatalog] = useState<ExpertCatalog | null>(null);
   const presets = useMemo(() => catalog?.experts ?? [], [catalog]);
   const [loading, setLoading] = useState(true);
@@ -34,6 +46,12 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, isSidebarCo
   const [category, setCategory] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const [detail, setDetail] = useState<PresetAgent | null>(null);
+  const { scrollRef: detailScrollRef, canScrollDown: detailCanScrollDown, scrollNext: scrollDetailNext } = useScrollAffordance<HTMLDivElement>(detail?.id ?? '');
+  useEffect(() => {
+    if (!initialPresetId || openedInitialPreset.current === initialPresetId) return;
+    const initial = presets.find(preset => preset.id === initialPresetId);
+    if (initial) { setDetail(initial); openedInitialPreset.current = initialPresetId; }
+  }, [initialPresetId, presets]);
   const [summoning, setSummoning] = useState<string | null>(null);
   const [summonFailed, setSummonFailed] = useState(false);
   const mountedRef = useRef(false);
@@ -131,6 +149,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, isSidebarCo
 
   const summon = async (preset: PresetAgent, prompt = expertText(preset.starterPrompts[0], language), starterIndex?: number) => {
     if (summoningRef.current) return;
+    if (requestLogin(() => { void summon(preset, prompt, starterIndex); })) return;
     summoningRef.current = true;
     setSummoning(preset.id);
     setSummonFailed(false);
@@ -249,17 +268,44 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, isSidebarCo
           </>}
         </div>
       </div>
-      {detail && <Modal onClose={closeDetail} onEscape={closeDetail} className="mx-5 flex max-h-[85vh] w-full max-w-[600px] flex-col rounded-2xl border border-border bg-surface shadow-xl">
-        <div role="dialog" aria-modal="true" aria-labelledby="expert-detail-title" className="overflow-y-auto p-7">
-          <div className="flex items-start gap-4"><AgentAvatarIcon value={detail.icon} expertFallback className="h-16 w-16" iconClassName="h-9 w-9" /><div className="flex-1"><h2 id="expert-detail-title" className="text-xl font-semibold text-foreground">{name(detail)}</h2><p className="mt-1.5 text-xs text-muted">{categoryName(detail.category)}</p></div><button type="button" autoFocus aria-label={t('close')} onClick={closeDetail} className="rounded-lg p-1 text-secondary hover:bg-surface-raised"><XMarkIcon className="h-5 w-5" /></button></div>
-          <p className="my-5 text-sm leading-6 text-secondary">{description(detail)}</p>
-          <div className="mb-7 flex flex-wrap gap-2">{detail.tags.map(item => <button type="button" key={item.zh} title={t('expertFilterByTag').replace('{tag}', expertText(item, language))} onClick={() => { setTag(item.zh); setCategory(null); closeDetail(); }} className="rounded-md bg-surface-raised px-2.5 py-1 text-xs text-secondary hover:text-primary">{expertText(item, language)}</button>)}</div>
-          <h3 className="mb-3 text-sm font-semibold text-foreground">{t('expertExampleHeading')}</h3>
-          <div className="space-y-3">{detail.starterPrompts.map((prompt, index) => <button type="button" key={prompt.zh} disabled={summoning !== null} onClick={() => void summon(detail, expertText(prompt, language), index)} className="flex w-full items-center gap-4 rounded-xl border border-border p-4 text-left text-sm leading-6 text-secondary transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50"><span className="flex-1">{expertText(prompt, language)}</span><ArrowRightIcon className="h-4 w-4 shrink-0 text-muted" /></button>)}</div>
-          <div className="mt-5">{errorNotice}</div>
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-5"><p className="max-w-[300px] text-xs leading-5 text-muted">{t('expertDraftHint')}</p>{summonButton(detail, true)}</div>
+      {detail && <Modal onClose={closeDetail} onEscape={closeDetail} className="mx-5 flex max-h-[85vh] w-full max-w-[600px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-xl">
+        <div role="dialog" aria-modal="true" aria-labelledby="expert-detail-title" className="relative flex min-h-0 flex-col">
+          <button type="button" autoFocus aria-label={t('close')} onClick={closeDetail} className="absolute right-5 top-7 z-10 rounded-lg bg-surface/95 p-1 text-secondary hover:bg-surface-raised"><XMarkIcon className="h-5 w-5" /></button>
+          <div ref={detailScrollRef} id="expert-detail-content" data-expert-detail-scroll data-more-content={detailCanScrollDown}
+            tabIndex={0} aria-labelledby="expert-detail-title"
+            className="image-creation-scrollbar image-creation-detail-scroll min-h-0 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30">
+            <div className="p-7">
+              <div className="flex items-start gap-4 pr-7"><AgentAvatarIcon value={detail.icon} expertFallback className="h-16 w-16" iconClassName="h-9 w-9" /><div className="flex-1"><h2 id="expert-detail-title" className="text-xl font-semibold text-foreground">{name(detail)}</h2><p className="mt-1.5 text-xs text-muted">{categoryName(detail.category)}</p></div></div>
+              <p className="my-5 text-sm leading-6 text-secondary">{description(detail)}</p>
+              <div className="mb-7 flex flex-wrap gap-2">{detail.tags.map(item => <button type="button" key={item.zh} title={t('expertFilterByTag').replace('{tag}', expertText(item, language))} onClick={() => { setTag(item.zh); setCategory(null); closeDetail(); }} className="rounded-md bg-surface-raised px-2.5 py-1 text-xs text-secondary hover:text-primary">{expertText(item, language)}</button>)}</div>
+              {imageCatalog?.enabled && detail.id === imageCatalog.expertPresetId && <section className="mb-6">
+                <h3 className="mb-3 text-sm font-semibold text-foreground">{t('imageCreationExpertExamples')}</h3>
+                <ImageExampleGallery catalog={imageCatalog} onSelect={setImageExample} compact />
+              </section>}
+              <h3 className="mb-3 text-sm font-semibold text-foreground">{t('expertExampleHeading')}</h3>
+              <div className="space-y-3">{detail.starterPrompts.map((prompt, index) => <button type="button" key={prompt.zh} disabled={summoning !== null} onClick={() => void summon(detail, expertText(prompt, language), index)} className="flex w-full items-center gap-4 rounded-xl border border-border p-4 text-left text-sm leading-6 text-secondary transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50"><span className="flex-1">{expertText(prompt, language)}</span><ArrowRightIcon className="h-4 w-4 shrink-0 text-muted" /></button>)}</div>
+              <div className="mt-5">{errorNotice}</div>
+              <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-5"><p className="max-w-[300px] text-xs leading-5 text-muted">{t('expertDraftHint')}</p>{summonButton(detail, true)}</div>
+            </div>
+          </div>
+          {detailCanScrollDown && <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+            <button type="button" onClick={scrollDetailNext} aria-controls="expert-detail-content"
+              className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface/95 px-3.5 py-1.5 text-xs text-secondary shadow-subtle backdrop-blur-sm transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50">
+              {t('imageCreationScrollDetails')}<ChevronDownIcon aria-hidden="true" className="h-3.5 w-3.5" />
+            </button>
+          </div>}
         </div>
       </Modal>}
+      {imageExample && imageCatalog?.enabled && <ImageExampleDialog example={imageExample} onClose={() => setImageExample(null)} onUse={async (prompt, reference) => {
+        const before = captureImageCreationDraft();
+        const agent = await agentService.addPreset(imageCatalog.expertPresetId);
+        if (!agent) throw new Error('Image expert preparation failed');
+        const staged = reference ? await stageImageCreationReference(reference, agent.workingDirectory) : undefined;
+        if (!mountedRef.current || JSON.stringify(captureImageCreationDraft()) !== JSON.stringify(before)) return false;
+        onSummon(agent, prompt, staged);
+        return true;
+      }} />}
+      {loginPrompt}
     </div>
   );
 };

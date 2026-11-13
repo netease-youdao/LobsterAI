@@ -1,9 +1,22 @@
-import { randomUUID } from 'crypto';
-import { BrowserWindow, screen, shell, systemPreferences } from 'electron';
+import { createHash, randomUUID } from 'crypto';
+import { BrowserWindow, screen, systemPreferences } from 'electron';
 import type { EventEmitter } from 'events';
 
-import { CompanionAnalyticsAction, CompanionAnalyticsInteraction as Interaction, CompanionAnalyticsSource, CompanionAnalyticsStage } from '../../shared/desktopCompanion/analytics';
-import { DEFAULT_SELECTION_EXCLUDED_APPS, isCompanionSelectionBlocked } from '../../shared/desktopCompanion/appCategories';
+import {
+  CompanionAnalyticsAction,
+  type CompanionAnalyticsEvent,
+  CompanionAnalyticsInteraction as Interaction,
+  CompanionAnalyticsSource,
+  CompanionAnalyticsStage,
+  CompanionSelectionMethod,
+  CompanionSelectionPosition,
+} from '../../shared/desktopCompanion/analytics';
+import {
+  categorizeCompanionApp,
+  DEFAULT_SELECTION_EXCLUDED_APPS,
+  isCompanionSelectionBlocked,
+  SELECTION_CLIPBOARD_APPS,
+} from '../../shared/desktopCompanion/appCategories';
 import {
   CompanionCapability,
   DesktopCompanionIpc,
@@ -34,14 +47,15 @@ import {
 import type { CompanionAnalytics } from './companionAnalytics';
 import { isCompanionTextTooLarge } from './companionClipboard';
 import type { CompanionQuickAnswerService } from './quickAnswerService';
-import { SelectionGestureTracker } from './selectionGesture';
+import { type SelectionGesture, SelectionGestureTracker } from './selectionGesture';
 import { isScreenshotApp, SelectionKeyEffect, selectionKeyEffect,type SelectionKeyEvent } from './selectionKeys';
+import { SelectionMissTracker } from './selectionMiss';
+import { WindowsCursorKind } from './windowsNative';
 
 const INVALID_COORDINATE = -99999;
 const PAUSE_MS = 60 * 60_000;
 const PERMISSION_POLL_MS = 2_000;
 const SHOW_FALLBACK_MS = 150;
-const MAC_ACCESSIBILITY_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn', 'AltGraph', 'OS']);
 const LEFT_BUTTON = 0;
 // Reads after a selection gesture that selection-hook reported nothing for, each timed from
@@ -56,6 +70,29 @@ const CAPTURE_TOOLBAR_MS = 20_000;
 const CAPTURE_SETTLE_MS = 400;
 // A pointer-only selection whose ends are this far apart vertically spans lines.
 const POINTER_LINE_SLOP = 12;
+// How far a selecting gesture may stray from the selected text: a line above or below it, and this
+// far past either side, since drags often run beyond the end of a line or start in the margin.
+const GESTURE_SIDE_SLOP = 48;
+const GESTURE_MAX_LINE_SLOP = 40;
+// Apps whose last selection is remembered, to tell a new selection from one left over.
+const SEEN_SELECTION_APPS = 32;
+// A selection shown later than this after the last gesture did not come from it.
+const GESTURE_LATENCY_MAX_MS = 10_000;
+// selection-hook's SelectionMethod and PositionLevel values (index.d.ts), named for analytics.
+const SELECTION_METHODS: Record<number, CompanionSelectionMethod> = {
+  1: CompanionSelectionMethod.Uia,
+  3: CompanionSelectionMethod.Accessible,
+  11: CompanionSelectionMethod.AxApi,
+  22: CompanionSelectionMethod.Primary,
+  99: CompanionSelectionMethod.Clipboard,
+};
+const POSITION_LEVELS: readonly CompanionSelectionPosition[] = [
+  CompanionSelectionPosition.None,
+  CompanionSelectionPosition.MouseSingle,
+  CompanionSelectionPosition.MouseDual,
+  CompanionSelectionPosition.Full,
+  CompanionSelectionPosition.Detailed,
+];
 
 interface Point { x: number; y: number }
 
@@ -73,6 +110,18 @@ export interface SelectionHookEvent {
   mousePosStart?: Point;
   mousePosEnd: Point;
   posLevel: number;
+  /** selection-hook's SelectionMethod: how the text was read. */
+  method?: number;
+}
+
+/** What analytics reports about a selection once its toolbar is on screen. */
+interface ShownSelection {
+  appId: string;
+  method?: number;
+  posLevel: number;
+  textLength: number;
+  /** When the gesture that made it ended, if one did. */
+  gestureAt: number | null;
 }
 
 export interface SelectionHookLike extends EventEmitter {
@@ -85,7 +134,7 @@ export interface SelectionHookLike extends EventEmitter {
 
 export interface SelectionHookModule {
   new (): SelectionHookLike;
-  FilterMode: { EXCLUDE_LIST: number };
+  FilterMode: { INCLUDE_LIST: number; EXCLUDE_LIST: number };
   PositionLevel: { SEL_FULL: number };
 }
 
@@ -94,10 +143,19 @@ export interface SelectionHost {
   preferences(): DesktopCompanionPreferences;
   /** False while the companion is off or hidden by a snooze. */
   isAvailable(): boolean;
+  /** A screenshot is being taken; companion surfaces step aside for it. */
+  isCapturing?(): boolean;
   createWindow(surface: typeof DesktopCompanionSurface.Selection, focusable: boolean): BrowserWindow;
   setPreferences(patch: Partial<DesktopCompanionPreferences>): void;
   publish(): void;
   openSettings(): void;
+  /**
+   * Windows only, like the two below: the pointer's shape. Read at a selecting gesture's press and
+   * release, it tells a selection the hook could not read from a window or scroll bar drag.
+   */
+  pointerKind?(): WindowsCursorKind | null;
+  /** The app in front, as an executable name. */
+  foregroundApp?(): string | null;
 }
 
 function loadSelectionHook(): SelectionHookModule | null {
@@ -155,6 +213,46 @@ export function selectionAnchor(data: SelectionHookEvent, fullLevel: number, cur
   };
 }
 
+/** Where a drag or double-click was made relative to the selection read right after it. */
+export const SelectionGestureFit = {
+  /**
+   * The selection has no position: the app reports none, or it is on a display left of or above
+   * the main one, where selection-hook drops negative coordinates.
+   */
+  Unknown: 'unknown',
+  /** Both ends lie on the selected text. */
+  Covers: 'covers',
+  /** An end lies on the selected lines, but not both on the text: past the end of a line, in the margin. */
+  Touches: 'touches',
+  /** Made elsewhere, as by a window or scroll bar drag. */
+  Apart: 'apart',
+} as const;
+export type SelectionGestureFit = typeof SelectionGestureFit[keyof typeof SelectionGestureFit];
+
+/**
+ * Where a drag or double-click lies against the selection read right after it. Both are in
+ * selection-hook's own coordinates.
+ */
+export function selectionGestureFit(data: SelectionHookEvent, fullLevel: number, gesture: SelectionGesture): SelectionGestureFit {
+  if (data.posLevel < fullLevel || !valid(data.startTop) || !valid(data.startBottom) || !valid(data.endTop) || !valid(data.endBottom)) {
+    return SelectionGestureFit.Unknown;
+  }
+  // An app that reports the whole selection as one rectangle makes this the selection's height.
+  const line = Math.min(GESTURE_MAX_LINE_SLOP, Math.max(1, data.endBottom.y - data.endTop.y));
+  const left = Math.min(data.startTop.x, data.endTop.x) - GESTURE_SIDE_SLOP;
+  const top = Math.min(data.startTop.y, data.endTop.y) - line;
+  const bottom = Math.max(data.startBottom.y, data.endBottom.y) + line;
+  const area: CompanionRect = {
+    x: left,
+    y: top,
+    width: Math.max(data.startTop.x, data.endTop.x) + GESTURE_SIDE_SLOP - left,
+    height: bottom - top,
+  };
+  if (rectContains(area, gesture.start) && rectContains(area, gesture.end)) return SelectionGestureFit.Covers;
+  const onLines = (point: Point): boolean => point.y >= top && point.y <= bottom;
+  return onLines(gesture.start) || onLines(gesture.end) ? SelectionGestureFit.Touches : SelectionGestureFit.Apart;
+}
+
 /** Owns the system selection hook and the toolbar/answer window that follows a selection. */
 export class CompanionSelectionController {
   private module: SelectionHookModule | null | undefined;
@@ -184,6 +282,14 @@ export class CompanionSelectionController {
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private permissionTimer: ReturnType<typeof setInterval> | undefined;
   private readonly gesture = new SelectionGestureTracker();
+  private readonly misses = new SelectionMissTracker(appId => this.reportMiss(appId));
+  /** The pointer at the current left press was the I-beam or an app's own cursor (Windows). */
+  private pressOverText = false;
+  /** When the last selecting gesture ended, until a selection claims it. */
+  private lastGestureAt = 0;
+  private shown: ShownSelection | null = null;
+  /** A fingerprint of the selection each app last had, as the hook reported it or a read found it. */
+  private readonly seenSelections = new Map<string, string>();
   private pausedUntil = 0;
   private status: CompanionCapability = CompanionCapability.Off;
 
@@ -227,7 +333,12 @@ export class CompanionSelectionController {
     if (!wanted) {
       this.status = CompanionCapability.Off;
       this.stopHook();
-      this.hide();
+      // A pinned answer belongs to the user: it outlives a gateway restart (a sign-in always causes one)
+      // and a pause, and closes only when the toolbar is turned off or a screenshot needs the screen.
+      const selection = this.selection;
+      const keep = selection?.mode === DesktopCompanionSelectionMode.Answer && selection.pinned
+        && preferences.enabled && preferences.selectionToolbar && !this.host.isCapturing?.();
+      if (!keep) this.hide();
     } else {
       // Load the native module only once someone actually wants the toolbar.
       if (this.module === undefined) this.module = this.loadModule();
@@ -245,14 +356,16 @@ export class CompanionSelectionController {
     if (previous !== this.status) this.host.publish();
   }
 
-  /** Prompts for macOS Accessibility and opens the matching System Settings pane. */
-  requestPermission(): void {
-    if (process.platform !== 'darwin') return;
-    if (!systemPreferences.isTrustedAccessibilityClient(true)) {
-      void shell.openExternal(MAC_ACCESSIBILITY_SETTINGS).catch((): void => undefined);
-      this.watchPermission();
-    }
+  /**
+   * Prompts for macOS Accessibility, which also lists the app in System Settings.
+   * True while it is still missing: the caller guides the user through System Settings.
+   */
+  requestPermission(): boolean {
+    if (process.platform !== 'darwin') return false;
+    const trusted = systemPreferences.isTrustedAccessibilityClient(true);
+    if (!trusted) this.watchPermission();
     this.sync();
+    return !trusted;
   }
 
   onForegroundChange(appId?: string): void {
@@ -377,6 +490,14 @@ export class CompanionSelectionController {
     if (this.pendingShow) this.reveal();
   }
 
+  /** Pins an answer card through a browser sign-in; the renderer runs its request once the session changes. */
+  holdForLogin(): void {
+    const selection = this.selection;
+    if (selection?.mode !== DesktopCompanionSelectionMode.Answer || selection.pinned) return;
+    this.selection = { ...selection, pinned: true };
+    this.sendSelection();
+  }
+
   hide(): void {
     clearTimeout(this.showTimer);
     this.pendingShow = false;
@@ -395,6 +516,7 @@ export class CompanionSelectionController {
   dispose(): void {
     clearInterval(this.permissionTimer);
     clearTimeout(this.showTimer);
+    this.misses.cancel();
     this.stopHook();
     try { this.hook?.cleanup(); } catch { /* already released */ }
     this.hook = null;
@@ -423,6 +545,13 @@ export class CompanionSelectionController {
   private startHook(): boolean {
     if (!this.module) return false;
     if (this.running) return true;
+    // Synthesizing Ctrl/Cmd+C copies over what the user copied, so it stays off except on Windows
+    // in the few apps whose text the accessibility APIs never return. There selection-hook saves and
+    // restores every clipboard format around the copy, and copies only over the text I-beam.
+    const clipboardApps = process.platform === 'win32' ? [...SELECTION_CLIPBOARD_APPS] : [];
+    const clipboard = clipboardApps.length
+      ? { enableClipboard: true, clipboardMode: this.module.FilterMode.INCLUDE_LIST, clipboardFilterList: clipboardApps }
+      : { enableClipboard: false };
     try {
       if (!this.hook) {
         this.hook = new this.module();
@@ -436,8 +565,7 @@ export class CompanionSelectionController {
       this.running = this.hook.start({
         debug: false,
         enableMouseMoveEvent: false,
-        // Never synthesize Cmd/Ctrl+C: reading through the clipboard would overwrite what the user copied.
-        enableClipboard: false,
+        ...clipboard,
         selectionPassiveMode: false,
         globalFilterMode: this.module.FilterMode.EXCLUDE_LIST,
         globalFilterList: this.excludedApps(),
@@ -453,6 +581,9 @@ export class CompanionSelectionController {
 
   private stopHook(): void {
     this.cancelRecovery();
+    this.misses.cancel();
+    // Selections change unseen while the hook is off.
+    this.seenSelections.clear();
     if (!this.running) return;
     try { this.hook?.stop(); } catch (error) { console.warn('[DesktopCompanion] Selection hook stop failed:', error); }
     this.running = false;
@@ -483,16 +614,28 @@ export class CompanionSelectionController {
   private onSelection = (data: SelectionHookEvent): void => {
     // The hook read this gesture itself.
     this.cancelRecovery();
+    if (typeof data?.text === 'string') this.rememberSelection(data);
     this.showSelection(data);
   };
 
   private showSelection(data: SelectionHookEvent): void {
     if (this.status !== CompanionCapability.Ready || !data) return;
     const text = typeof data.text === 'string' ? data.text : '';
+    const tooLarge = isCompanionTextTooLarge(text);
+    const readable = tooLarge || !!text.trim();
+    if (readable) this.misses.resolve();
     if (isCompanionSelectionBlocked(data.programName ?? '', this.host.preferences().selectionExcludedApps)) return;
     if (this.selection?.pinned) return;
-    const tooLarge = isCompanionTextTooLarge(text);
-    if (!tooLarge && !text.trim()) return;
+    if (!readable) return;
+    const now = Date.now();
+    this.shown = {
+      appId: data.programName ?? '',
+      method: data.method,
+      posLevel: data.posLevel,
+      textLength: text.length,
+      gestureAt: this.lastGestureAt && now - this.lastGestureAt <= GESTURE_LATENCY_MAX_MS ? this.lastGestureAt : null,
+    };
+    this.lastGestureAt = 0;
     const fullLevel = this.module?.PositionLevel.SEL_FULL ?? 3;
     this.anchor = selectionAnchor(data, fullLevel, screen.getCursorScreenPoint());
     this.selection = {
@@ -531,7 +674,10 @@ export class CompanionSelectionController {
   private onMouseDown = (data: MouseEventData): void => {
     this.cancelRecovery();
     if (!valid(data)) return;
-    if (data.button === LEFT_BUTTON) this.gesture.down(data, Date.now());
+    if (data.button === LEFT_BUTTON) {
+      this.gesture.down(data, Date.now());
+      this.pressOverText = this.pointerOverText();
+    }
     // The click or drag that takes the screenshot.
     if (this.capturing) {
       this.capturePressed = true;
@@ -560,8 +706,46 @@ export class CompanionSelectionController {
       this.captureUntil = Date.now() + CAPTURE_SETTLE_MS;
       this.captureOnRelease = false;
     }
-    if (this.gesture.up(data, Date.now()) && process.platform === 'darwin') this.recoverSelection({ x: data.x, y: data.y });
+    const gesture = this.gesture.up(data, Date.now());
+    if (!gesture) return;
+    this.lastGestureAt = Date.now();
+    if (process.platform === 'darwin') this.recoverSelection(gesture);
+    else this.watchForMiss();
   };
+
+  /** The pointer shows the I-beam or a cursor an app drew itself, so it may be over text (Windows). */
+  private pointerOverText(): boolean {
+    const kind = this.host.pointerKind?.();
+    return kind === WindowsCursorKind.Text || kind === WindowsCursorKind.Custom;
+  }
+
+  /**
+   * Waits for the selection a gesture over text in another app should bring. Window, scroll bar and
+   * link drags show a system cursor other than the I-beam and are left out; an I-beam at either end
+   * counts, as it does for selection-hook.
+   */
+  private watchForMiss(): void {
+    const overText = this.pressOverText || this.pointerOverText();
+    this.pressOverText = false;
+    // The gesture may have been on the toolbar or card, which stays up through it.
+    if (!overText || this.status !== CompanionCapability.Ready || this.capturing || this.selection) return;
+    const appId = this.host.foregroundApp?.();
+    if (!appId || isScreenshotApp(appId)) return;
+    // LobsterAI itself, password managers and excluded apps never report a selection.
+    if (isCompanionSelectionBlocked(appId, this.host.preferences().selectionExcludedApps)) return;
+    this.misses.expect(appId);
+  }
+
+  private reportMiss(appId: string): void {
+    console.debug(`[DesktopCompanion] No readable selection followed a selecting gesture in ${appId}`);
+    this.host.analytics?.report({ action: CompanionAnalyticsAction.Action, source: CompanionAnalyticsSource.Selection,
+      interactionType: Interaction.Miss, surface: DesktopCompanionSurface.Selection, ...this.appFields(appId) });
+  }
+
+  /** The app's category always; its id only for well-known apps (analytics drops the rest). */
+  private appFields(appId: string): Pick<CompanionAnalyticsEvent, 'topic' | 'app'> {
+    return { topic: categorizeCompanionApp(appId), app: appId };
+  }
 
   private onWheel = (): void => {
     this.cancelRecovery();
@@ -587,10 +771,13 @@ export class CompanionSelectionController {
   };
 
   /**
-   * selection-hook reads a selection once, at mouse-up. A Chromium or Electron app only turns
-   * its accessibility tree on after such a read fails, so its first selection would be lost.
+   * selection-hook reads a selection once, at mouse-up, and only after a gesture made with an
+   * I-beam pointer. AppKit apps such as Notes often show the arrow instead: over text that is
+   * already selected, and until the pointer moves after entering text, since they update it on
+   * mouse moves only. A Chromium or Electron app only turns its accessibility tree on after such
+   * a read fails, so its first selection would be lost.
    */
-  private recoverSelection(point: Point, attempt = 0): void {
+  private recoverSelection(gesture: SelectionGesture, attempt = 0): void {
     clearTimeout(this.recoveryTimer);
     this.recoveryTimer = setTimeout(() => {
       this.recoveryTimer = undefined;
@@ -598,17 +785,29 @@ export class CompanionSelectionController {
       // LobsterAI itself is in front.
       if (this.status !== CompanionCapability.Ready || this.selection || BrowserWindow.getFocusedWindow()) return;
       const data = this.readCurrentSelection();
+      const changed = !!data && this.rememberSelection(data);
       if (attempt === 0) {
-        // Text readable right away was readable at mouse-up too: the hook chose not to report it.
-        if (!data) this.recoverSelection(point, 1);
+        // Text readable right away was readable at mouse-up too: the hook skipped it over the pointer
+        // shape. The gesture made it if both ends lie on the text, even text selected before, or if
+        // the selection changed and an end lies on its lines, as when a drag runs past the end of a
+        // line. A selection left over from earlier stays hidden after a window or scroll bar drag.
+        if (!data) {
+          this.recoverSelection(gesture, 1);
+          return;
+        }
+        const fit = selectionGestureFit(data, this.module?.PositionLevel.SEL_FULL ?? 3, gesture);
+        if (fit === SelectionGestureFit.Covers || (changed && fit !== SelectionGestureFit.Apart)) {
+          console.debug(`[DesktopCompanion] Showing a selection the hook skipped in ${data.programName} (${fit})`);
+          this.showSelection({ ...data, mousePosStart: gesture.end, mousePosEnd: gesture.end });
+        }
         return;
       }
       if (data) {
         console.debug(`[DesktopCompanion] Recovered a selection the hook missed in ${data.programName}`);
         // A direct read reports the mouse at (0, 0); anchor where the gesture ended instead.
-        this.showSelection({ ...data, mousePosStart: point, mousePosEnd: point });
+        this.showSelection({ ...data, mousePosStart: gesture.end, mousePosEnd: gesture.end });
       } else if (attempt + 1 < RECOVERY_READ_DELAYS_MS.length) {
-        this.recoverSelection(point, attempt + 1);
+        this.recoverSelection(gesture, attempt + 1);
       }
     }, RECOVERY_READ_DELAYS_MS[attempt]);
   }
@@ -628,12 +827,38 @@ export class CompanionSelectionController {
     this.recoveryTimer = undefined;
   }
 
+  /** Records the app's current selection; returns whether it differs from the one seen before. */
+  private rememberSelection(data: SelectionHookEvent): boolean {
+    const app = data.programName ?? '';
+    const fingerprint = createHash('sha1').update(data.text).digest('base64');
+    const changed = this.seenSelections.get(app) !== fingerprint;
+    // Re-inserting keeps the map in least recently seen order.
+    this.seenSelections.delete(app);
+    this.seenSelections.set(app, fingerprint);
+    if (this.seenSelections.size > SEEN_SELECTION_APPS) {
+      const [oldest] = this.seenSelections.keys();
+      this.seenSelections.delete(oldest);
+    }
+    return changed;
+  }
+
   private reveal(): void {
     clearTimeout(this.showTimer);
     if (!this.pendingShow || !this.selection || !this.window || this.window.isDestroyed()) return;
     this.pendingShow = false;
+    const shown = this.shown;
+    this.shown = null;
     this.host.analytics?.report({ action: CompanionAnalyticsAction.Action, source: CompanionAnalyticsSource.Selection,
-      interactionType: Interaction.Open, stage: CompanionAnalyticsStage.Shown, surface: DesktopCompanionSurface.Selection });
+      interactionType: Interaction.Open, stage: CompanionAnalyticsStage.Shown, surface: DesktopCompanionSurface.Selection,
+      ...(shown ? {
+        ...this.appFields(shown.appId),
+        selectionMethod: SELECTION_METHODS[shown.method ?? 0] ?? CompanionSelectionMethod.Unknown,
+        positionLevel: POSITION_LEVELS[shown.posLevel] ?? CompanionSelectionPosition.None,
+        textLength: shown.textLength,
+        // From the end of the gesture to the toolbar on screen, as the user waits for it.
+        ...(shown.gestureAt ? { durationMs: Math.max(0, Date.now() - shown.gestureAt) } : {}),
+      } : {}),
+    });
     this.window.showInactive();
   }
 

@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import { CompanionAnalyticsOutcome as Outcome, CompanionAnalyticsStage as Stage } from '../../shared/desktopCompanion/analytics';
-import { LANGUAGE_TOOL_DEVICE_HEADER, LanguageTool, LanguageToolCode, type LanguageToolEvent, LanguageToolEventType, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
+import { LANGUAGE_TOOL_DEVICE_HEADER, LanguageTool, LanguageToolCode, LanguageToolErrorReason, type LanguageToolEvent, LanguageToolEventType, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
 import { CompanionLanguageClient } from './languageToolClient';
 
 const request = { requestId: '00000000-1111-2222-3333-444444444444', tool: LanguageTool.Translate,
@@ -109,6 +109,22 @@ test('authenticated rejection never falls back to anonymous transport', async ()
     headers: expect.objectContaining({ [LANGUAGE_TOOL_DEVICE_HEADER]: deviceId }),
   }));
   expect(fetchAnonymous).not.toHaveBeenCalled();
+});
+
+test('guest allowance rejection preserves the login reason and server quota without an auth retry', async () => {
+  const quota = { tools: { translate: { usedRequests: 20, limitRequests: 20, remainingRequests: 0, unlimitedAfterLogin: true } } };
+  const reason = LanguageToolErrorReason.AnonymousTranslationDailyLimit;
+  const fetchAnonymous = vi.fn(async () => Response.json({ code: 401, data: { reason, quota } }, { status: 401 }));
+  const fetchWithAuth = vi.fn();
+  const client = new CompanionLanguageClient({ ...deviceDeps, fetchAnonymous, fetchWithAuth,
+    getSessionKey: () => null, getServerApiBaseUrl: () => 'http://localhost' });
+  const send = vi.fn();
+  client.start(request, send);
+  await drain();
+  expect(send).toHaveBeenCalledExactlyOnceWith({ requestId: request.requestId, type: LanguageToolEventType.Error,
+    code: LanguageToolCode.Unauthorized, reason, quota });
+  expect(fetchAnonymous).toHaveBeenCalledTimes(1);
+  expect(fetchWithAuth).not.toHaveBeenCalled();
 });
 
 test('guest quota is translation-only and server authentication rejection requests sign-in', async () => {

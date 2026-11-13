@@ -1,0 +1,245 @@
+diff --git a/src/infra/windows-process-start.ts b/src/infra/windows-process-start.ts
+--- a/src/infra/windows-process-start.ts
++++ b/src/infra/windows-process-start.ts
+@@ -1,7 +1,115 @@
+ // Reads PID-reuse-safe Windows process start identities without workspace imports.
+ import { spawnSync } from "node:child_process";
++import { createRequire } from "node:module";
+ import path from "node:path";
+ 
++const require = createRequire(import.meta.url);
++
++/**
++ * Native lookup result: a creation time in epoch ms, `null` when the process
++ * does not exist or has exited, or `undefined` when the native lookup could
++ * not decide (helper unavailable, access denied) and the PowerShell/WMIC
++ * chain should answer instead.
++ */
++type NativeStartTimeReader = (pid: number) => number | null | undefined;
++
++// 100 ns FILETIME ticks between 1601-01-01 and 1970-01-01.
++const FILETIME_UNIX_EPOCH_TICKS = 116_444_736_000_000_000n;
++const FILETIME_TICKS_PER_MS = 10_000n;
++const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
++const ERROR_INVALID_PARAMETER = 87;
++
++let nativeReader: NativeStartTimeReader | null | undefined;
++let ownStartTime: number | undefined;
++
++function loadNativeStartTimeReader(): NativeStartTimeReader | null {
++  if (process.platform !== "win32") {
++    return null;
++  }
++  try {
++    const koffi: typeof import("koffi").default = require("koffi");
++    const kernel32 = koffi.load("kernel32.dll");
++    const fileTime = koffi.struct({ low: "uint32_t", high: "uint32_t" });
++    const getLastError = kernel32.func("uint32_t __stdcall GetLastError()");
++    const getCurrentProcess = kernel32.func("void * __stdcall GetCurrentProcess()");
++    const openProcess = kernel32.func(
++      "void * __stdcall OpenProcess(uint32_t access, int32_t inheritHandle, uint32_t processId)",
++    );
++    const closeHandle = kernel32.func("int32_t __stdcall CloseHandle(void *handle)");
++    const getProcessTimes = kernel32.func("__stdcall", "GetProcessTimes", "int32_t", [
++      "void *",
++      koffi.out(koffi.pointer(fileTime)),
++      koffi.out(koffi.pointer(fileTime)),
++      koffi.out(koffi.pointer(fileTime)),
++      koffi.out(koffi.pointer(fileTime)),
++    ]);
++    const ticks = (value: { low: number; high: number }) =>
++      (BigInt(value.high) << 32n) | BigInt(value.low);
++
++    return (pid) => {
++      const self = pid === process.pid;
++      // The pseudo handle needs no access check and no CloseHandle.
++      const handle = self
++        ? getCurrentProcess()
++        : openProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
++      if (!handle) {
++        return getLastError() === ERROR_INVALID_PARAMETER ? null : undefined;
++      }
++      try {
++        const creation = { low: 0, high: 0 };
++        const exit = { low: 0, high: 0 };
++        if (!getProcessTimes(handle, creation, exit, { low: 0, high: 0 }, { low: 0, high: 0 })) {
++          return undefined;
++        }
++        // A handle can outlive the process; GetProcessById and WMIC report it gone.
++        if (ticks(exit) !== 0n) {
++          return null;
++        }
++        // Same instant .NET Process.StartTime reads, truncated to ms the way
++        // Date.parse truncates PowerShell's 7-digit fraction.
++        return Number((ticks(creation) - FILETIME_UNIX_EPOCH_TICKS) / FILETIME_TICKS_PER_MS);
++      } finally {
++        if (!self) {
++          closeHandle(handle);
++        }
++      }
++    };
++  } catch {
++    return null;
++  }
++}
++
++function readNativeStartTime(pid: number): number | null | undefined {
++  if (pid === process.pid && ownStartTime !== undefined) {
++    return ownStartTime;
++  }
++  // `null` records that the helper is unavailable; only `undefined` loads it.
++  if (nativeReader === undefined) {
++    nativeReader = loadNativeStartTimeReader();
++  }
++  if (!nativeReader) {
++    return undefined;
++  }
++  let startTime: number | null | undefined;
++  try {
++    startTime = nativeReader(pid);
++  } catch {
++    return undefined;
++  }
++  if (pid === process.pid && typeof startTime === "number") {
++    ownStartTime = startTime;
++  }
++  return startTime;
++}
++
++/** Replace the native reader; `null` disables it, `undefined` restores loading. */
++export function setWindowsProcessStartNativeReaderForTests(
++  reader: NativeStartTimeReader | null | undefined,
++): void {
++  nativeReader = reader;
++  ownStartTime = undefined;
++}
++
+ const DEFAULT_TIMEOUT_MS = 5_000;
+ const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
+ const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
+@@ -82,6 +190,12 @@ export function readWindowsProcessStartTimeSync(
+   if (!Number.isInteger(pid) || pid <= 0) {
+     return null;
+   }
++  // GetProcessTimes answers in microseconds without starting PowerShell, which
++  // blocked startup ~0.5 s per call and is a common security-software trigger.
++  const nativeStartTime = readNativeStartTime(pid);
++  if (nativeStartTime !== undefined) {
++    return nativeStartTime;
++  }
+   // Preserve both former 5s attempts inside one deadline. Explicit callers
+   // still keep their smaller end-to-end budget.
+   const deadline = Date.now() + timeoutMs;
+diff --git a/src/infra/windows-process-start.test.ts b/src/infra/windows-process-start.test.ts
+--- a/src/infra/windows-process-start.test.ts
++++ b/src/infra/windows-process-start.test.ts
+@@ -1,6 +1,9 @@
+-import { beforeEach, describe, expect, it, vi } from "vitest";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import { getWindowsPowerShellExePath, getWindowsWmicExePath } from "./windows-install-roots.js";
+-import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
++import {
++  readWindowsProcessStartTimeSync,
++  setWindowsProcessStartNativeReaderForTests,
++} from "./windows-process-start.js";
+ 
+ const spawnSyncMock = vi.hoisted(() => vi.fn());
+ 
+@@ -9,9 +12,97 @@ vi.mock("node:child_process", async (importOriginal) => ({
+   spawnSync: spawnSyncMock,
+ }));
+ 
++afterEach(() => {
++  setWindowsProcessStartNativeReaderForTests(undefined);
++});
++
++describe("readWindowsProcessStartTimeSync native lookup", () => {
++  beforeEach(() => {
++    spawnSyncMock.mockReset();
++  });
++
++  it("answers from the native reader without starting PowerShell", () => {
++    const reader = vi.fn(() => 1_783_927_249_123);
++    setWindowsProcessStartNativeReaderForTests(reader);
++
++    expect(readWindowsProcessStartTimeSync(123, 1000)).toBe(1_783_927_249_123);
++    expect(reader).toHaveBeenCalledWith(123);
++    expect(spawnSyncMock).not.toHaveBeenCalled();
++  });
++
++  it("reports a missing or exited process without falling back", () => {
++    setWindowsProcessStartNativeReaderForTests(() => null);
++
++    expect(readWindowsProcessStartTimeSync(456, 1000)).toBeNull();
++    expect(spawnSyncMock).not.toHaveBeenCalled();
++  });
++
++  it.each([
++    ["cannot decide", () => undefined],
++    [
++      "throws",
++      () => {
++        throw new Error("native failure");
++      },
++    ],
++  ])("falls back to PowerShell when the native reader %s", (_label, reader) => {
++    setWindowsProcessStartNativeReaderForTests(reader);
++    spawnSyncMock.mockReturnValueOnce({
++      status: 0,
++      stdout: "2026-07-13T07:20:49.1234567Z",
++    } as never);
++
++    expect(readWindowsProcessStartTimeSync(789, 1000)).toBe(Date.parse("2026-07-13T07:20:49.123Z"));
++    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
++  });
++
++  it("reads this process's own start time once", () => {
++    const reader = vi.fn(() => 1_783_927_249_123);
++    setWindowsProcessStartNativeReaderForTests(reader);
++
++    expect(readWindowsProcessStartTimeSync(process.pid)).toBe(1_783_927_249_123);
++    expect(readWindowsProcessStartTimeSync(process.pid)).toBe(1_783_927_249_123);
++    expect(reader).toHaveBeenCalledTimes(1);
++  });
++
++  it.runIf(process.platform === "win32")(
++    "matches .NET Process.StartTime for live processes and rejects gone ones",
++    async () => {
++      const childProcess =
++        await vi.importActual<typeof import("node:child_process")>("node:child_process");
++      const viaDotNet = (pid: number) =>
++        Date.parse(
++          childProcess
++            .spawnSync(
++              getWindowsPowerShellExePath(),
++              [
++                "-NoProfile",
++                "-NonInteractive",
++                "-Command",
++                `[Console]::Out.Write([System.Diagnostics.Process]::GetProcessById(${pid}).StartTime.ToUniversalTime().ToString("o"))`,
++              ],
++              { encoding: "utf8", windowsHide: true },
++            )
++            .stdout.trim(),
++        );
++      const exited = childProcess.spawnSync(process.execPath, ["-e", "0"]);
++
++      setWindowsProcessStartNativeReaderForTests(undefined);
++      expect(readWindowsProcessStartTimeSync(process.pid)).toBe(viaDotNet(process.pid));
++      expect(readWindowsProcessStartTimeSync(process.ppid)).toBe(viaDotNet(process.ppid));
++      expect(readWindowsProcessStartTimeSync(exited.pid!)).toBeNull();
++      expect(readWindowsProcessStartTimeSync(0x7fff_fff0)).toBeNull();
++      expect(spawnSyncMock).not.toHaveBeenCalled();
++    },
++  );
++});
++
+ describe("readWindowsProcessStartTimeSync", () => {
+   beforeEach(() => {
+     spawnSyncMock.mockReset();
++    // These cases cover the PowerShell/WMIC chain used when the native helper
++    // is unavailable.
++    setWindowsProcessStartNativeReaderForTests(null);
+   });
+ 
+   it("reads an ISO creation time through PowerShell", () => {

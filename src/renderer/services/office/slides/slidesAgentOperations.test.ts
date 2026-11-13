@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { makeSlidesFixture, nodeXmlCodec, SLIDES_FIXTURE_SHAPES } from '../../../../../tests/fixtures/slides';
 import { inspectSlidesPackage } from '../../../../main/office/slides/slidesPackage';
 import { SlidesEditType } from '../../../../shared/office/slides/slidesAgent';
-import { applySlidesEdits, readSlides, slideSelection } from './slidesAgentOperations';
+import { applySlidesEdits, editedSlideList, pickEditedShapes, readSlides, slideSelection } from './slidesAgentOperations';
 import { SlidesEditError, SlidesRefusal } from './slidesDeck';
 import { SlidesPackage } from './slidesPackage';
 
@@ -114,5 +114,30 @@ describe('ppt_edit', () => {
     expect(refused([{ type: 'add_slide', layout: '不存在' }])).toMatch(/There is no layout "不存在"; the layouts are: 标题幻灯片, 标题和内容/);
     expect(refused([{ type: 'set_table_cell', slide: 2, shape: 3, row: 1, column: 1, text: 'x' }])).toMatch(/not a table/);
     expect(refused([{ type: 'unknown' }])).toMatch(/Unknown edit type "unknown"/);
+  });
+});
+
+describe('edit replies', () => {
+  test('echo the changed shapes\' text so no read is needed to check them', async () => {
+    const pkg = await open();
+    const result = edit(pkg, [
+      { type: 'set_text', slide: 2, shape: SLIDES_FIXTURE_SHAPES.body, text: '新的正文' },
+      { type: 'add_slide', title: '新标题' },
+    ]);
+    const slides = editedSlideList(result.changed);
+    expect(slides).toBe('2,3');
+    const echoed = pickEditedShapes(readSlides(pkg, { slides }), result.changed);
+    // The edited shape on slide 2, and every text shape of the added slide 3.
+    expect(echoed.shapes).toContainEqual({ slide: 2, shape: String(SLIDES_FIXTURE_SHAPES.body), text: '新的正文' });
+    expect(echoed.shapes.some(item => item.slide === 2 && item.shape !== String(SLIDES_FIXTURE_SHAPES.body))).toBe(false);
+    expect(echoed.shapes.some(item => item.slide === 3 && item.text === '新标题')).toBe(true);
+    expect(echoed.truncated).toBeUndefined();
+  });
+
+  test('bound the echo and say when shapes were left out', () => {
+    const changed = Array.from({ length: 7 }, (_, index) => ({ slide: index + 1 }));
+    expect(editedSlideList(changed)).toBe('1,2,3,4,5');
+    expect(editedSlideList([])).toBeUndefined();
+    expect(pickEditedShapes({ slides: [] }, changed).truncated).toBe(true);
   });
 });

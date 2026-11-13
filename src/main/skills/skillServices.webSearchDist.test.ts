@@ -181,6 +181,7 @@ describe.skipIf(process.platform === 'win32')('start-server.sh', () => {
   const BUILD_FUNCTIONS = ['ensure_npm_available', 'can_rebuild_server', 'is_server_build_outdated', 'ensure_server_build'];
   const DEPENDENCY_FUNCTIONS = [
     'resolve_node_runtime',
+    'run_node',
     'ensure_npm_available',
     'install_dependencies',
     'repair_iconv_lite',
@@ -287,5 +288,17 @@ describe.skipIf(process.platform === 'win32')('start-server.sh', () => {
 
     expect(result.status).toBe(0);
     expect(result.npmCalls).toEqual(['install --no-save iconv-lite']);
+  });
+
+  test('a no-op env on PATH does not make broken iconv-lite look healthy', () => {
+    // Like the ~/.local/bin/env that uv's installer adds: it runs nothing and exits 0.
+    writeFile(path.join(root, 'bin', 'env'), '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(path.join(root, 'bin', 'env'), 0o755);
+    writeIconvLite(path.join(bundledSkill, 'node_modules', 'iconv-lite'));
+    fs.rmSync(path.join(bundledSkill, 'node_modules', 'iconv-lite', 'encodings', 'utf7.js'));
+
+    const result = runStartServer(bundledSkill, DEPENDENCY_FUNCTIONS, 'resolve_node_runtime && verify_iconv_runtime', OFFLINE_NPM);
+
+    expect(result.status).toBe(1);
   });
 });

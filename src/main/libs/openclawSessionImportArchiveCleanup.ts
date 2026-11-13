@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+import { OPENCLAW_SESSION_IMPORT_ARCHIVE_DIRECTORY as IMPORT_ARCHIVE_DIRECTORY } from '../../shared/openclawEngine/constants';
 import { type DiskCleanupThrottle, isDiskCleanupStopped, UNTHROTTLED_DISK_CLEANUP } from './openclawDiskCleanupThrottle';
 import { removeTreeNoFollow } from './removeTreeNoFollow';
 
@@ -10,12 +11,11 @@ import { removeTreeNoFollow } from './removeTreeNoFollow';
 // `<sessions dir>/../session-sqlite-import-archive`; only the manual
 // `doctor --session-sqlite restore|recover` modes read them back, and LobsterAI
 // only ever runs `import`. Recheck when bumping OpenClaw.
-const IMPORT_ARCHIVE_DIRECTORY = 'session-sqlite-import-archive';
 const MIGRATION_RUNS_DIRECTORY = 'session-sqlite-migration-runs';
 // Archives are renamed aside before removal: deleting files bumps the
 // directory mtime, which would otherwise read as "recently modified" and stall
 // a stopped removal for another full age window.
-const STAGED_ARCHIVE = /^session-sqlite-import-archive\.lobsterai-stale-[0-9a-f]+$/;
+const STAGED_ARCHIVE = new RegExp(`^${IMPORT_ARCHIVE_DIRECTORY}\\.lobsterai-stale-[0-9a-f]+$`);
 /** Import archives are removed this long after the last successful migration. */
 export const OPENCLAW_SESSION_IMPORT_ARCHIVE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 

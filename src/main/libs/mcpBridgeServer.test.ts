@@ -47,6 +47,60 @@ describe('McpBridgeServer AskUser session attribution', () => {
     }
   });
 
+  test('sends headers at once and keeps a slow answer alive with whitespace', async () => {
+    const secret = 'test-secret';
+    const server = new McpBridgeServer(secret);
+    try {
+      await server.start();
+      let pendingId = '';
+      server.onAskUser(request => { pendingId = request.requestId; });
+
+      const response = await fetch(server.askUserCallbackUrl!, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-ask-user-secret': secret },
+        body: JSON.stringify({ questions: makeQuestions() }),
+      });
+      // Headers arrive before the user answers, so a caller's header timeout cannot fire.
+      expect(response.status).toBe(200);
+      expect(pendingId).not.toBe('');
+
+      server.resolveAskUser(pendingId, { behavior: 'allow', answers: { q: 'a' } });
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({ behavior: 'allow', answers: { q: 'a' } });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('dismisses the dialog as soon as the asker disconnects', async () => {
+    const secret = 'test-secret';
+    const server = new McpBridgeServer(secret);
+    try {
+      await server.start();
+      const dismissed: string[] = [];
+      let pendingId = '';
+      server.onAskUser(request => { pendingId = request.requestId; });
+      server.onAskUserDismiss(requestId => { dismissed.push(requestId); });
+
+      const controller = new AbortController();
+      const response = await fetch(server.askUserCallbackUrl!, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-ask-user-secret': secret },
+        body: JSON.stringify({ questions: makeQuestions() }),
+        signal: controller.signal,
+      });
+      expect(response.status).toBe(200);
+      controller.abort();
+
+      await expect.poll(() => dismissed, { timeout: 5_000 }).toEqual([pendingId]);
+      // A late answer for the abandoned request is ignored.
+      server.resolveAskUser(pendingId, { behavior: 'allow' });
+      expect(dismissed).toEqual([pendingId]);
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('passes sessionKey from internal AskUser requests', async () => {
     const server = new McpBridgeServer('test-secret');
     const received: AskUserRequest[] = [];
@@ -98,6 +152,37 @@ describe('McpBridgeServer browser bridge', () => {
       await expect(response.json()).resolves.toEqual({
         content: [{ type: 'text', text: 'navigate_page' }],
         structuredContent: { args: { pageId: 7 } },
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe('McpBridgeServer web search page', () => {
+  test('authenticates and forwards hidden search page requests', async () => {
+    const secret = 'web-search-test-secret';
+    const server = new McpBridgeServer(secret);
+
+    try {
+      await server.start();
+      const post = (headers: Record<string, string>, body: unknown) => fetch(server.webSearchCallbackUrl!, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+
+      expect((await post({}, { op: 'status' })).status).toBe(401);
+      expect((await post({ 'x-mcp-bridge-secret': secret }, { op: 'status' })).status).toBe(503);
+
+      server.onWebSearchPage(async request => ({ success: true, data: { op: request.op, query: request.query } }));
+      expect((await post({ 'x-mcp-bridge-secret': secret }, { query: 'missing op' })).status).toBe(400);
+
+      const response = await post({ 'x-mcp-bridge-secret': secret }, { op: 'search', query: 'lobster' });
+      expect(response.ok).toBe(true);
+      await expect(response.json()).resolves.toEqual({
+        success: true,
+        data: { op: 'search', query: 'lobster' },
       });
     } finally {
       await server.stop();
