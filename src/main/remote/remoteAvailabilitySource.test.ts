@@ -66,3 +66,45 @@ describe('target-scoped control facts', () => {
       .toThrow('REMOTE_CONTROL_DELETION_EVIDENCE_MISSING');
   });
 });
+
+
+describe('reply model tier dependency revisions', () => {
+  const revision = (db: Database.Database, id: string) => (db.prepare('SELECT revision FROM remote_live_revisions WHERE object_id=?').get(id) as { revision: number }).revision;
+  function turns() {
+    const f = fixture();
+    const insert = f.db.prepare("INSERT INTO cowork_messages VALUES(?,? ,?,'Text',?,1,?)");
+    insert.run('u1', 'task', 'user', JSON.stringify({ remoteRunId: 'first' }), 1);
+    insert.run('a1', 'task', 'assistant', JSON.stringify({ remoteRunId: 'first', model: 'actual' }), 2);
+    insert.run('a1b', 'task', 'assistant', JSON.stringify({ remoteRunId: 'first', model: 'actual' }), 3);
+    insert.run('u2', 'task', 'user', '{}', 4);
+    insert.run('a2', 'task', 'assistant', '{}', 5);
+    insert.run('other', 'other-session', 'assistant', '{}', 2);
+    return f;
+  }
+  test('versions only dependent assistants when user model provenance changes, not when text or billing changes', () => {
+    const { db } = turns();
+    const original = db.prepare('SELECT id,metadata FROM cowork_messages ORDER BY id').all();
+    const before = ['a1', 'a1b', 'a2', 'other'].map(id => revision(db, id));
+    db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='u1'").run(JSON.stringify({ remoteRunId: 'first', modelPresetId: 'balanced' }));
+    expect(['a1', 'a1b', 'a2', 'other'].map(id => revision(db, id))).toEqual([before[0] + 1, before[1] + 1, before[2], before[3]]);
+    const after = revision(db, 'a1');
+    db.prepare("UPDATE cowork_messages SET content='Updated',metadata=? WHERE id='u1'").run(JSON.stringify({ remoteRunId: 'first', modelPresetId: 'balanced', model: 'unused-selection', resolvedModelId: 'unused-resolved', turnUsage: { credits: 10 } }));
+    expect(revision(db, 'a1')).toBe(after);
+    expect(db.prepare("SELECT id,metadata FROM cowork_messages WHERE type='assistant' ORDER BY id").all()).toEqual(original.filter(row => (row as { id: string }).id.startsWith('a') || (row as { id: string }).id === 'other'));
+  });
+  test('rechecks only the newly bounded turn after a user insert or deletion', () => {
+    const { db } = turns(); const first = revision(db, 'a1'), second = revision(db, 'a2');
+    db.prepare("INSERT INTO cowork_messages VALUES('split','task','user','Text','{}',1,2)").run();
+    expect(revision(db, 'a1')).toBe(first); expect(revision(db, 'a1b')).toBe(first + 1); expect(revision(db, 'a2')).toBe(second);
+    db.prepare("DELETE FROM cowork_messages WHERE id='split'").run();
+    expect(revision(db, 'a1b')).toBe(first + 2); expect(revision(db, 'a2')).toBe(second);
+  });
+  test('rolls back dependency revisions with the user metadata transaction', () => {
+    const { db } = turns(), before = revision(db, 'a1');
+    expect(() => db.transaction(() => {
+      db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='u1'").run(JSON.stringify({ remoteRunId: 'first', modelPresetId: 'balanced' }));
+      throw new Error('rollback');
+    })()).toThrow('rollback');
+    expect(revision(db, 'a1')).toBe(before);
+  });
+});

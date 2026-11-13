@@ -1,23 +1,27 @@
-import type { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from './constants';
+import type { RemoteSyncRecoveryDisplay } from '../remote/recovery';
+import type { OwnershipAction, OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from './constants';
 
 export interface OwnershipTarget { kind: OwnershipTargetKind; id: string }
+export interface OwnershipPreviewRequest extends OwnershipTarget { action?: OwnershipAction }
 export interface OwnershipResources { agentIds: string[]; sessionIds: string[] }
 export interface OwnershipAccount { label: string; scopeLabel: string; partition: string }
 export interface OwnershipDisplay {
   kind: 'anonymous' | 'owned' | 'default'; label: string; scopeLabel: string; associatedAt?: number;
 }
 export interface OwnershipContentSync {
+  recovery?: RemoteSyncRecoveryDisplay;
   state: OwnershipContentSyncState; retryable: boolean; reason?: OwnershipContentSyncReason; nextRetryAt?: number;
 }
 export interface OwnershipTaskSync { syncState: OwnershipSyncState; contentSync: OwnershipContentSync }
 export interface OwnershipDetail extends OwnershipTarget {
   title: string; ownership: OwnershipDisplay;
   agent?: { id: string; name: string; ownership: OwnershipDisplay };
-  deviceName: string; syncState: OwnershipSyncState; canAssociate: boolean; accountPartition: string | null;
+  deviceName: string; syncState: OwnershipSyncState; canAssociate: boolean; canConfirmPublication?: boolean; accountPartition: string | null;
   status?: string; updatedAt?: number; contentSync?: OwnershipContentSync;
   description?: string; visibleTaskCount?: number; latestTaskTitle?: string;
 }
 export interface OwnershipPreview {
+  action?: OwnershipAction; publicationTarget?: { route: string };
   planId: string; planVersion: string; accountGeneration: string; expiresAt: number;
   account: OwnershipAccount | null; eligible: boolean; reason?: OwnershipErrorCode;
   kind: OwnershipTargetKind; targetId: string; targetTitle: string; agentId: string;
@@ -28,6 +32,7 @@ export interface OwnershipCommitRequest {
   planId: string; planVersion: string; accountGeneration: string; requestId: string;
 }
 export interface OwnershipCommitResult {
+  action?: OwnershipAction;
   status: typeof OwnershipResultStatus.Associated | typeof OwnershipResultStatus.AlreadyAssociated;
   operationId: string; requestId: string; agentIds: string[]; sessionIds: string[];
   syncState: OwnershipSyncState; accountPartition: string;
@@ -36,7 +41,7 @@ export type OwnershipResult = OwnershipCommitResult | { status: typeof Ownership
 export type OwnershipResponse<T> = { success: true; data: T } | { success: false; error: { code: OwnershipErrorCode } };
 export interface OwnershipApi {
   getDetail(target: OwnershipTarget): Promise<OwnershipResponse<OwnershipDetail>>;
-  preview(target: OwnershipTarget): Promise<OwnershipResponse<OwnershipPreview>>;
+  preview(target: OwnershipPreviewRequest): Promise<OwnershipResponse<OwnershipPreview>>;
   commit(input: OwnershipCommitRequest): Promise<OwnershipResponse<OwnershipCommitResult>>;
   getResult(input: { requestId: string }): Promise<OwnershipResponse<OwnershipResult>>;
   onChanged(listener: () => void): () => void;

@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { AgentAvatarSvg, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
+import { AgentAvatarSvg, AgentOwnerKind, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 
 vi.mock('electron', () => ({
@@ -573,4 +573,40 @@ test('committed authentication fences precede optional observers and cannot be s
     store.onCriticalChange('auth_tokens', () => { throw new Error('security failure'); });
     expect(() => store.delete('auth_tokens')).toThrow('security failure');
   } finally { store.close(); }
+});
+
+
+test('startup migrations update owned Agent layout and projections without changing ownership', async () => {
+  const userDataPath = createTempUserDataPath();
+  const store = await SqliteStore.create(userDataPath);
+  const db = store.getDatabase();
+  const cowork = new CoworkStore(db);
+  const owner = { userId: 'migration-owner', scopeKey: 'personal' };
+  const agent = cowork.createAgent({ name: 'Owned' }, owner);
+  const quarantined = cowork.createAgent({ name: 'Quarantined' }, owner);
+  cowork.agentOwnership.transaction(() => {
+    db.prepare("UPDATE agents SET pinned=1,pin_order=NULL,sort_order=NULL,icon='legacy-icon',working_directory='' WHERE id=?").run(agent.id);
+    db.prepare("UPDATE agents SET icon='legacy-icon' WHERE id=?").run(quarantined.id);
+  });
+  db.prepare("UPDATE agent_ownership SET owner_kind='quarantined' WHERE agent_id=?").run(quarantined.id);
+  db.prepare("INSERT OR REPLACE INTO cowork_config(key,value,updated_at) VALUES('workingDirectory','/migration/workspace',1)").run();
+  store.delete('agents.workingDirectoryBackfill.v1.completed');
+  store.close();
+
+  const reopened = await SqliteStore.create(userDataPath);
+  try {
+    const next = new CoworkStore(reopened.getDatabase());
+    expect(next.getVisibleAgent(agent.id, owner)).toMatchObject({
+      icon: DefaultAgentAvatarIcon, workingDirectory: '/migration/workspace', pinned: true,
+    });
+    const layout = reopened.getDatabase().prepare('SELECT sort_order,pin_order FROM agents WHERE id=?').get(agent.id) as {
+      sort_order: number | null; pin_order: number | null;
+    };
+    expect(layout.sort_order).not.toBeNull();
+    expect(layout.pin_order).not.toBeNull();
+    expect(next.agentOwnership.get(agent.id)).toMatchObject({ ownerKind: AgentOwnerKind.Owned, owner });
+    expect(next.agentOwnership.get(quarantined.id)?.ownerKind).toBe(AgentOwnerKind.Quarantined);
+    expect(reopened.getDatabase().prepare('SELECT trusted FROM agent_write_context WHERE id=1').get()).toEqual({ trusted: 0 });
+    expect(() => reopened.getDatabase().prepare("UPDATE agents SET name='External' WHERE id=?").run(agent.id)).toThrow();
+  } finally { reopened.close(); }
 });

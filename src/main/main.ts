@@ -695,7 +695,6 @@ import { assertDesktopInputDispatchCurrent, captureDesktopInput, desktopInputCap
 import { InputPreparationService } from './remote/inputPreparationService';
 import { createRemoteDatabaseFence,loadRemoteIdentity } from './remote/installationIdentity';
 import { RemoteAccountTransition } from './remote/remoteAccountTransition';
-import { registerRemoteAgentSettingsIpc } from './remote/remoteAgentSettingsIpc';
 import { RemoteBridge } from './remote/remoteBridge';
 import { withRemoteConnectionAccount } from './remote/remoteConnectionIpc';
 import { RemoteImageDecoder } from './remote/remoteImageDecoder';
@@ -2472,6 +2471,15 @@ const projectOpenClawStatus = (status: OpenClawEngineStatus): OpenClawEngineStat
   if (!openClawAccountRecovery?.active) return status;
   const state = openClawAccountRecovery.state;
   const failed = state?.phase === AccountRecoveryPhase.Failed;
+  let message = t('openClawAccountRecoveryPending');
+  switch (state?.phase) {
+    case AccountRecoveryPhase.Fencing: message = t('openClawAccountRecoveryStopping'); break;
+    case AccountRecoveryPhase.WaitingAuth: message = t('openClawAccountRecoveryAuthPending'); break;
+    case AccountRecoveryPhase.Preparing: message = t('openClawAccountRecoveryPreparing'); break;
+    case AccountRecoveryPhase.Starting: message = t('openClawAccountRecoveryStarting'); break;
+    case AccountRecoveryPhase.Confirming: message = t('openClawAccountRecoveryConfirming'); break;
+    case AccountRecoveryPhase.Retrying: message = t('openClawAccountRecoveryRetrying'); break;
+  }
   return {
     ...status,
     phase: failed ? OpenClawEnginePhase.Error : OpenClawEnginePhase.Starting,
@@ -2480,7 +2488,7 @@ const projectOpenClawStatus = (status: OpenClawEngineStatus): OpenClawEngineStat
     canRetry: failed,
     message: failed
       ? t('openClawAccountRecoveryFailed', { error: state.error || 'Gateway unavailable' })
-      : t('openClawAccountRecoveryPending'),
+      : message,
   };
 };
 
@@ -6643,7 +6651,6 @@ if (!gotTheLock) {
       owner, workspaces: [], accessRequests: [], initializationFailure: failure,
       ...(failure ? { deviceConnectionManagementSupported: false, error: t(failureMessages[failure]) } : {}) };
   };
-  registerRemoteAgentSettingsIpc({ getWindow: () => mainWindow, getProtocol: () => initializeRemoteBridge().agentSettingsProtocol() });
   ipcMain.handle(RemoteIpc.State, () => remoteSettingsController?.state() ?? readRemoteState());
   ipcMain.on(RemoteTelemetryIpc.Ui, (event, input: unknown) => {
     if (event.sender !== mainWindow?.webContents || !validRemoteTelemetryUi(input)
@@ -6722,7 +6729,13 @@ if (!gotTheLock) {
         || getCoworkEngineRouter().listPendingPermissions().some(item => item.sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID),
       syncState: target => remoteBridge?.associationSyncState(target),
       taskSync: target => remoteBridge?.associationTaskSync(target),
+      publicationTarget: () => remoteBridge?.associationPublicationTarget() ?? null,
+      confirmPublication: (ids, target) => {
+        if (!remoteBridge) throw new Error('Remote publication is unavailable');
+        remoteBridge.resumeAssociationPublication(ids, target);
+      },
       afterCommit: result => {
+        remoteBridge?.notifyAssociationChanged(result.sessionIds);
         revalidateArtifactPreviews();
         libraryIndexService?.notifySessionProjectionChanges({ changedSessionIds: result.sessionIds, deletedSessionIds: [], affectedArtifactIds: [] });
         for (const window of BrowserWindow.getAllWindows()) {
@@ -9581,7 +9594,12 @@ if (!gotTheLock) {
 
   ipcMain.handle(AuthIpcChannel.Logout, async () => {
     const tokens = getAuthTokens();
-    const enterpriseHeaders = getEnterpriseAccountHeaders();
+    const logoutUrl = `${getServerApiBaseUrl()}/api/auth/logout`;
+    const logoutHeaders = {
+      Authorization: `Bearer ${tokens?.accessToken}`,
+      'Content-Type': 'application/json',
+      ...getEnterpriseAccountHeaders(),
+    };
     const logoutBody = JSON.stringify(withKeyfromBody({}));
     clearLocalAuthSession({
       reason: AuthSessionChangeReason.UserLogout,
@@ -9590,21 +9608,28 @@ if (!gotTheLock) {
     console.log('[Auth] cleared local login state and scheduled server model config refresh');
 
     if (tokens) {
+      const controller = new AbortController();
+      let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
-        const serverBaseUrl = getServerApiBaseUrl();
-        const logoutUrl = `${serverBaseUrl}/api/auth/logout`;
         console.log(`[Auth] requesting logout at ${logoutUrl}`);
-        await net.fetch(logoutUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${tokens.accessToken}`,
-            'Content-Type': 'application/json',
-            ...enterpriseHeaders,
-          },
-          body: logoutBody,
-        });
+        await Promise.race([
+          net.fetch(logoutUrl, {
+            method: 'POST',
+            headers: logoutHeaders,
+            body: logoutBody,
+            signal: controller.signal,
+          }),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => {
+              controller.abort();
+              reject(new Error('Remote logout timed out'));
+            }, 5_000);
+          }),
+        ]);
       } catch (error) {
         console.warn('[Auth] remote logout failed after local credentials were cleared:', error);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
       }
     }
     return { success: true };
@@ -13622,7 +13647,10 @@ if (!gotTheLock) {
   });
   const scheduledTaskHandlerDeps = {
     captureRemoteOwner: getCurrentRemoteOwner,
-    recordRemoteTaskOwner: (jobId: string, owner: RemoteOwner | null) => getCoworkStore().remote.bindSource(`cron:${jobId}`, owner),
+    prepareRemoteTaskBinding: (owner: RemoteOwner | null) => {
+      const bindSource = getCoworkStore().remote.prepareSourceBinding(owner);
+      return (jobId: string) => bindSource(`cron:${jobId}`);
+    },
     assertRemoteTaskOwner: (jobId: string) => {
       const owner = getCoworkStore().remote.sourceOwner(`cron:${jobId}`);
       if (owner && !sameOwner(owner, getCurrentRemoteOwner())) throw new Error('Task belongs to another account');
@@ -13983,7 +14011,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('im:popo:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_POPO_CONFIG: defaults } = await import('./im/types');
@@ -13993,7 +14021,7 @@ if (!gotTheLock) {
         instanceName: name || 'POPO Bot',
       };
       getIMGatewayManager().getIMStore().setPopoInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:popo:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:popo:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14199,7 +14227,7 @@ if (!gotTheLock) {
 
   // DingTalk Multi-Instance handlers
   ipcMain.handle('im:dingtalk:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_DINGTALK_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -14209,7 +14237,7 @@ if (!gotTheLock) {
         instanceName: name || 'DingTalk Bot',
       };
       getIMGatewayManager().getIMStore().setDingTalkInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:dingtalk:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:dingtalk:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14259,7 +14287,7 @@ if (!gotTheLock) {
 
   // NIM Multi-Instance handlers
   ipcMain.handle('im:nim:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_NIM_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -14269,7 +14297,7 @@ if (!gotTheLock) {
         instanceName: name || 'NIM Bot',
       };
       getIMGatewayManager().getIMStore().setNimInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:nim:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:nim:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14319,7 +14347,7 @@ if (!gotTheLock) {
 
   // QQ Multi-Instance handlers
   ipcMain.handle('im:qq:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_QQ_CONFIG: defaults } = await import('./im/types');
@@ -14329,7 +14357,7 @@ if (!gotTheLock) {
         instanceName: name || 'QQ Bot',
       };
       getIMGatewayManager().getIMStore().setQQInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:qq:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:qq:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14379,7 +14407,7 @@ if (!gotTheLock) {
 
   // Feishu Multi-Instance handlers
   ipcMain.handle('im:feishu:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_FEISHU_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -14389,7 +14417,7 @@ if (!gotTheLock) {
         instanceName: name || 'Feishu Bot',
       };
       getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:feishu:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:feishu:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14439,7 +14467,7 @@ if (!gotTheLock) {
 
   // Email Multi-Instance handlers
   ipcMain.handle('im:email:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_EMAIL_INSTANCE_CONFIG: defaults } = await import('./im/types');
@@ -14451,7 +14479,7 @@ if (!gotTheLock) {
         agentId: 'main',
       };
       getIMGatewayManager().getIMStore().setEmailInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:email:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:email:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14463,7 +14491,7 @@ if (!gotTheLock) {
 
   // WeCom Multi-Instance handlers
   ipcMain.handle('im:wecom:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_WECOM_CONFIG: defaults } = await import('./im/types');
@@ -14473,7 +14501,7 @@ if (!gotTheLock) {
         instanceName: name || 'WeCom Bot',
       };
       getIMGatewayManager().getIMStore().setWecomInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:wecom:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:wecom:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14561,7 +14589,7 @@ if (!gotTheLock) {
 
   // Telegram Multi-Instance handlers
   ipcMain.handle('im:telegram:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_TELEGRAM_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -14571,7 +14599,7 @@ if (!gotTheLock) {
         instanceName: name || 'Telegram Bot',
       };
       getIMGatewayManager().getIMStore().setTelegramInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:telegram:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:telegram:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -14621,7 +14649,7 @@ if (!gotTheLock) {
 
   // Discord Multi-Instance handlers
   ipcMain.handle('im:discord:instance:add', async (_event, name: string) => {
-    const instanceOwner = getCurrentRemoteOwner();
+    const bindRemoteSource = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_DISCORD_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -14631,7 +14659,7 @@ if (!gotTheLock) {
         instanceName: name || 'Discord Bot',
       };
       getIMGatewayManager().getIMStore().setDiscordInstanceConfig(instanceId, instance);
-      getCoworkStore().remote.bindSource(`im:discord:${instanceId}`, instanceOwner);
+      bindRemoteSource(`im:discord:${instanceId}`);
       return { success: true, instance };
     } catch (error) {
       return {

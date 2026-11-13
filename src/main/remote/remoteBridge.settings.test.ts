@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { REMOTE_PROTOCOL_VERSION, RemoteCapability, RemoteConnectionReason, RemoteConnectionStatus, RemoteSyncStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteReplyCapability, RemoteReplyModelLabelCapability } from '../../shared/remote/reply';
 import { RemoteApiError, RemoteBridge } from './remoteBridge';
 import { collectRemoteDisplayHealth, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
 import { RemoteStore } from './remoteStore';
@@ -72,6 +73,38 @@ const settingsPatches = (request: ReturnType<typeof vi.fn>) => request.mock.call
 afterEach(() => { for (const dispose of disposables.splice(0).reverse()) dispose(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('remote settings persistence', () => {
+  it.each([false, true])('negotiates reply model labels without sending a server-only capability in device writes (registered: %s)', async registered => {
+    const f = fixture(registered);
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => {
+      if (pathname.endsWith('/capabilities')) return new Response(JSON.stringify({ code: 0, data: {
+        enabled: true, protocolVersions: [REMOTE_PROTOCOL_VERSION], projectionVersions: [1, 4],
+        capabilities: [RemoteCapability.SameAccountAccess, RemoteReplyCapability, RemoteReplyModelLabelCapability],
+      } }));
+      const body = init.body ? JSON.parse(String(init.body)) : null;
+      // The device declaration contract intentionally excludes this optional reply-field capability.
+      if ((pathname.endsWith('/devices/register') || pathname.endsWith('/settings'))
+        && body?.capabilities?.includes(RemoteReplyModelLabelCapability)) {
+        return new Response(JSON.stringify({ code: 47019, message: 'Invalid capability', data: { reason: 'INVALID_REMOTE_REQUEST' } }), { status: 400 });
+      }
+      return original(actor, pathname, init);
+    });
+    if (registered) await f.bridge.refreshCapabilities();
+    await expect(f.bridge.ensureRegistration()).resolves.toBeUndefined();
+    await f.bridge.configure({ enabled: true });
+    await expect(f.bridge.writeSettings()).resolves.toBeUndefined();
+    expect(f.bridge.replyModelLabelSupported).toBe(true);
+    const writes = f.request.mock.calls.filter(([, pathname, init]) => pathname.endsWith('/devices/register')
+      || pathname.endsWith('/settings') && init.method === 'PATCH');
+    expect(writes).toHaveLength(registered ? 1 : 2);
+    for (const [, , init] of writes) {
+      const declared = JSON.parse(String(init.body)).capabilities;
+      expect(declared).toContain(RemoteReplyCapability);
+      expect(declared).not.toContain(RemoteReplyModelLabelCapability);
+    }
+    expect(f.bridge.controls()).toEqual([]);
+  });
+
   it('defaults to enabled without overriding an explicit disabled preference', () => {
     const { bridge, store, switchOwner } = fixture();
     expect(bridge.state()).toMatchObject({ enabled: true, name: 'host.local' });

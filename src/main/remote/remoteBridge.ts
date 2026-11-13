@@ -14,13 +14,15 @@ import type { RemoteEnvironment } from '../../shared/remote/environment';
 import { RemoteFileCapability } from '../../shared/remote/files';
 import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryPage, RemoteInputStatus, type RemotePreparationClaim } from '../../shared/remote/input';
 import { type QuestionDecisionOutcome, RemoteQuestion } from '../../shared/remote/questions';
-import { REMOTE_REPLY_PROJECTION_VERSION, REMOTE_REPLY_SYNC_DELAY_MS,RemoteReplyCapability } from '../../shared/remote/reply';
+import { RemoteSyncRecoveryState } from '../../shared/remote/recovery';
+import { REMOTE_REPLY_PROJECTION_VERSION, REMOTE_REPLY_SYNC_DELAY_MS, RemoteReplyCapability,RemoteReplyModelLabelCapability } from '../../shared/remote/reply';
 import { RemoteImportValidation, RemoteRetention, type RetentionImport, type RetentionState } from '../../shared/remote/retention';
 import { parseRemoteSyncTarget, RemoteSyncTarget, remoteSyncTargetHeaders, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { RemoteTaskCredits } from '../../shared/remote/taskCredits';
 import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
 import type { AgentOwnerStore } from '../agentOwnership';
 import { OwnershipAssociationStore, type OwnershipClaimBlocks } from '../ownershipAssociationStore';
+import type { PublicationTarget } from '../ownershipPublication';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import { type InputPreparationService,RemoteAttachmentError } from './inputPreparationService';
 import type { RemoteIdentity } from './installationIdentity';
@@ -39,6 +41,7 @@ import { RemoteFileSync, type RemoteFileSyncDependencies } from './remoteFileSyn
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import { LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX, RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
 import type { ImportPartIndex } from './remoteImportSnapshotWorker';
+import { RemoteLegacyRecovery } from './remoteLegacyRecovery';
 import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
 import type { RemoteSocket } from './remoteNetworkProtocol';
 import { remoteResponseJson } from './remoteNetworkTransport';
@@ -48,6 +51,7 @@ import { remotePerformance, RemotePerformanceEvent, RemotePerformanceOutcome, Re
 import { isTransientProjectionFailure } from './remoteProjectionCoordinator';
 import { remotePublicationForeign, remotePublicationTargetSpace } from './remotePublicationOrigins';
 import { RemoteQuestionError } from './remoteQuestionService';
+import { isRecoveryDependencyFailure, RemoteRecoveryDependency } from './remoteRecoveryDependency';
 import type { RegistrationIdentities, RemoteRegistrationIdentity } from './remoteRegistrationIdentity';
 import { RemoteReplyTransport } from './remoteReplyTransport';
 import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
@@ -55,6 +59,8 @@ import { RemoteSessionDeletionClient, type SessionDeletionDependencies } from '.
 import { type ProjectionRecord, RemoteStore, type SyncRow } from './remoteStore';
 import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
 import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteDiagnosticLog, remoteDiagnosticRoute, RemoteInputDiagnostic, remoteLogMessage, remoteSyncErrorMetadata, remoteSyncRequestId, remoteSyncRequestMetadata, remoteSyncResultMetadata } from './remoteSyncLog';
+import { recoveryDisplay,RemoteRecoveryLimiter } from './remoteSyncRecoveryLedger';
+import { recoveryFailure } from './remoteSyncRecoveryPolicy';
 import { RemoteSyncTargetActivationKind, RemoteSyncTargetStore } from './remoteSyncTargetStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { classifyTaskSyncFailure, isSharedSyncFailure } from './remoteTaskSyncPolicy';
@@ -83,7 +89,7 @@ interface LocalSettings { createSessionAvailable?: boolean; enabled: boolean; na
 interface ControlIntent { createSessionAvailable?: boolean; id: string; enabled: boolean; workspaces: RemoteWorkspace[] }
 interface SettingsChanges { reregister?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; workspace?: { name: string; path: string }; removeWorkspaceId?: string; retry?: boolean }
 interface PendingConfiguration { route: string; changes: SettingsChanges[] }
-interface SavedImport extends RetentionImport { uploadCursor?: number; confirmedPartCount?: number; expiresAt?: string; absoluteExpiresAt?: string; reason?: string; projectionVersion?: number; replyProjection?: boolean; importId: string; sessionId: string; baseSourceSeq: string; snapshotEpoch: number; expectedSourceSeq: string; expectedServerSeq: string; beginConfirmed?: boolean; beginAttempted?: boolean; fileSet?: string; manifest: any; parts: Array<ImportPartIndex & { payload?: { records: ProjectionRecord[] } }>; stateVersion?: string }
+interface SavedImport extends RetentionImport { uploadCursor?: number; confirmedPartCount?: number; expiresAt?: string; absoluteExpiresAt?: string; reason?: string; projectionVersion?: number; replyProjection?: boolean; replyModelLabel?: boolean; importId: string; sessionId: string; baseSourceSeq: string; snapshotEpoch: number; expectedSourceSeq: string; expectedServerSeq: string; beginConfirmed?: boolean; beginAttempted?: boolean; fileSet?: string; manifest: any; parts: Array<ImportPartIndex & { payload?: { records: ProjectionRecord[] } }>; stateVersion?: string }
 export interface BridgeDependencies {
   agentSettings?: RemoteAgentSettingsDependencies;
   registrationIdentities?: RegistrationIdentities;
@@ -228,6 +234,9 @@ export class RemoteBridge {
   private agentLimits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES };
   private lastCapabilityCheck = 0;
   private capabilitySnapshot: any = null;
+  private readonly recoveryDependency: RemoteRecoveryDependency;
+  private readonly recoveryLimiter = new RemoteRecoveryLimiter();
+  private readonly automaticRecovery: RemoteLegacyRecovery;
   private inputCapabilities: string[] = [];
   private lastInputPublish = 0;
   private inputModelRefresh = { context: '', offset: 0 };
@@ -253,6 +262,7 @@ export class RemoteBridge {
   private projectionVersion = 1;
   private replySupported = false;
   private taskCreditsSupported = false;
+  private replyModelLabelSupported = false;
   private questionsSupported = false;
   private retentionSupported = false;
   private receiptsSupported = false;
@@ -314,13 +324,16 @@ export class RemoteBridge {
     });
     this.targets = new RemoteSyncTargetStore(deps.store);
     this.taskSync = new RemoteTaskSyncState(deps.store.db, undefined, undefined, observer => deps.store.afterCommit(observer));
+    this.recoveryDependency = new RemoteRecoveryDependency(deps.store.db);
     this.availability = new RemoteAvailabilityPublisher({
-      store: deps.store,
+      store: deps.store, recoveryLimiter: this.recoveryLimiter,
       context: () => this.owner && this.targetId && this.registration && this.settings().enabled && !this.stopped
         && !this.syncPaused() && !deps.store.needsSecurityRecovery() ? {
         environment: this.remoteEnvironment(), targetId: this.targetId, scope: `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}`,
         owner: this.owner, deviceId: this.registration.deviceId, generation: this.generation || '', routeEpoch: this.accountGeneration,
-        controlDeletionSupported: this.controlDeletionSupported, taskCreditsSupported: this.taskCreditsSupported,
+        controlDeletionSupported: this.controlDeletionSupported, taskCreditsSupported: this.taskCreditsSupported, replyModelLabelSupported: this.replyModelLabelSupported,
+        recoveryDependencyEpoch: this.recoveryDependency.epoch(this.taskContext()!),
+        recoveryCapabilities: this.capabilitySnapshot?.capabilities ?? [],
         historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
         checkpointPagesSupported: this.capabilitySnapshot?.capabilities?.includes('control_checkpoint_pages_v1') === true,
         publicationResolutionSupported: this.capabilitySnapshot?.capabilities?.includes('live_publication_resolution_v1') === true,
@@ -338,6 +351,21 @@ export class RemoteBridge {
       return this.availability.legacyHistoryAllowed(sessionId) && (!context || this.taskSync.projectionEligible(context, sessionId));
     });
     this.importSnapshots = new RemoteImportSnapshots(deps.store);
+    this.automaticRecovery = new RemoteLegacyRecovery({ store: deps.store, tasks: this.taskSync, limiter: this.recoveryLimiter,
+      dependencyEpoch: () => { const context = this.taskContext(); return context ? this.recoveryDependency.epoch(context) : null; },
+      capabilities: () => this.capabilitySnapshot,
+      admitted: id => {
+        const row = deps.store.sync(id), pending = deps.store.get<SavedImport>(`import:${id}`);
+        return !!row && row.device_id === this.registration?.deviceId && !row.migration_frozen
+          && (!row.sync_environment || this.targets.matchesEnvironment(this.remoteEnvironment(), row.sync_environment))
+          && (!pending?.owner || sameOwner(pending.owner, this.owner)) && (!pending?.deviceId || pending.deviceId === this.registration?.deviceId)
+          && (!pending?.environment || this.targets.matchesEnvironment(this.remoteEnvironment(), pending.environment))
+          && this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id) && !this.ownershipSyncBlocked(id);
+      },
+      readState: row => this.readSyncState(row, true), readImport: id => this.api(`/sync/imports/${encodeURIComponent(id)}`),
+      validateImport: (id, receipt) => this.assertImportIdentity(deps.store.get<SavedImport>(`import:${id}`)!, receipt),
+      partsAvailable: async id => { const saved = deps.store.get<SavedImport>(`import:${id}`); return !!saved && (!saved.fileSet || await this.importSnapshots.exists(saved.fileSet, saved.parts)); },
+    });
     this.deletions = deps.deletion ? new RemoteSessionDeletionClient({ ...deps.deletion, store: deps.store, security: deps.security,
       controlsAdmitted: () => deps.store.areControlsAdmitted(),
       context: () => this.owner && this.registration && this.targetId && sameOwner(this.owner, deps.getOwner()) ? {
@@ -727,7 +755,7 @@ export class RemoteBridge {
       this.deps.store.setEnabledOwner(null); this.disconnect();
       this.declaredDualApproval = false; this.deps.store.setApprovalProjectionSupported(false);
       this.deletionSupported = false; this.controlDeletionSupported = false; this.deletionAvailable = false; this.deps.store.setDeletionProjectionSupported(false);
-      this.fileCapabilities = []; this.declaredQuestions = false; this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false); this.replySupported = false; this.taskCreditsSupported = false; this.replies.clear(); this.projectionVersion = 1; this.files?.configure(false);
+      this.fileCapabilities = []; this.declaredQuestions = false; this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false); this.replySupported = false; this.taskCreditsSupported = false; this.replyModelLabelSupported = false; this.deps.store.setReplyModelLabelSupported(false); this.replies.clear(); this.projectionVersion = 1; this.files?.configure(false);
       this.retentionSupported = false; this.receiptsSupported = false; this.capabilitiesKnown = false; this.fenceCheckedAt = 0; this.retentionVerifiedAt.clear();
       this.deps.configureDualApproval?.({ enabled: false, projectionSupported: false });
       this.deps.onAccountChange(previous, current); this.changed();
@@ -1088,6 +1116,11 @@ export class RemoteBridge {
     const route = this.deps.getApiBaseUrl();
     const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
     if (route !== this.accountRoute || routeEpoch !== this.accountRouteEpoch) { this.ensureAccount(); throw new Error('Remote route changed before request'); }
+    const dependencyContext = this.taskContext(), dependencyTarget = this.targetId, dependencyDevice = this.registration?.deviceId;
+    const dependencyCurrent = (): boolean => !!dependencyContext && !!dependencyTarget && dependencyTarget === this.targetId
+      && dependencyDevice === this.registration?.deviceId && accountGeneration === this.accountGeneration
+      && routeEpoch === (this.deps.getRouteEpoch?.() ?? 0) && route === this.deps.getApiBaseUrl() && environment === this.remoteEnvironment()
+      && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && this.settings().enabled && !this.stopped;
     const requestKey = `${version}:${method}:${pathname.split('?')[0]}`;
     if (this.syncPaused() && (pathname.startsWith('/sync/') || /\/(?:agents|models|input-preparations)(?:\/|$)/u.test(pathname)
       || pathname.includes('/reply-content/') || /\/sessions\/[^/]+\/contents(?:\/|$)/u.test(pathname) || pathname.endsWith('/commands/claim'))) throw new RemoteApiError(
@@ -1147,6 +1180,7 @@ export class RemoteBridge {
       }
       telemetry.finish('api_ok', { requestId, httpStatus, businessCode: 0, responseBytes: Buffer.byteLength(text), failureStage: 'none' });
       remoteDiagnosticLog('remote.request.completed', { ...diagnostic, requestId, httpStatus, durationMs: performance.now() - startedAt, result: 'success' });
+      if (pathname !== '/capabilities' && dependencyCurrent()) this.observeRecoveryDependency(dependencyContext!, true);
       if (result.data && typeof result.data === 'object') this.telemetryRequestIds.set(result.data, requestId);
       return result.data;
     } catch (error) {
@@ -1157,6 +1191,7 @@ export class RemoteBridge {
         this.accountRoute = '';
         this.ensureAccount();
       }
+      if (dependencyCurrent() && stage !== 'prepare' && isRecoveryDependencyFailure(error)) this.observeRecoveryDependency(dependencyContext!, false);
       const addressedDevice = /^\/devices\/([^/]+)\//u.exec(pathname)?.[1];
       if ((!addressedDevice || addressedDevice === encodeURIComponent(this.registration?.deviceId ?? ''))
         && current()
@@ -1180,6 +1215,10 @@ export class RemoteBridge {
       throw error;
     }
   }
+  private observeRecoveryDependency(context: TaskSyncContext, success: boolean): void {
+    try { if (this.recoveryDependency.observe(context, success)) this.taskSync.wakeRecovery(context); }
+    catch (error) { remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'history', reason: 'DEPENDENCY_EVIDENCE_UNAVAILABLE', error }, 'warn'); }
+  }
   private advertisedCapabilities(createSessionAvailable = true): string[] {
     const supported = this.declaredAgentCapabilities.includes(RemoteCapability.AgentSelection) || createSessionAvailable && this.settings().createSessionAvailable !== false ? capabilities : capabilities.filter(value => value !== RemoteCapability.CreateSession);
     return [...(this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported), ...this.declaredAgentCapabilities, ...this.inputCapabilities, ...this.fileCapabilities, ...(this.replySupported ? [RemoteReplyCapability] : []), ...(this.taskCreditsSupported ? [RemoteTaskCredits.Capability] : []), ...(this.declaredQuestions ? [RemoteQuestion.Capability] : []), ...(this.retentionSupported ? [RemoteRetention.Capability] : []), ...(this.receiptsSupported ? [RemoteRetention.Receipts] : []), ...(this.declaredDualApproval ? [RemoteCapability.DualApproval] : []), ...(this.connectionManagementKnown ? [REMOTE_CONNECTION_MANAGEMENT_CAPABILITY] : []), ...(this.deletionSupported ? [RemoteDeletion.Capability] : []), ...(this.controlDeletionSupported ? [RemoteDeletion.ControlCapability] : []), ...(this.agentSettingsCapability ? [RemoteAgentSettings.Capability] : [])];
@@ -1193,6 +1232,7 @@ export class RemoteBridge {
   private async refreshCapabilities(confirmedSnapshot?: any): Promise<void> {
     await this.agentSettings?.refreshAvailability();
     const environment = this.remoteEnvironment();
+    const dependencyContextKey = this.taskContext() ? stableJson(this.taskContext()) : null, dependencyGeneration = this.accountGeneration;
     const support = confirmedSnapshot ?? await this.api('/capabilities', 'GET', undefined, false);
     if (environment !== this.remoteEnvironment()) throw new Error('Remote service environment changed');
     if (!support.enabled || !support.protocolVersions?.includes(REMOTE_PROTOCOL_VERSION)) throw new RemoteApiError(47000, 'Remote control is unavailable');
@@ -1202,8 +1242,9 @@ export class RemoteBridge {
       // Legacy servers still receive a saved disable; never announce an unsupported capability to them.
       if (!this.controls().some(intent => !intent.enabled)) throw new RemoteApiError(47000, 'Server upgrade required for same-account remote access');
     }
+    const recoveryCapabilities = stableJson([this.capabilitySnapshot?.capabilities ?? [], this.capabilitySnapshot?.projectionVersions ?? [], this.capabilitySnapshot?.syncRetention ?? null]);
     const previouslyKnown = this.capabilitiesKnown;
-    const previous = stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported]);
+    const previous = stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported, this.replyModelLabelSupported]);
     const previousProjectionVersion = this.projectionVersion;
     const supported = Array.isArray(support.capabilities) ? support.capabilities : [];
     const target = parseRemoteSyncTarget(support.syncTarget);
@@ -1228,6 +1269,7 @@ export class RemoteBridge {
     this.fileCapabilities = this.files && support.projectionVersions?.includes(3) ? Object.values(RemoteFileCapability).filter(value => supported.includes(value)) : [];
     const fileSupported = this.fileCapabilities.length === Object.values(RemoteFileCapability).length;
     this.replySupported = support.projectionVersions?.includes(REMOTE_REPLY_PROJECTION_VERSION) === true && supported.includes(RemoteReplyCapability);
+    this.replyModelLabelSupported = this.replySupported && supported.includes(RemoteReplyModelLabelCapability);
     this.taskCreditsSupported = this.replySupported && support.projectionVersions?.includes(RemoteTaskCredits.ReaderProjectionVersion) === true && supported.includes(RemoteTaskCredits.Capability);
     this.questionsSupported = this.deps.supportsQuestions?.() === true && support.projectionVersions?.includes(RemoteQuestion.ProjectionVersion) === true && supported.includes(RemoteQuestion.Capability);
     const questionKey = this.targetKey('questionCapability');
@@ -1267,15 +1309,19 @@ export class RemoteBridge {
     if (this.declaredDualApproval) this.deps.store.put(dualKey, true);
     this.deps.store.setApprovalProjectionSupported(this.declaredDualApproval);
     this.deps.configureDualApproval?.({ enabled: dualEnabled, projectionSupported: this.declaredDualApproval });
-    if (!previouslyKnown || previousProjectionVersion !== this.projectionVersion || previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported])) {
+    if (!previouslyKnown || previousProjectionVersion !== this.projectionVersion || previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported, this.replyModelLabelSupported])) {
       captureRemoteTelemetry({ remoteOwnerId: this.owner?.userId, ownerScopeId: this.owner?.scopeKey }).emit(RemoteBridgeTelemetry.Capability, {
         domain: 'control', fromState: previouslyKnown ? 'ready' : 'unknown', toState: 'ready', reason: 'STATE_CHANGED', projectionVersion: this.projectionVersion,
       });
     }
     this.lastCapabilityCheck = Date.now();
+    const recoveryContext = this.taskContext();
+    if (confirmedSnapshot === undefined && recoveryContext && dependencyContextKey === stableJson(recoveryContext) && dependencyGeneration === this.accountGeneration
+      && this.targetId && sameOwner(this.owner, this.deps.getOwner()) && this.settings().enabled && !this.stopped) this.observeRecoveryDependency(recoveryContext, true);
+    if (recoveryContext && recoveryCapabilities !== stableJson([support.capabilities ?? [], support.projectionVersions ?? [], support.syncRetention ?? null])) this.taskSync.wakeRecovery(recoveryContext);
     if (this.registration && this.settings().enabled) this.ownershipClaimBlocks();
     if (this.registration) this.applyProjectionCapabilities();
-    if (this.registration && previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported])) this.queueControl(this.settings());
+    if (this.registration && previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported, this.replyModelLabelSupported])) this.queueControl(this.settings());
   }
   private applyProjectionCapabilities(): void {
     if (!this.capabilitiesKnown || !this.owner || !this.registration) return;
@@ -1286,6 +1332,7 @@ export class RemoteBridge {
     this.deps.store.setDeletionProjectionSupported(this.deletionSupported);
     this.deps.store.setReplyProjectionSupported(this.replySupported);
     this.deps.store.setTaskCreditsProjectionSupported(this.taskCreditsSupported);
+    this.deps.store.setReplyModelLabelSupported(this.replyModelLabelSupported);
     this.deps.store.setQuestionProjectionSupported(this.questionsSupported);
     const fileSupported = this.fileCapabilities.length === Object.values(RemoteFileCapability).length;
     this.deps.store.setFileProjectionSupported(fileSupported);
@@ -1524,7 +1571,7 @@ export class RemoteBridge {
               this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false);
             }
             if (this.projectionVersion < REMOTE_REPLY_PROJECTION_VERSION) {
-              this.replySupported = false; this.replies.clear(); this.deps.store.setReplyProjectionSupported(false);
+              this.replySupported = false; this.replyModelLabelSupported = false; this.deps.store.setReplyModelLabelSupported(false); this.replies.clear(); this.deps.store.setReplyProjectionSupported(false);
             }
             if (this.projectionVersion < 3) { this.files?.configure(false); this.deps.store.setFileProjectionSupported(false); }
           }
@@ -1656,6 +1703,7 @@ export class RemoteBridge {
     if (!context) return;
     const current = this.syncContext();
     if (!current()) return;
+    void this.automaticRecovery.tick(context, current).catch(error => remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'history', reason: 'AUTO_RECOVERY_UNAVAILABLE', error }, 'warn'));
     const takeoverRecovery = this.reconcileTakenOverImports(context, current);
     if (takeoverRecovery) { await takeoverRecovery; if (!current()) return; }
     // Failed diagnostic persistence is a bounded dependency, not a permanent process-local skip list.
@@ -1749,7 +1797,8 @@ export class RemoteBridge {
     if (this.deps.store.isSyncClosed(id)) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
     const previous = this.deps.store.get<any>(`syncFailure:${id}`);
     const oldState = this.taskSync.get(context, id);
-    if (previous && !oldState?.failure_count && oldState?.phase !== 'reconciling') {
+    const automaticResuming = recoveryDisplay(oldState?.auto_probe_json ?? '{}', Date.now())?.state === RemoteSyncRecoveryState.Recovering;
+    if (previous && !oldState?.failure_count && oldState?.phase !== 'reconciling' && !automaticResuming) {
       const complete = this.sessionAdmitted(id) && row.device_id === context.deviceId && !row.needs_snapshot && row.source_seq === row.ack_seq
         && !this.deps.store.db.prepare('SELECT 1 FROM remote_dirty WHERE session_id=?').get(id)
         && !this.deps.store.db.prepare('SELECT 1 FROM remote_outbox WHERE session_id=? LIMIT 1').get(id)
@@ -1805,7 +1854,7 @@ export class RemoteBridge {
       return;
     }
     const state = this.taskSync.get(context, id);
-    if (previous?.blocked && state?.phase !== 'reconciling' && !state?.failure_count) throw new RemoteSyncStateError('Persisted synchronization safety block requires task review');
+    if (previous?.blocked && state?.phase !== 'reconciling' && !state?.failure_count && !automaticResuming) throw new RemoteSyncStateError('Persisted synchronization safety block requires task review');
     if (!this.generation && !row.device_id) { this.taskSync.defer(context, id, 5000); return; }
     if (row.device_id && row.device_id !== context.deviceId) throw new RemoteSyncStateError('Session belongs to another device');
     if (row.sync_environment && !this.targets.matchesEnvironment(context.target, row.sync_environment)) throw new RemoteSyncStateError('Session has no verified binding to the active service');
@@ -1820,7 +1869,7 @@ export class RemoteBridge {
       this.sessionChecks.add(id);
       // Manual retry revalidates safety; it does not clear an unresolved corruption budget.
       if (state?.phase === 'reconciling') {
-        this.deps.store.remove(`syncFailure:${id}`);
+        if (recoveryDisplay(state.auto_probe_json, Date.now())?.state !== RemoteSyncRecoveryState.Recovering) this.deps.store.remove(`syncFailure:${id}`);
         this.taskSync.resumeAfterVerification(context, id);
       }
       if (stepwise) return;
@@ -1840,6 +1889,10 @@ export class RemoteBridge {
         this.deps.store.remove(`syncFailure:${id}`); this.taskSync.progress(context, id, true);
       }
       return;
+    }
+    // Keep sealed event bytes until the destination supports their optional display field again.
+    if (!this.replyModelLabelSupported && events.some(event => event.payload.message?.modelLabel !== undefined)) {
+      this.taskSync.defer(context, id, 5000); return;
     }
     const batchId = payloadHash(events);
     telemetry.emit(RemoteTelemetryEvent.Sealed, { operationId: batchId, phase: 'sealed', businessStatus: 'prepared',
@@ -2002,8 +2055,10 @@ export class RemoteBridge {
           await this.recoverSyncState(row, current);
           failure = { phase: 'backoff', scope: 'session', reason: 'STREAM_RECONCILING' };
         } else if (error instanceof RemoteApiError && error.code === 47006 && error.message === RemoteSyncConflict.RunMapping) {
-          if (!this.deps.store.get(`import:${id}`) && this.taskSync.reserveRepair(context, id, 'RUN_MAPPING')) {
-            this.deps.store.requireRunMappingSnapshot(id);
+          if (!this.deps.store.get(`import:${id}`) && this.deps.store.transaction(() => {
+            if (!this.taskSync.reserveRepair(context, id, 'RUN_MAPPING')) return false;
+            this.deps.store.requireRunMappingSnapshot(id); return true;
+          })) {
             failure = { phase: 'backoff', scope: 'session', reason: 'RUN_MAPPING_REPAIR' };
           }
         } else if (failure.repairable && this.taskSync.reserveRepair(context, id, failure.reason)) {
@@ -2028,8 +2083,11 @@ export class RemoteBridge {
     try {
       saved = this.deps.store.transaction(() => {
         const state = this.taskSync.fail(context, id, failure);
+        const automatic = recoveryFailure(error);
+        if (state.phase === 'isolated' && automatic) this.taskSync.scheduleRecovery(context, id);
         this.deps.store.put(`syncFailure:${id}`, { ...remoteSyncErrorMetadata(error), code: error instanceof RemoteApiError ? error.code : 47019, reason: failure.reason,
-          blocked: ['isolated', 'closed'].includes(state.phase), retryAt: state.next_retry_at });
+          blocked: ['isolated', 'closed'].includes(state.phase), retryAt: state.next_retry_at,
+          ...(automatic ? { syncDiagnostic: { version: 1, ...(automatic.cause ? { cause: automatic.cause } : {}), ...(automatic.requiredCapability ? { requiredCapability: automatic.requiredCapability } : {}) } } : {}) });
         return state;
       });
     } catch (storageError) { throw new TaskFailurePersistenceError(storageError, failure); }
@@ -2057,11 +2115,50 @@ export class RemoteBridge {
     const owner = this.owner, deviceId = this.registration?.deviceId, generation = this.accountGeneration;
     const route = this.deps.getApiBaseUrl();
     const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
-    const environment = this.remoteEnvironment(), projection = this.projectionVersion, replyProjection = this.replySupported;
+    const environment = this.remoteEnvironment(), projection = this.projectionVersion, replyProjection = this.replySupported, modelLabel = this.replyModelLabelSupported;
     return () => !this.admissionDeferred && !this.deps.store.needsSecurityRecovery() && !this.stopped && generation === this.accountGeneration && sameOwner(owner, this.owner)
       && sameOwner(owner, this.deps.getOwner()) && routeEpoch === (this.deps.getRouteEpoch?.() ?? 0) && route === this.deps.getApiBaseUrl() && deviceId === this.registration?.deviceId
-      && environment === this.remoteEnvironment() && projection === this.projectionVersion && replyProjection === this.replySupported && this.settings().enabled && !this.syncPaused()
+      && environment === this.remoteEnvironment() && projection === this.projectionVersion && replyProjection === this.replySupported && modelLabel === this.replyModelLabelSupported && this.settings().enabled && !this.syncPaused()
       && (!this.connectionManagementKnown || this.generation !== null);
+  }
+  /** A renderer preview can show the route, but never supplies the destination authority. */
+  associationPublicationTarget(): PublicationTarget | null {
+    if (!this.owner || !this.registration || !this.targetId || this.admissionDeferred || this.stopped || this.deps.store.needsSecurityRecovery()
+      || !sameOwner(this.owner, this.deps.getOwner()) || !this.settings().enabled
+      || this.accountRoute !== this.deps.getApiBaseUrl() || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return null;
+    const active = this.targets.active(this.owner);
+    if (!active?.syncTarget || active.targetId !== this.targetId || active.deviceId !== this.registration.deviceId) return null;
+    const url = new URL(this.accountRoute);
+    return { owner: { ...this.owner }, route: `${url.origin}${url.pathname.replace(/\/+$/u, '')}`,
+      targetId: active.targetId, dataSpaceId: active.syncTarget.dataSpaceId, deviceId: active.deviceId,
+      epoch: active.epoch, routeEpoch: this.accountRouteEpoch, accountGeneration: this.accountGeneration };
+  }
+  /** Called only inside the explicit publication confirmation transaction, after source binding. */
+  resumeAssociationPublication(ids: string[], target: PublicationTarget): void {
+    if (!this.deps.store.db.inTransaction || stableJson(this.associationPublicationTarget()) !== stableJson(target)) {
+      throw new RemoteSyncStateError('Association publication target changed');
+    }
+    for (const id of ids) {
+      const row = this.deps.store.sync(id);
+      if (!sameOwner(this.deps.store.owner(id), target.owner) || !row || row.migration_frozen
+        || this.deps.store.isSyncClosed(id) || this.deps.store.hasIndependentHistoryFence(id) || !this.sessionAdmitted(id)) {
+        throw new RemoteSyncStateError('Association publication admission changed');
+      }
+      const context = { owner: target.owner, target: target.targetId, deviceId: target.deviceId };
+      const failure = this.taskSync.get(context, id);
+      if (failure?.phase === 'isolated' && failure.reason === 'REMOTE_SYNC_STATE_CONFLICT') {
+        // Reuse the ordinary cooldown and valid-ledger checks; confirmation is not a publication ACK.
+        if (failure.scope !== 'session' || !this.taskSync.manualRetry(context, id)) {
+          throw new RemoteSyncStateError('Association publication retry is unavailable');
+        }
+        const previous = this.deps.store.get<{ reason?: string }>(`syncFailure:${id}`);
+        if (previous?.reason === 'REMOTE_SYNC_STATE_CONFLICT') this.deps.store.remove(`syncFailure:${id}`);
+      }
+    }
+  }
+  notifyAssociationChanged(ids: string[]): void {
+    for (const id of ids) { this.contentSnapshot.invalidate(id); this.sessionChecks.delete(id); }
+    this.displaySnapshot.invalidate(); this.changed(); this.schedule(0);
   }
   getSyncTargetId(): string | null { return this.targetId; }
   private remoteEnvironment(): string { return this.targetId ?? this.deps.getEnvironment?.() ?? 'unresolved'; }
@@ -2290,7 +2387,7 @@ export class RemoteBridge {
     // format solely from the envelope. Legacy v5 manifests without this fact need one safe rebuild.
     const unknownReplyProjection = saved?.replyProjection === undefined && (saved?.projectionVersion || 0) >= RemoteQuestion.ProjectionVersion;
     const projectionChanged = Boolean(saved && (saved.projectionVersion !== undefined && saved.projectionVersion !== this.projectionVersion
-      || unknownReplyProjection || Boolean(importHasReplies) !== this.replySupported));
+      || unknownReplyProjection || Boolean(importHasReplies) !== this.replySupported || saved.replyModelLabel === true && !this.replyModelLabelSupported));
     const deleted = this.deps.store.db.prepare('SELECT id FROM cowork_sessions WHERE id=?').get(row.local_id) === undefined;
     const missingParts = saved?.fileSet ? !await this.importSnapshots.exists(saved.fileSet, saved.parts) : false;
     assertCurrent();
@@ -2358,7 +2455,7 @@ export class RemoteBridge {
         parts = packaged.parts; manifest = packaged.manifest; fileSet = packaged.fileSet;
         baseSourceSeq = identity.sourceSeq; snapshotEpoch = identity.snapshotEpoch;
       }
-      const prepared: SavedImport = { reason: migration ? 'protocol_upgrade' : this.deps.store.get<string>(`snapshotReason:${row.local_id}`) || 'initial_sync', projectionVersion: this.projectionVersion, replyProjection: this.replySupported, importId, sessionId: row.session_id,
+      const prepared: SavedImport = { reason: migration ? 'protocol_upgrade' : this.deps.store.get<string>(`snapshotReason:${row.local_id}`) || 'initial_sync', projectionVersion: this.projectionVersion, replyProjection: this.replySupported, replyModelLabel: this.replyModelLabelSupported, importId, sessionId: row.session_id,
         baseSourceSeq, snapshotEpoch, beginAttempted: false,
         expectedSourceSeq: state?.lastSourceSeq || String(row.ack_seq), expectedServerSeq: state?.lastSeq || row.server_seq, parts, ...(fileSet ? { fileSet } : {}),
         owner: { ...this.owner! }, environment: this.remoteEnvironment(), deviceId: this.registration!.deviceId,

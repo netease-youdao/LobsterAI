@@ -1,4 +1,4 @@
-import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
+import { OwnershipAction, OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipCommitResult, OwnershipDetail, OwnershipPreview } from '@shared/ownership/types';
 import { RemoteInitializationFailure } from '@shared/remote/constants';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -63,6 +63,75 @@ beforeEach(() => {
   ownershipService.close();
 });
 afterEach(() => { dispose?.(); dispose = undefined; ownershipService.close(); vi.unstubAllGlobals(); });
+
+describe('publication destination confirmation', () => {
+  const publicationDetail = { ...failedDetail, canConfirmPublication: true };
+  const publicationPreview = { ...preview, action: OwnershipAction.ConfirmPublication,
+    publicationTarget: { route: 'https://service.example/api/remote/v1' } };
+  beforeEach(() => {
+    api.getDetail.mockResolvedValue({ success: true, data: publicationDetail });
+    api.preview.mockResolvedValue({ success: true, data: publicationPreview });
+    api.commit.mockResolvedValue({ success: true, data: { ...result, action: OwnershipAction.ConfirmPublication } });
+  });
+  test('opens an explicit destination preview and submits only its immutable plan after confirmation', async () => {
+    await ownershipService.open(target, OwnershipView.Preview, OwnershipAction.ConfirmPublication);
+    expect(api.getDetail).toHaveBeenCalledExactlyOnceWith(target);
+    expect(api.preview).toHaveBeenCalledExactlyOnceWith({ ...target, action: OwnershipAction.ConfirmPublication });
+    expect(api.commit).not.toHaveBeenCalled();
+    await ownershipService.commit();
+    const request = api.commit.mock.calls[0][0];
+    expect(Object.keys(request).sort()).toEqual(['accountGeneration', 'planId', 'planVersion', 'requestId']);
+    expect(request).toMatchObject({ planId: preview.planId, planVersion: preview.planVersion, accountGeneration: preview.accountGeneration });
+    expect(toast()).toEqual({ message: 'ownershipPublicationConfirmed' });
+    expect(remote.configure).not.toHaveBeenCalled();
+  });
+  test.each([false, undefined])('does not offer a confirmation when fresh detail permission is %s', canConfirmPublication => {
+    api.getDetail.mockResolvedValue({ success: true, data: { ...publicationDetail, canConfirmPublication } });
+    return ownershipService.open(target, OwnershipView.Preview, OwnershipAction.ConfirmPublication).then(() => {
+      expect(api.preview).not.toHaveBeenCalled();
+      expect(ownershipService.getSnapshot()?.error).toBe(OwnershipErrorCode.NotAvailable);
+    });
+  });
+  test.each([preview, { ...publicationPreview, publicationTarget: undefined }])('rejects an eligible preview without the confirmed action and visible destination', async data => {
+    api.preview.mockResolvedValue({ success: true, data });
+    await ownershipService.open(target, OwnershipView.Preview, OwnershipAction.ConfirmPublication);
+    await ownershipService.commit();
+    expect(ownershipService.getSnapshot()?.error).toBe(OwnershipErrorCode.NotAvailable);
+    expect(api.commit).not.toHaveBeenCalled();
+  });
+  test('reconciles an earlier association intent before offering a new destination confirmation', async () => {
+    saveOwnershipPending(localStorage, { partition: 'account-a', target,
+      request: { planId: 'old', planVersion: 'old-version', accountGeneration: 'old-epoch', requestId: 'old-request' } });
+    api.getResult.mockResolvedValue({ success: true, data: result });
+    await ownershipService.open(target, OwnershipView.Preview, OwnershipAction.ConfirmPublication);
+    expect(api.getResult).toHaveBeenCalledExactlyOnceWith({ requestId: 'old-request' });
+    expect(api.preview).not.toHaveBeenCalled();
+    expect(api.commit).not.toHaveBeenCalled();
+    expect(toast()).toEqual({ message: 'ownershipSuccess' });
+  });
+  test('recovers the original destination confirmation after losing its commit response', async () => {
+    api.commit.mockRejectedValueOnce(new Error('lost response'));
+    api.getResult.mockResolvedValue({ success: true, data: { ...result, action: OwnershipAction.ConfirmPublication } });
+    await ownershipService.open(target, OwnershipView.Preview, OwnershipAction.ConfirmPublication);
+    await ownershipService.commit();
+    expect(api.commit).toHaveBeenCalledOnce();
+    expect(api.getResult).toHaveBeenCalledOnce();
+    expect(readOwnershipPending(localStorage)).toEqual([]);
+    expect(toast()).toEqual({ message: 'ownershipPublicationConfirmed' });
+  });
+  test('drops a destination preview received after an account change', async () => {
+    dispose = ownershipService.start();
+    let resolve!: (value: unknown) => void;
+    api.preview.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const opening = ownershipService.open(target, OwnershipView.Preview, OwnershipAction.ConfirmPublication);
+    await settle();
+    switchAccount(2);
+    resolve({ success: true, data: publicationPreview });
+    await opening;
+    expect(ownershipService.getSnapshot()).toBeNull();
+    expect(api.commit).not.toHaveBeenCalled();
+  });
+});
 
 describe('ownership confirmation and recovery', () => {
   test.each([OwnershipSyncState.Local, OwnershipSyncState.Pending, OwnershipSyncState.Synced, OwnershipSyncState.Partial, OwnershipSyncState.WaitingService])(

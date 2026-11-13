@@ -37,6 +37,21 @@ export function sessionVisibilitySql(actor: RemoteOwner | null | undefined, alia
   };
 }
 
+/** App-owned migrations and settings writes share the same atomic trust boundary. */
+export function withTrustedAgentWrite<T>(db: Database.Database, operation: () => T): T {
+  return db.transaction(() => {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_write_context'").get()) {
+      return operation(); // Before ownership was introduced, no trust-aware triggers exist.
+    }
+    const context = db.prepare('SELECT trusted FROM agent_write_context WHERE id=1').get() as { trusted: number } | undefined;
+    if (!context || (context.trusted !== 0 && context.trusted !== 1)) throw new Error('Invalid Agent write context');
+    db.prepare('UPDATE agent_write_context SET trusted=1 WHERE id=1').run();
+    try { return operation(); } finally {
+      db.prepare('UPDATE agent_write_context SET trusted=? WHERE id=1').run(context.trusted);
+    }
+  })();
+}
+
 /** Ownership survives Agent deletion. Runtime raw reads must not be used for UI authorization. */
 export class AgentOwnerStore {
   readonly publicationOrigins: RemotePublicationOrigins;
@@ -79,6 +94,14 @@ export class AgentOwnerStore {
           INSERT OR IGNORE INTO agent_ownership VALUES(NEW.id,CASE WHEN NEW.id='main' THEN 'default' ELSE 'quarantined' END,NULL,NULL,1,NEW.created_at,NEW.updated_at,NULL);
           INSERT OR IGNORE INTO agent_ownership_dirty VALUES(NEW.id);
         END;
+        CREATE TRIGGER IF NOT EXISTS agent_owned_update_guard BEFORE UPDATE ON agents
+        WHEN COALESCE((SELECT trusted FROM agent_write_context WHERE id=1),0)!=1
+          AND EXISTS(SELECT 1 FROM agent_ownership WHERE agent_id=OLD.id AND owner_kind='owned')
+        BEGIN SELECT RAISE(ABORT,'Use LobsterAI Agent settings to update an owned Agent'); END;
+        CREATE TRIGGER IF NOT EXISTS agent_owned_delete_guard BEFORE DELETE ON agents
+        WHEN COALESCE((SELECT trusted FROM agent_write_context WHERE id=1),0)!=1
+          AND EXISTS(SELECT 1 FROM agent_ownership WHERE agent_id=OLD.id AND owner_kind='owned')
+        BEGIN SELECT RAISE(ABORT,'Use LobsterAI Agent settings to delete an owned Agent'); END;
         DROP TRIGGER IF EXISTS agent_ownership_update;
         CREATE TRIGGER agent_ownership_update AFTER UPDATE ON agents BEGIN
           UPDATE agent_ownership SET version=version+1,updated_at=NEW.updated_at,
@@ -168,14 +191,10 @@ export class AgentOwnerStore {
 
   transaction<T>(operation: () => T): T {
     if (this.depth > 0) return operation();
-    const result = this.db.transaction(() => {
+    const result = withTrustedAgentWrite(this.db, () => {
       this.depth++;
-      this.db.prepare('UPDATE agent_write_context SET trusted=1 WHERE id=1').run();
-      try { return operation(); } finally {
-        this.db.prepare('UPDATE agent_write_context SET trusted=0 WHERE id=1').run();
-        this.depth--;
-      }
-    })();
+      try { return operation(); } finally { this.depth--; }
+    });
     this.flushChanges();
     return result;
   }

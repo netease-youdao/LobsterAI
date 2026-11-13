@@ -10,6 +10,7 @@ import {
   OpenClawCronRunMetadataKey,
   parseOpenClawCronSessionKey,
 } from '../shared/cowork/openclawCronSessionKey';
+import { withTrustedAgentWrite } from './agentOwnership';
 import { DB_FILENAME } from './appConstants';
 import { initializeLibraryTables } from './library/libraryMigrations';
 import {
@@ -655,13 +656,11 @@ export class SqliteStore {
     }
 
     try {
-      const pinnedAgentResult = this.db.prepare('UPDATE agents SET pinned = 0 WHERE pinned IS NULL;').run();
-      const pinOrderAgentResult = this.db
-        .prepare('UPDATE agents SET pin_order = updated_at WHERE pinned = 1 AND pin_order IS NULL;')
-        .run();
-      const unpinnedAgentResult = this.db
-        .prepare('UPDATE agents SET pin_order = NULL WHERE pinned = 0 AND pin_order IS NOT NULL;')
-        .run();
+      const [pinnedAgentResult, pinOrderAgentResult, unpinnedAgentResult] = withTrustedAgentWrite(this.db, () => [
+        this.db.prepare('UPDATE agents SET pinned = 0 WHERE pinned IS NULL;').run(),
+        this.db.prepare('UPDATE agents SET pin_order = updated_at WHERE pinned = 1 AND pin_order IS NULL;').run(),
+        this.db.prepare('UPDATE agents SET pin_order = NULL WHERE pinned = 0 AND pin_order IS NOT NULL;').run(),
+      ]);
       if (pinnedAgentResult.changes > 0 || pinOrderAgentResult.changes > 0 || unpinnedAgentResult.changes > 0) {
         this.didRunMigration = true;
       }
@@ -700,9 +699,9 @@ export class SqliteStore {
         const normalizedName = mainAgent.name.trim();
         const shouldUpgradeName = !normalizedName || normalizedName.toLowerCase() === LegacyAgentName.Main;
         if (shouldUpgradeName) {
-          this.db
+          withTrustedAgentWrite(this.db, () => this.db
             .prepare('UPDATE agents SET name = ?, updated_at = ? WHERE id = ?')
-            .run(DefaultAgentProfile.Name, Date.now(), AgentId.Main);
+            .run(DefaultAgentProfile.Name, Date.now(), AgentId.Main));
           this.didRunMigration = true;
         }
       }
@@ -730,7 +729,7 @@ export class SqliteStore {
             updateSortOrder.run(index + 1, agent.id);
           });
         });
-        backfillSortOrder(rows);
+        withTrustedAgentWrite(this.db, () => backfillSortOrder(rows));
         this.didRunMigration = true;
       }
     } catch (error) {
@@ -754,7 +753,7 @@ export class SqliteStore {
             updateIcon.run(agent.icon, now, agent.id);
           }
         });
-        migrateIcons(updates);
+        withTrustedAgentWrite(this.db, () => migrateIcons(updates));
         this.didRunMigration = true;
       }
     } catch (error) {
@@ -769,13 +768,13 @@ export class SqliteStore {
           .get() as { value: string } | undefined;
         const legacyWorkingDirectory = cwdRow?.value?.trim() || '';
         if (legacyWorkingDirectory) {
-          const result = this.db
+          const result = withTrustedAgentWrite(this.db, () => this.db
             .prepare(
               `UPDATE agents
                SET working_directory = ?, updated_at = ?
                WHERE TRIM(COALESCE(working_directory, '')) = ''`,
             )
-            .run(legacyWorkingDirectory, Date.now());
+            .run(legacyWorkingDirectory, Date.now()));
           if (result.changes > 0) {
             this.didRunMigration = true;
           }

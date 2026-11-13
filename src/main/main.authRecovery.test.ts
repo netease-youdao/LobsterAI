@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 import ts from 'typescript';
-import { expect, test, vi } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import { LogReporterStoreKey } from '../shared/analytics/constants';
 import { AuthIpcChannel, AuthSessionChangeReason, AuthSessionStatus } from '../shared/auth/constants';
-import { EnterpriseAccountMode, EnterpriseAccountStoreKey, EnterpriseApiErrorCode } from '../shared/enterpriseAccount/constants';
+import { EnterpriseAccountMode, EnterpriseAccountRequestHeader, EnterpriseAccountStoreKey, EnterpriseApiErrorCode } from '../shared/enterpriseAccount/constants';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
-import { clearEnterpriseAccountContext, fetchEnterpriseAccountContext, getPersistedEnterpriseAccountContext, normalizeEnterpriseAccountContext, persistEnterpriseAccountContext, readAccountMode } from './enterpriseAccount/context';
+import { buildEnterpriseAccountRequestHeaders, clearEnterpriseAccountContext, fetchEnterpriseAccountContext, getPersistedEnterpriseAccountContext, normalizeEnterpriseAccountContext, persistEnterpriseAccountContext, readAccountMode } from './enterpriseAccount/context';
 import { resolveAuthSessionStatusFromError } from './libs/authSessionManager';
 import { OpenClawAccountRecovery } from './libs/openclawAccountRecovery';
 import { isAuthExchangeIntentCurrent, isAuthStateSnapshotCurrent } from './mediaAccountIsolation';
@@ -21,13 +21,13 @@ const ast = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true)
 const declarations = new Set([
   'authMutationRevision', 'isCurrentAuthMutation', 'saveAuthTokens', 'getAuthTokens',
   'captureAuthStateSnapshot', 'isCurrentAuthStateSnapshot', 'clearAuthTokens',
-  'getAuthUser', 'saveAuthUser', 'clearAuthUser', 'getAuthQuotaGateState',
+  'getEnterpriseAccountHeaders', 'getAuthUser', 'saveAuthUser', 'clearAuthUser', 'getAuthQuotaGateState',
   'hasAuthQuotaGateStateChanged', 'syncOpenClawConfigIfAuthQuotaGateChanged', 'resetAuthQuotaGateState',
   'captureAuthMutationState', 'rollbackAuthMutation', 'clearLocalAuthSession', 'normalizeQuota',
   'pendingEnterpriseAccountContextRefresh', 'refreshEnterpriseAccountContext', 'syncEnterpriseAccountContextFromPayload',
 ]);
 const selected: string[] = [];
-const channels = new Set(['AuthIpcChannel.Exchange', 'AuthIpcChannel.GetUser', 'AuthIpcChannel.GetQuota']);
+const channels = new Set(['AuthIpcChannel.Exchange', 'AuthIpcChannel.GetUser', 'AuthIpcChannel.GetQuota', 'AuthIpcChannel.Logout']);
 function select(node: ts.Node): void {
   if (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declarations.has(declaration.name.getText(ast)))) {
     selected.push(node.getText(ast));
@@ -76,7 +76,7 @@ function fixture() {
   };
   const handlers = new Map<string, (...args: unknown[]) => Promise<Record<string, unknown>>>();
   const fetchWithAuth = vi.fn(async () => response({ accountMode: EnterpriseAccountMode.Personal }));
-  const exchangeFetch = vi.fn(async () => response({
+  const exchangeFetch = vi.fn<(input: string, init: RequestInit) => Promise<ReturnType<typeof response>>>(async () => response({
     accessToken: 'new-access', refreshToken: 'new-refresh', user: { userId: 2, accountMode: EnterpriseAccountMode.Personal },
     quota: { subscriptionStatus: AuthSubscriptionStatus.Free },
   }));
@@ -90,14 +90,15 @@ function fixture() {
     openClawAccountRecovery: recovery, LogReporterStoreKey, AuthIpcChannel, AuthSessionChangeReason, AuthSessionStatus,
     EnterpriseAccountMode, EnterpriseApiErrorCode, AuthSubscriptionStatus,
     authQuotaGateStateFromQuota, createDefaultAuthQuotaGateState, normalizeAuthQuota,
-    clearEnterpriseAccountContext, fetchEnterpriseAccountContext, getPersistedEnterpriseAccountContext,
+    buildEnterpriseAccountRequestHeaders, clearEnterpriseAccountContext, fetchEnterpriseAccountContext, getPersistedEnterpriseAccountContext,
     normalizeEnterpriseAccountContext, persistEnterpriseAccountContext, readAccountMode,
     isAuthExchangeIntentCurrent, isAuthStateSnapshotCurrent, resolveAuthSessionStatusFromError, sameOwner,
     getStore: () => store, getCurrentRemoteOwner: owner,
     getCurrentMediaAccountScope: () => ({ ownerAccountKey: 'fixture', accountGeneration: 0 }),
     captureEnterpriseAuthSessionSnapshot: () => null,
-    getServerApiBaseUrl: () => 'https://test.invalid', fetchWithAuth, net: { fetch: exchangeFetch },
-    activateLowCreditPurchaseOffer: purchase, withKeyfromBody: (value: unknown) => value,
+    getServerApiBaseUrl: vi.fn(() => 'https://test.invalid'), fetchWithAuth, net: { fetch: exchangeFetch },
+    activateLowCreditPurchaseOffer: purchase, withKeyfromBody: vi.fn((value: unknown) => value),
+    AbortController, setTimeout, clearTimeout,
     handleEnterpriseAccountContextMismatch: () => false, handleEnterpriseMembershipRevocation: () => false,
     getAllServerModelMetadata: () => [...models], clearServerModelMetadata: () => { models = []; },
     updateServerModelMetadata: (value: unknown[]) => { models = [...value]; },
@@ -126,7 +127,11 @@ function fixture() {
     exchange: () => handlers.get(AuthIpcChannel.Exchange)!({ sender: { id: 1 } }, { code: 'auth-code' }),
     getUser: () => handlers.get(AuthIpcChannel.GetUser)!(),
     getQuota: () => handlers.get(AuthIpcChannel.GetQuota)!(),
+    logout: () => handlers.get(AuthIpcChannel.Logout)!(),
     syncConfig: globals.syncOpenClawConfig,
+    getServerApiBaseUrl: globals.getServerApiBaseUrl,
+    withKeyfromBody: globals.withKeyfromBody,
+    emitAuthSessionChanged: globals.emitAuthSessionChanged,
   };
 }
 
@@ -235,4 +240,98 @@ test('GetQuota delivers changed entitlement config only after its enterprise con
   expect(delivered).toEqual([{ pending: false, quota: {
     subscriptionStatus: AuthSubscriptionStatus.Active, mediaGenerationEntitled: true,
   } }]);
+});
+
+
+afterEach(() => vi.useRealTimers());
+
+test('Logout clears local state and emits before a fast remote request completes', async () => {
+  vi.useFakeTimers();
+  const h = fixture();
+  h.values.set(EnterpriseAccountStoreKey.Context, enterprise);
+  h.exchangeFetch.mockImplementationOnce(async () => {
+    expect(h.values.has('auth_tokens')).toBe(false);
+    expect(h.values.has(LogReporterStoreKey.AuthUser)).toBe(false);
+    expect(h.values.has(EnterpriseAccountStoreKey.Context)).toBe(false);
+    expect(h.emitAuthSessionChanged).toHaveBeenCalledWith({ status: AuthSessionStatus.Unauthenticated, reason: AuthSessionChangeReason.UserLogout });
+    expect(h.commits).toHaveLength(1);
+    return response(null);
+  });
+  expect(await h.logout()).toEqual({ success: true });
+  expect(h.exchangeFetch).toHaveBeenCalledOnce();
+  expect(h.exchangeFetch.mock.calls[0]).toEqual(['https://test.invalid/api/auth/logout', expect.objectContaining({
+    method: 'POST', body: '{}', headers: {
+      Authorization: 'Bearer old-access', 'Content-Type': 'application/json',
+      [EnterpriseAccountRequestHeader.AccountMode]: EnterpriseAccountMode.Enterprise,
+      [EnterpriseAccountRequestHeader.EnterpriseId]: '20',
+    },
+  })]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('Logout succeeds locally after a remote rejection without retrying', async () => {
+  vi.useFakeTimers();
+  const h = fixture();
+  h.exchangeFetch.mockRejectedValueOnce(new Error('network unavailable'));
+  expect(await h.logout()).toEqual({ success: true });
+  expect(h.values.has('auth_tokens')).toBe(false);
+  expect(h.exchangeFetch).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('Logout bounds an unresponsive fetch and its late response cannot clear a new login', async () => {
+  vi.useFakeTimers();
+  const h = fixture();
+  const remote = Promise.withResolvers<ReturnType<typeof response>>();
+  h.exchangeFetch.mockReturnValueOnce(remote.promise);
+  let completed = false;
+  const logout = h.logout().then(result => { completed = true; return result; });
+  const signal = h.exchangeFetch.mock.calls[0][1].signal;
+  expect(h.values.has('auth_tokens')).toBe(false);
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(completed).toBe(false);
+  expect(signal?.aborted).toBe(false);
+  expect((await h.exchange()).success).toBe(true);
+  const tokens = h.values.get('auth_tokens');
+  const user = h.values.get(LogReporterStoreKey.AuthUser);
+  const commitCount = h.commits.length;
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await logout).toEqual({ success: true });
+  expect(signal?.aborted).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
+  remote.resolve(response(null));
+  await Promise.resolve();
+  expect(h.values.get('auth_tokens')).toBe(tokens);
+  expect(h.values.get(LogReporterStoreKey.AuthUser)).toBe(user);
+  expect(h.commits).toHaveLength(commitCount);
+  expect(h.exchangeFetch).toHaveBeenCalledTimes(2);
+});
+
+test('Logout captures its old environment, credentials and body before local change notifications', async () => {
+  const h = fixture();
+  h.values.set(EnterpriseAccountStoreKey.Context, enterprise);
+  h.withKeyfromBody.mockReturnValueOnce({ keyfrom: 'old-environment' });
+  const oldTokens = h.values.get('auth_tokens') as { accessToken: string };
+  h.emitAuthSessionChanged.mockImplementationOnce(() => {
+    h.getServerApiBaseUrl.mockReturnValue('https://next.invalid');
+    oldTokens.accessToken = 'changed-token';
+    h.values.set(EnterpriseAccountStoreKey.Context, { ...enterprise, enterpriseId: 30 });
+    h.withKeyfromBody.mockReturnValue({ keyfrom: 'next-environment' });
+  });
+  expect(await h.logout()).toEqual({ success: true });
+  expect(h.exchangeFetch.mock.calls[0]).toEqual(['https://test.invalid/api/auth/logout', expect.objectContaining({
+    body: '{"keyfrom":"old-environment"}', headers: expect.objectContaining({
+      Authorization: 'Bearer old-access', [EnterpriseAccountRequestHeader.EnterpriseId]: '20',
+    }),
+  })]);
+});
+
+test('Logout without credentials still clears locally and makes no remote request', async () => {
+  vi.useFakeTimers();
+  const h = fixture();
+  h.values.delete('auth_tokens');
+  expect(await h.logout()).toEqual({ success: true });
+  expect(h.values.has(LogReporterStoreKey.AuthUser)).toBe(false);
+  expect(h.exchangeFetch).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
 });

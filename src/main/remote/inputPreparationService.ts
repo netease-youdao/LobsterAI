@@ -2,13 +2,14 @@ import { createHash, randomUUID } from 'crypto';
 import { constants, createReadStream, promises as fs, realpathSync, statSync } from 'fs';
 import path from 'path';
 
-import { AgentId } from '../../shared/agent/constants';
+import { AgentAccessErrorCode, AgentId } from '../../shared/agent/constants';
 import { COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES, type CoworkImageAttachmentPayload, estimateBase64DecodedBytes } from '../../shared/cowork/imageAttachments';
 import { type ModelPresetId, modelPresetModelId, parseModelPresetId } from '../../shared/modelPresets/constants';
 import { OpenClawProviderId } from '../../shared/providers/constants';
 import { parseModelThinkingLevel } from '../../shared/providers/modelThinking';
 import { REMOTE_TEXT_BYTES, type RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryReceipt, type RemotePreparationClaim, type RemoteResolvedInput } from '../../shared/remote/input';
+import { AgentAccessError } from '../agentOwnership';
 import type { CoworkStore } from '../coworkStore';
 import { payloadHash, sameOwner } from './canonical';
 import type { RemoteAgentCatalog } from './remoteAgentCatalog';
@@ -170,6 +171,16 @@ export class InputPreparationService {
   private assertOwner(owner: RemoteOwner, current: () => boolean): void {
     if (!sameOwner(owner, this.deps.getOwner()) || !current()) throw new RemoteInputError(RemoteInputReason.Account);
   }
+  private assertAgentAccess(agentId: string, owner: RemoteOwner): void {
+    try { this.deps.store.assertAgentAccess(agentId, owner); }
+    catch (error) {
+      // Keep missing, quarantined and foreign Agents indistinguishable to remote callers.
+      if (error instanceof AgentAccessError && error.code === AgentAccessErrorCode.Unavailable) {
+        throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
+      }
+      throw error;
+    }
+  }
   private sessionInputVersion(sessionId: string): string { return this.deps.store.remote.inputVersion(sessionId); }
   async prepare(owner: RemoteOwner, deviceId: string, claim: RemotePreparationClaim,
     download: (assetId: string, requestId: string) => Promise<Response>, current: () => boolean): Promise<LocalPreparedInput> {
@@ -208,8 +219,10 @@ export class InputPreparationService {
       if (session && (request.expectedInputVersion !== this.sessionInputVersion(session.id) || request.expectedControlVersion !== store.remote.controlVersion(session.id))) throw new RemoteInputError(RemoteInputReason.Version);
       if (session && !store.remote.isTaskAdmitted(session.id)) throw new RemoteInputError(RemoteInputReason.Stale);
       const agentId = session?.agentId || request.input.agent?.agentId || AgentId.Main;
-      if (targetId && !remotePublicationAllowed(store.remote.db, RemotePublicationKind.Agent, agentId, owner, targetId)) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
-      store.assertAgentAccess(agentId, owner);
+      // An existing task authorizes only its fixed Agent binding, not Agent-wide publication.
+      if (targetId && !remotePublicationAllowed(store.remote.db, session ? RemotePublicationKind.Session : RemotePublicationKind.Agent,
+        session?.id || agentId, owner, targetId)) throw new RemoteInputError(session ? RemoteInputReason.Stale : RemoteInputReason.AgentUnavailable);
+      this.assertAgentAccess(agentId, owner);
       const agent = store.getAgent(agentId);
       const ownership = store.agentOwnership.get(agentId);
       if (!agent?.enabled || !ownership || (!continuation && !store.agentOwnership.canPublish(agentId, owner))) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
@@ -407,7 +420,8 @@ export class InputPreparationService {
       || (!bound && prepared.expiresAt <= Date.now()) || payloadHash(prepared.resolvedInput) !== prepared.inputDigest) throw new RemoteInputError(RemoteInputReason.Stale);
     const input = prepared.resolvedInput;
     const targetId = this.deps.getTargetId?.();
-    if (targetId && !remotePublicationAllowed(this.deps.store.remote.db, RemotePublicationKind.Agent, input.agentId, owner, targetId)) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
+    if (targetId && !remotePublicationAllowed(this.deps.store.remote.db, prepared.sessionId ? RemotePublicationKind.Session : RemotePublicationKind.Agent,
+      prepared.sessionId || input.agentId, owner, targetId)) throw new RemoteInputError(prepared.sessionId ? RemoteInputReason.Stale : RemoteInputReason.AgentUnavailable);
     if (prepared.sessionId && !this.deps.store.remote.isTaskAdmitted(prepared.sessionId)) throw new RemoteInputError(RemoteInputReason.Stale);
     const model = this.deps.models.resolve(owner, deviceId, input.model.modelRef, input.model.version);
     if (prepared.inheritedThinking !== undefined) {
@@ -446,7 +460,7 @@ export class InputPreparationService {
         || input.attachments.some(asset => asset.intent === RemoteInputIntent.Image && (!model.item.inputCapabilities.image || !physical.item.inputCapabilities.image)))
         throw new RemoteInputError(RemoteInputReason.ModelChanged);
     } else if (model.local.runtimeRef !== prepared.runtimeRef) throw new RemoteInputError(RemoteInputReason.ModelChanged);
-    this.deps.store.assertAgentAccess(input.agentId, owner);
+    this.assertAgentAccess(input.agentId, owner);
     if (!this.deps.store.getAgent(input.agentId)?.enabled) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
     if (!bound && !prepared.sessionId && this.deps.store.agentOwnership.get(input.agentId)?.version !== input.expectedAgentVersion) throw new RemoteInputError(RemoteInputReason.AgentChanged);
     if (prepared.sessionId) {

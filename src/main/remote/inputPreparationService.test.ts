@@ -6,11 +6,13 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { AgentAccessErrorCode } from '../../shared/agent/constants';
 import { buildCoworkImageAttachmentPreviews } from '../../shared/cowork/imageAttachments';
 import { ModelPresetId, modelPresetModelId } from '../../shared/modelPresets/constants';
 import { OpenClawProviderId } from '../../shared/providers/constants';
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, type RemotePreparationClaim } from '../../shared/remote/input';
+import { AgentAccessError } from '../agentOwnership';
 import type { CoworkStore } from '../coworkStore';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { payloadHash } from './canonical';
@@ -570,4 +572,87 @@ it('rejects tampering with the private inherited setting or adding a public over
   expect(() => service.validate({ ...prepared, inheritedThinking: 'low' }, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
   const resolvedInput = { ...prepared.resolvedInput, options: { thinkingLevel: 'high' } };
   expect(() => service.validate({ ...prepared, resolvedInput, inputDigest: payloadHash(resolvedInput) }, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
+});
+
+it('reports an inaccessible continuation Agent without downloading or committing prepared input', async () => {
+  const f = fixture(); f.continueAnonymous(); f.attach('private attachment');
+  vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.Unavailable); });
+  const download = vi.fn();
+  await expect(f.service.prepare(owner, 'pc', f.claim, download, () => true)).rejects.toThrow(RemoteInputReason.AgentUnavailable);
+  expect(download).not.toHaveBeenCalled();
+  expect([...f.values.keys()].some(key => key.startsWith('inputPreparation:'))).toBe(false);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'validate', result: 'failed', reason: RemoteInputReason.AgentUnavailable }));
+  expect(emitted).toContainEqual(expect.objectContaining({ fields: expect.objectContaining({ phase: Telemetry.Validate, reason: RemoteInputReason.AgentUnavailable }) }));
+});
+
+it('rejects cached preparation and final validation after Agent access is revoked', async () => {
+  const f = fixture(); f.continueAnonymous();
+  const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+  vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.Unavailable); });
+  await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toThrow(RemoteInputReason.AgentUnavailable);
+  expect(() => f.service.validate(prepared, owner, 'pc', false)).toThrow(RemoteInputReason.AgentUnavailable);
+  expect(() => f.service.validate(prepared, owner, 'pc', true)).toThrow(RemoteInputReason.AgentUnavailable);
+});
+
+it('does not disguise unexpected store failures as unavailable Agents', async () => {
+  const f = fixture();
+  const failure = new Error('unexpected storage failure');
+  vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw failure; });
+  await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toBe(failure);
+});
+
+
+function publishedContinuationFixture() {
+  const f = fixture(() => Target.First);
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE remote_sync_targets(target_id TEXT PRIMARY KEY,sync_target_json TEXT)');
+  db.prepare('INSERT INTO remote_sync_targets VALUES (?,?)').run(Target.First, JSON.stringify({ version: 1, dataSpaceId: 'task-space', dataGeneration: '1' }));
+  const origins = new RemotePublicationOrigins(db);
+  origins.setRouteProvider(() => 'https://task.example');
+  origins.setCurrentTargetProvider(() => ({ owner, route: 'https://task.example', dataSpaceId: 'task-space' }));
+  origins.capture(RemotePublicationKind.Agent, 'anon', null);
+  origins.capture(RemotePublicationKind.Session, 'local', owner);
+  Object.assign(f.deps.store.remote, { db });
+  f.continueAnonymous();
+  return { ...f, db };
+}
+
+it('prepares and revalidates a published owned task without publishing its anonymous Agent', async () => {
+  const f = publishedContinuationFixture();
+  try {
+    const origin = f.db.prepare("SELECT * FROM remote_publication_origins WHERE kind='agent'").get();
+    const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+    expect(prepared.sessionId).toBe('local');
+    expect(prepared.resolvedInput.agentId).toBe('anon');
+    expect(() => f.service.validate(prepared, owner, 'pc', true)).not.toThrow();
+    expect(f.catalog.refresh).not.toHaveBeenCalled();
+    expect(f.db.prepare("SELECT * FROM remote_publication_origins WHERE kind='agent'").get()).toEqual(origin);
+  } finally { f.db.close(); }
+});
+
+it.each(['admission', 'owner', 'source', 'access', 'disabled'] as const)(
+  'rechecks %s before a cached anonymous-Agent continuation can execute', async boundary => {
+    const f = publishedContinuationFixture();
+    try {
+      const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+      if (boundary === 'admission') vi.spyOn(f.deps.store.remote, 'isTaskAdmitted').mockReturnValue(false);
+      if (boundary === 'owner') vi.spyOn(f.deps.store.remote, 'owner').mockReturnValue({ userId: 'other', scopeKey: owner.scopeKey });
+      if (boundary === 'source') f.db.prepare("UPDATE remote_publication_origins SET data_space_id='other-space' WHERE kind='session'").run();
+      if (boundary === 'access') vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.Unavailable); });
+      if (boundary === 'disabled') f.disable();
+      const reason = boundary === 'access' || boundary === 'disabled' ? RemoteInputReason.AgentUnavailable : RemoteInputReason.Stale;
+      expect(() => f.service.validate(prepared, owner, 'pc', true)).toThrow(reason);
+      await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toThrow(reason);
+    } finally { f.db.close(); }
+  },
+);
+
+it('does not turn an owned task into Agent-wide permission for a new task', async () => {
+  const f = publishedContinuationFixture();
+  try {
+    f.claim.request = { preparationId: 'prep', inputSchemaVersion: 2, purpose: 'create_session', draftId: 'draft',
+      input: { text: 'new task', agent: { agentId: 'anon', expectedVersion: '1' }, model: { mode: RemoteInputMode.Agent } } };
+    await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toThrow(RemoteInputReason.AgentUnavailable);
+    expect(f.catalog.refresh).not.toHaveBeenCalled();
+  } finally { f.db.close(); }
 });

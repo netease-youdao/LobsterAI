@@ -16,7 +16,7 @@ import type { RootState } from '../../store';
 import Modal from '../common/Modal';
 import RemoteControlIcon from '../icons/RemoteControlIcon';
 import { isRemoteOnline, needsRemoteSignIn, normalizeRemoteDeviceName, remoteConnectionDescription, remoteConnectionFailure, remoteOwnerKey, remoteTaskContentSummary } from '../settings/remoteControlState';
-import { RemoteAgentSettingsAccess } from './RemoteAgentSettingsAccess';
+import { recoveryNextProbeText, recoveryReasonText, recoveryStatusLabel } from '../settings/remoteRecoveryCopy';
 import { RemoteDeviceConnectionList, RemoteDeviceConnectionSummary } from './RemoteDeviceConnectionList';
 
 interface RemoteDeviceSettingsProps {
@@ -309,7 +309,9 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
                   void ownershipService.open({ kind: OwnershipTargetKind.Task, id: issue.localSessionId });
                 }}>
                 <span className="block truncate font-medium text-foreground" title={issue.title}>{issue.title || t('remoteUnnamedTask')}</span>
-                <span className="mt-1 block">{t(issue.source === RemoteSyncTaskIssueSource.Live && (issue.status === RemoteSyncTaskIssueStatus.Isolated || issue.status === RemoteSyncTaskIssueStatus.Retrying) ? 'ownershipContentSyncEntryFailed' : TASK_STATUS_KEYS[issue.status])}</span>
+                <span className="mt-1 block">{recoveryStatusLabel(issue.recovery) ?? t(issue.source === RemoteSyncTaskIssueSource.Live && (issue.status === RemoteSyncTaskIssueStatus.Isolated || issue.status === RemoteSyncTaskIssueStatus.Retrying) ? 'ownershipContentSyncEntryFailed' : TASK_STATUS_KEYS[issue.status])}</span>
+                {recoveryReasonText(issue.recovery) && <span className="mt-1 block">{recoveryReasonText(issue.recovery)}</span>}
+                {recoveryNextProbeText(issue.recovery) && <span className="mt-1 block">{recoveryNextProbeText(issue.recovery)}</span>}
               </button>
             </li>)}
           </ul>}
@@ -318,7 +320,7 @@ export function RemoteDeviceSettings({ onLogin, loginAllowed }: RemoteDeviceSett
         </details>)}
     </section>
     {showConnections && <RemoteDeviceConnectionList snapshot={management} sectionRef={connectionsSection} />}
-    <RemoteAgentSettingsAccess identity={identity} />
+    <p className="text-xs leading-5 text-secondary">{t('remoteAgentSettingsDescription')}</p>
     <Modal isOpen={renameOpen} onClose={closeRename} onEscape={closeRename}
       overlayClassName="fixed inset-0 z-[60] modal-backdrop flex items-center justify-center p-4"
       className="w-full max-w-sm rounded-xl border border-border bg-background p-5 shadow-modal">

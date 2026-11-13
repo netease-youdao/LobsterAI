@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentOwnerKind } from '../shared/agent/constants';
-import { OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '../shared/ownership/constants';
+import { OwnershipAction, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '../shared/ownership/constants';
 import type { OwnershipCommitRequest, OwnershipPreview, OwnershipTarget } from '../shared/ownership/types';
 import type { RemoteOwner } from '../shared/remote/constants';
 import { AgentOwnerStore } from './agentOwnership';
@@ -10,6 +10,9 @@ import { SubagentTracker } from './libs/agentEngine/subagent/tracker';
 import { type OwnershipActor, OwnershipAssociationBlockReason, OwnershipAssociationService } from './ownershipAssociation';
 import { OwnershipAssociationStore } from './ownershipAssociationStore';
 import { OwnershipOperationGate } from './ownershipOperationGate';
+import type { PublicationTarget } from './ownershipPublication';
+import { LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX } from './remote/remoteImportSnapshots';
+import { RemotePublicationKind } from './remote/remotePublicationOrigins';
 import { RemoteStore } from './remote/remoteStore';
 import { SubagentRunStore } from './subagentRunStore';
 
@@ -32,8 +35,9 @@ function fixture() {
   const gate = new OwnershipOperationGate();
   let actor: OwnershipActor = { owner: a, generation: '1', label: 'Alice', scopeLabel: 'Personal' };
   let now = 1000;
+  let publicationTarget: PublicationTarget | null = null;
   const deps = { store: { remote, agentOwnership: agents, runSessionTransaction: <T>(op: () => T): T => remote.transaction(op) },
-    actor: () => actor, gate, now: () => now, deviceName: () => 'Computer', afterCommit: vi.fn() };
+    actor: () => actor, gate, now: () => now, publicationTarget: () => publicationTarget, confirmPublication: vi.fn(), deviceName: () => 'Computer', afterCommit: vi.fn() };
   const service = new OwnershipAssociationService(deps);
   let requests = 0;
   const create = (id: string, agentId = 'office', owner: RemoteOwner | null = null, parent: string | null = null) => {
@@ -55,6 +59,7 @@ function fixture() {
   };
   return { db, remote, agents, gate, service, deps, create, link, input, commit,
     setActor: (owner: RemoteOwner | null, generation = '2') => { actor = { ...actor, owner, generation }; },
+    setPublicationTarget: (target: PublicationTarget | null) => { publicationTarget = target; },
     advance: () => { now += 400000; } };
 }
 
@@ -349,5 +354,236 @@ describe('ownership task content detail delegation', () => {
     const service = new OwnershipAssociationService({ ...f.deps, taskSync: () => { throw new Error('unavailable'); } });
     expect(service.getDetail(task('mine'))).toMatchObject({ syncState: OwnershipSyncState.Pending,
       contentSync: { state: 'unknown', reason: 'unavailable', retryable: false } });
+  });
+});
+
+
+const destination = (): PublicationTarget => ({ owner: a, route: 'https://current.example/api', targetId: 'target',
+  dataSpaceId: 'space', deviceId: 'desktop', epoch: 1, routeEpoch: 2, accountGeneration: 3 });
+const confirmation = (id: string) => ({ ...task(id), action: OwnershipAction.ConfirmPublication });
+const origin = (f: ReturnType<typeof fixture>, id: string) => f.db.prepare(
+  "SELECT * FROM remote_publication_origins WHERE kind='session' AND local_id=?").get(id);
+function oldAssociation() {
+  const f = fixture(); f.create('old'); const original = f.commit(task('old'));
+  f.setPublicationTarget(destination());
+  return { ...f, original };
+}
+
+describe('explicit publication destination confirmation', () => {
+  it.each(['office', 'main'])('captures a new historical claim without changing the %s Agent or another task', agentId => {
+    const f = fixture(); f.create('new-claim', agentId); f.create('unrelated', agentId);
+    f.remote.publicationOrigins.setRouteProvider(() => 'https://current.example/api');
+    f.remote.publicationOrigins.setCurrentTargetProvider(() => ({ owner: a, route: 'https://current.example/api', dataSpaceId: 'space' }));
+    const other = f.remote.sync('unrelated'), agentOwner = f.agents.get(agentId);
+    f.commit(task('new-claim'));
+    expect(origin(f, 'new-claim')).toMatchObject({ route: 'https://current.example/api', data_space_id: 'space', owner_user_id: a.userId });
+    expect(f.agents.get(agentId)).toEqual(agentOwner); expect(f.remote.sync('unrelated')).toEqual(other);
+    expect(f.remote.owner('unrelated')).toBeNull(); expect(f.deps.confirmPublication).not.toHaveBeenCalled();
+  });
+
+  it('keeps offline claims on the chosen route and never overwrites an existing source', () => {
+    const f = fixture(); f.create('offline'); f.create('known');
+    f.remote.publicationOrigins.setRouteProvider(() => 'https://original.example');
+    f.remote.publicationOrigins.capture(RemotePublicationKind.Session, 'known', null);
+    f.remote.publicationOrigins.setRouteProvider(() => 'https://offline.example');
+    f.commit(task('offline')); f.commit(task('known'));
+    expect(origin(f, 'offline')).toMatchObject({ route: 'https://offline.example', data_space_id: null });
+    expect(origin(f, 'known')).toMatchObject({ route: 'https://original.example', data_space_id: null });
+    f.remote.publicationOrigins.confirm(a, 'https://offline.example', { version: 1, dataSpaceId: 'offline-space', dataGeneration: '1' });
+    expect(origin(f, 'offline')).toMatchObject({ route: 'https://offline.example', data_space_id: 'offline-space' });
+  });
+
+  it.each(['route', 'space'])('invalidates new association after preview source %s changes', change => {
+    const f = fixture(); f.create('old'); let route = 'https://original.example', space = 'space-a';
+    f.remote.publicationOrigins.setRouteProvider(() => route);
+    f.remote.publicationOrigins.setCurrentTargetProvider(() => ({ owner: a, route, dataSpaceId: space }));
+    const preview = f.service.preview(task('old'));
+    if (change === 'route') route = 'https://changed.example'; else space = 'space-b';
+    expect(() => f.service.commit(f.input(preview))).toThrow(OwnershipErrorCode.PlanChanged);
+    expect(f.remote.owner('old')).toBeNull(); expect(origin(f, 'old')).toBeUndefined();
+  });
+
+  it('requires a new confirmation and never treats replaying the original association receipt as destination permission', () => {
+    const f = oldAssociation();
+    f.remote.publicationOrigins.setRouteProvider(() => destination().route);
+    f.remote.publicationOrigins.setCurrentTargetProvider(() => destination());
+    expect(f.service.commit(f.original.request)).toEqual(f.original.result);
+    expect(origin(f, 'old')).toMatchObject({ route: null, data_space_id: null });
+    expect(f.service.getDetail(task('old'))).toMatchObject({ canAssociate: false, canConfirmPublication: true });
+    const preview = f.service.preview(confirmation('old'));
+    expect(preview).toMatchObject({ eligible: true, action: OwnershipAction.ConfirmPublication,
+      publicationTarget: { route: destination().route }, agentWillAssociate: false, tasks: [{ id: 'old' }] });
+    expect(preview.publicationTarget).toEqual({ route: destination().route });
+    const mapping = f.remote.sync('old'), owner = f.remote.ownershipRecord('old'), agentOwner = f.agents.get('office');
+    const request = f.input(preview), result = f.service.commit(request);
+    expect(result.action).toBe(OwnershipAction.ConfirmPublication);
+    expect(f.remote.sync('old')).toEqual(mapping); expect(f.remote.ownershipRecord('old')).toEqual(owner); expect(f.agents.get('office')).toEqual(agentOwner);
+    expect(origin(f, 'old')).toMatchObject({ route: destination().route, data_space_id: destination().dataSpaceId });
+    expect(f.deps.confirmPublication).toHaveBeenCalledExactlyOnceWith(['old'], destination());
+    expect(f.service.commit(request)).toEqual(result);
+    const restarted = new OwnershipAssociationService(f.deps);
+    expect(restarted.getResult({ requestId: request.requestId })).toEqual(result);
+    expect(restarted.getDetail(task('old')).canConfirmPublication).toBe(false);
+  });
+
+  it('confirms only the original real execution closure, leaving ordinary forks and other Agent tasks unchanged', () => {
+    const f = fixture(); f.create('root'); f.create('child', 'other', null, 'root'); f.link('root', 'child', 'other');
+    f.create('fork', 'office', null, 'root'); f.create('other-task');
+    f.commit(task('child')); f.setPublicationTarget(destination());
+    const agents = f.db.prepare('SELECT * FROM agent_ownership ORDER BY agent_id').all();
+    const preview = f.service.preview(confirmation('child')); expect(preview.eligible).toBe(true);
+    expect(preview.tasks.map(t => t.id)).toEqual(['child', 'root']);
+    const result = f.service.commit(f.input(preview));
+    expect(result.sessionIds.sort()).toEqual(['child', 'root']);
+    expect(origin(f, 'root')).toMatchObject({ data_space_id: 'space' }); expect(origin(f, 'child')).toMatchObject({ data_space_id: 'space' });
+    expect(f.remote.owner('fork')).toBeNull(); expect(f.remote.owner('other-task')).toBeNull();
+    expect(f.db.prepare('SELECT * FROM agent_ownership ORDER BY agent_id').all()).toEqual(agents);
+  });
+
+  it('does not silently include a newly joined execution child outside the original association receipt', () => {
+    const f = oldAssociation(); f.create('later', 'office', a, 'old'); f.link('old', 'later');
+    expect(f.service.getDetail(task('old')).canConfirmPublication).toBe(false);
+    expect(f.service.preview(confirmation('old')).eligible).toBe(false);
+    expect(origin(f, 'old')).toMatchObject({ route: null, data_space_id: null });
+  });
+
+  it.each(['route', 'dataSpaceId', 'targetId', 'deviceId', 'epoch', 'routeEpoch', 'accountGeneration'] as const)(
+    'rejects a confirmation plan after trusted target %s changes', field => {
+      const f = oldAssociation(), preview = f.service.preview(confirmation('old'));
+      const target = destination();
+      if (typeof target[field] === 'number') (target as unknown as Record<string, unknown>)[field] = (target[field] as number) + 1;
+      else (target as unknown as Record<string, unknown>)[field] = `${target[field]}-changed`;
+      f.setPublicationTarget(target);
+      expect(() => f.service.commit(f.input(preview))).toThrow(OwnershipErrorCode.PlanChanged);
+      expect(origin(f, 'old')).toMatchObject({ route: null, data_space_id: null });
+    });
+
+  it('rejects account changes, offline destinations, missing receipts, and non-manual owned tasks', () => {
+    const f = oldAssociation(), preview = f.service.preview(confirmation('old'));
+    f.setActor(a, 'changed'); expect(() => f.service.commit(f.input(preview))).toThrow(OwnershipErrorCode.AccountChanged);
+    f.setPublicationTarget(null); expect(f.service.getDetail(task('old')).canConfirmPublication).toBe(false);
+    f.setPublicationTarget(destination());
+    f.db.prepare('DELETE FROM ownership_association_operations').run();
+    expect(f.service.getDetail(task('old')).canConfirmPublication).toBe(false);
+    f.create('ordinary-owned', 'office', a);
+    expect(f.service.getDetail(task('ordinary-owned')).canConfirmPublication).toBe(false);
+    expect(f.service.preview({ ...agent(), action: OwnershipAction.ConfirmPublication }).eligible).toBe(false);
+  });
+
+  it('checks the operation gate and rolls back source, receipt and revisions if bridge confirmation fails', () => {
+    const f = oldAssociation();
+    const busy = f.gate.tryAcquire({ agentIds: ['office'], sessionIds: ['old'] });
+    expect(f.service.preview(confirmation('old'))).toMatchObject({ eligible: false, reason: OwnershipErrorCode.ResourceBusy }); busy!();
+    const preview = f.service.preview(confirmation('old')), request = f.input(preview);
+    const before = { source: origin(f, 'old'), sync: f.remote.sync('old'), revisions: f.remote.projectionRevision('old') };
+    f.deps.confirmPublication.mockImplementation(() => {
+      expect(f.db.inTransaction).toBe(true);
+      expect(f.service.receipts.find(a, request.requestId)).not.toBeNull();
+      expect(origin(f, 'old')).toMatchObject({ data_space_id: 'space' });
+      throw new Error('Trusted target became unavailable');
+    });
+    expect(() => f.service.commit(request)).toThrow(OwnershipErrorCode.LocalCommitFailed);
+    expect({ source: origin(f, 'old'), sync: f.remote.sync('old'), revisions: f.remote.projectionRevision('old') }).toEqual(before);
+    expect(f.service.getResult({ requestId: request.requestId })).toEqual({ status: OwnershipResultStatus.NotCommitted });
+    f.deps.confirmPublication.mockReset(); expect(f.service.commit(request).action).toBe(OwnershipAction.ConfirmPublication);
+  });
+
+  it.each([
+    ["UPDATE remote_sync SET device_id='published' WHERE local_id='old'"],
+    ["UPDATE remote_sync SET sync_environment='other-target' WHERE local_id='old'"],
+    ["UPDATE remote_sync SET ack_seq=1 WHERE local_id='old'"],
+    ["UPDATE remote_sync SET server_seq='1' WHERE local_id='old'"],
+    ["UPDATE remote_sync SET sync_protocol_version=2 WHERE local_id='old'"],
+    ["UPDATE remote_sync SET stream_epoch='original-epoch' WHERE local_id='old'"],
+    ["UPDATE remote_sync SET source_purge_seq='1' WHERE local_id='old'"],
+    ["UPDATE remote_sync SET event_purge_seq='1' WHERE local_id='old'"],
+    ["UPDATE remote_sync SET migration_frozen=1 WHERE local_id='old'"],
+    ["INSERT INTO remote_state VALUES('import:old','{}')"],
+    ["INSERT INTO remote_state VALUES('deletionFence:old','{}')"],
+    ["INSERT INTO remote_state VALUES('inputFence:old','{}')"],
+    ["INSERT INTO remote_history_migrations VALUES('scope','old','writer','migration','{}','hash','active')"],
+    ["INSERT INTO remote_state VALUES('localGcDeleted:old','{}')"],
+    ["INSERT INTO remote_state VALUES('deletionClosed:old','{}')"],
+    ["INSERT INTO remote_state VALUES('sessionDeletion:old','{}')"],
+    ["INSERT INTO remote_state VALUES('runCommand:old','\"remote-command\"')"],
+    ["INSERT INTO remote_run_isolation VALUES('old','run','hash','unknown')"],
+    ["UPDATE remote_publication_origins SET route='https://known.example' WHERE local_id='old'"],
+    ["UPDATE remote_publication_origins SET data_space_id='known-space' WHERE local_id='old'"],
+  ])('never confirms a source when historical remote authority or another source exists: %s', statement => {
+    const f = oldAssociation(); f.db.exec(statement);
+    expect(f.service.getDetail(task('old')).canConfirmPublication).toBe(false);
+    expect(f.service.preview(confirmation('old')).eligible).toBe(false);
+    expect(f.deps.confirmPublication).not.toHaveBeenCalled();
+  });
+
+  it.each(['remote_sync_target_archives', 'remote_sync_admission_evidence'])('rejects original or damaged mapping evidence in %s', table => {
+    const f = oldAssociation();
+    f.db.exec(`CREATE TABLE ${table}(row_key TEXT,table_name TEXT,row_json TEXT)`);
+    f.db.prepare(`INSERT INTO ${table} VALUES(?,?,?)`).run('old', 'remote_sync', JSON.stringify({ local_id: 'old', session_id: 'remote-original' }));
+    expect(f.service.preview(confirmation('old')).eligible).toBe(false);
+    f.db.prepare(`UPDATE ${table} SET row_key='unknown',row_json='{}'`).run();
+    expect(f.service.preview(confirmation('old')).eligible).toBe(false);
+    f.db.prepare(`UPDATE ${table} SET row_json=?`).run(JSON.stringify({ local_id: '', session_id: '' }));
+    expect(f.service.preview(confirmation('old')).eligible).toBe(false);
+  });
+
+  it('preserves unknown source for a future claim with a residual original archive', () => {
+    const f = fixture(); f.create('old');
+    f.db.exec("CREATE TABLE remote_sync_target_archives(row_key TEXT,table_name TEXT,row_json TEXT)");
+    f.db.prepare('INSERT INTO remote_sync_target_archives VALUES(?,?,?)').run('old', 'remote_sync', JSON.stringify({ local_id: 'old', session_id: 'remote-original' }));
+    f.remote.publicationOrigins.setRouteProvider(() => destination().route);
+    f.remote.publicationOrigins.setCurrentTargetProvider(() => destination());
+    f.commit(task('old'));
+    expect(origin(f, 'old')).toMatchObject({ route: null, data_space_id: null });
+  });
+});
+
+
+describe('publication source control and archived authority', () => {
+  it.each(['takeover', 'input', 'empty-input', 'bad-takeover', 'bad-input'])('does not confirm with unresolved %s evidence', kind => {
+    const f = oldAssociation();
+    const key = kind.includes('takeover') ? `${LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX}operation` : 'inputPreparation:operation';
+    const value = kind === 'takeover' ? JSON.stringify({ localId: 'old', importId: 'original' })
+      : kind === 'input' ? JSON.stringify({ sessionId: 'old' }) : kind === 'empty-input' ? JSON.stringify({ sessionId: '' }) : '{broken';
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run(key, value);
+    expect(f.service.getDetail(task('old')).canConfirmPublication).toBe(false);
+  });
+
+  it('allows unrelated well-attributed controls and ordinary local deletion version guards', () => {
+    const f = oldAssociation();
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run(`${LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX}unrelated`, JSON.stringify({ localId: 'unrelated' }));
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('inputPreparation:new-task', JSON.stringify({ sessionId: null }));
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('deletionGuard:old', JSON.stringify({ version: '2', runId: null }));
+    expect(f.service.preview(confirmation('old')).eligible).toBe(true);
+  });
+
+  it.each(['remote_sync_target_archives', 'remote_sync_admission_evidence'])('retains nested immutable takeover authority in %s', table => {
+    const f = oldAssociation();
+    f.db.exec(`CREATE TABLE ${table}(row_key TEXT,table_name TEXT,row_json TEXT)`);
+    const key = `${LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX}original-import`;
+    const body = JSON.stringify({ key, value: JSON.stringify({ localId: 'old', savedImport: { importId: 'original-import' } }) });
+    f.db.prepare(`INSERT INTO ${table} VALUES(?,?,?)`).run(key, 'remote_state', body);
+    expect(f.service.preview(confirmation('old')).eligible).toBe(false);
+  });
+});
+
+
+describe('publication confirmation during received deletion', () => {
+  it.each(['local', 'remote', 'malformed'])('rejects %s deletion claim before the task fence is written', kind => {
+    const f = oldAssociation();
+    const value = kind === 'malformed' ? '{}' : JSON.stringify({ phase: 'received', target: {
+      localSessionId: kind === 'local' ? 'old' : 'other',
+      sessionId: kind === 'remote' ? f.remote.sync('old')!.session_id : 'unrelated-remote',
+    } });
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('sessionDeletion:operation:1:claim', value);
+    expect(f.service.preview(confirmation('old')).eligible).toBe(false);
+  });
+
+  it('does not confuse an unrelated fully attributed deletion claim with this task', () => {
+    const f = oldAssociation();
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('sessionDeletion:operation:1:claim', JSON.stringify({
+      phase: 'received', target: { localSessionId: 'unrelated', sessionId: 'unrelated-remote' },
+    }));
+    expect(f.service.preview(confirmation('old')).eligible).toBe(true);
   });
 });

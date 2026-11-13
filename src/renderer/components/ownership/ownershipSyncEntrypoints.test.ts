@@ -1,4 +1,4 @@
-import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
+import { OwnershipAction, OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipDetail } from '@shared/ownership/types';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -106,6 +106,52 @@ describe('task sync entry points', () => {
     expect(closeMenu).toHaveBeenCalledOnce();
     expect(harness.open).toHaveBeenCalledExactlyOnceWith(target, 'detail');
     expect(button('ownershipRetrySync')).toBeUndefined();
+  });
+});
+
+describe('publication destination entry', () => {
+  test('offers only the authorized task a preview action without retrying or committing', () => {
+    setDetail({ ...detail, canConfirmPublication: true });
+    render(React.createElement(OwnershipHost));
+    click(button('ownershipConfirmPublication'));
+    expect(harness.open).toHaveBeenCalledExactlyOnceWith(target, 'preview', OwnershipAction.ConfirmPublication);
+    expect(harness.retry).not.toHaveBeenCalled();
+  });
+  test.each(['missing', 'false', 'anonymous', 'agent'] as const)('keeps destination confirmation hidden for %s eligibility', scenario => {
+    const next: OwnershipDetail = { ...detail, canConfirmPublication: true };
+    if (scenario === 'missing') delete next.canConfirmPublication;
+    if (scenario === 'false') next.canConfirmPublication = false;
+    if (scenario === 'anonymous') next.ownership = { kind: 'anonymous', label: '', scopeLabel: '' };
+    if (scenario === 'agent') next.kind = OwnershipTargetKind.Agent;
+    setDetail(next);
+    render(React.createElement(OwnershipHost));
+    expect(button('ownershipConfirmPublication')).toBeUndefined();
+  });
+  test('keeps publication rechecks in the same action with destination-specific errors', () => {
+    harness.panel = { target, view: 'preview', action: OwnershipAction.ConfirmPublication, error: OwnershipErrorCode.PlanChanged };
+    const html = render(React.createElement(OwnershipHost));
+    expect(html).toContain(i18nService.t('ownershipPublicationErrorChanged'));
+    expect(html).not.toContain(i18nService.t('ownershipError_PLAN_CHANGED'));
+    click(button('ownershipRecheck'));
+    expect(harness.open).toHaveBeenCalledExactlyOnceWith(target, 'preview', OwnershipAction.ConfirmPublication);
+  });
+  test('shows the trusted account, service route and bounded scope without association language', () => {
+    const route = 'https://service.example/api/remote/v1';
+    harness.panel = { target, view: 'preview', action: OwnershipAction.ConfirmPublication, detail,
+      preview: { planId: 'plan', planVersion: 'v1', accountGeneration: 'generation', expiresAt: Date.now() + 1000,
+        action: OwnershipAction.ConfirmPublication, publicationTarget: { route }, eligible: true,
+        account: { label: 'Account A', scopeLabel: 'Personal', partition: 'account-a' },
+        kind: target.kind, targetId: target.id, targetTitle: detail.title, agentId: 'agent',
+        anonymousTaskCount: 0, subtaskCount: 0, existingOwnedTaskCount: 1, agentWillAssociate: false,
+        tasks: [{ id: target.id, title: detail.title, isSubtask: false }] } };
+    const html = render(React.createElement(OwnershipHost));
+    expect(html).toContain(route);
+    expect(html).toContain('Account A');
+    expect(html).toContain(i18nService.t('ownershipPublicationScope'));
+    expect(html).not.toContain(i18nService.t('ownershipConfirmVisibility'));
+    expect(html).not.toContain(i18nService.t('ownershipRetainedTasks').replace('{count}', '1'));
+    expect(button('ownershipConfirmPublication')).toBeDefined();
+    expect(button('ownershipConfirm')).toBeUndefined();
   });
 });
 

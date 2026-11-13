@@ -560,6 +560,79 @@ describe('session synchronization recovery', () => {
     store.acknowledge('sync-task', 'desktop', row.session_id, snapshot.baseSourceSeq, '1', true, snapshot.snapshotEpoch);
   }
 
+  it('persists a dependency transition only after real current-context HTTP success', async () => {
+    const { bridge, requestApi } = syncing(); const context = bridge.taskContext();
+    requestApi.mockRejectedValueOnce(new TypeError('fetch failed'));
+    await expect(bridge.api('/sync/state?localSessionId=sync-task')).rejects.toThrow('fetch failed');
+    expect(bridge.recoveryDependency.epoch(context)).toBe(0);
+    requestApi.mockResolvedValue(new Response(JSON.stringify({ code: 0, data: {} })));
+    await bridge.api('/sync/state?localSessionId=sync-task'); expect(bridge.recoveryDependency.epoch(context)).toBe(1);
+    requestApi.mockResolvedValue(new Response(JSON.stringify({ code: 0, data: {} })));
+    await bridge.api('/sync/state?localSessionId=sync-task'); expect(bridge.recoveryDependency.epoch(context)).toBe(1);
+  });
+  it('does not treat a cached capability snapshot as restored network evidence', async () => {
+    const { bridge, requestApi } = syncing(); const context = bridge.taskContext();
+    requestApi.mockRejectedValueOnce(new TypeError('fetch failed'));
+    await expect(bridge.api('/sync/state?localSessionId=sync-task')).rejects.toThrow('fetch failed');
+    const support = { enabled: true, protocolVersions: [1], projectionVersions: [1], capabilities: [RemoteCapability.SameAccountAccess] };
+    await bridge.refreshCapabilities(support); expect(bridge.recoveryDependency.epoch(context)).toBe(0);
+    requestApi.mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: support })));
+    await bridge.refreshCapabilities(); expect(bridge.recoveryDependency.epoch(context)).toBe(1);
+  });
+
+  it('does not use a late HTTP response for a different registered device', async () => {
+    const { bridge, requestApi } = syncing(); const context = bridge.taskContext();
+    requestApi.mockRejectedValueOnce(new TypeError('fetch failed'));
+    await expect(bridge.api('/sync/state?localSessionId=sync-task')).rejects.toThrow('fetch failed');
+    let resolve!: (value: Response) => void;
+    requestApi.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const pending = bridge.api('/sync/state?localSessionId=sync-task');
+    bridge.registration = { ...bridge.registration, deviceId: 'another-device' };
+    resolve(new Response(JSON.stringify({ code: 0, data: {} }))); await pending;
+    expect(bridge.recoveryDependency.epoch(context)).toBe(0); expect(bridge.recoveryDependency.epoch(bridge.taskContext())).toBe(0);
+  });
+
+  it.each(['committed', 'uploading', 'expired'])('automatically verifies an old isolated %s import before the original pipeline publishes', async terminal => {
+    const { bridge, store, requestApi, execute } = syncing();
+    requestApi.mockRejectedValueOnce(new RemoteApiError(47019, 'Invalid request', { reason: 'INVALID_REMOTE_REQUEST' }, 400));
+    await bridge.syncSessions();
+    const original = store.get<any>('import:sync-task')!;
+    expect(original).not.toBeNull();
+    const context = bridge.taskContext();
+    store.db.prepare('UPDATE remote_sync_task_state SET auto_probe_next_at=0').run();
+    const operations: Array<{ method: string; path: string; importId?: string }> = [];
+    requestApi.mockImplementation(async (_owner, pathname, init) => {
+      const saved = store.get<any>('import:sync-task') || original;
+      const body = init.body ? JSON.parse(String(init.body)) : null;
+      operations.push({ method: init.method, path: pathname, importId: body?.importId });
+      const row = store.sync('sync-task')!;
+      const receipt = { importId: saved.importId, sessionId: saved.sessionId, manifestHash: saved.manifest.manifestHash,
+        baseSourceSeq: saved.baseSourceSeq, expectedSourceSeq: saved.expectedSourceSeq, expectedServerSeq: saved.expectedServerSeq,
+        stateVersion: '2', committedSourceSeq: saved.baseSourceSeq, committedSeq: '1' };
+      let data: any;
+      if (pathname.includes('/sync/state?')) data = { deviceId: 'desktop', sessionId: row.session_id, localSessionId: row.local_id,
+        syncProtocolVersion: 1, streamEpoch: null, lastSourceSeq: terminal === 'committed' ? original.baseSourceSeq : String(row.ack_seq),
+        lastSeq: row.server_seq, sourcePurgeSeq: '0', eventPurgeSeq: '0', activeImport: null };
+      else if (init.method === 'GET') data = { ...receipt, state: saved.importId === original.importId ? terminal : 'uploading' };
+      else if (pathname.endsWith('/sync/imports')) data = { ...receipt, state: saved.importId === original.importId ? terminal : 'uploading' };
+      else if (pathname.endsWith('/commit')) data = { ...receipt, state: 'committed' };
+      else if (pathname.includes('/parts/')) { const part = saved.parts.find((value: any) => pathname.endsWith(`/parts/${value.partNo}`)); data = { partNo: part.partNo, payloadHash: part.payloadHash, byteSize: part.byteSize }; }
+      else throw new Error('Unexpected recovery request');
+      return new Response(JSON.stringify({ code: 0, data }));
+    });
+    await bridge.automaticRecovery.tick(context, bridge.syncContext());
+    await bridge.automaticRecovery.tick(context, bridge.syncContext());
+    expect(operations).toHaveLength(2); expect(operations.every(operation => operation.method === 'GET')).toBe(true);
+    expect(bridge.taskSync.get(context, 'sync-task').phase).toBe('reconciling');
+    expect(store.get('syncFailure:sync-task')).not.toBeNull();
+    for (let turn = 0; turn < 12 && store.get('syncFailure:sync-task'); turn++) await bridge.syncSessions(true);
+    const final = store.sync('sync-task')!;
+    expect(final.ack_seq).toBe(final.source_seq); expect(final.needs_snapshot).toBe(0);
+    expect(store.get('syncFailure:sync-task')).toBeNull(); expect(execute).not.toHaveBeenCalled();
+    if (terminal === 'committed') expect(operations.every(operation => operation.method === 'GET')).toBe(true);
+    if (terminal === 'uploading') expect(operations.filter(operation => operation.importId).every(operation => operation.importId === original.importId)).toBe(true);
+  });
+
   it('clears a failed import after a later commit and logs no sensitive error content', async () => {
     const { bridge, store, requestApi, warning, setDisplay } = syncing();
     const secret = 'private conversation and device credential';

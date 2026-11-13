@@ -10,6 +10,7 @@ import { RemoteLiveEncodingError } from './remoteLiveMetadata';
 import { enqueueRemoteLog } from './remoteLogSink';
 import { remoteTransportErrorMetadata } from './remoteNetworkError';
 import { RemoteNetworkFailure } from './remoteNetworkProtocol';
+import { RecoveryImmutableErrors } from './remoteSyncRecoveryPolicy';
 
 /** Diagnostic metadata only. Never pass raw requests, responses or errors to the logger. */
 export const REMOTE_SYNC_REQUEST_ID_HEADER = 'X-Remote-Request-Id';
@@ -22,6 +23,7 @@ const eventTypes = new Set(['session.upsert', 'session.deleted', 'message.upsert
 const manifestEventTypes = [...eventTypes].filter(type => type !== RemoteReply.DeltaEvent).concat(RemoteQuestion.Event);
 const lifecycleStates = new Set(['starting', 'running', 'waiting_approval', 'waiting_local', 'cancelling', 'reconciling', 'succeeded', 'failed', 'cancelled', 'interrupted', 'pending', 'approved', 'rejected', 'expired', 'streaming', 'complete', 'error', 'queued', 'waiting_user', 'unavailable', 'uploading', 'committed', 'aborted']);
 const validationMessages = new Set([
+  ...RecoveryImmutableErrors,
   ...Object.values(RemoteDeletionReason),
   ...Object.values(RemoteNetworkFailure), ...Object.values(RemoteLiveEncodingError),
   'Unverified legacy session has no original mapping', 'Persisted synchronization safety block requires task review',

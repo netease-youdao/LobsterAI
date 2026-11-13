@@ -1,3 +1,5 @@
+export const RemoteReplyModelLabelCapability = 'reply_model_label_v1';
+
 /** Versioned public conversation content, shared by the desktop transport and App contract. */
 export const RemoteReply = {
   Capability: 'reply_content_v1', ProjectionVersion: 4, DeltaEvent: 'message.delta',

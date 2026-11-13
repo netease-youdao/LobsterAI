@@ -1,9 +1,11 @@
-import type { OwnershipTargetKind } from '../shared/ownership/constants';
+import type { OwnershipAction, OwnershipTargetKind } from '../shared/ownership/constants';
 import { RemoteCapability, type RemoteOwner } from '../shared/remote/constants';
+import type { PublicationTarget } from './ownershipPublication';
 import { payloadHash, stableJson } from './remote/canonical';
 import type { RemoteStore } from './remote/remoteStore';
 
 export interface OwnershipManifest {
+  action?: OwnershipAction; publicationTarget?: PublicationTarget; originalOperationId?: string;
   kind: OwnershipTargetKind; targetId: string; agentId: string | null; agentVersion: string | null;
   associatedSessionIds: string[]; retainedSessionIds: string[]; affectedAgentIds: string[];
 }

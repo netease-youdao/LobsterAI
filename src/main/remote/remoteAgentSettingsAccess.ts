@@ -36,7 +36,7 @@ export function settingsPermissions(value: unknown, conversationReady: boolean):
   }
   return structuredClone(value) as RemoteAgentSettingsPermissions;
 }
-/** Only bindings durably confirmed by the local authorization flow can admit work. */
+/** Only bindings durably confirmed for this account and connection can admit work. */
 export class RemoteAgentSettingsAccess {
   private state: AccessState;
   private blocked = false;
@@ -64,7 +64,7 @@ export class RemoteAgentSettingsAccess {
           accountEpoch: binding.accountEpoch, bindingId: binding.bindingId, bindingVersion: binding.bindingVersion });
       }
     }
-    // A pending explicit grant must never be replayed after a local fence.
+    // A pending binding must never be replayed after a local fence.
     this.state.pending = this.state.pending.filter(item => item.kind === 'revoke');
     this.state.epoch = (BigInt(this.state.epoch) + 1n).toString();
     this.save(); this.blocked = false;
@@ -87,23 +87,15 @@ export class RemoteAgentSettingsAccess {
       connection: structuredClone(connection), accountEpoch: this.state.epoch, input: { ...input, sections } };
     this.state.pending.push(pending); this.save(); return structuredClone(pending);
   }
-  revoke(connection: RemoteAgentSettingsConnection, bindingId: string, bindingVersion: string): PendingSettingsAccess {
-    this.current(connection, false);
-    const binding = this.state.bindings.find(item => item.identity === settingsIdentity(connection) && item.bindingId === bindingId && item.bindingVersion === bindingVersion);
-    if (!binding) throw new Error('SETTINGS_ACCESS_STALE');
-    binding.status = RemoteAgentSettingsStatus.Revoked;
-    const pending: PendingSettingsAccess = { requestId: randomUUID(), kind: 'revoke', identity: settingsIdentity(connection),
-      connection: structuredClone(connection), accountEpoch: binding.accountEpoch, bindingId, bindingVersion };
-    this.state.pending.push(pending); this.save(); return structuredClone(pending);
-  }
   discardPending(requestId: string): void {
     this.state.pending = this.state.pending.filter(item => item.requestId !== requestId); this.save();
   }
-  reconcile(connection: RemoteAgentSettingsConnection, remote: RemoteAgentSettingsBinding[]): void {
+  reconcile(connection: RemoteAgentSettingsConnection, remote: RemoteAgentSettingsBinding[], complete = true): void {
     this.current(connection);
     const identity = settingsIdentity(connection);
     for (const local of this.state.bindings) {
       if (local.identity === identity && local.status === RemoteAgentSettingsStatus.Active
+        && (complete || remote.some(value => value.mobileDeviceId === local.mobileDeviceId && value.agentId === local.agentId))
         && !remote.some(value => value.status === RemoteAgentSettingsStatus.Active && this.matches(local, value))) local.status = RemoteAgentSettingsStatus.Revoked;
     }
     for (const value of remote) {

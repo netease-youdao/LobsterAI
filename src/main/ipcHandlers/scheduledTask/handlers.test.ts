@@ -69,6 +69,40 @@ beforeEach(() => {
 });
 
 describe('registerScheduledTaskHandlers', () => {
+  test('captures automation ownership and publication before creation yields to an environment change', async () => {
+    const { cronJobService, deps } = makeDeps();
+    let owner = { userId: 'test-user', scopeKey: 'personal' };
+    let route = 'https://test.example';
+    const bindings: Array<{ jobId: string; owner: typeof owner; route: string }> = [];
+    deps.captureRemoteOwner = () => owner;
+    deps.prepareRemoteTaskBinding = vi.fn(actor => {
+      const captured = { owner: { ...actor! }, route };
+      return jobId => bindings.push({ jobId, ...captured });
+    });
+    deps.recordRemoteTaskOwner = vi.fn();
+    registerScheduledTaskHandlers(deps);
+    const pending = registeredHandlers.get(ScheduledTaskIpc.Create)?.(undefined, { name: 'original task' });
+    expect(deps.prepareRemoteTaskBinding).toHaveBeenCalledWith(owner);
+    // Delivery normalization and addJob are asynchronous; their completion cannot choose a new source.
+    owner = { userId: 'production-user', scopeKey: 'personal' };
+    route = 'https://production.example';
+    await expect(pending).resolves.toMatchObject({ success: true });
+    expect(cronJobService.addJob).toHaveBeenCalledOnce();
+    expect(bindings).toEqual([{ jobId: 'job-1', owner: { userId: 'test-user', scopeKey: 'personal' }, route: 'https://test.example' }]);
+    expect(deps.recordRemoteTaskOwner).not.toHaveBeenCalled();
+  });
+
+  test('does not bind an automation source if gateway creation fails', async () => {
+    const { cronJobService, deps } = makeDeps();
+    const bind = vi.fn();
+    deps.prepareRemoteTaskBinding = () => bind;
+    cronJobService.addJob.mockRejectedValueOnce(new Error('creation failed'));
+    registerScheduledTaskHandlers(deps);
+    await expect(registeredHandlers.get(ScheduledTaskIpc.Create)?.(undefined, { name: 'rejected task' }))
+      .resolves.toMatchObject({ success: false, error: 'creation failed' });
+    expect(bind).not.toHaveBeenCalled();
+  });
+
   test('connects the gateway client before listing scheduled tasks', async () => {
     const { adapter, cronJobService, deps } = makeDeps();
     registerScheduledTaskHandlers(deps);

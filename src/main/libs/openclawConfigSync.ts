@@ -398,6 +398,17 @@ const MANAGED_BROWSER_POLICY_PROMPT = [
   '- If no saved login is available, ask the user to sign in directly in the visible LobsterAI browser. Never ask the user to send a password in chat, and never search files, memory, or logs for passwords.',
 ].join('\n');
 
+const MANAGED_AGENT_SETTINGS_POLICY_PROMPT = [
+  '## LobsterAI Agent Settings',
+  '',
+  'LobsterAI owns Agent settings and account ownership. Apply this policy on every turn, including continuations after a stop or restart.',
+  '- To change a custom Agent identity, use `lobsterai_agent_settings` only when it is available for the current run and allows the requested change.',
+  '- If that tool is unavailable or rejects the change, explain that the setting was not changed and direct the user to the Agent settings page in LobsterAI. Do not try another tool to bypass the restriction.',
+  '- Never change App-managed Agent settings (identity, name, model, enabled state or account ownership) through `exec`, SQLite, LobsterAI data files, `openclaw.json`, or gateway config writes. Never modify ownership records or trust markers.',
+  '- For custom Agents, `IDENTITY.md` and `SOUL.md` are generated views of the App settings. Do not edit these files to change Agent settings, and do not copy their contents back into the App database.',
+  '- Ordinary user workspace files and requested project edits remain allowed. This restriction applies to LobsterAI-managed settings and their generated files, and takes precedence over general command-execution guidance.',
+].join('\n');
+
 const MANAGED_EXEC_SAFETY_PROMPT = [
   '## Command Execution & User Interaction Policy',
   '',
@@ -4001,7 +4012,7 @@ export class OpenClawConfigSync {
       const agentsMdPath = path.join(workspaceDir, 'AGENTS.md');
 
       // Build the managed section
-      const sections: string[] = [];
+      const sections: string[] = [MANAGED_AGENT_SETTINGS_POLICY_PROMPT];
 
       // Add system prompt if configured — strip MARKER to prevent content corruption
       const systemPrompt = (coworkConfig.systemPrompt || '').trim().replaceAll(MARKER, '');

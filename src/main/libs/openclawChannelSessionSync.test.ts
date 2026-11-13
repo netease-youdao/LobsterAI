@@ -149,7 +149,7 @@ test('channel sync reuses one local session for run-scoped cron session keys', (
     [],
     'ops',
     '',
-    { scheduledTaskId: 'daily-monitor', owner: null, ownershipSource: 'bound_automation' },
+    { scheduledTaskId: 'daily-monitor', owner: null, ownershipSource: 'bound_automation', publicationSourceId: 'cron:daily-monitor' },
   );
   expect(getDefaultCwd).toHaveBeenCalledWith('ops');
   expect(resolveJobName).toHaveBeenCalledWith('daily-monitor');
@@ -254,7 +254,7 @@ test('channel sync replaces a stale persisted scheduled task lookup', () => {
       [],
       'ops',
       '',
-      { scheduledTaskId: 'daily-monitor', owner: null, ownershipSource: 'bound_automation' },
+      { scheduledTaskId: 'daily-monitor', owner: null, ownershipSource: 'bound_automation', publicationSourceId: 'cron:daily-monitor' },
     );
     expect(warnSpy).toHaveBeenCalledWith(
       '[ChannelSessionSync] ignored stale persisted cron session lookup:',
@@ -482,7 +482,7 @@ test('channel sync resolves Feishu group delivery mirrors as separate direct con
     [],
     'agent-feishu-bot-1',
     '',
-    { owner: null, ownershipSource: 'bound_automation' },
+    { owner: null, ownershipSource: 'bound_automation', publicationSourceId: 'im:feishu:feishu-bot-1' },
   );
   expect(createSessionMapping).toHaveBeenCalledWith(
     'feishu-bot-1:direct:oc_zhangsan_group',
@@ -689,7 +689,7 @@ test('channel sync stores the real OpenClaw session key when creating a mapping'
     [],
     'main',
     '',
-    { owner: null, ownershipSource: 'bound_automation' },
+    { owner: null, ownershipSource: 'bound_automation', publicationSourceId: 'im:feishu:default' },
   );
   expect(createSessionMapping).toHaveBeenCalledWith(
     'dm:ou_123',
@@ -924,7 +924,7 @@ test('channel sync creates separate local sessions for the same group under diff
     [],
     'agent-2',
     '',
-    { owner: null, ownershipSource: 'bound_automation' },
+    { owner: null, ownershipSource: 'bound_automation', publicationSourceId: 'im:feishu:default' },
   );
   expect(mappings).toEqual([
     expect.objectContaining({

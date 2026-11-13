@@ -1,10 +1,15 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { OwnershipAction, OwnershipTargetKind } from '../../shared/ownership/constants';
 import { REMOTE_PROTOCOL_VERSION, RemoteCapability, type RemoteOwner } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteReplyCapability, RemoteReplyModelLabelCapability } from '../../shared/remote/reply';
 import { RemoteRetention, type RetentionState } from '../../shared/remote/retention';
 import { RemoteSyncTarget, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
+import { AgentOwnerStore } from '../agentOwnership';
+import { OwnershipAssociationService } from '../ownershipAssociation';
+import { OwnershipOperationGate } from '../ownershipOperationGate';
 import { RemoteBridge } from './remoteBridge';
 import { RemoteStore } from './remoteStore';
 import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
@@ -455,5 +460,215 @@ describe('source provenance through real bridge registration', () => {
     expect(f.bridge.sessionAdmitted('before-replacement')).toBe(false);
     expect(f.bridge.sessionAdmitted('after-replacement')).toBe(true);
     expect(f.store.isTaskAdmitted('after-replacement')).toBe(true);
+  });
+});
+
+
+describe('explicit linked task publication confirmation', () => {
+  it('resumes only the selected source isolation and preserves mapping and all retry budgets', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const target = f.bridge.associationPublicationTarget(); expect(target).not.toBeNull();
+    for (const id of ['selected', 'unselected']) f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run(id, id, 'completed');
+      f.store.assignNew(id, owner, 'manual_claim');
+    });
+    const context = { owner, target: target.targetId, deviceId: target.deviceId };
+    for (const id of ['selected', 'unselected']) {
+      f.bridge.taskSync.fail(context, id, { phase: 'isolated', scope: 'session', reason: 'REMOTE_SYNC_STATE_CONFLICT' });
+      f.store.put(`syncFailure:${id}`, { reason: 'REMOTE_SYNC_STATE_CONFLICT', blocked: true });
+    }
+    const before = f.bridge.taskSync.get(context, 'selected');
+    const mapping = f.store.sync('selected');
+    expect(() => f.bridge.resumeAssociationPublication(['selected'], target)).toThrow('target changed');
+    f.store.transaction(() => f.bridge.resumeAssociationPublication(['selected'], target));
+    const after = f.bridge.taskSync.get(context, 'selected');
+    expect(after.phase).toBe('reconciling');
+    expect(after.manual_retry_at).toBeGreaterThanOrEqual(before.manual_retry_at);
+    for (const key of ['failure_count', 'server_retry_at', 'repair_json', 'auto_probe_json', 'auto_probe_revision']) expect(after[key]).toEqual(before[key]);
+    expect(f.store.sync('selected')).toEqual(mapping);
+    expect(f.store.get('syncFailure:selected')).toBeNull();
+    expect(f.bridge.taskSync.get(context, 'unselected').phase).toBe('isolated');
+    expect(f.store.get('syncFailure:unselected')).toMatchObject({ blocked: true });
+    expect(f.deps.execute).not.toHaveBeenCalled();
+    f.bridge.notifyAssociationChanged(['selected']); expect(f.bridge.schedule).toHaveBeenCalledWith(0);
+  });
+
+  it('invalidates confirmation when the destination route changes and never resets unrelated failures', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const target = f.bridge.associationPublicationTarget(); expect(target).not.toBeNull();
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('task', 'task', 'completed');
+      f.store.assignNew('task', owner, 'manual_claim');
+    });
+    const context = { owner, target: target.targetId, deviceId: target.deviceId };
+    f.bridge.taskSync.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'PROTOCOL_UNSUPPORTED' });
+    const before = f.bridge.taskSync.get(context, 'task');
+    f.store.transaction(() => f.bridge.resumeAssociationPublication(['task'], target));
+    expect(f.bridge.taskSync.get(context, 'task')).toEqual(before);
+    f.silentlySwitchRoute('https://other.example');
+    expect(f.bridge.associationPublicationTarget()).toBeNull();
+    expect(() => f.store.transaction(() => f.bridge.resumeAssociationPublication(['task'], target))).toThrow('target changed');
+    expect(f.bridge.taskSync.get(context, 'task')).toEqual(before);
+  });
+
+  it('does not offer a destination confirmation against an unidentified legacy service', async () => {
+    const f = fixture(null); await f.bridge.ensureRegistration();
+    expect(f.bridge.associationPublicationTarget()).toBeNull();
+  });
+});
+
+
+it.each(['repair', 'automatic', 'scope', 'cooldown'])('does not release invalid or busy publication retry evidence (%s)', async invalid => {
+  const f = fixture(); await f.bridge.ensureRegistration();
+  const target = f.bridge.associationPublicationTarget(); expect(target).not.toBeNull();
+  f.store.transaction(() => {
+    f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('task', 'task', 'completed');
+    f.store.assignNew('task', owner, 'manual_claim');
+  });
+  const context = { owner, target: target.targetId, deviceId: target.deviceId };
+  f.bridge.taskSync.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'REMOTE_SYNC_STATE_CONFLICT' });
+  if (invalid === 'repair') f.db.prepare("UPDATE remote_sync_task_state SET repair_json='broken'").run();
+  if (invalid === 'automatic') f.db.prepare("UPDATE remote_sync_task_state SET auto_probe_json='broken'").run();
+  if (invalid === 'scope') f.db.prepare("UPDATE remote_sync_task_state SET scope='device'").run();
+  if (invalid === 'cooldown') f.db.prepare('UPDATE remote_sync_task_state SET manual_retry_at=?').run(Date.now());
+  const before = f.bridge.taskSync.get(context, 'task');
+  expect(() => f.store.transaction(() => f.bridge.resumeAssociationPublication(['task'], target))).toThrow('retry is unavailable');
+  expect(f.bridge.taskSync.get(context, 'task')).toEqual(before);
+});
+
+
+it('publishes a newly associated legacy-local task through the first import without requesting a nonexistent old mapping', async () => {
+  const f = fixture();
+  f.store.transaction(() => {
+    f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('linked-local', 'Old local task', 'completed');
+    f.store.assignNew('linked-local', null, 'local_create');
+  });
+  // Pre-origin clients have local content but no publication identity or remote mapping.
+  f.db.prepare("DELETE FROM remote_publication_origins WHERE local_id='linked-local'").run();
+  await f.bridge.ensureRegistration();
+  f.store.transaction(() => f.store.associateHistorical('linked-local', owner, Date.now()));
+  expect(f.bridge.sessionAdmitted('linked-local')).toBe(true);
+  const original = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (actor, pathname, init) => {
+    if (pathname.endsWith('/sync/imports') && init.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      return response({ state: 'committed', importId: body.importId, sessionId: body.sessionId,
+        manifestHash: body.manifest.manifestHash, committedSourceSeq: body.baseSourceSeq, committedSeq: '1' });
+    }
+    return original(actor, pathname, init);
+  });
+  f.request.mockClear(); f.bridge.generation = 'connected';
+  await f.bridge.syncSessions();
+  const imports = f.request.mock.calls.filter(([, pathname, init]) => pathname.endsWith('/sync/imports') && init.method === 'POST');
+  expect(imports).toHaveLength(1);
+  expect(JSON.parse(String(imports[0][2].body)).localSessionId).toBe('linked-local');
+  expect(f.request.mock.calls.some(([, pathname]) => pathname.includes('/sync/state?'))).toBe(false);
+  const row = f.store.sync('linked-local')!;
+  expect(row.needs_snapshot).toBe(0); expect(row.ack_seq).toBe(row.source_seq);
+  expect(f.deps.execute).not.toHaveBeenCalled();
+});
+
+
+it.each(['anonymous', 'main'])('recovers a failed linked task under %s only after destination confirmation and completes first import', async agentId => {
+  const f = fixture();
+  f.db.exec(`ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT DEFAULT 'anonymous';
+    ALTER TABLE cowork_sessions ADD COLUMN parent_session_id TEXT;
+    ALTER TABLE cowork_sessions ADD COLUMN cwd TEXT DEFAULT '/tmp';
+    CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT,created_at INTEGER,updated_at INTEGER,subagent_allow_agent_ids TEXT);
+    CREATE TABLE subagent_runs(id TEXT PRIMARY KEY,parent_session_id TEXT,child_cowork_session_id TEXT,agent_id TEXT,status TEXT,session_key TEXT);
+    INSERT INTO agents VALUES('main','Main',1,1,'[]'),('anonymous','Old Agent',1,1,'[]');`);
+  const agents = new AgentOwnerStore(f.db);
+  f.store.transaction(() => {
+    for (const id of ['old-task', 'unrelated-task']) {
+      f.db.prepare('INSERT INTO cowork_sessions(id,title,created_at,updated_at,status,agent_id) VALUES (?,?,1,1,?,?)')
+        .run(id, id, 'completed', agentId);
+      f.store.assignNew(id, null, 'local_create');
+    }
+  });
+  const originalAgent = agents.get(agentId);
+  const unrelatedOwnership = f.store.ownershipRecord('unrelated-task');
+  const unrelatedSync = f.store.sync('unrelated-task');
+  // Reproduce the original unresolved association source, not a known foreign source.
+  f.db.prepare("UPDATE remote_publication_origins SET route=NULL,data_space_id=NULL WHERE local_id='old-task'").run();
+  await f.bridge.ensureRegistration(); f.bridge.generation = 'connected';
+  const service = new OwnershipAssociationService({ store: { remote: f.store, agentOwnership: agents,
+    runSessionTransaction: operation => f.store.transaction(operation) }, gate: new OwnershipOperationGate(),
+    actor: () => ({ owner, generation: 'account-generation', label: 'User', scopeLabel: 'Personal' }),
+    publicationTarget: () => f.bridge.associationPublicationTarget(),
+    confirmPublication: (ids, target) => f.bridge.resumeAssociationPublication(ids, target),
+    afterCommit: result => f.bridge.notifyAssociationChanged(result.sessionIds),
+  });
+  const target = { kind: OwnershipTargetKind.Task, id: 'old-task' };
+  const commit = (preview: ReturnType<typeof service.preview>, requestId: string) => service.commit({
+    planId: preview.planId, planVersion: preview.planVersion, accountGeneration: preview.accountGeneration, requestId });
+  commit(service.preview(target), 'original-claim');
+  await f.bridge.syncSessions();
+  const context = f.bridge.taskContext();
+  expect(f.bridge.taskSync.get(context, 'old-task')).toMatchObject({ phase: 'isolated', reason: 'REMOTE_SYNC_STATE_CONFLICT' });
+  const originalMapping = f.store.sync('old-task')!;
+  expect(service.getDetail(target).canConfirmPublication).toBe(true);
+  const preview = service.preview({ ...target, action: OwnershipAction.ConfirmPublication });
+  expect(preview).toMatchObject({ eligible: true, publicationTarget: { route: 'https://first.example.com' } });
+  const result = commit(preview, 'new-destination-confirmation');
+  expect(result.action).toBe(OwnershipAction.ConfirmPublication);
+  expect(f.store.sync('old-task')!.session_id).toBe(originalMapping.session_id);
+  expect(agents.get(agentId)).toEqual(originalAgent);
+  expect(f.bridge.taskSync.get(context, 'old-task')!.phase).toBe('reconciling');
+  const original = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (actor, pathname, init) => {
+    if (pathname.endsWith('/sync/imports') && init.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      return response({ state: 'committed', importId: body.importId, sessionId: body.sessionId,
+        manifestHash: body.manifest.manifestHash, committedSourceSeq: body.baseSourceSeq, committedSeq: '1' });
+    }
+    return original(actor, pathname, init);
+  });
+  f.request.mockClear();
+  await f.bridge.syncSessions();
+  const imports = f.request.mock.calls.filter(([, pathname, init]) => pathname.endsWith('/sync/imports') && init.method === 'POST');
+  expect(imports).toHaveLength(1);
+  expect(JSON.parse(String(imports[0][2].body)).localSessionId).toBe('old-task');
+  expect(agents.get(agentId)).toEqual(originalAgent);
+  expect(f.store.owner('unrelated-task')).toBeNull();
+  expect(f.store.ownershipRecord('unrelated-task')).toEqual(unrelatedOwnership);
+  expect(f.store.sync('unrelated-task')).toEqual(unrelatedSync);
+  const synced = f.store.sync('old-task')!;
+  expect(synced.needs_snapshot).toBe(0); expect(synced.ack_seq).toBe(synced.source_seq);
+  expect(service.getDetail(target).canConfirmPublication).toBe(false);
+  expect(service.getResult({ requestId: 'new-destination-confirmation' })).toMatchObject({ operationId: result.operationId, action: OwnershipAction.ConfirmPublication });
+  expect(f.deps.execute).not.toHaveBeenCalled();
+});
+
+
+describe('reply model label capability compatibility', () => {
+  it('requires server support without a device declaration and invalidates delayed work on downgrade', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const configure = vi.spyOn(f.store, 'setReplyModelLabelSupported');
+    const supported = { enabled: true, protocolVersions: [REMOTE_PROTOCOL_VERSION], projectionVersions: [1, 4], syncTarget: targetA,
+      capabilities: [RemoteCapability.SameAccountAccess, RemoteSyncTarget.Capability, RemoteReplyCapability, RemoteReplyModelLabelCapability] };
+    await f.bridge.refreshCapabilities(supported);
+    expect(configure).toHaveBeenLastCalledWith(true);
+    expect(f.bridge.advertisedCapabilities()).not.toContain(RemoteReplyModelLabelCapability);
+    const current = f.bridge.syncContext(); expect(current()).toBe(true);
+    await f.bridge.refreshCapabilities({ ...supported, capabilities: supported.capabilities.filter(value => value !== RemoteReplyModelLabelCapability) });
+    expect(current()).toBe(false);
+    expect(configure).toHaveBeenLastCalledWith(false);
+    expect(f.bridge.advertisedCapabilities()).not.toContain(RemoteReplyModelLabelCapability);
+  });
+
+  it('keeps sealed legacy events intact while an older server lacks label support', async () => {
+    const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    const target = f.bridge.getSyncTargetId();
+    f.db.prepare('UPDATE remote_sync SET sync_environment=?,needs_snapshot=0 WHERE local_id=?').run(target, 'local');
+    vi.spyOn(f.bridge, 'sessionAdmitted').mockReturnValue(true);
+    vi.spyOn(f.bridge, 'ownershipSyncBlocked').mockReturnValue(false);
+    vi.spyOn(f.bridge.availability, 'legacyHistoryAllowed').mockReturnValue(true);
+    const events = [{ eventType: 'message.upsert', sourceSeq: '12', payload: { message: { modelLabel: 'deepseek-flash' } } }];
+    vi.spyOn(f.store, 'pending').mockReturnValue(events as any);
+    const before = f.store.sync('local'); f.request.mockClear();
+    await f.bridge.syncSession(before, () => true, { owner, target, deviceId: 'desktop' }, false);
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.store.sync('local')).toEqual(before);
+    expect(f.store.pending('local')).toEqual(events);
   });
 });

@@ -1,5 +1,5 @@
 import { AgentId } from '@shared/agent';
-import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
+import { OwnershipAction, OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipCommitResult, OwnershipDetail, OwnershipPreview, OwnershipResponse,OwnershipTarget } from '@shared/ownership/types';
 
 import { remoteConnectionFailure } from '../components/settings/remoteControlState';
@@ -14,6 +14,7 @@ export type OwnershipView = typeof OwnershipView[keyof typeof OwnershipView];
 export interface OwnershipPanelState {
   target: OwnershipTarget;
   view: OwnershipView;
+  action?: OwnershipAction;
   loading?: boolean;
   retrying?: boolean;
   detail?: OwnershipDetail;
@@ -26,7 +27,7 @@ export interface OwnershipPanelState {
 let panel: OwnershipPanelState | null = null;
 let revision = 0;
 let sequence = 0;
-let waitingLogin: OwnershipTarget | null = null;
+let waitingLogin: { target: OwnershipTarget; action?: OwnershipAction } | null = null;
 const listeners = new Set<() => void>();
 const changeListeners = new Set<() => void>();
 const notify = () => listeners.forEach(listener => listener());
@@ -53,13 +54,14 @@ function finishAssociation(target: OwnershipTarget, result: OwnershipCommitResul
   const generation = identity();
   ownershipService.close();
   notifyChange();
+  const publication = result.action === OwnershipAction.ConfirmPublication;
   const toast: ToastEventDetail = result.syncState === OwnershipSyncState.Failed ? {
-    message: i18nService.t('ownershipAssociationSyncFailed'),
+    message: i18nService.t(publication ? 'ownershipPublicationSyncFailed' : 'ownershipAssociationSyncFailed'),
     actionLabel: i18nService.t('ownershipRetrySync'),
     onAction: () => {
       if (generation === identity()) void ownershipService.retrySync(target);
     },
-  } : { message: i18nService.t('ownershipSuccess') };
+  } : { message: i18nService.t(publication ? 'ownershipPublicationConfirmed' : 'ownershipSuccess') };
   window.dispatchEvent(new CustomEvent<ToastEventDetail>('app:showToast', { detail: toast }));
 }
 
@@ -76,10 +78,10 @@ export const ownershipService = {
     return detail;
   },
   close() { sequence += 1; panel = null; waitingLogin = null; notify(); },
-  async open(target: OwnershipTarget, view: OwnershipView = OwnershipView.Detail) {
+  async open(target: OwnershipTarget, view: OwnershipView = OwnershipView.Detail, action?: OwnershipAction) {
     const requestSequence = ++sequence;
     const generation = identity();
-    panel = { target, view, loading: true };
+    panel = { target, view, action, loading: true };
     waitingLogin = null;
     notify();
     try {
@@ -95,17 +97,21 @@ export const ownershipService = {
         await this.reconcile(pending);
         return;
       }
+      if (action === OwnershipAction.ConfirmPublication && (target.kind !== OwnershipTargetKind.Task
+        || detail.ownership.kind !== 'owned' || !detail.canConfirmPublication)) throw new Error(OwnershipErrorCode.NotAvailable);
       const preview = view === OwnershipView.Preview
-        ? unwrap(await window.electron.ownership.preview(target)) : undefined;
+        ? unwrap(await window.electron.ownership.preview(action ? { ...target, action } : target)) : undefined;
       if (requestSequence !== sequence || generation !== identity()) return;
-      panel = { target, view, detail, preview };
+      if (action === OwnershipAction.ConfirmPublication && preview?.eligible && (preview.action !== action
+        || typeof preview.publicationTarget?.route !== 'string' || !preview.publicationTarget.route)) throw new Error(OwnershipErrorCode.NotAvailable);
+      panel = { target, view, action, detail, preview };
     } catch (error) {
       if (requestSequence !== sequence || generation !== identity()) return;
-      panel = { target, view, error: errorCode(error) };
+      panel = { target, view, action, error: errorCode(error) };
     }
     notify();
   },
-  waitForLogin() { waitingLogin = panel?.target ?? null; },
+  waitForLogin() { waitingLogin = panel ? { target: panel.target, action: panel.action } : null; },
   loginFailed() {
     waitingLogin = null;
     if (panel) { panel = { ...panel, error: OwnershipErrorCode.AuthRequired }; notify(); }
@@ -277,7 +283,7 @@ export const ownershipService = {
       waitingLogin = null;
       notifyChange();
       notify();
-      if (resume && store.getState().auth.isLoggedIn) void this.open(resume, OwnershipView.Preview);
+      if (resume && store.getState().auth.isLoggedIn) void this.open(resume.target, OwnershipView.Preview, resume.action);
       else void recover();
     });
     const unsubscribeChanged = window.electron.ownership?.onChanged(() => {

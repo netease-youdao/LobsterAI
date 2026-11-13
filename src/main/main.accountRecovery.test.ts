@@ -181,6 +181,95 @@ test('main actively restores a running gateway after fence and auth commit, with
   expect(f.statuses.at(-1)?.phase).toBe(OpenClawEnginePhase.Running);
 });
 
+test.each([null, { userId: '2', scopeKey: 'personal' }])('main reports recovery stages independently of sign-out or account change: %j', async next => {
+  const f = fixture();
+  const revision = f.api.recovery.beginAuthMutation();
+  f.change(next);
+  expect(f.api.status().message).toBe('openClawAccountRecoveryStopping');
+  await flush();
+  expect(f.api.status().message).toBe('openClawAccountRecoveryAuthPending');
+  f.api.recovery.commitAuthMutation(revision);
+  await f.api.recovery.wait();
+  expect(f.statuses.map(status => status.message)).toEqual(expect.arrayContaining([
+    'openClawAccountRecoveryStopping', 'openClawAccountRecoveryAuthPending',
+    'openClawAccountRecoveryPreparing', 'openClawAccountRecoveryStarting', 'openClawAccountRecoveryConfirming',
+  ]));
+  expect(f.api.status().phase).toBe(OpenClawEnginePhase.Running);
+  expect(f.api.status().accountRecoveryPending).toBeUndefined();
+});
+
+test('main re-prepares after a committed same-owner refresh interrupts Starting without projecting failure', async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const starting = deferred();
+  const oldPermit: { current: (() => boolean) | null } = { current: null };
+  const start = vi.spyOn(f.manager, 'startGateway').mockImplementationOnce(async () => {
+    oldPermit.current = f.api.recovery.captureStartPermit();
+    await starting.promise;
+    // The real manager keeps the live process Starting when its old permit is revoked.
+    // Main's real start callback turns this status into an Error before the coordinator sees it.
+    return { phase: OpenClawEnginePhase.Starting, version: 'fixture', canRetry: false,
+      message: 'Starting OpenClaw gateway... (36s)' };
+  });
+  try {
+    f.change({ userId: '2', scopeKey: 'personal' });
+    await flush();
+    expect(start).toHaveBeenCalledOnce();
+    expect(oldPermit.current?.()).toBe(true);
+    const revision = f.api.recovery.beginAuthMutation();
+    f.refresh();
+    expect(oldPermit.current?.()).toBe(false);
+    f.api.recovery.commitAuthMutation(revision);
+    starting.resolve();
+    await flush();
+    // No timer is advanced: stale auth evidence must immediately restart the preparation path.
+    expect(f.api.recovery.state).toMatchObject({ phase: AccountRecoveryPhase.Complete, attempt: 0 });
+    await f.api.recovery.wait();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(f.events.filter(event => event === 'stop')).toHaveLength(1);
+    expect(f.events.filter(event => event === 'prepare')).toHaveLength(2);
+    expect(f.events.filter(event => event === 'handshake')).toHaveLength(1);
+    expect(f.events.filter(event => event === 'confirm')).toHaveLength(1);
+    expect(f.statuses.some(status => status.phase === OpenClawEnginePhase.Error)).toBe(false);
+    expect(f.statuses.some(status => status.message === 'openClawAccountRecoveryFailed')).toBe(false);
+    expect(f.api.status().phase).toBe(OpenClawEnginePhase.Running);
+  } finally {
+    if (f.api.recovery.active) {
+      f.api.recovery.cancel();
+      await f.api.recovery.wait().catch(() => {});
+    }
+    vi.useRealTimers();
+  }
+});
+
+test('main projects bounded automatic recovery retries as Starting until recovery succeeds', async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const start = vi.spyOn(f.manager, 'startGateway').mockRejectedValueOnce(new Error('Gateway connection temporarily unavailable'));
+  try {
+    f.change({ userId: '2', scopeKey: 'personal' });
+    await flush();
+    expect(f.api.recovery.state?.phase).toBe(AccountRecoveryPhase.Retrying);
+    expect(f.api.status()).toMatchObject({ phase: OpenClawEnginePhase.Starting, accountRecoveryPending: true,
+      canRetry: false, message: 'openClawAccountRecoveryRetrying' });
+    expect(f.statuses.some(status => status.phase === OpenClawEnginePhase.Error)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await f.api.recovery.wait();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(f.api.recovery.state).toMatchObject({ phase: AccountRecoveryPhase.Complete, attempt: 1 });
+    expect(f.events.filter(event => event === 'stop')).toHaveLength(1);
+    expect(f.events.filter(event => event === 'prepare')).toHaveLength(1);
+    expect(f.statuses.some(status => status.phase === OpenClawEnginePhase.Error)).toBe(false);
+    expect(f.api.status().phase).toBe(OpenClawEnginePhase.Running);
+  } finally {
+    if (f.api.recovery.active) {
+      f.api.recovery.cancel();
+      await f.api.recovery.wait().catch(() => {});
+    }
+    vi.useRealTimers();
+  }
+});
+
 test('main waits for old process stop even when auth commits first', async () => {
   const f = fixture();
   const stopping = deferred();

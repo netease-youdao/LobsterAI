@@ -1,13 +1,13 @@
 import { randomUUID } from 'crypto';
 import { describe, expect, it, vi } from 'vitest';
 
-import { emptyAgentSettingsPermissions } from '../../shared/remote/agentSettings';
+import { emptyAgentSettingsPermissions, type RemoteAgentSettingsBinding, sameAccountAgentSettingsPermissions } from '../../shared/remote/agentSettings';
 import type { AgentSettingsPersistence } from '../libs/agentSettings/types';
 import { payloadHash } from './canonical';
 import type { RemoteAgentSettingsConnection } from './remoteAgentSettingsAccess';
 import { agentSettingsErrorReason, RemoteAgentSettingsProtocol } from './remoteAgentSettingsProtocol';
 
-async function fixture(userId = 'owner') {
+async function fixture(userId = 'owner', initialAuthorize = true, permissions = sameAccountAgentSettingsPermissions(true)) {
   const data = new Map<string, unknown>();
   const store: AgentSettingsPersistence = { get: key => structuredClone(data.get(key) ?? null) as never, set: (key, value) => { data.set(key, structuredClone(value)); } };
   const connection: RemoteAgentSettingsConnection = { owner: { userId, scopeKey: 'personal' }, dataSpaceId: 'test', dataGeneration: '1', deviceId: 'desktop',
@@ -16,13 +16,21 @@ async function fixture(userId = 'owner') {
     prepare: vi.fn(), apply: vi.fn(), recover: vi.fn(async () => ({ operationId: operationId, section: 'memory' as const, status: 'reconciling' as const })) };
   const operationId = randomUUID(); let claimed = false;
   let permitAction: (() => void) | undefined; let losePermit = false;
-  const permissions = emptyAgentSettingsPermissions(); permissions.memory = { read: true, directUpdate: false, conversationUpdate: true };
+  let remoteBindings: RemoteAgentSettingsBinding[] = [];
+  const candidates = [{ mobileDeviceId: 'phone', name: 'My phone', grantId: 'grant', grantVersion: '1' }];
   const operation = { schemaVersion: 1, operationId, type: 'read', section: 'memory', bindingId: 'binding', bindingVersion: '1', accountEpoch: '1', issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() };
   let requestHash = '';
   const request = vi.fn(async (path: string, _method: string, body?: unknown): Promise<unknown> => {
-    if (path.endsWith('/agent-settings-access-candidates')) return { items: [{ mobileDeviceId: 'phone', name: 'My phone', grantId: 'grant', grantVersion: '1' }] };
-    if (path.endsWith('/settings-access')) return { bindingId: 'binding', bindingVersion: '1', mobileDeviceId: 'phone', agentId: 'main', grantId: 'grant', grantVersion: '1', accountEpoch: '1', sections: permissions, status: 'active' };
-    if (path.endsWith('/agent-settings-access')) return { items: [{ bindingId: 'binding', bindingVersion: '1', mobileDeviceId: 'phone', agentId: 'main', grantId: 'grant', grantVersion: '1', accountEpoch: '1', sections: permissions, status: 'active' }] };
+    if (path.endsWith('/agent-settings-access-candidates')) return { items: candidates, nextCursor: null };
+    if (path.endsWith('/settings-access')) {
+      const input = body as RemoteAgentSettingsBinding, agentId = path.split('/').at(-2)!;
+      const binding: RemoteAgentSettingsBinding = { bindingId: agentId === 'main' ? 'binding' : `binding-${agentId}`, bindingVersion: '1',
+        mobileDeviceId: input.mobileDeviceId, agentId, grantId: input.grantId, grantVersion: input.grantVersion,
+        accountEpoch: input.accountEpoch, sections: input.sections, status: 'active' };
+      remoteBindings = [...remoteBindings.filter(item => item.agentId !== agentId || item.mobileDeviceId !== input.mobileDeviceId), binding];
+      return binding;
+    }
+    if (path.endsWith('/agent-settings-access')) return { items: remoteBindings, nextCursor: null };
     if (path.endsWith('/revoke')) return { status: 'revoked' };
     if (path.includes('unresolved=true')) return { items: [], nextCursor: null };
     if (path.endsWith('/claim')) {
@@ -38,19 +46,114 @@ async function fixture(userId = 'owner') {
   const deps = { store, service, request, connection: () => connection, available: () => true, conversationReady: () => true,
     listAgents: () => [{ agentId: 'main', name: 'Default' }] };
   const protocol = new RemoteAgentSettingsProtocol(deps); protocol.configure(true);
-  await protocol.authorize({ expectedAccountEpoch: '1', mobileDeviceId: 'phone', agentId: 'main', grantId: 'grant', grantVersion: '1', sections: permissions });
+  if (initialAuthorize) {
+    // A previously confirmed binding simulates upgrading an installation that used the old settings form.
+    const input = { expectedAccountEpoch: '1', mobileDeviceId: 'phone', agentId: 'main', grantId: 'grant', grantVersion: '1', sections: permissions };
+    protocol.access.activate(connection);
+    const pending = protocol.access.authorize(connection, input, true);
+    const value = await request('/devices/desktop/agents/main/settings-access', 'POST', { ...input, accountEpoch: '1' }) as RemoteAgentSettingsBinding;
+    protocol.access.confirm(pending, value);
+  }
   requestHash = payloadHash({ deviceId: 'desktop', agentId: 'main', body: operation, target: { version: 1, dataSpaceId: 'test', dataGeneration: '1' } });
-  return { protocol, deps, store, connection, service, request, operationId, operation,
+  return { protocol, deps, store, connection, service, request, operationId, operation, candidates,
     losePermit: () => { losePermit = true; }, onPermit: (action: () => void) => { permitAction = action; }, corruptHash: () => { requestHash = 'a'.repeat(64); } };
 }
-describe('Agent settings HTTP execution', () => {
-  it('uses the same device code for the candidate and its binding with a 64-bit user ID', async () => {
-    const { protocol } = await fixture('9223372036854775807');
-    const { candidates, bindings } = await protocol.state();
-    expect(candidates[0]?.shortLabel).toBe('BEC0C0');
-    expect(bindings[0]?.shortLabel).toBe('BEC0C0');
+describe('same-account Agent settings', () => {
+  async function poll(f: Awaited<ReturnType<typeof fixture>>, offset = 0): Promise<void> {
+    const count = f.request.mock.calls.filter(([path]) => path.endsWith('/claim')).length;
+    const clock = offset ? vi.spyOn(Date, 'now').mockReturnValue(Date.now() + offset) : null;
+    try {
+      f.protocol.tick();
+      await vi.waitFor(() => expect(f.request.mock.calls.filter(([path]) => path.endsWith('/claim')).length).toBe(count + 1));
+      await vi.waitFor(() => expect(f.store.get<{ phase: string }>(`remote-agent-settings-operation:${f.operationId}`)?.phase).toBe('settled'));
+    } finally { clock?.mockRestore(); }
+  }
+  it('automatically enables settings for the signed-in account without a manual authorization', async () => {
+    const f = await fixture('owner', false); await poll(f);
+    expect(f.service.read).toHaveBeenCalledOnce();
+    expect(f.protocol.access.bindings(f.connection)[0].sections).toEqual(sameAccountAgentSettingsPermissions(true));
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(1);
   });
+  it('does not recreate unchanged bindings on later polls', async () => {
+    const f = await fixture('owner', false); await poll(f); await poll(f, 6000);
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(1);
+  });
+  it('keeps confirmed account bindings across an ordinary WebSocket reconnection', async () => {
+    const f = await fixture('owner', false); await poll(f);
+    f.connection.connectionGeneration = 'generation-2'; await poll(f, 6000);
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(1);
+  });
+  it('refreshes the binding when its control grant version changes', async () => {
+    const f = await fixture('owner', false); await poll(f);
+    f.candidates[0].grantVersion = '2'; await poll(f, 6000);
+    expect(f.protocol.access.bindings(f.connection)[0].grantVersion).toBe('2');
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(2);
+  });
+  it('continues a large access snapshot on the next tick without revoking missing local bindings', async () => {
+    const f = await fixture(), original = f.request.getMockImplementation()!;
+    const existing = f.protocol.access.bindings(f.connection)[0];
+    f.request.mockImplementation(async (path, method, body) => {
+      if (path.includes('/agent-settings-access') && !path.includes('candidates')) {
+        const cursor = new URL(path, 'https://example.test').searchParams.get('cursor');
+        const page = cursor ? Number(cursor) : 0;
+        return page < 6 ? { items: [], nextCursor: String(page + 1) } : { items: [existing], nextCursor: null };
+      }
+      return original(path, method, body);
+    });
+    await poll(f);
+    expect(f.request.mock.calls.filter(([path]) => path.includes('/agent-settings-access') && !path.includes('candidates'))).toHaveLength(5);
+    await poll(f, 6000);
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(1);
+    expect(f.protocol.access.bindings(f.connection)[0].status).toBe('active');
+  });
+  it('upgrades old partial section permissions automatically', async () => {
+    const permissions = emptyAgentSettingsPermissions(); permissions.memory = { read: true, directUpdate: false, conversationUpdate: true };
+    const f = await fixture('owner', true, permissions); await poll(f);
+    expect(f.protocol.access.bindings(f.connection)[0].sections).toEqual(sameAccountAgentSettingsPermissions(true));
+  });
+  it('follows pagination even when a page has no eligible phones', async () => {
+    const f = await fixture('owner', false), original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (path, method, body) => {
+      if (path.endsWith('/agent-settings-access-candidates')) return { items: [], nextCursor: 'next-page' };
+      if (path.endsWith('/agent-settings-access-candidates?cursor=next-page')) return { items: f.candidates, nextCursor: null };
+      return original(path, method, body);
+    });
+    await poll(f);
+    expect(f.service.read).toHaveBeenCalledOnce();
+  });
+  it('keeps locally confirmed bindings when an older server returns a partial first page', async () => {
+    const f = await fixture(), original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (path, method, body) => path.endsWith('/agent-settings-access') ? { items: [] } : original(path, method, body));
+    await poll(f);
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(1);
+    expect(f.service.read).toHaveBeenCalledOnce();
+  });
+  it('publishes at most five bindings per poll and continues with the other Agents later', async () => {
+    const f = await fixture('owner', false);
+    f.deps.listAgents = () => ['main', 'a', 'b', 'c', 'd', 'e', 'f'].map(agentId => ({ agentId, name: agentId }));
+    await poll(f);
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(5);
+    await poll(f, 6000);
+    expect(f.request.mock.calls.filter(([path]) => path.endsWith('/settings-access'))).toHaveLength(7);
+  });
+  it('isolates a failed publication so the next Agent can still synchronize', async () => {
+    const f = await fixture(), original = f.request.getMockImplementation()!;
+    f.deps.listAgents = () => ['main', 'fails', 'works'].map(agentId => ({ agentId, name: agentId }));
+    f.request.mockImplementation(async (path, method, body) => {
+      if (path.endsWith('/agents/fails/settings-access')) throw new Error('network');
+      return original(path, method, body);
+    });
+    await poll(f);
+    expect(f.protocol.access.bindings(f.connection).map(binding => binding.agentId)).toContain('works');
+  });
+  it('never grants direct text changes through the same-account defaults', () => {
+    const permissions = sameAccountAgentSettingsPermissions(false);
+    for (const section of ['identity', 'memory', 'userProfile'] as const) expect(permissions[section]).toEqual({ read: true, directUpdate: false, conversationUpdate: false });
+    expect(permissions.model.directUpdate).toBe(true);
+  });
+});
 
+describe('Agent settings HTTP execution', () => {
   it('reads only after a durable permit and keeps document bodies out of settled evidence', async () => {
     const f = await fixture(); f.protocol.tick();
     await vi.waitFor(() => expect(f.request.mock.calls.some(([path]) => path.endsWith('/result'))).toBe(true));
@@ -133,15 +236,15 @@ describe('Agent settings HTTP execution', () => {
     } finally { clock.mockRestore(); }
   });
 
-  it.each([{ status: 'revoked', bindingVersion: '2' }, { mobileDeviceId: 'different-phone' }])('cannot revive a stale or mismatched authorization response: %o', async patch => {
-    const f = await fixture(), original = f.request.getMockImplementation()!;
-    const local = f.protocol.access.bindings(f.connection)[0];
+  it.each([{ status: 'revoked', bindingVersion: '2' }, { mobileDeviceId: 'different-phone' }])('cannot revive a stale or mismatched binding response: %o', async patch => {
+    const f = await fixture('owner', false), original = f.request.getMockImplementation()!;
     f.request.mockImplementation(async (path, method, body) => {
       const value = await original(path, method, body);
       return path.endsWith('/settings-access') ? { ...value as object, ...patch } : value;
     });
-    await expect(f.protocol.authorize({ expectedAccountEpoch: local.accountEpoch, mobileDeviceId: local.mobileDeviceId,
-      agentId: local.agentId, grantId: local.grantId, grantVersion: local.grantVersion, sections: local.sections })).rejects.toThrow('SETTINGS_ACCESS_STALE');
+    f.protocol.tick();
+    await vi.waitFor(() => expect(f.request.mock.calls.some(([path]) => path.endsWith('/claim'))).toBe(true));
+    expect(f.service.read).not.toHaveBeenCalled();
     expect(f.protocol.access.bindings(f.connection).some(binding => binding.status === 'active')).toBe(false);
     expect(f.protocol.access.pending(f.connection).some(pending => pending.kind === 'authorize')).toBe(false);
   });

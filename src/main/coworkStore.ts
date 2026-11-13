@@ -838,6 +838,7 @@ export interface CreateCoworkSessionOptions {
   /** Only explicit authenticated creation/bound automation may provide an owner. */
   owner?: RemoteOwner | null;
   ownershipSource?: string;
+  publicationSourceId?: string;
   id?: string;
   scheduledTaskId?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
@@ -1052,7 +1053,7 @@ export class CoworkStore {
           now,
           now,
         );
-      this.remote.assignNew(id, options.owner ?? null, options.ownershipSource || 'local_create');
+      this.remote.assignNew(id, options.owner ?? null, options.ownershipSource || 'local_create', undefined, options.publicationSourceId);
     });
 
     return {

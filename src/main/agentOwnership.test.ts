@@ -1,4 +1,7 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { afterEach, expect, test, vi } from 'vitest';
 
 import { AgentAccessErrorCode, AgentId, AgentOwnerKind } from '../shared/agent/constants';
@@ -6,17 +9,21 @@ import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/exp
 import type { ExpertCatalog } from '../shared/agent/presets';
 import type { RemoteOwner } from '../shared/remote/constants';
 import { AgentManager } from './agentManager';
-import { AgentOwnerStore } from './agentOwnership';
+import { AgentOwnerStore, withTrustedAgentWrite } from './agentOwnership';
 import { CoworkStore } from './coworkStore';
 
 vi.mock('electron', () => ({ app: { getAppPath: () => '/mock' } }));
 const ownerA = { userId: '1001', scopeKey: 'personal' };
 const ownerB = { userId: '1002', scopeKey: 'personal' };
 const databases: Database.Database[] = [];
-afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+const tempDirs: string[] = [];
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
-function fixture() {
-  const db = new Database(':memory:');
+function fixture(filename = ':memory:') {
+  const db = new Database(filename);
   databases.push(db);
   db.exec(`
     CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT DEFAULT '',system_prompt TEXT DEFAULT '',
@@ -26,6 +33,8 @@ function fixture() {
       preset_id TEXT DEFAULT '',created_at INTEGER DEFAULT 1,updated_at INTEGER DEFAULT 1);
     CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,agent_id TEXT,status TEXT,title TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);
+    CREATE TABLE user_memories(id TEXT PRIMARY KEY,status TEXT,is_explicit INTEGER,updated_at INTEGER);
+    CREATE TABLE user_memory_sources(memory_id TEXT,session_id TEXT,is_active INTEGER);
     INSERT INTO agents(id,name,is_default) VALUES('main','LobsterAI',1);
     INSERT INTO agents(id,name) VALUES('legacy','Shared legacy');
   `);
@@ -61,16 +70,84 @@ test('trusted creation fixes owner and scopes; no login claims anonymous instanc
   expect(() => store.updateAgent(privateAgent.id, { name: 'Stolen' }, ownerB)).toThrow();
 });
 
-test('legacy writes quarantine owned agents and malformed ownership never grants anonymous access', () => {
+test('external updates cannot damage an owned Agent or hide it after reopening ownership', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-agent-guard-'));
+  tempDirs.push(dir);
+  const filename = path.join(dir, 'test.sqlite');
+  const { db, store, ownership } = fixture(filename);
+  const agent = store.createAgent({ name: 'Private' }, ownerA);
+  const before = ownership.get(agent.id);
+  const external = new Database(filename);
+  databases.push(external);
+  expect(() => external.prepare('UPDATE agents SET name=?,identity=? WHERE id=?').run('Changed', 'Changed identity', agent.id))
+    .toThrow('Use LobsterAI Agent settings');
+  expect(store.getVisibleAgent(agent.id, ownerA)).toEqual(agent);
+  expect(ownership.get(agent.id)).toEqual(before);
+  expect(new AgentOwnerStore(db).canView(agent.id, ownerA)).toBe(true);
+});
+
+test.each(['DELETE FROM agents WHERE id=?', 'INSERT OR REPLACE INTO agents(id,name) VALUES(?,\'Replacement\')'])(
+  'external mutation %s preserves owned Agent data and tombstone state', statement => {
+    const { db, store, ownership } = fixture();
+    const agent = store.createAgent({ name: 'Private' }, ownerA);
+    const before = ownership.get(agent.id);
+    expect(() => db.prepare(statement).run(agent.id)).toThrow();
+    expect(store.getVisibleAgent(agent.id, ownerA)).toEqual(agent);
+    expect(ownership.get(agent.id)).toEqual(before);
+  },
+);
+
+test('trusted settings, reorder, model backfill and deletion retain their normal authorization', () => {
   const { db, store, ownership } = fixture();
   const agent = store.createAgent({ name: 'Private' }, ownerA);
-  db.prepare('UPDATE agents SET name=? WHERE id=?').run('Legacy update', agent.id);
-  expect(ownership.get(agent.id)?.ownerKind).toBe(AgentOwnerKind.Quarantined);
-  expect(store.getVisibleAgent(agent.id, ownerA)).toBeNull();
+  expect(store.updateAgent(agent.id, { name: 'Updated', identity: 'New identity' }, ownerA)?.identity).toBe('New identity');
+  store.reorderAgents([agent.id], ownerA);
+  store.backfillEmptyAgentModels('provider/model');
+  expect(store.getAgent(agent.id)?.model).toBe('provider/model');
+  expect(ownership.get(agent.id)?.owner).toEqual(ownerA);
+  expect(() => store.deleteAgent(agent.id, ownerB)).toThrow();
+  expect(store.deleteAgent(agent.id, ownerA)).toBe(true);
+  expect(ownership.get(agent.id)?.deletedAt).not.toBeNull();
+  expect(db.prepare('SELECT trusted FROM agent_write_context WHERE id=1').get()).toEqual({ trusted: 0 });
+});
+
+test('trusted migration failure rolls back Agent changes and trust; missing trust fails closed', () => {
+  const { db, store, ownership } = fixture();
+  const agent = store.createAgent({ name: 'Private' }, ownerA);
+  const before = ownership.get(agent.id);
+  expect(() => withTrustedAgentWrite(db, () => {
+    db.prepare('UPDATE agents SET name=? WHERE id=?').run('Partial migration', agent.id);
+    throw new Error('migration failed');
+  })).toThrow('migration failed');
+  expect(store.getAgent(agent.id)).toEqual(agent);
+  expect(ownership.get(agent.id)).toEqual(before);
+  expect(db.prepare('SELECT trusted FROM agent_write_context WHERE id=1').get()).toEqual({ trusted: 0 });
+  withTrustedAgentWrite(db, () => {
+    expect(() => withTrustedAgentWrite(db, () => {
+      db.prepare('UPDATE agents SET name=? WHERE id=?').run('Nested failure', agent.id);
+      throw new Error('nested migration failed');
+    })).toThrow('nested migration failed');
+    expect(store.getAgent(agent.id)).toEqual(agent);
+    expect(db.prepare('SELECT trusted FROM agent_write_context WHERE id=1').get()).toEqual({ trusted: 1 });
+    db.prepare('UPDATE agents SET name=? WHERE id=?').run('Trusted outer change', agent.id);
+  });
+  expect(ownership.get(agent.id)?.owner).toEqual(ownerA);
+  expect(db.prepare('SELECT trusted FROM agent_write_context WHERE id=1').get()).toEqual({ trusted: 0 });
+  db.prepare('DELETE FROM agent_write_context').run();
+  expect(() => db.prepare('UPDATE agents SET name=? WHERE id=?').run('Untrusted', agent.id)).toThrow();
+  expect(() => withTrustedAgentWrite(db, () => undefined)).toThrow('Invalid Agent write context');
+});
+
+test('legacy anonymous writes remain compatible and malformed ownership remains quarantined', () => {
+  const { db, store, ownership } = fixture();
+  db.prepare("UPDATE agents SET name='Legacy update' WHERE id='legacy'").run();
+  expect(ownership.canView('legacy', ownerA)).toBe(true);
+  const agent = store.createAgent({ name: 'Private' }, ownerA);
   db.prepare("UPDATE agent_ownership SET owner_kind='owned',owner_user_id=NULL WHERE agent_id=?").run(agent.id);
   expect(ownership.canView(agent.id, null)).toBe(false);
   new AgentOwnerStore(db);
   expect(ownership.get(agent.id)?.ownerKind).toBe(AgentOwnerKind.Quarantined);
+  expect(store.getVisibleAgent(agent.id, ownerA)).toBeNull();
 });
 
 test('owner assignment, versions and notifications commit atomically and tombstones prevent reuse', () => {

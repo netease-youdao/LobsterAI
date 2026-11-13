@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
 import { afterEach, expect, it } from 'vitest';
 
+import { OpenClawCronRunMetadataKey } from '../../shared/cowork/openclawCronSessionKey';
 import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { setLanguage } from '../i18n';
 import { projectLiveMessage } from './remoteLiveProjection';
-import { replyInputModel, replyModelPresetNames } from './remoteReplyModel';
+import { replyInputModel, ReplyModelMetadataBytes, replyModelPresetNames } from './remoteReplyModel';
 import { RemoteStore } from './remoteStore';
 
 const owner = { userId: 'A', scopeKey: 'personal' };
@@ -35,10 +36,10 @@ function add(store: RemoteStore, metadata: Record<string, unknown>, id = 'm') {
 function message(store: RemoteStore, id = 'm') {
   return store.snapshot('s').records.find(record => record.eventType === 'message.upsert' && record.payload.message.messageId === id)!.payload.message;
 }
-function live(store: RemoteStore, id = 'm', names = replyModelPresetNames()) {
+function live(store: RemoteStore, id = 'm', names = replyModelPresetNames(), replyModelLabelSupported = false) {
   const revision = store.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id=?").get(id) as { revision: number };
   return projectLiveMessage(store.db, { database: '', localId: 's', sessionId: store.sync('s')!.session_id,
-    deviceId: 'pc', owner, objectId: id, revision: String(revision.revision), modelPresetNames: names })!;
+    deviceId: 'pc', owner, replyModelLabelSupported, objectId: id, revision: String(revision.revision), modelPresetNames: names })!;
 }
 
 it.each([
@@ -173,4 +174,137 @@ it('does not infer a tier from rejected model metadata', () => {
     expect(replyInputModel('assistant', { model, resolvedModelId: 'provider/actual' }, selected))
       .toMatchObject({ displayName: 'actual' });
   }
+});
+
+
+function nativeFixture() {
+  const f = fixture(); f.store.remove('desktopInputRun:run'); f.store.setReplyModelLabelSupported(true);
+  return f;
+}
+const cronMetadata = (index: number, key = 'agent:main:cron:job:run:execution') => ({
+  [OpenClawCronRunMetadataKey.SessionKey]: key, [OpenClawCronRunMetadataKey.EntryIndex]: index,
+});
+function priorUser(store: RemoteStore, metadata: Record<string, unknown>) {
+  store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('u','s','user','Question',?,1,0)").run(JSON.stringify(metadata)));
+}
+function modelLabel(store: RemoteStore, id = 'm') {
+  const historical = message(store, id), realtime = live(store, id, replyModelPresetNames(), true);
+  expect(realtime.payload.modelLabel).toBe(historical.modelLabel);
+  if (historical.modelLabel) expect(realtime.resolvedModelLabel).toBe(historical.modelLabel);
+  return historical.modelLabel;
+}
+
+it('publishes display-only actual model evidence for native runs without inventing an input selection', () => {
+  const { store } = nativeFixture();
+  add(store, { remoteRunId: undefined, model: 'lobsterai-server/deepseek-flash-YoudaoInner', modelPresetId: ModelPresetId.Balanced });
+  expect(modelLabel(store)).toBe('快速（deepseek-flash）');
+  expect(message(store)).not.toHaveProperty('inputModel'); expect(live(store, 'm', replyModelPresetNames(), true).payload).not.toHaveProperty('inputModel');
+  expect(store.get('inputModel:s')).toMatchObject({ modelRef: 'new-selection' });
+  expect(store.get('desktopInputRun:run')).toBeNull();
+});
+
+it('keeps the new field absent for peers without the capability while preserving the original input model', () => {
+  const { store } = fixture(); add(store, { model: 'actual' });
+  expect(message(store)).not.toHaveProperty('modelLabel'); expect(live(store).payload).not.toHaveProperty('modelLabel');
+  const original = message(store).inputModel;
+  store.setReplyModelLabelSupported(true);
+  expect(modelLabel(store)).toBe('actual'); expect(message(store).inputModel).toEqual(original);
+  store.setReplyModelLabelSupported(false);
+  expect(message(store)).not.toHaveProperty('modelLabel'); expect(message(store).inputModel).toEqual(original);
+});
+
+it.each(['run', 'cron'])('borrows only the preceding user tier proved to belong to the same %s', kind => {
+  const { store } = nativeFixture();
+  priorUser(store, { modelPresetId: ModelPresetId.Balanced, ...(kind === 'run' ? { remoteRunId: 'run' } : cronMetadata(0)) });
+  add(store, { model: 'deepseek-flash', ...(kind === 'cron' ? { remoteRunId: undefined, ...cronMetadata(1) } : {}) });
+  expect(modelLabel(store)).toBe('快速（deepseek-flash）');
+});
+
+it.each(['unknown', 'other-run', 'other-cron', 'reversed-cron', 'foreign-user'])('does not borrow a tier across %s provenance', reason => {
+  const { store } = nativeFixture();
+  priorUser(store, { modelPresetId: ModelPresetId.Ultimate, ...cronMetadata(reason === 'reversed-cron' ? 2 : 0),
+    ...(reason === 'other-run' || reason === 'foreign-user' ? { remoteRunId: 'other-run' } : {}) });
+  if (reason === 'foreign-user') store.put('syncTargetHistory:s', { runIds: ['other-run'] });
+  add(store, { model: 'deepseek-flash', ...(reason === 'unknown' ? { remoteRunId: undefined }
+    : { ...cronMetadata(1, reason === 'other-cron' ? 'agent:main:cron:job:run:other' : undefined) }) });
+  expect(modelLabel(store)).toBe('deepseek-flash');
+});
+
+it('uses the nearest user only and does not borrow a matching tier from an earlier turn', () => {
+  const { store } = nativeFixture(); priorUser(store, { modelPresetId: ModelPresetId.Ultimate, remoteRunId: 'run' });
+  store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('u2','s','user','New question',?,2,1)").run(JSON.stringify({ remoteRunId: 'other' })));
+  add(store, { model: 'deepseek-flash' }, 'm2');
+  expect(modelLabel(store, 'm2')).toBe('deepseek-flash');
+});
+
+it('does not use a user resolved model to fill missing actual assistant execution evidence', () => {
+  const { store } = nativeFixture(); priorUser(store, { modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'actual', remoteRunId: 'run' });
+  add(store, { model: 'yd-fast' });
+  expect(modelLabel(store)).toBeUndefined();
+});
+
+it.each(['https://internal.example/private', 'localhost/private', '10.0.0.2/private', 'provider/sk-secret',
+  'provider/Bearer key', 'provider/api_key=private', 'provider/token:private', 'provider/password=private',
+  'provider/secret=private', 'provider/model\u202eunsafe', 'provider/model\u0000unsafe', 'provider/\ud800broken'])('omits unsafe display-only models: %j', model => {
+  const { store } = nativeFixture(); add(store, { model });
+  expect(modelLabel(store)).toBeUndefined();
+});
+
+it('does not send model labels for user/tool rows or foreign and cross-account run metadata', () => {
+  const { store } = nativeFixture(); priorUser(store, { model: 'private', remoteRunId: 'run' });
+  add(store, { model: 'actual' });
+  expect(message(store, 'u')).not.toHaveProperty('modelLabel');
+  store.put('desktopInputRun:run', { owner: { userId: 'other', scopeKey: 'personal' }, inputModel: selected, attachments: [] });
+  expect(modelLabel(store)).toBeUndefined(); store.remove('desktopInputRun:run');
+  store.put('syncTargetHistory:s', { runIds: ['run'] }); expect(modelLabel(store)).toBeUndefined();
+});
+
+it('does not label a legacy command whose original target cannot be verified', () => {
+  const { store } = nativeFixture();
+  store.put('syncTargetHistory:s', { targetId: 'current', runIds: [] });
+  add(store, { remoteRunId: undefined, remoteCommandId: 'legacy', model: 'actual' });
+  expect(modelLabel(store)).toBeUndefined();
+});
+
+it('preserves explicit reply and frozen run tiers ahead of user tier metadata', () => {
+  const { store } = nativeFixture(); priorUser(store, { remoteRunId: 'run', modelPresetId: ModelPresetId.Ultimate });
+  store.put('inputRun:run', { input: { text: 'Question', attachments: [] }, modelPresetId: ModelPresetId.Balanced });
+  add(store, { model: 'actual' }); expect(modelLabel(store)).toBe('快速（actual）');
+  add(store, { model: 'actual', modelPresetId: ModelPresetId.Ultimate }, 'm2'); expect(modelLabel(store, 'm2')).toBe('旗舰（actual）');
+});
+
+it('emits a new history revision after a capability upgrade without changing sealed events', () => {
+  const { store } = fixture(); store.remove('desktopInputRun:run'); add(store, { model: 'actual' });
+  const original = message(store), sealed = store.pending('s');
+  store.setReplyModelLabelSupported(true);
+  const upgraded = message(store);
+  expect(upgraded.modelLabel).toBe('actual'); expect(BigInt(upgraded.revision)).toBeGreaterThan(BigInt(original.revision));
+  expect(store.pending('s').slice(0, sealed.length)).toEqual(sealed);
+});
+
+it('relabels live and historical replies when the verified native tier arrives after publication', () => {
+  const { store, db } = nativeFixture(); priorUser(store, { ...cronMetadata(0) });
+  add(store, { remoteRunId: undefined, ...cronMetadata(1), model: 'deepseek-flash' });
+  const before = live(store, 'm', replyModelPresetNames(), true); expect(before.payload.modelLabel).toBe('deepseek-flash');
+  store.transaction(() => db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='u'").run(JSON.stringify({ ...cronMetadata(0), modelPresetId: ModelPresetId.Balanced })));
+  expect(modelLabel(store)).toBe('快速（deepseek-flash）');
+  expect(BigInt(live(store, 'm', replyModelPresetNames(), true).sourceObjectRevision)).toBeGreaterThan(BigInt(before.sourceObjectRevision));
+});
+
+
+it('bounds user metadata before parsing and revises dependent labels when it crosses that limit', () => {
+  const { store, db } = nativeFixture(); priorUser(store, { remoteRunId: 'run' });
+  add(store, { model: 'actual' });
+  const base = { remoteRunId: 'run', modelPresetId: ModelPresetId.Balanced, unused: '' };
+  const raw = JSON.stringify({ ...base, unused: 'x'.repeat(ReplyModelMetadataBytes - Buffer.byteLength(JSON.stringify(base))) });
+  expect(Buffer.byteLength(raw)).toBe(ReplyModelMetadataBytes);
+  const update = (metadata: string) => store.transaction(() => db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='u'").run(metadata));
+  update(raw); expect(modelLabel(store)).toBe('快速（actual）');
+  const before = live(store, 'm', replyModelPresetNames(), true).sourceObjectRevision;
+  update(raw.replace('"unused":"', '"unused":"x'));
+  expect(modelLabel(store)).toBe('actual');
+  const after = live(store, 'm', replyModelPresetNames(), true).sourceObjectRevision;
+  expect(BigInt(after)).toBeGreaterThan(BigInt(before));
+  update(raw.replace('"unused":"', '"unused":"xx'));
+  expect(live(store, 'm', replyModelPresetNames(), true).sourceObjectRevision).toBe(after);
 });

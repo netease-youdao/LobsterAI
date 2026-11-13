@@ -29,9 +29,10 @@ import { RemoteProjectionCoordinator } from './remoteProjectionCoordinator';
 import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
 import { initializeRemoteProjectionSchema } from './remoteProjectionSchema';
 import type { ProjectionWork } from './remoteProjectionWorker';
+import { hasNoRemotePublicationAuthority } from './remotePublicationEvidence';
 import { RemotePublicationKind, RemotePublicationOrigins } from './remotePublicationOrigins';
 import { type QuestionEvidenceAuthenticator,questionIdSql,questionSessionSql, RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
-import { replyInputModel, type ReplyModelPresetNames,replyModelPresetNames } from './remoteReplyModel';
+import { replyInputModel, replyMessageModelLabel, type ReplyModelPresetNames,replyModelPresetNames } from './remoteReplyModel';
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState, replyUserText } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
@@ -182,6 +183,7 @@ export class RemoteStore {
   private approvalProjectionSupported = false;
   private questionProjectionSupported = false;
   private inputProjectionSupported = false;
+  private replyModelLabelSupported = false;
   private modelPresetNames?: ReplyModelPresetNames;
   private fileProjectionSupported = false;
   private replyProjectionSupported = false;
@@ -433,6 +435,7 @@ export class RemoteStore {
   }
   configureDetachedProjection(work: ProjectionWork): void {
     this.modelPresetNames = work.modelPresetNames;
+    this.replyModelLabelSupported = work.replyModelLabelSupported === true;
     this.taskCreditsProjectionSupported = work.taskCredits === true;
     this.taskCreditsSourceVersion = work.taskCreditsSourceVersion;
     this.enabledOwner = work.owner; this.approvalProjectionSupported = work.approval; this.questionProjectionSupported = work.questions; this.inputProjectionSupported = work.input;
@@ -503,7 +506,7 @@ export class RemoteStore {
         const work: ProjectionWork = { annotationLanguage: getLanguage(), modelPresetNames: replyModelPresetNames(), questionEvidenceDigest: remoteQuestionEvidenceDigest(this.db), database: this.db.name, target: '', sessionId: id, owner: { ...this.enabledOwner },
           deviceId: this.projectionIdentity?.deviceId || sync.device_id, environment: this.fileEnvironment || this.projectionIdentity?.environment || null,
           agent: this.agentSummary?.(id, this.enabledOwner) || null, approval: this.approvalProjectionSupported, questions: this.questionProjectionSupported,
-          input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, taskCredits: this.taskCreditsProjectionSupported, deletions: this.deletionProjectionSupported };
+          replyModelLabelSupported: this.replyModelLabelSupported, input: this.inputProjectionSupported, files: this.fileProjectionSupported, reply: this.replyProjectionSupported, taskCredits: this.taskCreditsProjectionSupported, deletions: this.deletionProjectionSupported };
         this.projectionTargetContexts.set(work, stableJson(activeRemoteSyncTargetContext(this, work.owner)));
         this.projectionFaultEpochs.set(work, projectionFault(this.db, id)?.epoch ?? null);
         // Rotate after service: a continuously dirty old task must not monopolize
@@ -530,6 +533,7 @@ export class RemoteStore {
       && (!work.annotationLanguage || work.annotationLanguage === getLanguage())
       && (!work.modelPresetNames || stableJson(work.modelPresetNames) === stableJson(replyModelPresetNames()))
       && work.approval === this.approvalProjectionSupported && work.questions === this.questionProjectionSupported && work.input === this.inputProjectionSupported
+      && (work.replyModelLabelSupported === true) === this.replyModelLabelSupported
       && (work.taskCredits === true) === this.taskCreditsProjectionSupported
       && work.files === this.fileProjectionSupported && work.reply === this.replyProjectionSupported && (work.deletions === true) === this.deletionProjectionSupported
       && work.deviceId === (this.projectionIdentity?.deviceId || this.sync(work.sessionId)?.device_id)
@@ -829,6 +833,11 @@ export class RemoteStore {
     this.inputProjectionSupported = supported;
     for (const { session_id } of this.projectionSessions()) this.markProjectionDirty(session_id);
   }
+  setReplyModelLabelSupported(supported: boolean): void {
+    if (this.replyModelLabelSupported === supported) return;
+    this.replyModelLabelSupported = supported;
+    for (const { session_id } of this.projectionSessions()) this.markProjectionDirty(session_id);
+  }
   currentAgentSummary(sessionId: string): RemoteAgentSummary | null {
     const owner = this.owner(sessionId);
     return owner && this.agentSummary ? this.agentSummary(sessionId, owner) : null;
@@ -1009,7 +1018,7 @@ export class RemoteStore {
     this.db.prepare('INSERT INTO cowork_session_ownership VALUES (?,?,?,?,?,?)')
       .run(sessionId, owner.userId, owner.scopeKey, 'confirmed', OWNERSHIP_MANUAL_SOURCE, associatedAt);
     this.signOwnership(sessionId, owner);
-    this.publicationOrigins.associate(RemotePublicationKind.Session, sessionId, owner);
+    this.publicationOrigins.associate(RemotePublicationKind.Session, sessionId, owner, hasNoRemotePublicationAuthority(this.db, sessionId));
     this.db.prepare('INSERT INTO remote_sync(local_id,session_id) VALUES (?,?)').run(sessionId, randomUUID());
     this.markProjectionDirty(sessionId);
   }
@@ -1035,18 +1044,29 @@ export class RemoteStore {
     const run = this.run(sessionId);
     if (!run || run.runId !== binding.runId || terminal.has(run.status)) throw new Error('REMOTE_QUARANTINE_STOP_UNVERIFIED');
   }
-  assignNew(sessionId: string, owner: RemoteOwner | null, source: string, parentId?: string): void {
+  assignNew(sessionId: string, owner: RemoteOwner | null, source: string, parentId?: string, publicationSourceId?: string): void {
     if (owner && (!this.db.inTransaction || this.depth === 0)) throw new Error('Ownership must be recorded in the creation transaction');
-    this.publicationOrigins.capture(RemotePublicationKind.Session, sessionId, owner, parentId);
+    if (source === 'bound_automation') this.publicationOrigins.inheritAutomationSession(sessionId, publicationSourceId, owner);
+    else this.publicationOrigins.capture(RemotePublicationKind.Session, sessionId, owner, parentId);
     if (!owner) return;
     this.db.prepare('INSERT INTO cowork_session_ownership VALUES (?,?,?,?,?,?)').run(sessionId, owner.userId, owner.scopeKey, 'confirmed', source, Date.now());
     this.signOwnership(sessionId, owner);
     this.db.prepare('INSERT INTO remote_sync(local_id,session_id) VALUES (?,?)').run(sessionId, randomUUID());
   }
   inheritNew(sessionId: string, parentId: string): void { this.assignNew(sessionId, this.owner(parentId), 'inherited_parent', parentId); }
+  /** Capture before asynchronous automation creation, so a service switch cannot relabel its source. */
+  prepareSourceBinding(owner: RemoteOwner | null): (sourceId: string) => void {
+    const actor = owner ? { ...owner } : null;
+    const source = this.publicationOrigins.captureSource(actor);
+    return sourceId => this.db.transaction(() => {
+      const existing = this.db.prepare('SELECT 1 FROM remote_source_owner WHERE source_id=?').get(sourceId);
+      if (existing && !sameOwner(this.sourceOwner(sourceId), actor)) throw new Error('Automation belongs to another account');
+      if (actor) this.db.prepare('INSERT OR IGNORE INTO remote_source_owner VALUES (?,?)').run(sourceId, stableJson(actor));
+      this.publicationOrigins.bindAutomationSource(sourceId, actor, existing ? null : source, !!existing);
+    })();
+  }
   bindSource(sourceId: string, owner: RemoteOwner | null): void {
-    if (!owner) return;
-    this.db.prepare('INSERT OR IGNORE INTO remote_source_owner VALUES (?,?)').run(sourceId, stableJson(owner));
+    this.prepareSourceBinding(owner)(sourceId);
   }
   sourceOwner(sourceId: string): RemoteOwner | null {
     const row = this.db.prepare('SELECT owner_json FROM remote_source_owner WHERE source_id=?').get(sourceId) as any;
@@ -1679,7 +1699,9 @@ export class RemoteStore {
             id => hasTaskUsageRunOrigin(this.db, sessionId, id))) turnUsage = remoteTurnUsage(metadata);
         } catch { /* Corrupt optional attribution cannot expose a usage snapshot. */ }
       }
-      const message: any = { ...(turnUsage ? { turnUsage } : {}), messageId: m.id, ordinal: String(Math.max(1, m.sequence || 1)), revision: '0',
+      const modelLabel = this.replyModelLabelSupported && !foreignHistory && (!desktopInput || sameOwner(desktopInput.owner, this.owner(sessionId)))
+        ? replyMessageModelLabel(this.db, sessionId, m, metadata, this.modelPresetNames, inputRun?.modelPresetId, foreignRuns) : null;
+      const message: any = { ...(modelLabel ? { modelLabel } : {}), ...(turnUsage ? { turnUsage } : {}), messageId: m.id, ordinal: String(Math.max(1, m.sequence || 1)), revision: '0',
         runId: foreignHistory ? null : metadata.remoteRunId || null, commandId: foreignHistory ? null : metadata.remoteCommandId || null,
         role: isTool ? 'tool' : this.replyProjectionSupported && m.type === 'system' ? 'notice' : m.type, status: metadata.isStreaming ? 'streaming' : 'complete', createdAt: iso(m.created_at),
         ...(this.replyProjectionSupported ? { projectionVersion: RemoteReply.ProjectionVersion, displayOrdinal: String(displayIndex + 1) } : {}),

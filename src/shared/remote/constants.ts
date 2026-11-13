@@ -1,5 +1,5 @@
-import type { RemoteAgentSettingsApi } from './agentSettings';
 import type { RemoteConnectionOperation, RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest, RemoteConnectionsSnapshot } from './connections';
+import type { RemoteSyncRecoveryDisplay } from './recovery';
 import type { RemoteTelemetryUiInput } from './telemetryUi';
 
 /** Remote transport values are shared by main, preload and settings. */
@@ -42,6 +42,7 @@ export const RemoteSyncTaskIssueStatus = {
 } as const;
 export const RemoteSyncTaskIssueSource = { Live: 'live' } as const;
 export interface RemoteSyncTaskIssue {
+  recovery?: RemoteSyncRecoveryDisplay;
   localSessionId: string;
   source?: typeof RemoteSyncTaskIssueSource[keyof typeof RemoteSyncTaskIssueSource];
   title?: string;
@@ -93,7 +94,7 @@ export interface RemoteSettingsState {
   accessRequests: Array<{ requestId: string; mobileDevice: { deviceId: string; name: string; platform: string }; permissions: string[]; expiresAt?: string }>;
 }
 export interface RemoteConfigureRequest { expectedAccountEpoch?: string; reregister?: boolean; keepAwakeEnabled?: boolean; retry?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; addWorkspace?: boolean; removeWorkspaceId?: string }
-export interface RemoteSettingsApi extends RemoteAgentSettingsApi {
+export interface RemoteSettingsApi {
   telemetry?(input: RemoteTelemetryUiInput): void;
   onChanged(listener: (state: RemoteSettingsState) => void): () => void;
   state(): Promise<RemoteSettingsState>;

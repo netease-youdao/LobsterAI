@@ -397,8 +397,11 @@ export class OpenClawChannelSessionSync {
       agentId,
     );
 
-    const session = this.coworkStore.createSession(title, cwd, '', 'local', [], agentId, '', { owner: this.coworkStore.remote.sourceOwner(`im:${parsed.platform}:${accountId || 'default'}`), ownershipSource: 'bound_automation' });
-    this.coworkStore.remote.bindExecutionSource?.(session.id, `im:${parsed.platform}:${accountId || 'default'}`);
+    const publicationSourceId = `im:${parsed.platform}:${accountId || 'default'}`;
+    const session = this.coworkStore.createSession(title, cwd, '', 'local', [], agentId, '', {
+      owner: this.coworkStore.remote.sourceOwner(publicationSourceId), ownershipSource: 'bound_automation', publicationSourceId,
+    });
+    this.coworkStore.remote.bindExecutionSource?.(session.id, publicationSourceId);
     console.log(
       `[ChannelSessionSync] Created session for ${parsed.platform} conversation ${parsed.conversationId}: ${session.id}`,
     );
@@ -502,6 +505,7 @@ export class OpenClawChannelSessionSync {
           const titlePrefix = getChannelTitlePrefix(parsed.platform);
           const title = `${titlePrefix} ${buildChannelDisplayName(parsed.conversationId)}`;
           const cwd = this.getDefaultCwd(currentAgentId);
+          const publicationSourceId = `im:${parsed.platform}:${extractAccountIdFromKey(sessionKey) || 'default'}`;
           const newSession = this.coworkStore.createSession(
             title,
             cwd,
@@ -510,9 +514,9 @@ export class OpenClawChannelSessionSync {
             [],
             currentAgentId,
             '',
-            { owner: this.coworkStore.remote.sourceOwner(`im:${parsed.platform}:${extractAccountIdFromKey(sessionKey) || 'default'}`), ownershipSource: 'bound_automation' },
+            { owner: this.coworkStore.remote.sourceOwner(publicationSourceId), ownershipSource: 'bound_automation', publicationSourceId },
           );
-          this.coworkStore.remote.bindExecutionSource?.(newSession.id, `im:${parsed.platform}:${extractAccountIdFromKey(sessionKey) || 'default'}`);
+          this.coworkStore.remote.bindExecutionSource?.(newSession.id, publicationSourceId);
           console.log('[ChannelSessionSync] created new session for agent change:', newSession.id);
           this.imStore.updateSessionMappingTarget(
             existingMapping.imConversationId,
@@ -828,6 +832,7 @@ export class OpenClawChannelSessionSync {
     }
 
     const jobId = cronKey.scheduledTaskId;
+    const publicationSourceId = `cron:${jobId}`;
     const agentId = cronKey.agentId || DEFAULT_MANAGED_AGENT_ID;
     const persistedSessionId = typeof this.coworkStore.getSessionIdByScheduledTaskId === 'function'
       ? this.coworkStore.getSessionIdByScheduledTaskId(jobId, agentId)
@@ -835,7 +840,7 @@ export class OpenClawChannelSessionSync {
     if (persistedSessionId) {
       const persistedSession = this.coworkStore.getSession(persistedSessionId, 0);
       if (persistedSession) {
-        this.coworkStore.remote.bindExecutionSource?.(persistedSessionId, `cron:${jobId}`);
+        this.coworkStore.remote.bindExecutionSource?.(persistedSessionId, publicationSourceId);
         this.updateLocalSessionCwdIfNeeded(persistedSession, agentId);
         this.syncedSessionKeys.set(cronKey.cacheKey, persistedSessionId);
         console.debug(
@@ -873,9 +878,9 @@ export class OpenClawChannelSessionSync {
       [],
       agentId,
       '',
-      { scheduledTaskId: jobId, owner: this.coworkStore.remote.sourceOwner(`cron:${jobId}`), ownershipSource: 'bound_automation' },
+      { scheduledTaskId: jobId, owner: this.coworkStore.remote.sourceOwner(publicationSourceId), ownershipSource: 'bound_automation', publicationSourceId },
     );
-    this.coworkStore.remote.bindExecutionSource?.(session.id, `cron:${jobId}`);
+    this.coworkStore.remote.bindExecutionSource?.(session.id, publicationSourceId);
     console.log('[ChannelSessionSync] created cron session:', session.id);
 
     this.syncedSessionKeys.set(cronKey.cacheKey, session.id);

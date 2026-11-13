@@ -751,7 +751,11 @@ class AuthService {
   async logout() {
     this.cancelAuthRecovery();
     clearPendingPublishingConversionAttribution();
+    const generation = this.authRestoreGeneration;
+    const requestSnapshot = store.getState().auth;
     await window.electron.auth.logout();
+    if (generation !== this.authRestoreGeneration
+      || !isAuthAccountRequestCurrent(requestSnapshot, store.getState().auth)) return;
     await this.applyLoggedOutState(false);
   }
 

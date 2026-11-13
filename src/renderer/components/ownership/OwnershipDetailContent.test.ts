@@ -1,5 +1,6 @@
 import { OwnershipContentSyncReason, OwnershipContentSyncState, OwnershipSyncState, OwnershipTargetKind } from '@shared/ownership/constants';
 import type { OwnershipDetail } from '@shared/ownership/types';
+import { RemoteSyncRecoveryReason, RemoteSyncRecoveryState } from '@shared/remote/recovery';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -62,6 +63,15 @@ describe('task content sync detail', () => {
     expect(html).toContain(i18nService.t('ownershipContentSyncUnavailableHelp'));
     expect(html).not.toContain(i18nService.t('ownershipContentSync_synced'));
   });
+  test.each(['zh', 'en'] as const)('explains an unconfirmed source without promising recovery or blaming the connection (%s)', language => {
+    i18nService.setLanguage(language, { persist: false });
+    const html = renderToStaticMarkup(React.createElement(OwnershipDetailContent, {
+      detail: { ...detail, canConfirmPublication: false, contentSync: { state: OwnershipContentSyncState.Waiting, retryable: false, reason: OwnershipContentSyncReason.Source } },
+    }));
+    expect(html).toContain(i18nService.t('ownershipContentSyncSourceHelp'));
+    expect(html).not.toContain(i18nService.t('ownershipContentSyncConnectionHelp'));
+    expect(html).not.toContain(i18nService.t('ownershipConfirmPublication'));
+  });
   test('keeps waiting and connection guidance separate from content failure', () => {
     const html = renderToStaticMarkup(React.createElement(OwnershipDetailContent, {
       detail: { ...detail, contentSync: { state: OwnershipContentSyncState.Waiting, retryable: false, reason: OwnershipContentSyncReason.Connection } },
@@ -75,5 +85,26 @@ describe('task content sync detail', () => {
       detail: { ...detail, status: 'running', updatedAt: 1_800_000_000_000, contentSync }, compact: true,
     }));
     expect(compact({ state, retryable: true, reason: OwnershipContentSyncReason.Content })).toBe(compact(undefined));
+  });
+});
+
+describe('automatic recovery detail', () => {
+  test.each(['zh', 'en'] as const)('retains a recovery label until publication is confirmed (%s)', language => {
+    i18nService.setLanguage(language, { persist: false });
+    const states = [
+      [RemoteSyncRecoveryState.Waiting, 'remoteRecoveryWaiting'], [RemoteSyncRecoveryState.Checking, 'remoteRecoveryChecking'],
+      [RemoteSyncRecoveryState.Recovering, 'remoteRecoveryRecovering'], [RemoteSyncRecoveryState.Blocked, 'remoteRecoveryBlocked'],
+    ] as const;
+    for (const [state, key] of states) {
+      const html = renderToStaticMarkup(React.createElement(OwnershipDetailContent, {
+        detail: { ...detail, contentSync: { state: OwnershipContentSyncState.Failed, retryable: false,
+          recovery: { state, reason: RemoteSyncRecoveryReason.Protocol, nextProbeAt: Date.now() + 60000 } } },
+      }));
+      expect(html).toContain(i18nService.t(key));
+      expect(html).toContain(i18nService.t('remoteRecoveryProtocolHelp'));
+      expect(html).not.toContain(i18nService.t('ownershipContentSync_synced'));
+      expect(html).not.toContain(i18nService.t('ownershipRetrySync'));
+      expect(html.includes(i18nService.t('remoteRecoveryNextProbe').split('{time}')[0])).toBe(state === RemoteSyncRecoveryState.Waiting);
+    }
   });
 });

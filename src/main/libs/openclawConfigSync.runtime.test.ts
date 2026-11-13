@@ -4286,6 +4286,28 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(agentsMd).toContain('never tell the user to enable Chrome remote debugging');
   });
 
+  test('delivers Agent settings guidance to main and custom workspaces on initial and subsequent syncs', async () => {
+    const sync = await createSync({
+      getAgents: () => [{ id: 'writer', name: 'Writer', enabled: true, model: '', systemPrompt: 'Custom system prompt', identity: 'Original identity' }],
+    });
+    for (const reason of ['initial-settings-policy', 'continued-settings-policy']) {
+      expect(sync.sync(reason).ok).toBe(true);
+      for (const id of ['main', 'writer']) {
+        const agentsMd = fs.readFileSync(path.join(stateDir, `workspace-${id}`, 'AGENTS.md'), 'utf8');
+        expect(agentsMd).toContain('Apply this policy on every turn, including continuations after a stop or restart.');
+        expect(agentsMd).toContain('use `lobsterai_agent_settings` only when it is available for the current run');
+        expect(agentsMd).toContain('direct the user to the Agent settings page in LobsterAI');
+        expect(agentsMd).toContain('SQLite, LobsterAI data files, `openclaw.json`, or gateway config writes');
+        expect(agentsMd).toContain('`IDENTITY.md` and `SOUL.md` are generated views of the App settings');
+        expect(agentsMd).toContain('Ordinary user workspace files and requested project edits remain allowed.');
+        if (id === 'writer') {
+          expect(agentsMd.indexOf('## LobsterAI Agent Settings')).toBeLessThan(agentsMd.indexOf('## System Prompt'));
+        }
+      }
+    }
+    expect(fs.readFileSync(path.join(stateDir, 'workspace-writer', 'IDENTITY.md'), 'utf8')).toBe('Original identity\n');
+  });
+
   test('enables managed OpenClaw tool loop detection', async () => {
     const sync = await createSync();
 

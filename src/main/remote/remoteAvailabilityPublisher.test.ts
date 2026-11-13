@@ -1288,6 +1288,47 @@ describe('acknowledged reply model display repair', () => {
     expect(f.request).not.toHaveBeenCalled();
   });
 
+  it('repairs an acknowledged scheduled reply without inventing an input selection', async () => {
+    const f = await prepare(); f.store.remove('inputRun:run'); f.context.replyModelLabelSupported = true;
+    f.publisher.ledger.markReplyModelDisplayChecked(f.context.scope, 'local', 'message:message', f.revision);
+    await f.live();
+    const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(body).toMatchObject({ representation: 'repair', sourceObjectRevision: f.revision,
+      expectedProjectionRevision: '41', payload: { modelLabel: 'deepseek-flash' } });
+    expect(body.payload).not.toHaveProperty('inputModel');
+    expect(body).not.toHaveProperty('replyModelLabelChecked');
+    expect(body).not.toHaveProperty('resolvedModelLabel');
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.replyModelLabelChecked).toBe(true);
+    (f.publisher as any).liveScan.clear(); f.request.mockClear(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('defers display-only repair until capability negotiation without consuming its check', async () => {
+    const f = await prepare(); f.store.remove('inputRun:run'); f.context.replyModelLabelSupported = false;
+    await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.replyModelLabelChecked).toBeUndefined();
+    f.context.replyModelLabelSupported = true; (f.publisher as any).liveScan.clear();
+    await f.live();
+    expect(f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2].payload.modelLabel).toBe('deepseek-flash');
+  });
+
+  it('retains a sealed label publication when rollback offers no resolution capability', async () => {
+    const f = await prepare(); f.context.replyModelLabelSupported = false; f.context.publicationResolutionSupported = false;
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const body = { publicationId: 'pending-label', objectKind: 'message', objectId: 'message', sourceObjectRevision: f.revision,
+      writerGeneration: state.writerGeneration, sessionId: state.sessionId, representation: 'complete', payload: { modelLabel: 'deepseek-flash' } };
+    f.publisher.ledger.saveRequest({ key: body.publicationId, lane: 'live', scope: f.context.scope, localId: 'local',
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: '/sync/live-projections/pending-label', lookupVersion: 3,
+      attempted: true, createdAt: 1, body, replyModelLabelChecked: true });
+    await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.request(body.publicationId)?.body).toEqual(body);
+    f.context.replyModelLabelSupported = true;
+    await f.live();
+    expect(f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2]).toEqual({ ...body, connectionGeneration: f.context.generation });
+  });
+
   it('does not republish a frozen preset name without an actual recorded model', async () => {
     const f = await prepare({ model: 'yd-fast' }), encode = vi.spyOn((f.publisher as any).encoder, 'project');
     await f.live();

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 export const SettingsRuntime = {
   Plugin: 'lobster-agent-settings', Tool: 'lobsterai_agent_settings', Policy: 'agent-settings-writers',
   Status: 'lobster.settings.status', BindRun: 'lobster.settings.bindRun', Acquire: 'lobster.settings.acquire', Release: 'lobster.settings.release',
-  MemoryLock: 'lobsterai.memoryWorkspaceLock.v1',
+  MemoryLock: 'lobsterai.memoryWorkspaceLock.v1', SharedState: 'lobsterai.agentSettingsRuntime.v1',
 } as const;
 
 export type SettingsRunIdentity = { agentId: string; sessionKey: string; runId: string };
@@ -97,6 +97,8 @@ export class SettingsWriterCoordinator {
       });
     });
   }
+  idle(): boolean { return this.active.size === 0 && this.leases.size === 0; }
+
   release(agentId: string, token: string): boolean {
     const lease = this.leases.get(agentId);
     if (!lease || lease.token !== token) return false;

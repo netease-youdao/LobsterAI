@@ -4,6 +4,7 @@ import path from 'path';
 
 import type { RemoteOwner } from '../../shared/remote/constants';
 import { payloadHash, sameOwner, stableJson } from './canonical';
+import { AvailabilityRecoveryLane, completeAvailabilityRecovery, RemoteAvailabilityAutoRecovery } from './remoteAvailabilityAutoRecovery';
 import { assertRemoteSidecarHeadroom } from './remoteSidecarHeadroom';
 import type { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
@@ -197,6 +198,9 @@ export class RemoteHistoryStore {
       return action(this.databaseForHistory());
     }); } catch (error) { if (sharedFailure(error)) throw this.fail(error); throw error; }
   }
+  autoRecovery(context: HistoryContext): RemoteAvailabilityAutoRecovery {
+    return new RemoteAvailabilityAutoRecovery(action => this.access(context, action));
+  }
   operation(context: HistoryContext, id: string): HistoryOperation | null {
     return this.access(context, db => this.readOperation(db,context,id));
   }
@@ -309,6 +313,8 @@ export class RemoteHistoryStore {
       if (BigInt(position.historyGeneration) < BigInt(session.historyGeneration) || BigInt(position.resolvedSourceSeq) < BigInt(session.resolvedSourceSeq)) {
         throw new RemoteHistoryUnavailable('REMOTE_HISTORY_RECEIPT_REGRESSION');
       }
+      completeAvailabilityRecovery(db, context.scope, context.localId, AvailabilityRecoveryLane.History, id, receipt.state === 'committed');
+      if (receipt.state === 'committed') completeAvailabilityRecovery(db, context.scope, context.localId, AvailabilityRecoveryLane.History, `history-state:${context.writerGeneration}`);
       operation.state = 'complete'; operation.receipt = receipt; kind = operation.kind;
       const body = stableJson(operation);
       if (Buffer.byteLength(body) > 2 * 1024 * 1024) throw new RemoteHistoryUnavailable('REMOTE_HISTORY_RECEIPT_BUDGET');

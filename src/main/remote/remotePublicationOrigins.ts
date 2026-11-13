@@ -5,7 +5,7 @@ import type { RemoteAgentCatalogItem, RemoteOwner } from '../../shared/remote/co
 import type { RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
 import { payloadHash } from './canonical';
 
-export const RemotePublicationKind = { Session: 'session', Agent: 'agent' } as const;
+export const RemotePublicationKind = { Session: 'session', Agent: 'agent', Source: 'source' } as const;
 type Kind = typeof RemotePublicationKind[keyof typeof RemotePublicationKind];
 interface Origin { route: string | null; data_space_id: string | null; owner_user_id: string | null; owner_scope_key: string | null }
 const exists = (db: Database.Database, table: string): boolean => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
@@ -57,16 +57,51 @@ export class RemotePublicationOrigins {
         .run(kind, id, parent?.route ?? null, parent?.data_space_id ?? null, owner?.userId ?? null, owner?.scopeKey ?? null);
       return;
     }
-    if (!this.route) return;
+    const source = this.captureSource(owner);
+    if (!source) return;
+    this.db.prepare('INSERT OR IGNORE INTO remote_publication_origins VALUES(?,?,?,?,?,?)')
+      .run(kind, id, source.route, source.dataSpaceId, owner?.userId ?? null, owner?.scopeKey ?? null);
+  }
+  captureSource(owner: RemoteOwner | null): { route: string; dataSpaceId: string | null } | null {
+    if (!this.route) return null;
     const route = normalize(this.route());
     const current = this.currentTarget?.();
-    const space = owner && current?.owner.userId === owner.userId && current.owner.scopeKey === owner.scopeKey && normalize(current.route) === route
-      ? current.dataSpaceId : null;
-    this.db.prepare('INSERT OR IGNORE INTO remote_publication_origins VALUES(?,?,?,?,?,?)')
-      .run(kind, id, route, space, owner?.userId ?? null, owner?.scopeKey ?? null);
+    return { route, dataSpaceId: owner && current?.owner.userId === owner.userId && current.owner.scopeKey === owner.scopeKey && normalize(current.route) === route
+      ? current.dataSpaceId : null };
   }
-  associate(kind: Kind, id: string, owner: RemoteOwner): void {
-    // Association changes account ownership, never the environment where the source was created.
+  /** Bind only a newly created automation; legacy bindings cannot acquire the current route. */
+  bindAutomationSource(id: string, owner: RemoteOwner | null, source: { route: string; dataSpaceId: string | null } | null, hadOwnerBinding: boolean): void {
+    const existing = this.get(RemotePublicationKind.Source, id);
+    if (existing && (existing.owner_user_id !== (owner?.userId ?? null)
+      || existing.owner_scope_key !== (owner?.scopeKey ?? null)
+      || existing.owner_user_id !== null && !hadOwnerBinding)) {
+      throw new Error('Automation source ownership cannot be reassigned');
+    }
+    this.db.prepare('INSERT OR IGNORE INTO remote_publication_origins VALUES(?,?,?,?,?,?)')
+      .run(RemotePublicationKind.Source, id, source?.route ?? '', source?.dataSpaceId ?? null, owner?.userId ?? null, owner?.scopeKey ?? null);
+  }
+  inheritAutomationSession(id: string, sourceId: string | undefined, owner: RemoteOwner | null): void {
+    const source = sourceId ? this.get(RemotePublicationKind.Source, sourceId) : undefined;
+    let valid = false;
+    try {
+      valid = !!source && source.owner_user_id === (owner?.userId ?? null) && source.owner_scope_key === (owner?.scopeKey ?? null)
+        && (source.route === null || typeof source.route === 'string' && source.route !== '' && normalize(source.route) === source.route)
+        && (source.data_space_id === null || typeof source.data_space_id === 'string' && source.data_space_id.length > 0)
+        && (source.route !== null || source.data_space_id !== null);
+    } catch { /* Damaged or missing source evidence stays local. */ }
+    // An unknown automation must not become eligible for the generic legacy-local confirmation path.
+    this.db.prepare('INSERT OR IGNORE INTO remote_publication_origins VALUES(?,?,?,?,?,?)')
+      .run(RemotePublicationKind.Session, id, valid ? source!.route : '', valid ? source!.data_space_id : null,
+        owner?.userId ?? null, owner?.scopeKey ?? null);
+  }
+  /** Read-only preview evidence; changing routes invalidates the original association plan. */
+  associationSource(kind: Kind, id: string, owner: RemoteOwner): Origin | { route: string; dataSpaceId: string | null } | null {
+    return this.get(kind, id) ?? this.captureSource(owner);
+  }
+  associate(kind: Kind, id: string, owner: RemoteOwner, captureMissingSource = false): void {
+    // A new explicit claim may choose the route only when the caller proves no
+    // historical publication authority. Existing origins, including unknown ones, stay intact.
+    if (captureMissingSource && !this.get(kind, id)) this.capture(kind, id, owner);
     this.db.prepare('INSERT OR IGNORE INTO remote_publication_origins VALUES(?,?,NULL,NULL,?,?)').run(kind, id, owner.userId, owner.scopeKey);
     this.db.prepare('UPDATE remote_publication_origins SET owner_user_id=?,owner_scope_key=? WHERE kind=? AND local_id=? AND owner_user_id IS NULL')
       .run(owner.userId, owner.scopeKey, kind, id);

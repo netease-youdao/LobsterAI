@@ -17,6 +17,7 @@ export interface ProjectionWork {
   database: string; target: string; sessionId: string; owner: RemoteOwner; deviceId: string; environment: string | null;
   questionEvidenceDigest?: string;
   modelPresetNames?: ReplyModelPresetNames;
+  replyModelLabelSupported?: boolean;
   deletions?: boolean; taskCredits?: boolean; taskCreditsSourceVersion?: string; agent: RemoteAgentSummary | null; approval: boolean; questions: boolean; input: boolean; files: boolean; reply: boolean;
 }
 /** Runs only in a worker: consistent source read, bounded disk materialization, then projection. */

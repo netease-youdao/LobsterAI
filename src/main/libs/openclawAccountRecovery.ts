@@ -4,6 +4,7 @@ export const AccountRecoveryPhase = {
   Preparing: 'preparing_config',
   Starting: 'starting',
   Confirming: 'confirming',
+  Retrying: 'retrying',
   Complete: 'complete',
   Stopped: 'stopped',
   Failed: 'failed',
@@ -210,6 +211,7 @@ export class OpenClawAccountRecovery {
 
   private async run(op: RecoveryOperation): Promise<void> {
     while (op.isCurrent()) {
+      let workRevision: number | null = null;
       try {
         if (!op.isolated) {
           this.publish(op, AccountRecoveryPhase.Fencing);
@@ -222,13 +224,13 @@ export class OpenClawAccountRecovery {
         op.assertCurrent();
         this.deps.allowCredentials();
         if (!this.deps.canRun()) throw new AccountRecoveryCancelledError();
-        if (op.preparedRevision !== this.mutationRevision) {
+        workRevision = this.mutationRevision;
+        if (op.preparedRevision !== workRevision) {
           this.publish(op, AccountRecoveryPhase.Preparing);
-          const revision = this.mutationRevision;
           await this.deps.prepare(op);
           op.assertCurrent();
-          if (this.mutationPending || revision !== this.mutationRevision) continue;
-          op.preparedRevision = revision;
+          if (this.mutationPending || workRevision !== this.mutationRevision) continue;
+          op.preparedRevision = workRevision;
         }
         if (!op.resume) {
           this.publish(op, AccountRecoveryPhase.Stopped);
@@ -247,11 +249,17 @@ export class OpenClawAccountRecovery {
         return;
       } catch (error) {
         if (!op.isCurrent()) throw new AccountRecoveryCancelledError();
-        if (this.mutationPending && !this.mutationError && op.phase !== AccountRecoveryPhase.WaitingAuth) continue;
-        this.publish(op, AccountRecoveryPhase.Failed, error);
+        // A same-owner refresh can commit before cancelled startup/config work rejects.
+        // Its old result is obsolete even though auth is no longer pending.
+        if (!(error instanceof AccountRecoveryCancelledError) && !this.mutationError && workRevision !== null
+          && (this.mutationPending || workRevision !== this.mutationRevision)) continue;
         if (error instanceof AccountRecoveryCancelledError || this.mutationError
-          || !this.deps.canRetry(error) || op.attempt >= RETRY_DELAYS_MS.length) throw error;
+          || !this.deps.canRetry(error) || op.attempt >= RETRY_DELAYS_MS.length) {
+          this.publish(op, AccountRecoveryPhase.Failed, error);
+          throw error;
+        }
         const delay = Math.max(RETRY_DELAYS_MS[op.attempt++], this.deps.retryDelayMs?.() ?? 0);
+        this.publish(op, AccountRecoveryPhase.Retrying, error);
         await this.pause(op, delay);
       }
     }

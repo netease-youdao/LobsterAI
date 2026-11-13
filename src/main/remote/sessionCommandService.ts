@@ -381,9 +381,15 @@ export class SessionCommandService {
       });
     } finally { if (id) this.submitting.delete(id); release(); }
   }
-  private validateAgent(agentId: string, owner: RemoteOwner, expectedVersion?: string, selectable = false): void {
+  private validateAgent(agentId: string, owner: RemoteOwner, expectedVersion?: string, selectable = false, sessionId?: string): void {
     const targetId = this.input?.getTargetId?.();
-    if (targetId && !remotePublicationAllowed(this.store.remote.db, RemotePublicationKind.Agent, agentId, owner, targetId)) throw remoteAgentFailure('NOT_SELECTABLE');
+    if (sessionId) {
+      const session = this.store.getSession(sessionId, 0);
+      if (!session || (session.agentId || AgentId.Main) !== agentId || !sameOwner(this.store.remote.owner(sessionId), owner)
+        || !this.store.remote.isTaskAdmitted(sessionId)) throw remoteAgentFailure('NOT_SELECTABLE');
+    }
+    if (targetId && !remotePublicationAllowed(this.store.remote.db, sessionId ? RemotePublicationKind.Session : RemotePublicationKind.Agent,
+      sessionId || agentId, owner, targetId)) throw remoteAgentFailure('NOT_SELECTABLE');
     const identity = this.store.agentOwnership.get(agentId);
     if (!identity || identity.deletedAt !== null) throw remoteAgentFailure('DELETED');
     try { this.store.assertAgentAccess(agentId, owner); } catch { throw remoteAgentFailure('NOT_SELECTABLE'); }
@@ -427,7 +433,7 @@ export class SessionCommandService {
       if (command.type === 'send_message') {
         const session = this.store.getSession(localId, 0);
         if (!session) throw remoteAgentFailure('DELETED');
-        this.validateAgent(session.agentId || AgentId.Main, owner);
+        this.validateAgent(session.agentId || AgentId.Main, owner, undefined, false, localId);
         this.validateDirectory(session.cwd);
       }
     }
@@ -474,7 +480,8 @@ export class SessionCommandService {
         if (requested !== fixedAgentId || explicit && (!binding || binding.agentId !== requested
           || binding.version !== payload.expectedAgentVersion || binding.workspaceId !== payload.workspaceId || binding.cwd !== resolve(current.cwd))) throw remoteAgentFailure('BINDING_MISMATCH');
       }
-      this.validateAgent(fixedAgentId, entry.owner, explicit && !preparedInput ? payload.expectedAgentVersion : undefined, explicit);
+      this.validateAgent(fixedAgentId, entry.owner, explicit && !preparedInput ? payload.expectedAgentVersion : undefined, explicit,
+        entry.command.type === 'send_message' ? localId : undefined);
       if (explicit || entry.command.type === 'send_message') this.validateDirectory(current.cwd);
     };
     let bindingFailure: RemoteAgentError | undefined;

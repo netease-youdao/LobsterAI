@@ -1,8 +1,10 @@
 import type Database from 'better-sqlite3';
 
+import { OpenClawCronRunMetadataKey } from '../../shared/cowork/openclawCronSessionKey';
 import { stableJson } from './canonical';
 import { replaceCoreTrigger } from './remoteCoreTriggers';
 import { questionSessionSql, questionStatusSql } from './remoteQuestionEvidence';
+import { ReplyModelMetadataBytes } from './remoteReplyModel';
 import { redactReplyText } from './remoteReplyProjection';
 import type { ProjectionRecord, RemoteRun, RemoteStore } from './remoteStore';
 
@@ -17,10 +19,27 @@ export function initializeAvailabilitySource(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS remote_control_revisions(session_id TEXT PRIMARY KEY,revision INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS remote_control_pending(session_id TEXT NOT NULL,object_key TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(session_id,object_key));
     CREATE INDEX IF NOT EXISTS idx_remote_live_revision_session ON remote_live_revisions(session_id,revision,object_id);
-    CREATE INDEX IF NOT EXISTS idx_remote_live_deleted ON remote_live_revisions(session_id,object_id) WHERE deleted=1;`);
+    CREATE INDEX IF NOT EXISTS idx_remote_live_deleted ON remote_live_revisions(session_id,object_id) WHERE deleted=1;
+    CREATE INDEX IF NOT EXISTS idx_remote_message_model_turn ON cowork_messages(session_id,type,sequence);`);
   for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
     const ref = operation === 'DELETE' ? 'OLD' : 'NEW';
     const refs = operation === 'UPDATE' ? ['OLD', 'NEW'] : [ref];
+    // A native run may resolve its preset after its assistant message is already
+    // published. Version only the dependent display objects in that exact turn.
+    const modelFields = ['modelPresetId', 'remoteRunId',
+      OpenClawCronRunMetadataKey.SessionKey, OpenClawCronRunMetadataKey.EntryIndex];
+    const modelValue = (value: string, field: string): string => `CASE WHEN octet_length(${value}.metadata)<=${ReplyModelMetadataBytes}
+      THEN CASE WHEN json_valid(${value}.metadata) THEN json_extract(${value}.metadata,'$.${field}') END END`;
+    const modelChanged = operation === 'UPDATE' ? `AND (OLD.session_id IS NOT NEW.session_id OR OLD.sequence IS NOT NEW.sequence
+      OR OLD.type IS NOT NEW.type OR ${modelFields.map(field => `(${modelValue('OLD', field)}) IS NOT (${modelValue('NEW', field)})`).join(' OR ')})` : '';
+    replaceCoreTrigger(db, `CREATE TRIGGER remote_reply_model_user_${operation.toLowerCase()} AFTER ${operation} ON cowork_messages
+      WHEN (${refs.map(value => `${value}.type='user'`).join(' OR ')}) ${modelChanged} BEGIN
+      UPDATE remote_live_revisions SET revision=revision+1 WHERE deleted=0 AND (session_id,object_id) IN (
+        ${refs.map(value => `SELECT m.session_id,m.id FROM cowork_messages m WHERE ${value}.type='user' AND m.type='assistant'
+          AND m.session_id=${value}.session_id AND m.sequence>${value}.sequence
+          AND m.sequence<COALESCE((SELECT MIN(u.sequence) FROM cowork_messages u WHERE u.session_id=${value}.session_id
+            AND u.type='user' AND u.sequence>${value}.sequence),9223372036854775807)`).join(' UNION ')}
+      ); END;`);
     const attributionSessions = refs.map(value => `SELECT substr(${value}.key,19) AS session_id WHERE ${value}.key GLOB 'syncTargetHistory:*'
       UNION SELECT session_id FROM local_execution_origin WHERE ${value}.key GLOB 'runPublished:*' AND run_id=substr(${value}.key,14)
       UNION SELECT COALESCE(json_extract(${value}.value,'$.localSessionId'),

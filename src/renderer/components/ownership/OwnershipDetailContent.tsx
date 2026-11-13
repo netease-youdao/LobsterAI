@@ -7,6 +7,7 @@ import React from 'react';
 
 import { i18nService } from '../../services/i18n';
 import { CoworkSessionStatusValue } from '../../types/cowork';
+import { recoveryNextProbeText, recoveryReasonText, recoveryStatusLabel } from '../settings/remoteRecoveryCopy';
 
 function ownerLabel(owner: OwnershipDisplay): string {
   if (owner.kind === 'anonymous') return i18nService.t('ownershipAnonymous');
@@ -71,13 +72,14 @@ const OwnershipDetailContent: React.FC<{ detail: OwnershipDetail; compact?: bool
   ];
   const content = detail.kind === OwnershipTargetKind.Task ? detail.contentSync : undefined;
   const contentState = content?.state ?? OwnershipContentSyncState.Unknown;
-  const contentLabel = contentState === OwnershipContentSyncState.Partial
-    ? i18nService.t('ownershipSync_partial') : i18nService.t(`ownershipContentSync_${contentState}`);
+  const contentLabel = recoveryStatusLabel(content?.recovery) ?? (contentState === OwnershipContentSyncState.Partial
+    ? i18nService.t('ownershipSync_partial') : i18nService.t(`ownershipContentSync_${contentState}`));
   const help = contentState === OwnershipContentSyncState.Failed && content?.reason === OwnershipContentSyncReason.Content
     ? 'remoteTaskLiveSyncIssue'
     : contentState === OwnershipContentSyncState.Failed && content?.reason === OwnershipContentSyncReason.History
       ? 'ownershipContentSyncHistoryHelp'
-      : content?.reason === OwnershipContentSyncReason.Connection ? 'ownershipContentSyncConnectionHelp'
+      : content?.reason === OwnershipContentSyncReason.Source ? 'ownershipContentSyncSourceHelp'
+        : content?.reason === OwnershipContentSyncReason.Connection ? 'ownershipContentSyncConnectionHelp'
         : contentState === OwnershipContentSyncState.Unknown || content?.reason === OwnershipContentSyncReason.Unavailable
           ? 'ownershipContentSyncUnavailableHelp' : null;
   return <div className="space-y-3">
@@ -92,7 +94,10 @@ const OwnershipDetailContent: React.FC<{ detail: OwnershipDetail; compact?: bool
     {detail.kind === OwnershipTargetKind.Task && <section className="space-y-1.5 border-t border-border pt-3" aria-label={i18nService.t('ownershipMobileContentSync')}>
       <h4 className="text-xs text-secondary">{i18nService.t('ownershipMobileContentSync')}</h4>
       <p className={`text-xs ${contentState === OwnershipContentSyncState.Failed ? 'text-amber-700 dark:text-amber-400' : 'text-foreground'}`}>{contentLabel}</p>
-      {help && <p className="text-xs leading-5 text-secondary">{i18nService.t(help)}</p>}
+      {recoveryReasonText(content?.recovery)
+        ? <p className="text-xs leading-5 text-secondary">{recoveryReasonText(content?.recovery)}</p>
+        : help && <p className="text-xs leading-5 text-secondary">{i18nService.t(help)}</p>}
+      {recoveryNextProbeText(content?.recovery) && <p className="text-xs leading-5 text-secondary">{recoveryNextProbeText(content?.recovery)}</p>}
       {contentState === OwnershipContentSyncState.Failed && Number.isFinite(content?.nextRetryAt) && (content?.nextRetryAt ?? 0) > Date.now()
         && <p className="text-xs leading-5 text-secondary">{i18nService.t('ownershipContentSyncRetryAfter').replace('{time}', new Date(content!.nextRetryAt!).toLocaleTimeString())}</p>}
     </section>}

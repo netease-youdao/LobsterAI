@@ -1,19 +1,23 @@
 import type Database from 'better-sqlite3';
 
 import { type RemoteOwner, type RemoteSyncTaskIssue, RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
+import { type RemoteSyncRecoveryDisplay, RemoteSyncRecoveryReason, RemoteSyncRecoveryState } from '../../shared/remote/recovery';
+import { readRecoveryLedger, recoveryDisplay } from './remoteSyncRecoveryLedger';
 
 export const TaskSyncPhase = {
   Ready: 'ready', Backoff: 'backoff', Cooldown: 'cooldown', Waiting: 'waiting_dependency',
   Reconciling: 'reconciling', Repairing: 'repairing', Isolated: 'isolated', Closed: 'closed',
 } as const;
 export type TaskSyncPhase = typeof TaskSyncPhase[keyof typeof TaskSyncPhase];
-export const TaskSyncFailureReason = { RetryHintInvalid: 'REMOTE_RETRY_HINT_INVALID' } as const;
+export const TaskSyncFailureReason = { RetryHintInvalid: 'REMOTE_RETRY_HINT_INVALID', Protocol: 'PROTOCOL_UNSUPPORTED',
+  Capability: 'CAPABILITY_UNSUPPORTED', Request: 'INVALID_REMOTE_REQUEST', Conflict: 'IDEMPOTENCY_CONFLICT', StateConflict: 'REMOTE_SYNC_STATE_CONFLICT' } as const;
 export interface TaskSyncHealth {
   failedSessions: number; retryingSessions: number; isolatedSessions: number; countsTruncated?: boolean;
   taskIssues: RemoteSyncTaskIssue[]; taskIssuesTruncated: boolean;
 }
 export interface TaskSyncContext { owner: RemoteOwner; target: string; deviceId: string }
 export interface TaskSyncRecord {
+  auto_probe_version?: number; auto_probe_next_at?: number; auto_probe_revision?: number; auto_probe_json?: string;
   local_session_id: string; phase: TaskSyncPhase; next_retry_at: number; failure_count: number;
   reason: string; scope: string; fingerprint: string; last_served_at: number; last_progress_at: number;
   pending_since: number; repair_json: string; manual_retry_at: number; server_retry_at: number; recovery_probe_version: number;
@@ -23,6 +27,7 @@ const NEVER = Number.MAX_SAFE_INTEGER;
 const identity = (context: TaskSyncContext): string[] => [context.owner.userId, context.owner.scopeKey, context.target, context.deviceId];
 /** Display eligibility only. Mutation handlers must recheck their current admission evidence. */
 export function displayTaskCanRetry(value: TaskSyncRecord, now: number): boolean {
+  if (value.auto_probe_json !== undefined && !readRecoveryLedger(value.auto_probe_json)) return false;
   if (!(value.phase !== TaskSyncPhase.Closed && value.scope !== 'device' && value.reason !== TaskSyncFailureReason.RetryHintInvalid
     && value.server_retry_at <= now && (value.manual_retry_at < 0 || now - value.manual_retry_at >= 60_000))) return false;
   try {
@@ -35,11 +40,32 @@ export function displayTaskCanRetry(value: TaskSyncRecord, now: number): boolean
   } catch { return false; }
 }
 
+/** Same bounded recovery view for overview and task detail. This never grants mutation. */
+export function displayTaskRecovery(value: TaskSyncRecord | null | undefined, now: number): RemoteSyncRecoveryDisplay | undefined {
+  if (!value || value.phase === TaskSyncPhase.Closed || value.auto_probe_json === undefined) return undefined;
+  const recovery = recoveryDisplay(value.auto_probe_json, now) ?? (value.phase === TaskSyncPhase.Isolated && value.auto_probe_version
+    ? { state: Number.isSafeInteger(value.auto_probe_next_at) && value.auto_probe_next_at! < NEVER ? RemoteSyncRecoveryState.Waiting : RemoteSyncRecoveryState.Blocked,
+      ...(Number.isSafeInteger(value.auto_probe_next_at) && value.auto_probe_next_at! > now && value.auto_probe_next_at! < NEVER ? { nextProbeAt: value.auto_probe_next_at } : {}) } : undefined);
+  if (!recovery) return undefined;
+  const reason = (value.reason === TaskSyncFailureReason.Protocol || value.reason === TaskSyncFailureReason.Capability) ? RemoteSyncRecoveryReason.Protocol
+    : value.reason === TaskSyncFailureReason.Request ? RemoteSyncRecoveryReason.Request
+      : value.reason === TaskSyncFailureReason.Conflict || value.reason === TaskSyncFailureReason.StateConflict ? RemoteSyncRecoveryReason.Conflict
+        : RemoteSyncRecoveryReason.Unavailable;
+  return { ...recovery, reason };
+}
+export function displayTaskRecoveryBusy(recovery?: RemoteSyncRecoveryDisplay): boolean {
+  return recovery?.state === RemoteSyncRecoveryState.Checking || recovery?.state === RemoteSyncRecoveryState.Recovering;
+}
+
 /** Pure read path shared by the scheduler display and the isolated health collector. */
 export function readRemoteDisplayTaskHealth(db: Database.Database, context: TaskSyncContext,
   admitted: (sessionId: string) => boolean = () => true, visible: (sessionId: string) => boolean = () => true,
   now = Date.now()): TaskSyncHealth {
   const hasProjection = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_projection_failures'").get();
+  const hasProbe = (db.prepare('PRAGMA table_info(remote_sync_task_state)').all() as Array<{ name: string }>).some(column => column.name === 'auto_probe_json');
+  const recovering = hasProbe ? "t.phase='ready' AND t.reason<>'' AND t.auto_probe_json<>'{}'" : '0';
+  const issue = `(t.phase NOT IN ('ready','closed') OR (${recovering}))`;
+  const probeColumn = hasProbe ? "CASE WHEN t.local_session_id IS NULL THEN '{}' WHEN octet_length(t.auto_probe_json)<=8192 THEN t.auto_probe_json ELSE 'null' END AS auto_probe_json,t.auto_probe_version,t.auto_probe_next_at," : '';
   const ownerFilter = "o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed'";
   const notDeleted = "NOT EXISTS(SELECT 1 FROM remote_state closed WHERE closed.key='deletionClosed:'||o.session_id)";
   const projectionIds = hasProjection ? `SELECT f.session_id AS id FROM cowork_session_ownership o
@@ -57,12 +83,13 @@ export function readRemoteDisplayTaskHealth(db: Database.Database, context: Task
     SELECT t.local_session_id AS id FROM remote_sync_task_state t
     JOIN cowork_session_ownership o ON o.session_id=t.local_session_id JOIN cowork_sessions s ON s.id=o.session_id
     WHERE t.owner_user_id=? AND t.owner_scope_key=? AND t.target_key=? AND t.device_id=?
-      AND ${ownerFilter} AND ${notDeleted} AND t.phase NOT IN ('ready','closed') ORDER BY t.local_session_id LIMIT 65
+      AND ${ownerFilter} AND ${notDeleted} AND ${issue} ORDER BY t.local_session_id LIMIT 65
   ), projection_ids AS (${projectionIds}), ids(id) AS (SELECT id FROM task_ids UNION SELECT id FROM projection_ids)
   SELECT ids.id AS local_session_id,substr(s.title,1,256) AS title,
-    CASE WHEN t.phase NOT IN ('ready','closed') THEN t.phase
+    CASE WHEN t.phase NOT IN ('ready','closed') THEN t.phase WHEN ${recovering} THEN 'reconciling'
       WHEN ${projectionReason} IN ('REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID') THEN 'isolated' ELSE 'backoff' END AS phase,
-    substr(CASE WHEN t.phase NOT IN ('ready','closed') THEN t.reason ELSE ${projectionReason} END,1,160) AS reason,
+    substr(CASE WHEN ${issue} THEN t.reason ELSE ${projectionReason} END,1,160) AS reason,
+    ${probeColumn}
     COALESCE(t.scope,'session') AS scope,COALESCE(t.next_retry_at,${projectionRetry},0) AS next_retry_at,
     COALESCE(t.server_retry_at,0) AS server_retry_at,COALESCE(t.manual_retry_at,-1) AS manual_retry_at,
     CASE WHEN t.local_session_id IS NULL THEN '{"attempts":[],"times":[]}'
@@ -71,7 +98,7 @@ export function readRemoteDisplayTaskHealth(db: Database.Database, context: Task
     LEFT JOIN remote_sync_task_state t ON t.local_session_id=ids.id AND t.owner_user_id=? AND t.owner_scope_key=? AND t.target_key=? AND t.device_id=?
     ${projectionJoin}
     WHERE o.owner_user_id=? AND o.owner_scope_key=? AND o.ownership_status='confirmed'
-      AND (t.phase NOT IN ('ready','closed') OR (${projectionVisible}))
+      AND (${issue} OR (${projectionVisible}))
       AND NOT EXISTS(SELECT 1 FROM remote_state closed WHERE closed.key='deletionClosed:'||ids.id)
     ORDER BY CASE WHEN phase='isolated' THEN 0 ELSE 1 END,next_retry_at,ids.id LIMIT 65`)
     .iterate(...identity(context), context.owner.userId, context.owner.scopeKey,
@@ -85,9 +112,10 @@ export function readRemoteDisplayTaskHealth(db: Database.Database, context: Task
     result.failedSessions++;
     if (value.phase === TaskSyncPhase.Isolated) result.isolatedSessions++; else result.retryingSessions++;
     if (result.taskIssues.length >= 20) { result.taskIssuesTruncated = true; continue; }
+    const recovery = displayTaskRecovery(value, now);
     let retryable = false;
-    try { retryable = displayTaskCanRetry(value, now) && admitted(value.local_session_id); } catch { /* A failed admission check cannot grant retry. */ }
-    result.taskIssues.push({ localSessionId: value.local_session_id, title: typeof value.title === 'string' ? value.title : '',
+    try { retryable = !displayTaskRecoveryBusy(recovery) && displayTaskCanRetry(value, now) && admitted(value.local_session_id); } catch { /* A failed admission check cannot grant retry. */ }
+    result.taskIssues.push({ ...(recovery ? { recovery } : {}), localSessionId: value.local_session_id, title: typeof value.title === 'string' ? value.title : '',
       status: value.phase === TaskSyncPhase.Isolated ? RemoteSyncTaskIssueStatus.Isolated
         : value.phase === TaskSyncPhase.Waiting ? RemoteSyncTaskIssueStatus.WaitingDependency
           : value.phase === TaskSyncPhase.Repairing ? RemoteSyncTaskIssueStatus.Repairing : RemoteSyncTaskIssueStatus.Retrying,

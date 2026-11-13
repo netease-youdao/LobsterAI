@@ -4,6 +4,7 @@ import path from 'path';
 
 import { payloadHash, stableJson } from './canonical';
 import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
+import { AvailabilityRecoveryLane, completeAvailabilityRecovery } from './remoteAvailabilityAutoRecovery';
 import { advanceAvailabilityMigration, AvailabilityMigration } from './remoteAvailabilityMigration';
 import { assertRemoteSidecarHeadroom } from './remoteSidecarHeadroom';
 import { emitCommittedTelemetry, observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
@@ -22,6 +23,7 @@ export interface AvailabilityRequest {
   key: string; lane: 'control' | 'live'; scope: string; localId: string; method: string; pathname: string; version: number;
   body: Record<string, any>; lookup: string | null; lookupVersion: number; createdAt: number; attempted: boolean;
   replyModelDisplayVersion?: number;
+  replyModelLabelChecked?: boolean;
   annotationDisplayVersion?: number;
   annotationRepair?: boolean;
   liveEncoderVersion?: number;
@@ -240,6 +242,7 @@ export class RemoteAvailabilityStore {
         WHERE key=? AND scope=? AND local_id=? AND lane='live' AND resolution_body=? AND resolution_receipt IS NULL`)
         .run(encoded, key, scope, localId, stableJson(body)).changes;
       if (!changed) throw new AvailabilityRecordError();
+      completeAvailabilityRecovery(this.db, scope, localId, AvailabilityRecoveryLane.Live, key, false);
     })();
   }
 
@@ -327,7 +330,8 @@ export class RemoteAvailabilityStore {
   archiveBootstrap(scope: string, localId: string, operationId: string, result: unknown): void {
     this.db.transaction(() => {
       this.db.prepare('INSERT OR IGNORE INTO availability_receipts VALUES(?,?)').run(operationId, stableJson(result));
-      this.db.prepare('DELETE FROM availability_requests WHERE scope=? AND local_id=? AND key LIKE ?').run(scope, localId, `${operationId}:%`);
+      const keys = this.db.prepare('SELECT key FROM availability_requests WHERE scope=? AND local_id=? AND key LIKE ?').all(scope, localId, `${operationId}:%`) as Array<{ key: string }>;
+      for (const row of keys) this.complete(row.key, (result as { state?: string })?.state === 'committed');
     })();
   }
   objectRetryAllowed(scope: string, localId: string, objectKey: string, now = Date.now(), fingerprint?: string): boolean {
@@ -344,18 +348,22 @@ export class RemoteAvailabilityStore {
       DO UPDATE SET fingerprint=excluded.fingerprint,attempts=excluded.attempts,window_start=excluded.window_start,next_retry=excluded.next_retry`)
       .run(scope, localId, objectKey, fingerprint, attempts, start, next);
   }
-  complete(key: string): void { this.db.prepare('DELETE FROM availability_requests WHERE key=?').run(key); }
+  complete(key: string, resolved = true): void {
+    const request = this.request(key);
+    if (request) completeAvailabilityRecovery(this.db, request.scope, request.localId, request.lane, key, resolved);
+    this.db.prepare('DELETE FROM availability_requests WHERE key=?').run(key);
+  }
   object(scope: string, localId: string, objectId: string): { sourceRevision: string; result: Record<string, any> } | null {
     const row = this.db.prepare('SELECT source_revision,result FROM availability_objects WHERE scope=? AND local_id=? AND object_id=?').get(scope, localId, objectId) as { source_revision: string; result: string } | undefined;
     return row ? { sourceRevision: row.source_revision, result: JSON.parse(row.result) } : null;
   }
   /** Local inspection evidence never changes a sealed publication or a source revision. */
-  markReplyModelDisplayChecked(scope: string, localId: string, objectKey: string, sourceRevision: string): void {
+  markReplyModelDisplayChecked(scope: string, localId: string, objectKey: string, sourceRevision: string, modelLabelChecked = false): void {
     const previous = this.object(scope, localId, objectKey);
     if (!previous || previous.sourceRevision !== sourceRevision) return;
     assertRemoteSidecarHeadroom(this.db.name, 128, 0);
     this.db.prepare('UPDATE availability_objects SET result=? WHERE scope=? AND local_id=? AND object_id=? AND source_revision=?')
-      .run(stableJson({ ...previous.result, replyModelDisplayVersion: ReplyModelDisplayVersion }), scope, localId, objectKey, sourceRevision);
+      .run(stableJson({ ...previous.result, replyModelDisplayVersion: ReplyModelDisplayVersion, ...(modelLabelChecked ? { replyModelLabelChecked: true } : {}) }), scope, localId, objectKey, sourceRevision);
   }
   markAnnotationDisplayChecked(scope: string, localId: string, objectKey: string, sourceRevision: string): void {
     const previous = this.object(scope, localId, objectKey);
@@ -381,6 +389,8 @@ export class RemoteAvailabilityStore {
             representation: request.body.representation === 'repair' ? request.body.objectKind === 'tool' ? 'complete' : request.body.payload?.contentState || 'unknown' : request.body.representation,
             ...(request.replyModelDisplayVersion === ReplyModelDisplayVersion && ['accepted', 'superseded'].includes(result.state)
               ? { replyModelDisplayVersion: ReplyModelDisplayVersion } : {}),
+            ...(request.replyModelLabelChecked === true && (result.state === 'accepted' || result.state === 'superseded' && result.reason === 'ALREADY_REPRESENTED')
+              ? { replyModelLabelChecked: true } : {}),
             ...(request.annotationDisplayVersion === RemoteAnnotationDisplayVersion && (result.state === 'accepted'
               || result.state === 'superseded' && result.reason === 'ALREADY_REPRESENTED')
               ? { annotationDisplayVersion: RemoteAnnotationDisplayVersion } : {}) }));
@@ -391,7 +401,7 @@ export class RemoteAvailabilityStore {
         if (request.body.objectKind === 'tool') this.db.prepare('DELETE FROM availability_tool_refresh WHERE scope=? AND local_id=? AND tool_id=?')
           .run(request.scope, request.localId, request.body.objectId);
       }
-      this.complete(request.key);
+      this.complete(request.key, result.state === 'accepted' || result.state === 'superseded');
       this.recordProgress(request.scope, request.localId, request.lane);
     })());
     emitCommittedTelemetry(this.db, telemetry, SyncTelemetry.Event.Acknowledged,

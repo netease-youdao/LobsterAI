@@ -3,10 +3,13 @@ import path from 'path';
 
 import { OwnershipContentSyncReason as Reason, OwnershipContentSyncState as State, OwnershipSyncState } from '../../shared/ownership/constants';
 import type { OwnershipContentSync, OwnershipTaskSync } from '../../shared/ownership/types';
+import { RemoteDeletion } from '../../shared/remote/deletions';
+import { mergeRecoveryDisplay } from '../../shared/remote/recovery';
 import { payloadHash } from './canonical';
+import { AvailabilityRecoveryLane, availabilityRecoveryMetadataValid, readAvailabilityRecoveryDisplay } from './remoteAvailabilityAutoRecovery';
 import type { RemoteDisplayHealthInput } from './remoteDisplayHealth';
 import { readRemoteDisplayAdmission } from './remoteDisplayHealthAdmission';
-import { displayTaskCanRetry, type TaskSyncRecord } from './remoteDisplayHealthTask';
+import { displayTaskCanRetry, displayTaskRecovery, displayTaskRecoveryBusy, TaskSyncPhase, type TaskSyncRecord } from './remoteDisplayHealthTask';
 
 export interface OwnershipContentSyncInput extends RemoteDisplayHealthInput { contentTaskId: string }
 export interface OwnershipContentSyncSnapshot extends OwnershipTaskSync { observedAt: number }
@@ -33,6 +36,8 @@ function result(contentSync: OwnershipContentSync, controlPending = false): Owne
 export function collectOwnershipContentSync(input: OwnershipContentSyncInput): OwnershipContentSyncSnapshot {
   const handles: Array<{ db: Database.Database; version: number }> = [], observedAt = Date.now();
   const open = (filename: string): Database.Database => {
+    const existing = handles.find(handle => handle.db.name === filename);
+    if (existing) return existing.db;
     const db = new Database(filename, { readonly: true, fileMustExist: true, timeout: 50 });
     try {
       db.pragma('query_only=ON'); const version = Number(db.pragma('data_version', { simple: true }));
@@ -55,9 +60,17 @@ export function collectOwnershipContentSync(input: OwnershipContentSyncInput): O
       if (!settings) return unknownOwnershipContentSync();
       if (json(settings.value).enabled !== true) return waiting();
       const binding = get(core, 'SELECT session_id,device_id,migration_frozen,sync_environment,needs_snapshot,source_seq,ack_seq FROM remote_sync WHERE local_id=?', id);
+      const sourceFailure = binding && !binding.migration_frozen && get(core, `SELECT 1 FROM remote_sync_task_state
+        WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?
+          AND phase='isolated' AND scope='session' AND reason='REMOTE_SYNC_STATE_CONFLICT'`,
+        input.owner.userId, input.owner.scopeKey, input.target, input.deviceId, id);
+      if (sourceFailure && !readRemoteDisplayAdmission(core, input.owner, input.deviceId, input.targetId, id)
+        && !get(core, 'SELECT 1 FROM remote_state WHERE key IN (?,?,?,?) LIMIT 1', `deletionClosed:${id}`, `sessionDeletion:${id}`, `localGcDeleted:${id}`, `${RemoteDeletion.Fence}${id}`)) {
+        return result({ state: State.Failed, reason: Reason.Source, retryable: false });
+      }
       if (!binding || binding.migration_frozen || binding.device_id !== input.deviceId || !binding.sync_environment
         || binding.sync_environment !== input.target && !get(core, 'SELECT 1 FROM remote_sync_target_aliases WHERE target_id=? AND environment=?', input.target, binding.sync_environment)) return waiting();
-      if (get(core, 'SELECT 1 FROM remote_state WHERE key IN (?,?,?,?) LIMIT 1', `deletionClosed:${id}`, `sessionDeletion:${id}`, `localGcDeleted:${id}`, `deletionGuard:${id}`)
+      if (get(core, 'SELECT 1 FROM remote_state WHERE key IN (?,?,?,?) LIMIT 1', `deletionClosed:${id}`, `sessionDeletion:${id}`, `localGcDeleted:${id}`, `${RemoteDeletion.Fence}${id}`)
         || !readRemoteDisplayAdmission(core, input.owner, input.deviceId, input.targetId, id)) return waiting();
       const scope = `${input.targetId}:${input.owner.userId}:${input.owner.scopeKey}:${input.deviceId}`;
       if (input.availabilityScope !== scope) return unknownOwnershipContentSync();
@@ -68,15 +81,19 @@ export function collectOwnershipContentSync(input: OwnershipContentSyncInput): O
         || get(control, 'SELECT phase FROM availability_migration WHERE id=1')?.phase !== 'ready') return unknownOwnershipContentSync();
       const availability = get(control, 'SELECT CASE WHEN octet_length(body)<=65536 THEN body END AS body FROM availability_sessions WHERE scope=? AND local_id=?', scope, id);
       if (!availability) {
-        const task = get<TaskSyncRecord>(core, `SELECT phase,scope,reason,server_retry_at,manual_retry_at,
+        const hasProbe = (core.prepare('PRAGMA table_info(remote_sync_task_state)').all() as Array<{ name: string }>).some(column => column.name === 'auto_probe_json');
+        const probeColumn = hasProbe ? "CASE WHEN octet_length(auto_probe_json)<=8192 THEN auto_probe_json ELSE 'null' END AS auto_probe_json,auto_probe_version,auto_probe_next_at," : '';
+        const task = get<TaskSyncRecord>(core, `SELECT ${probeColumn}phase,scope,reason,server_retry_at,manual_retry_at,
           CASE WHEN octet_length(repair_json)<=4096 THEN repair_json ELSE 'null' END AS repair_json FROM remote_sync_task_state
           WHERE owner_user_id=? AND owner_scope_key=? AND target_key=? AND device_id=? AND local_session_id=?`, input.owner.userId, input.owner.scopeKey, input.target, input.deviceId, id);
         if (task?.phase === 'closed') return waiting();
         const projection = get(core, 'SELECT 1 FROM remote_projection_failures WHERE session_id=?', id);
-        if (projection) {
+        const recovery = displayTaskRecovery(task, observedAt);
+        if (projection || task?.scope === 'session' && (task.phase === TaskSyncPhase.Isolated || recovery)) {
           const retry = task ?? { phase: 'ready', scope: 'session', reason: '', server_retry_at: 0, manual_retry_at: -1, repair_json: '{"attempts":[],"times":[]}' } as TaskSyncRecord;
           const nextRetryAt = Math.max(number(retry.server_retry_at), retry.manual_retry_at < 0 ? 0 : number(retry.manual_retry_at) + 60000);
-          return result({ state: State.Failed, reason: Reason.Content, retryable: displayTaskCanRetry(retry, observedAt), ...(nextRetryAt > observedAt ? { nextRetryAt } : {}) });
+          return result({ state: State.Failed, reason: Reason.Content, retryable: !displayTaskRecoveryBusy(recovery) && displayTaskCanRetry(retry, observedAt),
+            ...(recovery ? { recovery } : {}), ...(nextRetryAt > observedAt ? { nextRetryAt } : {}) });
         }
         if (task && task.phase !== 'ready') return task.scope === 'service' || task.scope === 'owner_scope' ? waiting() : unknownOwnershipContentSync();
         if (get(core, 'SELECT 1 FROM remote_state WHERE key=?', `syncFailure:${id}`)) return unknownOwnershipContentSync();
@@ -87,7 +104,26 @@ export function collectOwnershipContentSync(input: OwnershipContentSyncInput): O
       const saved = json(availability.body);
       if (saved.scope !== scope || saved.localId !== id || saved.sessionId !== binding.session_id
         || typeof saved.writerGeneration !== 'string' || !saved.writerGeneration) return unknownOwnershipContentSync();
-      if (saved.phase !== 'active') return waiting();
+      let recovery = readAvailabilityRecoveryDisplay(control, scope, id, observedAt);
+      let historyRecoveryDisplay: ReturnType<typeof readAvailabilityRecoveryDisplay>;
+      // Merge history metadata only after the same target/writer migration identity is established.
+      // Full content progress is still checked below before any success is reported.
+      if (input.historySupported && saved.phase === 'active') {
+        const migration = get(core, "SELECT migration_id,manifest_hash,CASE WHEN octet_length(manifest_json)<=16384 THEN manifest_json END AS manifest_json FROM remote_history_migrations WHERE scope=? AND local_id=? AND writer_generation=? AND phase='ready'", scope, id, saved.writerGeneration);
+        if (migration) {
+          const manifest = json(migration.manifest_json), context = manifest.context;
+          if (payloadHash(manifest) !== migration.manifest_hash || !object(context) || context.scope !== scope || context.localId !== id
+            || context.sessionId !== binding.session_id || context.writerGeneration !== saved.writerGeneration || context.deviceId !== input.deviceId
+            || context.owner?.userId !== input.owner.userId || context.owner?.scopeKey !== input.owner.scopeKey) return unknownOwnershipContentSync();
+          const history = open(path.join(path.dirname(input.database), 'remote-sync.sqlite'));
+          const profile = get(core, 'SELECT sidecar_id FROM remote_history_profile WHERE id=1');
+          if (!profile || get(history, 'SELECT sidecar_id FROM history_identity WHERE id=1')?.sidecar_id !== profile.sidecar_id
+            || !get(history, 'SELECT 1 FROM history_migration_copies WHERE migration_id=? AND manifest_hash=? AND manifest_json=?', migration.migration_id, migration.manifest_hash, migration.manifest_json)) return unknownOwnershipContentSync();
+          historyRecoveryDisplay = readAvailabilityRecoveryDisplay(history, scope, id, observedAt);
+          recovery = mergeRecoveryDisplay(recovery, historyRecoveryDisplay);
+        }
+      }
+      if (saved.phase !== 'active') return recovery ? result({ state: State.Waiting, reason: Reason.Connection, retryable: false, recovery }) : waiting();
       const controlRevision = get(core, 'SELECT revision FROM remote_control_revisions WHERE session_id=?', id)?.revision;
       if (!Number.isSafeInteger(controlRevision) || !decimal(saved.controlRevision)) return unknownOwnershipContentSync();
       const controlPending = saved.controlRevision !== String(controlRevision)
@@ -97,12 +133,14 @@ export function collectOwnershipContentSync(input: OwnershipContentSyncInput): O
         WHERE f.scope=? AND f.local_id=? AND (substr(f.object_key,1,8)='message:' OR substr(f.object_key,1,5)='tool:')`, scope, id);
       if (liveFault?.retry_at !== null && liveFault?.retry_at !== undefined) {
         const nextRetryAt = number(liveFault.retry_at);
-        return result({ state: State.Failed, reason: Reason.Content, retryable: nextRetryAt <= observedAt, ...(nextRetryAt > observedAt ? { nextRetryAt } : {}) }, controlPending);
+        return result({ state: State.Failed, reason: Reason.Content, retryable: !displayTaskRecoveryBusy(recovery) && availabilityRecoveryMetadataValid(control, scope, id) && nextRetryAt <= observedAt, ...(recovery ? { recovery } : {}), ...(nextRetryAt > observedAt ? { nextRetryAt } : {}) }, controlPending);
       }
       const historyFault = get(control, "SELECT next_retry FROM availability_faults WHERE scope=? AND local_id=? AND object_key='history-recovery'", scope, id);
-      if (historyFault) return result({ state: State.Failed, reason: Reason.History, retryable: false,
+      if (historyFault) return result({ state: State.Failed, reason: Reason.History, retryable: false, ...(recovery ? { recovery } : {}),
         ...(number(historyFault.next_retry) > observedAt ? { nextRetryAt: historyFault.next_retry } : {}) }, controlPending);
       const otherFault = get(control, 'SELECT 1 FROM availability_faults WHERE scope=? AND local_id=? LIMIT 1', scope, id);
+      if (recovery) return result({ state: historyRecoveryDisplay || readAvailabilityRecoveryDisplay(control, scope, id, observedAt, [AvailabilityRecoveryLane.Live]) ? State.Failed : State.Waiting,
+        reason: historyRecoveryDisplay ? Reason.History : Reason.Content, retryable: false, recovery }, controlPending);
       if (otherFault) return waiting();
       const hasAcks = exists(core, 'remote_availability_health_acks');
       const acks = hasAcks ? 'remote_availability_health_acks' : '(SELECT NULL scope,NULL session_id,NULL object_key,0 revision,NULL representation WHERE 0)';
@@ -144,6 +182,8 @@ export function collectOwnershipContentSync(input: OwnershipContentSyncInput): O
         if (historyState.scope !== scope || historyState.localId !== id || historyState.sessionId !== binding.session_id || historyState.writerGeneration !== saved.writerGeneration
           || historyState.owner?.userId !== input.owner.userId || historyState.owner?.scopeKey !== input.owner.scopeKey || historyState.deviceId !== input.deviceId
           || historyState.migrationId !== migration.migration_id || historyState.legacyMetadataHash !== migration.manifest_hash || !decimal(historyState.resolvedSourceSeq)) return unknownOwnershipContentSync();
+        const historyRecovery = readAvailabilityRecoveryDisplay(history, scope, id, observedAt);
+        if (historyRecovery) return result({ state: State.Failed, reason: Reason.History, retryable: false, recovery: historyRecovery }, controlPending);
         if (get(history, "SELECT 1 FROM history_operations WHERE scope=? AND local_id=? AND writer_generation=? AND state NOT IN ('pending','complete') LIMIT 1", scope, id, saved.writerGeneration)) return unknownOwnershipContentSync();
         if (BigInt(historyState.resolvedSourceSeq) < BigInt(legacySource)
           || get(history, "SELECT 1 FROM history_operations WHERE scope=? AND local_id=? AND writer_generation=? AND state='pending' LIMIT 1", scope, id, saved.writerGeneration))

@@ -2,10 +2,12 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 import { type RemoteOwner, type RemoteSyncLanes, RemoteSyncLaneStatus as Lane, type RemoteSyncTaskIssue, RemoteSyncTaskIssueSource, RemoteSyncTaskIssueStatus, type RemoteWorkspace } from '../../shared/remote/constants';
+import { mergeRecoveryDisplay, RemoteSyncRecoveryState } from '../../shared/remote/recovery';
 import { payloadHash } from './canonical';
+import { availabilityRecoveryMetadataValid, readAvailabilityRecoveryDisplay } from './remoteAvailabilityAutoRecovery';
 import { readRemoteDisplayDeletionHealth, type RemoteDisplayDeletionHealth } from './remoteDisplayDeletionHealth';
 import { readRemoteDisplayAdmission, RemoteSyncAdmissionBudgetError } from './remoteDisplayHealthAdmission';
-import { readRemoteDisplayTaskHealth, type TaskSyncHealth } from './remoteDisplayHealthTask';
+import { displayTaskRecoveryBusy, readRemoteDisplayTaskHealth, type TaskSyncHealth } from './remoteDisplayHealthTask';
 
 export const RemoteDisplayHealthStatus = { Known: 'known', Unknown: 'unknown' } as const;
 export const RemoteDisplayHealthFailure = {
@@ -227,13 +229,7 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
             COALESCE(SUM(CASE WHEN substr(object_key,1,8)='message:' OR substr(object_key,1,5)='tool:' THEN 1 ELSE 0 END),0) AS liveObjects
           FROM availability_faults WHERE scope=? AND local_id=?`, scope, row.local_id)!;
         const fault = count(faultRow.total) > 0;
-        if (fault) {
-          availabilityFailedSessions++;
-          const nextRetryAt = count(faultRow.nextRetryAt), hasLiveFault = count(faultRow.liveObjects) > 0;
-          if (availabilityTaskIssues.length < 20) availabilityTaskIssues.push({ localSessionId: row.local_id,
-            title: typeof binding.title === 'string' ? binding.title : '', ...(hasLiveFault ? { source: RemoteSyncTaskIssueSource.Live } : {}),
-            status: RemoteSyncTaskIssueStatus.Isolated, nextRetryAt, retryable: hasLiveFault && admitted(row.local_id) });
-        }
+        let recovery = deletion ? undefined : readAvailabilityRecoveryDisplay(control, scope, row.local_id, observedAt);
         const taskLanes: RemoteSyncLanes = {
           control: !deletion && (saved.phase !== 'active' || saved.controlRevision !== String(revision)) || requests.some(request => request.lane === 'control') ? Lane.Pending : Lane.Idle,
           live: unavailable ? Lane.Unknown : fault ? Lane.Degraded : count(messages.pending) + tools || requests.some(request => request.lane === 'live') ? Lane.Pending : Lane.Idle,
@@ -265,14 +261,24 @@ export function collectRemoteDisplayHealth(input: RemoteDisplayHealthInput): Rem
             || historySession.migrationId !== migration.migration_id || historySession.legacyMetadataHash !== migration.manifest_hash
             || !object(historySession.owner) || historySession.owner.userId !== input.owner.userId || historySession.owner.scopeKey !== input.owner.scopeKey
             || !sequence(historySession.resolvedSourceSeq)) unknown(RemoteDisplayHealthFailure.Inconsistent);
+          recovery = mergeRecoveryDisplay(recovery, readAvailabilityRecoveryDisplay(history, scope, row.local_id, observedAt));
           // Unknown request bodies remain untouched: display counts depend only on existing scalar state.
           if (scalar(history, "SELECT 1 FROM history_operations WHERE scope=? AND local_id=? AND writer_generation=? AND state NOT IN ('pending','complete') LIMIT 1", scope, row.local_id, saved.writerGeneration))
             unknown(RemoteDisplayHealthFailure.Inconsistent);
           const operation = scalar(history, "SELECT 1 FROM history_operations WHERE scope=? AND local_id=? AND writer_generation=? AND state='pending' LIMIT 1", scope, row.local_id, saved.writerGeneration);
           taskLanes.history = operation || BigInt(String(historySession.resolvedSourceSeq)) < BigInt(legacySource) ? Lane.Pending : Lane.Idle;
         }
+        if (fault || recovery) {
+          availabilityFailedSessions++;
+          const nextRetryAt = fault ? count(faultRow.nextRetryAt) : 0, hasLiveFault = count(faultRow.liveObjects) > 0;
+          if (availabilityTaskIssues.length < 20) availabilityTaskIssues.push({ localSessionId: row.local_id,
+            title: typeof binding.title === 'string' ? binding.title : '', ...(hasLiveFault ? { source: RemoteSyncTaskIssueSource.Live } : {}),
+            status: RemoteSyncTaskIssueStatus.Isolated, nextRetryAt, ...(recovery ? { recovery } : {}),
+            retryable: !displayTaskRecoveryBusy(recovery) && hasLiveFault && availabilityRecoveryMetadataValid(control, scope, row.local_id) && admitted(row.local_id) });
+        }
+        if (recovery) taskLanes.recovery = recovery.state === RemoteSyncRecoveryState.Blocked ? Lane.Degraded : Lane.Pending;
         if (Object.values(taskLanes).some(lane => lane !== Lane.Idle)) pending++;
-        degraded ||= unavailable || fault || Object.values(taskLanes).includes(Lane.Unknown);
+        degraded ||= unavailable || fault || !!recovery || Object.values(taskLanes).includes(Lane.Unknown);
         oldest = minTime([oldest, timestamp(messages.oldest), ...requests.map(request => timestamp(request.oldest)), deletionPending ? timestamp(deletion!.deletedAt) : null]);
         for (const [name, status] of Object.entries(taskLanes)) {
           const lane = name as keyof RemoteSyncLanes;

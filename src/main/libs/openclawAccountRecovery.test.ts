@@ -224,6 +224,81 @@ describe('account gateway recovery', () => {
     expect(f.deps.start).toHaveBeenCalledOnce();
   });
 
+  test.each(['prepare', 'start', 'confirm'] as const)(
+    'a superseded %s error resumes automatically whether auth commit precedes or follows it', async stage => {
+      for (const committed of [true, false]) {
+        const f = fixture();
+        const work = deferred();
+        f.deps[stage].mockImplementationOnce(async () => {
+          await work.promise;
+          throw new Error('Starting OpenClaw gateway... (36s)');
+        });
+        const pending = f.recovery.request({ resume: true, fence: f.fence });
+        await flush();
+        const revision = f.recovery.beginAuthMutation();
+        if (committed) f.recovery.commitAuthMutation(revision);
+        work.resolve();
+        await flush();
+        expect(f.recovery.state?.attempt).toBe(0);
+        expect(f.deps.changed.mock.calls.some(([state]) => state.phase === AccountRecoveryPhase.Failed)).toBe(false);
+        if (!committed) {
+          expect(f.recovery.state?.phase).toBe(AccountRecoveryPhase.WaitingAuth);
+          expect(f.deps.complete).not.toHaveBeenCalled();
+          expect(f.recovery.captureStartPermit()).toBeNull();
+          f.recovery.commitAuthMutation(revision);
+        }
+        await pending;
+        expect(f.fence).toHaveBeenCalledOnce();
+        expect(f.deps.prepare).toHaveBeenCalledTimes(2);
+        expect(f.deps[stage]).toHaveBeenCalledTimes(2);
+        expect(f.deps.complete).toHaveBeenCalledOnce();
+        expect(f.recovery.state?.phase).toBe(AccountRecoveryPhase.Complete);
+      }
+    },
+  );
+
+  test('an auth commit failure cannot be hidden by a superseded startup error', async () => {
+    const f = fixture();
+    const work = deferred();
+    f.deps.canRetry = () => true;
+    f.deps.start.mockImplementationOnce(async () => {
+      await work.promise;
+      throw new Error('startup interrupted');
+    });
+    const pending = f.recovery.request({ resume: true, fence: f.fence });
+    await flush();
+    const revision = f.recovery.beginAuthMutation();
+    f.recovery.failAuthMutation(revision, new Error('account update failed'));
+    work.resolve();
+    await expect(pending).rejects.toThrow();
+    expect(f.recovery.state?.phase).toBe(AccountRecoveryPhase.Failed);
+    expect(f.recovery.captureStartPermit()).toBeNull();
+    expect(f.deps.start).toHaveBeenCalledOnce();
+    expect(f.deps.complete).not.toHaveBeenCalled();
+  });
+
+  test('a superseded startup error cannot revive an older account recovery', async () => {
+    const f = fixture();
+    const work = deferred();
+    f.deps.start.mockImplementationOnce(async () => {
+      await work.promise;
+      throw new Error('startup interrupted');
+    });
+    const old = f.recovery.request({ resume: true, fence: f.fence });
+    await flush();
+    const revision = f.recovery.beginAuthMutation();
+    f.switchIdentity('B:2');
+    const current = f.recovery.request({ resume: true, fence: f.fence });
+    f.recovery.commitAuthMutation(revision);
+    work.resolve();
+    await expect(old).rejects.toBeInstanceOf(AccountRecoveryCancelledError);
+    await current;
+    expect(f.deps.prepare).toHaveBeenCalledTimes(2);
+    expect(f.deps.start).toHaveBeenCalledTimes(2);
+    expect(f.deps.complete).toHaveBeenCalledOnce();
+    expect(f.recovery.state?.phase).toBe(AccountRecoveryPhase.Complete);
+  });
+
   test('uses one bounded retry budget without re-fencing or regenerating a valid config', async () => {
     vi.useFakeTimers();
     const f = fixture();
@@ -237,6 +312,10 @@ describe('account gateway recovery', () => {
     expect(f.deps.prepare).toHaveBeenCalledOnce();
     expect(f.deps.confirm).toHaveBeenCalledTimes(5);
     expect(f.recovery.state?.attempt).toBe(4);
+    const phases = f.deps.changed.mock.calls.map(([state]) => state.phase);
+    expect(phases.filter(phase => phase === AccountRecoveryPhase.Failed)).toHaveLength(1);
+    expect(phases.filter(phase => phase === AccountRecoveryPhase.Retrying)).toHaveLength(4);
+    expect(f.recovery.state?.phase).toBe(AccountRecoveryPhase.Failed);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -248,6 +327,8 @@ describe('account gateway recovery', () => {
     f.deps.confirm.mockRejectedValueOnce(new Error('retry later'));
     const pending = f.recovery.request({ resume: true, fence: f.fence });
     await flush();
+    expect(f.recovery.state).toMatchObject({ phase: AccountRecoveryPhase.Retrying, attempt: 1 });
+    expect(f.deps.changed.mock.calls.some(([state]) => state.phase === AccountRecoveryPhase.Failed)).toBe(false);
     await vi.advanceTimersByTimeAsync(29_999);
     expect(f.deps.confirm).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);

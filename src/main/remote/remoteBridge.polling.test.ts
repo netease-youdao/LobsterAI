@@ -432,6 +432,7 @@ describe('input preparation failure boundaries', () => {
     [new RemoteAttachmentError(), 'ATTACHMENT_INVALID'],
     [new RemoteInputError(RemoteInputReason.Invalid), 'PREPARATION_FAILED'],
     [new RemoteInputError(RemoteInputReason.ModelUnavailable), RemoteInputReason.ModelUnavailable],
+    [new RemoteInputError(RemoteInputReason.AgentUnavailable), RemoteInputReason.AgentUnavailable],
   ])('reports only existing server reasons for %s', async (error, expectedReason) => {
     const { bridge, request } = await fixture();
     bridge.deps.input.preparations.prepare.mockRejectedValue(error);

@@ -7,11 +7,11 @@ import type { LanguageType } from '../i18n';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { type ArtifactProjectionJob, projectRemoteArtifacts, type RemoteArtifactProjection } from './remoteArtifactProjection';
 import { liveMetadataToolId, normalizeLiveMetadata, RemoteLiveEncodingError, RemoteLiveEncodingLimits, RemoteLiveMetadataMode } from './remoteLiveMetadata';
-import { replyInputModel, replyModelLabel, type ReplyModelPresetNames } from './remoteReplyModel';
+import { replyInputModel, replyMessageModelLabel, replyModelLabel, type ReplyModelPresetNames } from './remoteReplyModel';
 import { redactReplyText, replyToolState } from './remoteReplyProjection';
 import { hasTaskUsageRunOrigin, isInheritedTaskUsage, readTaskUsageState, taskUsageForkAt, taskUsageVisible } from './remoteTaskCredits';
 
-export interface LiveProjectionInput { annotationLanguage?: LanguageType; database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames; taskCreditsSupported?: boolean }
+export interface LiveProjectionInput { replyModelLabelSupported?: boolean; annotationLanguage?: LanguageType; database: string; localId: string; sessionId: string; deviceId: string; owner: RemoteOwner; objectId: string; revision: string; objectKind?: 'message' | 'tool'; environment?: string; modelPresetNames?: ReplyModelPresetNames; taskCreditsSupported?: boolean }
 export interface LiveToolSource { messageId: string; toolId: string; sourceRevision: string }
 /** Local diagnostics; tool values sum only the source rows actually read by this job. */
 export interface LiveEncodingStats { rawMetadataBytes: number; normalizedMetadataBytes: number }
@@ -43,7 +43,12 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       const value = db.prepare('SELECT value FROM remote_state WHERE key=?').get(key) as { value: string } | undefined;
       return value ? JSON.parse(value.value) : null;
     };
-    const foreign = new Set(readState(`syncTargetHistory:${input.localId}`)?.runIds || []);
+    const targetHistory = readState(`syncTargetHistory:${input.localId}`);
+    const foreign = new Set<string>(targetHistory?.runIds || []);
+    const command = targetHistory?.targetId && metadata.remoteCommandId && !metadata.remoteRunId
+      ? readState(`inbox:${targetHistory.targetId}:${metadata.remoteCommandId}`) || readState(`inbox:${metadata.remoteCommandId}`) : null;
+    const foreignMessage = foreign.has(metadata.remoteRunId)
+      || !!(targetHistory?.targetId && metadata.remoteCommandId && !metadata.remoteRunId && command?.targetId !== targetHistory.targetId);
     const runId = metadata.remoteRunId && !foreign.has(metadata.remoteRunId) ? metadata.remoteRunId : null;
     if (runId && readState(`runPublished:${runId}`) === false) return null;
     let content = redactReplyText(row.content || '');
@@ -74,7 +79,11 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       try { usageVisible = taskUsageVisible(metadata, readTaskUsageState(db, `syncTargetHistory:${input.localId}`),
         key => readTaskUsageState(db, key), id => hasTaskUsageRunOrigin(db, input.localId, id)); } catch { /* Invalid optional attribution cannot expose a usage snapshot. */ }
     }
+    const modelLabel = input.replyModelLabelSupported && !foreignMessage
+      && (!desktop || sameOwner(desktop.owner, input.owner))
+      ? replyMessageModelLabel(db, input.localId, row, metadata, input.modelPresetNames, prepared?.modelPresetId, foreign) : null;
     const payload: Record<string, any> = {
+      ...(modelLabel ? { modelLabel } : {}),
       messageId: row.id, ordinal: String(Math.max(1, row.sequence || 1)), runId,
       commandId: runId ? metadata.remoteCommandId || null : null,
       role: row.type.startsWith('tool_') ? 'tool' : row.type === 'system' ? 'notice' : row.type, status: metadata.isStreaming ? 'streaming' : 'complete',
@@ -87,7 +96,7 @@ export function projectLiveMessage(db: Database.Database, input: LiveProjectionI
       ...(model ? { inputModel: replyInputModel(row.type, metadata, model, input.modelPresetNames, prepared?.modelPresetId) } : {}),
       ...(omitted ? { contentUnavailableReason: 'CONTENT_LIMIT_EXCEEDED' } : {}),
     };
-    const resolvedModelLabel = model && (row.type === 'user' || row.type === 'assistant') ? replyModelLabel(metadata, input.modelPresetNames, prepared?.modelPresetId) : null;
+    const resolvedModelLabel = modelLabel ?? (model && (row.type === 'user' || row.type === 'assistant') ? replyModelLabel(metadata, input.modelPresetNames, prepared?.modelPresetId) : null);
     return { objectKind: 'message', objectId: row.id, sourceObjectRevision: input.revision,
       ...(row.type === 'user' && normalized.hasAnnotationText ? { hasAnnotationText: true } : {}),
       ...(resolvedModelLabel ? { resolvedModelLabel } : {}), ...(toolSource ? { toolSource } : {}),

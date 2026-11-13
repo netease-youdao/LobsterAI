@@ -1,5 +1,7 @@
 # 远程模型目录公开模型 ID（2026-11-05）
 
+2026-11-13 文档补充：[手机选择列表倍率与订阅优先接入](../../../lobsterai-server/docs/integration/2026-11-13-mobile-model-multiplier.md)明确倍率数据源、虚拟预设能力、0／限免、订阅优先徽标及缓存规则。本轮仅核对源码和补文档，不改 App 或协议，未测试、未部署、未完成真机验收；下方旧验证记录保持原日期含义。
+
 ## 变更摘要
 
 远程模型目录增加可选 `modelId`，供手机 App 以公开业务模型 ID 查找配置服务中的图标和展示倍率。`modelRef` 继续是桌面按账号、空间、设备及同步目标隔离的随机引用；模型选择和执行始终使用 `modelRef + version`。本次不修改手机 App 源码、Portal、Admin 或数据库。
@@ -74,9 +76,11 @@
 
 ## App 接入要点
 
-- 可用 `modelId` 原值在配置服务映射 icon 和展示倍率；保留公开 ID 的完整渠道后缀。缺字段、未知 ID 或图标加载失败使用默认图标，展示倍率缺失时隐藏或采用明确的默认展示，不能阻塞选择和发送。
-- 展示倍率只是 UI 配置，不代表实际扣费。须结合 `source` 区分套餐与自定义模型；同名 `source=custom` 不能继承套餐倍率或套餐计费含义。实际计费、权益和用量以服务端权威结果为准。
-- 快速／旗舰使用 `yd-fast`／`yd-ultra` 的图标。不要把模型显示名称或 `providerLabel` 当稳定 ID；不要把图标映射结果当作可执行模型。
+- 倍率使用同服务环境、同账号及个人／企业上下文的 `GET /api/models/available`（正常 JWT，data 为数组，不要求远控设备凭据），只对 `source=subscription` 按完整 modelId 唯一精确匹配；不改大小写、剥渠道或按名称／modelRef 猜测。custom 不套同名平台价，缺 ID／重复匹配／请求失败／null 时隐藏未知倍率，不补 x1。图标仍可按公开 ID 映射，缺失用通用图标。
+- costMultiplier 必须为有限非负数字，0 不是缺值；值 >0、存在 presetId 或 limitedFreeActive===true 时显示 x 两位小数，限免只认 limitedFreeActive。合法 0 不等于请求必然免费；倍率只用于当前选择列表，不回填历史成本或赋予选择权限。保留远控顺序、available 和 modelRef/version，实际计费以服务端为准。
+- 快速／旗舰使用 yd-fast／yd-ultra 自身的 available 加权倍率，不用静态 displayCost 或具体模型代替。请求需 virtual-models-v1，精确候选池还受目标执行能力影响，例如 kimi-k3-agentic-v1；不能为查倍率盲目宣称能力或保证简化头部与任意桌面相同。公共 pricing-catalog 不完整覆盖员工／预设，不作默认补缺。
+- 打开选择页刷新 available，缓存按环境、账号、scope、能力集合隔离，远控目录另按设备／版本隔离；上下文变化丢弃旧在途结果。完整请求示例、显示条件、目标能力匹配及验收见[11 月 13 日 App 指南](../../../lobsterai-server/docs/integration/2026-11-13-mobile-model-multiplier.md)。
+- 订阅优先复用同一次 available 查询和 subscription 完整 modelId 唯一精确匹配；仅 subscriptionPriority===true 显示金色钻石＋「订阅优先」，提示「仅限有效订阅用户使用」。false／null／缺失／非法类型或匹配失败隐藏，custom 不套用；不从 Highspeed 名称、倍率、付费状态猜测，预设不继承候选标记。倍率 null／非法不影响 true 徽标，限免和订阅优先可同时显示；不重排、不解锁，保持原 remote.available 和准备／执行校验。无需向 remote 严格白名单新增字段，标签沿用同源同上下文缓存与开页刷新；见[指南 §2.1](../../../lobsterai-server/docs/integration/2026-11-13-mobile-model-multiplier.md#21-订阅优先徽标)。App 待接入，本轮未现场验证。
 - 仍按设备隔离缓存目录并使用 `modelRef + version` 保存选择。旧桌面发布的目录不含 `modelId`，升级服务端无法反推该字段。
 - 详细手机 API 与服务端接入约定见 `lobsterai-server/docs/api/mobile-remote-input-v2.md` 和 `lobsterai-server/docs/integration/2026-11-05-remote-model-id.md`。
 

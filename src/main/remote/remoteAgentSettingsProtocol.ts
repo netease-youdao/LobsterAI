@@ -1,17 +1,10 @@
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 
-import { RemoteAgentSettings, type RemoteAgentSettingsAccessState, RemoteAgentSettingsAction, type RemoteAgentSettingsAuthorization, type RemoteAgentSettingsBinding, type RemoteAgentSettingsCandidate, type RemoteAgentSettingsRevoke,RemoteAgentSettingsSection, RemoteAgentSettingsStatus } from '../../shared/remote/agentSettings';
+import { RemoteAgentSettings, RemoteAgentSettingsAction, type RemoteAgentSettingsBinding, type RemoteAgentSettingsCandidate, RemoteAgentSettingsSection, RemoteAgentSettingsStatus, sameAccountAgentSettingsPermissions } from '../../shared/remote/agentSettings';
 import type { AgentSettingsService } from '../libs/agentSettings/service';
 import { type AgentSettingsAction, type AgentSettingsContext, type AgentSettingsPersistence, AgentSettingsPhase, type AgentSettingsReceipt, type AgentSettingsSnapshot,AgentSettingsSource } from '../libs/agentSettings/types';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { type LocalSettingsBinding, type PendingSettingsAccess, RemoteAgentSettingsAccess, type RemoteAgentSettingsConnection, settingsIdentity } from './remoteAgentSettingsAccess';
-
-function mobileDeviceShortLabel(userId: string, scopeKey: string, mobileDeviceId: string): string | undefined {
-  if (!/^[1-9]\d{0,18}$/u.test(userId)) return undefined;
-  // Match the App Connections API and iOS. Keep the numeric ID exact even beyond JavaScript's safe range.
-  const input = `[${userId},${JSON.stringify(scopeKey)},${JSON.stringify(mobileDeviceId)}]`;
-  return createHash('sha256').update(input, 'utf8').digest('hex').slice(0, 6).toUpperCase();
-}
 
 export interface RemoteAgentSettingsDependencies {
   service: Pick<AgentSettingsService, 'read' | 'prepare' | 'apply' | 'recover'>;
@@ -78,6 +71,9 @@ export class RemoteAgentSettingsProtocol {
   private availabilityWork: Promise<boolean> | null = null;
   private readonly inFlight = new Set<string>();
   private recoveryCursor: string | null = null;
+  private automaticAccessCursor = 0;
+  private pendingAccessCursor = 0;
+  private readonly accessSnapshots = new Map<string, { identity: string; generation: string | null; epoch: string; items: unknown[]; cursor: string | null; cursors: Set<string> }>();
   constructor(private readonly deps: ProtocolDependencies) { this.access = new RemoteAgentSettingsAccess(deps.store); }
   configure(serverSupported: boolean): void { this.supported = serverSupported; }
   async refreshAvailability(): Promise<boolean> {
@@ -112,76 +108,104 @@ export class RemoteAgentSettingsProtocol {
     if (settingsIdentity(expected) !== settingsIdentity(current) || active && current.connectionGeneration !== expected.connectionGeneration) throw new Error('SETTINGS_ACCESS_STALE');
     return current;
   }
-  async state(): Promise<RemoteAgentSettingsAccessState> {
-    await this.refreshAvailability();
-    const current = this.deps.connection();
-    const base: RemoteAgentSettingsAccessState = { supported: this.available() && !!current?.active, conversationReady: this.deps.conversationReady(),
-      accountEpoch: this.access.epoch(), owner: current?.owner ?? null, candidates: [], agents: [], bindings: [] };
-    if (!current) return base;
-    this.access.activate(current); base.accountEpoch = this.access.epoch();
-    const shortLabel = (deviceId: string): string | undefined =>
-      mobileDeviceShortLabel(current.owner.userId, current.owner.scopeKey, deviceId);
-    base.bindings = this.access.bindings(current).map(({ identity: _identity, connection: _connection, ...binding }) =>
-      ({ ...binding, shortLabel: shortLabel(binding.mobileDeviceId) }));
-    if (!base.supported) return base;
-    let data: { items: RemoteAgentSettingsCandidate[] };
-    try { data = await this.deps.request(`/devices/${encode(current.deviceId)}/agent-settings-access-candidates`, 'GET') as typeof data; }
-    catch { this.assertConnection(current, false); return { ...base, supported: false }; }
-    this.assertConnection(current);
-    if (!Array.isArray(data?.items) || data.items.length > 200) throw new Error('SETTINGS_INVALID_RESPONSE');
-    base.candidates = data.items.filter(item => item && SAFE_ID.test(item.mobileDeviceId) && SAFE_ID.test(item.grantId)
-      && /^[1-9]\d{0,18}$/u.test(item.grantVersion) && typeof item.name === 'string' && item.name.length <= 200)
-      .map(item => ({ ...item, shortLabel: shortLabel(item.mobileDeviceId) }));
-    base.agents = this.deps.listAgents(); return base;
-  }
-  async authorize(input: RemoteAgentSettingsAuthorization): Promise<RemoteAgentSettingsAccessState> {
-    if (this.accessBusy) throw new Error('SETTINGS_OPERATION_PENDING');
-    this.accessBusy = true;
-    try {
-      const connection = this.connection();
-      if (!this.deps.listAgents().some(agent => agent.agentId === input.agentId)) throw new Error('AGENT_UNAVAILABLE');
-      const pending = this.access.authorize(connection, input, this.deps.conversationReady());
-      await this.publishAccess(pending); return await this.state();
-    } finally { this.accessBusy = false; }
-  }
-  async revoke(input: RemoteAgentSettingsRevoke): Promise<RemoteAgentSettingsAccessState> {
-    if (this.accessBusy) throw new Error('SETTINGS_OPERATION_PENDING');
-    this.accessBusy = true;
-    try {
-      const connection = this.connection(false);
-      if (input.expectedAccountEpoch !== this.access.epoch()) throw new Error('SETTINGS_ACCESS_STALE');
-      const pending = this.access.revoke(connection, input.bindingId, input.bindingVersion);
-      // The durable local fence takes effect even when publication must wait for reconnection.
-      if (connection.active && connection.connectionGeneration) {
-        try { await this.publishAccess(pending); } catch { /* Retain the revoke intent. */ }
-      }
-      return await this.state();
-    } finally { this.accessBusy = false; }
-  }
   private async reconcileAccess(current: RemoteAgentSettingsConnection): Promise<void> {
     if (this.accessBusy) throw new Error('SETTINGS_OPERATION_PENDING');
     this.accessBusy = true;
     try {
-      for (const pending of this.access.pending(current)) {
-        if (pending.kind === 'authorize' && pending.connection.connectionGeneration !== current.connectionGeneration) {
-          // An uncertain old grant is not silently renewed on a new connection.
-          this.access.discardPending(pending.requestId); continue;
-        }
-        await this.publishAccess(pending);
-      }
-      const result = await this.deps.request(`/devices/${encode(current.deviceId)}/agent-settings-access`, 'GET') as { items: RemoteAgentSettingsBinding[] };
-      this.assertConnection(current);
-      if (!Array.isArray(result?.items) || result.items.length > 1000) throw new Error('SETTINGS_INVALID_RESPONSE');
-      this.access.reconcile(current, result.items);
-      for (const pending of this.access.pending(current)) await this.publishAccess(pending);
+      let budget = await this.publishPendingAccess(current, 5);
+      const result = await this.accessPages<RemoteAgentSettingsBinding>(current, 'agent-settings-access', 200);
+      if (result.pending) return;
+      this.access.reconcile(current, result.items, result.complete);
+      budget = await this.publishPendingAccess(current, budget);
+      if (!this.access.pending(current).some(item => item.kind === 'revoke')) await this.synchronizeSameAccountAccess(current, budget);
     } finally { this.accessBusy = false; }
+  }
+  private async publishPendingAccess(current: RemoteAgentSettingsConnection, budget: number): Promise<number> {
+    const pendingItems = this.access.pending(current); let attempts = 0;
+    for (let visited = 0; visited < pendingItems.length && attempts < 2; visited++) {
+      const index = this.pendingAccessCursor % pendingItems.length; this.pendingAccessCursor = (index + 1) % pendingItems.length;
+      const pending = pendingItems[index];
+      if (pending.kind === 'authorize' && pending.connection.connectionGeneration !== current.connectionGeneration) {
+        this.access.discardPending(pending.requestId); continue;
+      }
+      if (budget <= 0) break;
+      budget--; attempts++;
+      try { await this.publishAccess(pending); }
+      catch (error) {
+        this.assertConnection(current);
+        if (pending.kind === 'revoke') throw error;
+        // Immutable requests survive temporary transport errors; a definitive rejection cannot be retried forever.
+        if (['SETTINGS_ACCESS_REVOKED', 'SETTINGS_ACCESS_STALE', 'AGENT_UNAVAILABLE', 'ACCESS_DENIED', 'SETTINGS_INVALID_REQUEST'].includes(agentSettingsErrorReason(error))) {
+          this.access.discardPending(pending.requestId);
+        }
+      }
+    }
+    return budget;
+  }
+  private async accessPages<T>(current: RemoteAgentSettingsConnection, endpoint: string, limit: number): Promise<{ items: T[]; complete: boolean; pending?: boolean }> {
+    let snapshot = this.accessSnapshots.get(endpoint);
+    if (!snapshot || snapshot.identity !== settingsIdentity(current) || snapshot.generation !== current.connectionGeneration || snapshot.epoch !== this.access.epoch()) {
+      snapshot = { identity: settingsIdentity(current), generation: current.connectionGeneration, epoch: this.access.epoch(), items: [], cursor: null, cursors: new Set() };
+      this.accessSnapshots.set(endpoint, snapshot);
+    }
+    // Continue large snapshots over later ticks instead of starving claims or exceeding HTTP limits.
+    for (let page = 0; page < 5; page++) {
+      this.assertConnection(current);
+      const result = await this.deps.request(`/devices/${encode(current.deviceId)}/${endpoint}${snapshot.cursor ? `?cursor=${encode(snapshot.cursor)}` : ''}`, 'GET') as { items: T[]; nextCursor?: string | null };
+      this.assertConnection(current);
+      if (!Array.isArray(result?.items) || result.items.length > limit) throw new Error('SETTINGS_INVALID_RESPONSE');
+      snapshot.items.push(...result.items);
+      if (snapshot.items.length > 20000 || snapshot.cursors.size >= 200) {
+        this.accessSnapshots.delete(endpoint); throw new Error('SETTINGS_INVALID_RESPONSE');
+      }
+      if (result.nextCursor === undefined || result.nextCursor === null) {
+        this.accessSnapshots.delete(endpoint);
+        // Old services return a bounded first page without completeness metadata.
+        return { items: snapshot.items as T[], complete: result.nextCursor === null };
+      }
+      const cursor = result.nextCursor;
+      if (typeof cursor !== 'string' || !cursor || cursor.length > 4096 || snapshot.cursors.has(cursor)) {
+        this.accessSnapshots.delete(endpoint); throw new Error('SETTINGS_INVALID_RESPONSE');
+      }
+      snapshot.cursors.add(cursor); snapshot.cursor = cursor;
+    }
+    return { items: [], complete: false, pending: true };
+  }
+  private async synchronizeSameAccountAccess(current: RemoteAgentSettingsConnection, budget: number): Promise<void> {
+    if (budget <= 0) return;
+    const snapshot = await this.accessPages<RemoteAgentSettingsCandidate>(current, 'agent-settings-access-candidates', 100);
+    if (snapshot.pending) return;
+    const candidates = snapshot.items;
+    if (candidates.some(item => !item || !SAFE_ID.test(item.mobileDeviceId) || !SAFE_ID.test(item.grantId)
+      || typeof item.grantVersion !== 'string' || !/^[1-9]\d{0,18}$/u.test(item.grantVersion))) throw new Error('SETTINGS_INVALID_RESPONSE');
+    const agents = this.deps.listAgents(), count = candidates.length * agents.length;
+    if (!count) return;
+    const sections = sameAccountAgentSettingsPermissions(this.deps.conversationReady());
+    const bindings = this.access.bindings(current), awaiting = this.access.pending(current);
+    let attempts = 0;
+    // Bound writes and rotate after partial failures so one stale candidate cannot starve other Agents.
+    for (let visited = 0; visited < count && attempts < budget; visited++) {
+      const index = this.automaticAccessCursor % count; this.automaticAccessCursor = (index + 1) % count;
+      const phone = candidates[Math.floor(index / agents.length)], agent = agents[index % agents.length];
+      if (bindings.some(binding => binding.status === RemoteAgentSettingsStatus.Active && binding.mobileDeviceId === phone.mobileDeviceId
+        && binding.agentId === agent.agentId && binding.grantId === phone.grantId && binding.grantVersion === phone.grantVersion
+        && binding.accountEpoch === this.access.epoch()
+        && stableJson(binding.sections) === stableJson(sections))) continue;
+      if (awaiting.some(pending => pending.kind === 'authorize' && pending.input?.mobileDeviceId === phone.mobileDeviceId
+        && pending.input.agentId === agent.agentId)) continue;
+      this.assertConnection(current); attempts++;
+      const pending = this.access.authorize(current, { expectedAccountEpoch: this.access.epoch(), agentId: agent.agentId,
+        mobileDeviceId: phone.mobileDeviceId, grantId: phone.grantId, grantVersion: phone.grantVersion, sections }, this.deps.conversationReady());
+      try { await this.publishAccess(pending); }
+      catch { this.assertConnection(current); }
+    }
   }
   private async publishAccess(pending: PendingSettingsAccess): Promise<void> {
     const current = this.connection();
     if (settingsIdentity(current) !== pending.identity) throw new Error('SETTINGS_ACCESS_STALE');
     const common = { requestId: pending.requestId, connectionGeneration: pending.connection.connectionGeneration, accountEpoch: pending.accountEpoch };
     if (pending.kind === 'authorize') {
-      // Replaying an explicit decision uses the original immutable request; never rebind it to a new connection.
+      // Replaying a pending binding uses the original immutable request; never rebind it to a new connection.
       const input = pending.input!;
       const value = await this.deps.request(`/devices/${encode(current.deviceId)}/agents/${encode(input.agentId)}/settings-access`, 'POST',
         { ...common, mobileDeviceId: input.mobileDeviceId, grantId: input.grantId, grantVersion: input.grantVersion, sections: input.sections }) as RemoteAgentSettingsBinding;

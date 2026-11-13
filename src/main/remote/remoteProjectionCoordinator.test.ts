@@ -74,6 +74,15 @@ describe('desktop core and remote projection isolation', () => {
     expect(records.find(row => row.eventType === 'session.upsert')!.payload.session.taskUsage).toEqual(captured);
     expect(records.find(row => row.payload.message?.messageId === 'user')!.payload.message.turnUsage.displayCreditsUsed).toBe('4.84');
   });
+  it('preserves the negotiated display-only model field through the isolated disk worker', async () => {
+    const f = fixture(); f.store.setReplyProjectionSupported(true); f.store.setReplyModelLabelSupported(true);
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='message'").run(JSON.stringify({ model: 'deepseek-flash', modelPresetId: 'balanced' })));
+    await f.store.flushProjections();
+    const message = f.store.snapshot('task').records.find(row => row.payload.message)?.payload.message;
+    expect(message.modelLabel).toBe('快速（deepseek-flash）'); expect(message).not.toHaveProperty('inputModel');
+    f.store.setReplyModelLabelSupported(false); await f.store.flushProjections();
+    expect(f.store.snapshot('task').records.find(row => row.payload.message)?.payload.message).not.toHaveProperty('modelLabel');
+  });
   it('commits local messages before any worker projection and publishes off-thread', async () => {
     const f = fixture();
     expect(f.store.sync('task')?.source_seq).toBe(0);

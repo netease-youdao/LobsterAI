@@ -6,6 +6,7 @@ import { getLanguage } from '../i18n';
 import { payloadHash, sameOwner, stableJson } from './canonical';
 import { annotationRepairCandidates } from './remoteAnnotationRepair';
 import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
+import { type AvailabilityRecoveryIdentity, AvailabilityRecoveryLane, availabilityRecoveryMetadataValid, RemoteAvailabilityAutoRecovery } from './remoteAvailabilityAutoRecovery';
 import { acknowledgeAvailabilityDeletion, AvailabilityDeletion, availabilityDeletion, mirrorAvailabilityDeletionIdentity, rememberAvailabilityDeletionBinding } from './remoteAvailabilityDeletion';
 import { availabilitySourceHealth, recordAvailabilityObjectHealth } from './remoteAvailabilityHealth';
 import { type ControlReconciliationPage,RemoteAvailabilityReconcile } from './remoteAvailabilityReconcile';
@@ -25,11 +26,13 @@ import { recoveryEvents, recoveryRequired, recoverySourceManifest } from './remo
 import { replyModelPresetNames } from './remoteReplyModel';
 import type { CoreRemoteBinding, RemoteStore } from './remoteStore';
 import { remoteDiagnosticLog, remoteSyncErrorMetadata } from './remoteSyncLog';
+import type { RemoteRecoveryLimiter } from './remoteSyncRecoveryLedger';
+import { recoveryFailure } from './remoteSyncRecoveryPolicy';
 import { observeSyncCommit, SyncTelemetry } from './remoteSyncTelemetry';
 import { hasTaskCreditsSnapshot } from './remoteTaskCredits';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
-export interface AvailabilityContext { environment?: string; targetId?: string; routeEpoch?: number; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; controlDeletionSupported?: boolean; taskCreditsSupported?: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean }
+export interface AvailabilityContext { environment?: string; targetId?: string; routeEpoch?: number; scope: string; owner: RemoteOwner; deviceId: string; generation: string; supported: boolean; controlDeletionSupported?: boolean; taskCreditsSupported?: boolean; replyModelLabelSupported?: boolean; historySupported?: boolean; checkpointPagesSupported?: boolean; publicationResolutionSupported?: boolean; recoveryCapabilities?: readonly string[]; recoveryDependencyEpoch?: number | null }
 export const HistoryOwnership = { Owned: 'owned', Unowned: 'unowned', Unavailable: 'unavailable' } as const;
 export type HistoryOwnershipResult = { state: typeof HistoryOwnership.Owned | typeof HistoryOwnership.Unowned }
   | { state: typeof HistoryOwnership.Unavailable; dependency: 'control_ledger' | 'context'; error: unknown };
@@ -37,6 +40,7 @@ interface Dependencies {
   store: RemoteStore;
   context(): AvailabilityContext | null;
   admitted(localId: string): boolean;
+  recoveryLimiter?: RemoteRecoveryLimiter;
   request(path: string, method: string, body: unknown, version: number, timeoutMs?: number): Promise<any>;
 }
 const recordKey = (record: { eventType: string; payload: Record<string, any> }): string => `${record.eventType}:${record.payload.run?.runId
@@ -44,6 +48,7 @@ const recordKey = (record: { eventType: string; payload: Record<string, any> }):
 const CONTROL_TURN_YIELDED = 'REMOTE_CONTROL_TURN_YIELDED';
 const CONTEXT_CHANGED = 'REMOTE_AVAILABILITY_CONTEXT_CHANGED';
 const publisherEpoch = Symbol('publisherEpoch');
+const recoveredBootstrapReceipt = Symbol('recoveredBootstrapReceipt');
 type CapturedContext = AvailabilityContext & { [publisherEpoch]?: number };
 const backoff = [1000, 3000, 10000, 30000, 60000];
 
@@ -52,6 +57,7 @@ export class RemoteAvailabilityPublisher {
   readonly ledger: RemoteAvailabilityStore;
   private readonly encoder = new RemoteLiveProjectionJob();
   private readonly liveRecovery: RemoteLiveRecovery;
+  private readonly autoRecovery: RemoteAvailabilityAutoRecovery;
   private readonly reconciliation: RemoteAvailabilityReconcile;
   private readonly reconciliationId = randomUUID();
   private controlWork: Promise<void> | null = null;
@@ -79,6 +85,7 @@ export class RemoteAvailabilityPublisher {
   constructor(private readonly deps: Dependencies) {
     this.ledger = new RemoteAvailabilityStore(deps.store.db);
     this.liveRecovery = new RemoteLiveRecovery(this.ledger);
+    this.autoRecovery = new RemoteAvailabilityAutoRecovery(action => action(this.ledger.db));
     this.reconciliation = new RemoteAvailabilityReconcile(this.ledger);
   }
   retryLive(localId?: string): boolean {
@@ -88,7 +95,8 @@ export class RemoteAvailabilityPublisher {
       const binding = this.deps.store.controlBinding(id);
       return !!binding && !binding.migration_frozen && binding.device_id === context.deviceId
         && sameOwner(this.deps.store.owner(id), context.owner) && this.deps.admitted(id)
-        && !this.deps.store.isSyncClosed(id) && !this.deps.store.get(`${AvailabilityDeletion.Prefix}${id}`);
+        && !this.deps.store.isSyncClosed(id) && !this.deps.store.get(`${AvailabilityDeletion.Prefix}${id}`)
+        && availabilityRecoveryMetadataValid(this.ledger.db, context.scope, id);
     }, localId);
     if (retried) this.wake();
     return retried > 0;
@@ -245,7 +253,7 @@ export class RemoteAvailabilityPublisher {
     try { next = this.deps.context(); } catch { return false; }
     return next?.routeEpoch === context.routeEpoch && next?.scope === context.scope && next.deviceId === context.deviceId
       && next.environment === context.environment && next.targetId === context.targetId && sameOwner(next.owner, context.owner) && next.generation === context.generation
-      && next.taskCreditsSupported === context.taskCreditsSupported;
+      && next.taskCreditsSupported === context.taskCreditsSupported && next.replyModelLabelSupported === context.replyModelLabelSupported;
   }
   private capture(context: AvailabilityContext): CapturedContext {
     return (context as CapturedContext)[publisherEpoch] === undefined ? { ...context, owner: { ...context.owner }, [publisherEpoch]: this.timerEpoch } : context;
@@ -313,7 +321,115 @@ export class RemoteAvailabilityPublisher {
       ...(liveEncoderVersion === undefined ? {} : { liveEncoderVersion }),
       ...(annotationDisplayVersion === undefined ? {} : { annotationDisplayVersion }) });
   }
+  private recoveryIdentity(context: AvailabilityContext, localId: string, lane: AvailabilityRecoveryLane, objectKey: string,
+    operationKey: string, state: AvailabilitySession): AvailabilityRecoveryIdentity {
+    return { scope: context.scope, localId, lane, objectKey, operationKey,
+      contextKey: payloadHash([context.owner, context.targetId || context.environment || context.scope, context.deviceId,
+        state.sessionId, state.writerGeneration, state.controlEpoch]) };
+  }
+  private recoveryCurrent(context: AvailabilityContext, localId: string, state: AvailabilitySession): boolean {
+    if (!this.current(context)) return false;
+    const row = this.deps.store.controlBinding(localId), current = this.ledger.session(context.scope, localId);
+    return !!row && !!current && !row.migration_frozen && (!row.device_id || row.device_id === context.deviceId)
+      && row.session_id === state.sessionId && (!context.targetId || row.sync_environment === context.targetId)
+      && sameOwner(this.deps.store.owner(localId), context.owner) && this.deps.admitted(localId)
+      && !this.deps.store.isSyncClosed(localId) && !this.deps.store.get(`${AvailabilityDeletion.Prefix}${localId}`)
+      && !this.deps.store.get(`${RemoteDeletion.Fence}${localId}`)
+      && current.sessionId === state.sessionId && current.writerGeneration === state.writerGeneration && current.controlEpoch === state.controlEpoch;
+  }
+  private recoveryDependencyEpoch(context: AvailabilityContext): number | null {
+    if (!this.current(context)) return null;
+    const current = this.deps.context();
+    return current && current.recoveryDependencyEpoch !== undefined ? current.recoveryDependencyEpoch : current ? 0 : null;
+  }
+  private recoveryEvidence(context: AvailabilityContext, lane: AvailabilityRecoveryLane): unknown {
+    const relevant = lane === AvailabilityRecoveryLane.History ? ['sync_recovery_v3']
+      : lane === AvailabilityRecoveryLane.Control ? ['control_facts_v1', 'control_checkpoint_pages_v1']
+        : ['live_projections_v3', 'reply_content_v1', 'input_schema_v2', 'input_attachments_v1'];
+    return { capabilities: relevant.map(value => [value, context.recoveryCapabilities?.includes(value) === true]),
+      supported: context.supported, ...(lane === AvailabilityRecoveryLane.History ? { history: context.historySupported === true } : {}) };
+  }
   private async send(context: AvailabilityContext, request: AvailabilityRequest): Promise<any> {
+    context = this.capture(context); this.assertCurrent(context);
+    const state = this.ledger.session(context.scope, request.localId);
+    if (!state) throw new Error('REMOTE_AVAILABILITY_STATE_MISSING');
+    const operationKey = payloadHash([request.pathname, request.method, request.body]);
+    const identity = this.recoveryIdentity(context, request.localId, request.lane, request.key, operationKey, state);
+    if (this.autoRecovery.has(identity)) {
+      const current = (): boolean => this.recoveryCurrent(context, request.localId, state)
+        && payloadHash([request.pathname, request.method, this.ledger.request(request.key)?.body]) === operationKey;
+      const durable = this.ledger.request(request.key)!;
+      const parentMatch = /^\/control\/bootstrap\/([A-Za-z0-9_-]+)\/(parts\/\d+|commit|abort)$/u.exec(request.pathname);
+      const parentBegin = parentMatch ? this.ledger.request(`${parentMatch[1]}:begin`) : null;
+      const lookup = request.lookup || durable.lookup || (parentBegin ? `/control/operations/${parentMatch![1]}` : null);
+      const query = new URLSearchParams({ deviceId: context.deviceId, sessionId: state.sessionId, localSessionId: state.localId,
+        writerGeneration: state.writerGeneration, mode: 'online', connectionGeneration: context.generation });
+      const recovered = await this.autoRecovery.probe(identity, this.recoveryEvidence(context, request.lane), this.deps.recoveryLimiter, current,
+        () => this.deps.request(lookup || `/sync/state?${query}`, 'GET', undefined, lookup ? durable.lookupVersion : 3), result => {
+          if (!lookup) throw new Error('REMOTE_AUTO_RECOVERY_EVIDENCE_INVALID');
+          if (request.lane === AvailabilityRecoveryLane.Live) { assertLiveReceipt(request.body, result, true); return; }
+          if (request.pathname === '/sync/mode-activations') {
+            if (result?.operationId !== request.body.operationId || result.sessionId !== state.sessionId
+              || result.writerGeneration !== state.writerGeneration || !['fenced', 'active'].includes(result.state))
+              throw new Error('REMOTE_ACTIVATION_RECEIPT_INVALID');
+          } else if (request.pathname === '/control/facts/batches') {
+            const { coreRevision: _core, ackCoreRevision: _ack, knownCheckpointId: _checkpoint, controlReconciliation: _reconcile,
+              mode: _mode, connectionGeneration: _generation, ...business } = request.body;
+            if (result?.batchId !== request.body.batchId || result.sessionId !== state.sessionId || result.writerGeneration !== state.writerGeneration
+              || result.controlEpoch !== state.controlEpoch || result.requestHash !== payloadHash(business)
+              || !['committed', 'covered_by_checkpoint'].includes(result.state) || !/^(0|[1-9][0-9]*)$/u.test(String(result.lastFactSeq))
+              || BigInt(result.lastFactSeq) < BigInt(request.body.lastFactSeq)) throw new Error('REMOTE_CONTROL_FACT_RECEIPT_INVALID');
+          } else {
+            const operationId = request.body.operationId || request.key.split(':')[0];
+            const begin = this.ledger.request(`${operationId}:begin`);
+            if (!begin) throw new Error('REMOTE_AUTO_RECOVERY_EVIDENCE_INVALID');
+            this.validateBootstrapReceipt(result, begin);
+            if (parentBegin && ['uploading', 'receiving'].includes(result.state)) {
+              // The original accepted begin binds its immutable manifest. A state GET alone cannot grant a new part.
+              const acceptedBegin = this.ledger.stepReceipt(parentBegin);
+              const checkpoint = this.ledger.request(`${parentMatch![1]}:checkpoint`);
+              if (!acceptedBegin || !checkpoint || checkpoint.body.manifestHash !== parentBegin.body.manifestHash
+                || request.body.controlEpoch !== parentBegin.body.controlEpoch) throw new Error('REMOTE_AUTO_RECOVERY_EVIDENCE_INVALID');
+              this.validateBootstrapReceipt(acceptedBegin, parentBegin);
+              if (parentMatch![2].startsWith('parts/')) {
+                const index = Number(parentMatch![2].slice(6));
+                const original = checkpoint.body.parts?.[index], descriptor = checkpoint.body.pagedManifest?.pageManifest?.[index];
+                if (!Array.isArray(request.body.records) || payloadHash(request.body.records) !== request.body.payloadHash)
+                  throw new Error('REMOTE_AUTO_RECOVERY_EVIDENCE_INVALID');
+                if (descriptor) {
+                  const kinds = Object.fromEntries([...new Set(request.body.records.map((record: any) => record.eventType))]
+                    .map(kind => [kind, request.body.records.filter((record: any) => record.eventType === kind).length]));
+                  if (descriptor.partNo !== index || descriptor.payloadHash !== request.body.payloadHash
+                    || descriptor.recordCount !== request.body.records.length || descriptor.bytes !== Buffer.byteLength(stableJson(request.body.records))
+                    || payloadHash(descriptor.kindCounts) !== payloadHash(kinds)
+                    || payloadHash(checkpoint.body.pagedManifest) !== parentBegin.body.manifestHash
+                    || payloadHash(checkpoint.body.pagedManifest.pageManifest) !== payloadHash(parentBegin.body.pageManifest))
+                    throw new Error('REMOTE_AUTO_RECOVERY_EVIDENCE_INVALID');
+                } else if (!original || original.payloadHash !== request.body.payloadHash
+                  || payloadHash(original.records) !== payloadHash(request.body.records)) throw new Error('REMOTE_AUTO_RECOVERY_EVIDENCE_INVALID');
+              }
+            }
+          }
+        }, () => this.recoveryDependencyEpoch(context));
+      if (!current()) throw new Error(CONTEXT_CHANGED);
+      if (parentMatch) {
+        if (parentMatch[2].startsWith('parts/') && ['committed', 'aborted', 'expired', 'superseded'].includes(recovered.state))
+          return { [recoveredBootstrapReceipt]: recovered };
+        if (['uploading', 'receiving'].includes(recovered.state)) {
+          // Continue the exact original step, never return a parent state as a part/commit ACK.
+          try { return await this.sendImmutable(context, { ...request, lookup: null }); }
+          catch (error) { if (this.current(context)) this.autoRecovery.record(identity, error); throw error; }
+        }
+      }
+      return recovered;
+    }
+    try { return await this.sendImmutable(context, request); }
+    catch (error) {
+      if (this.current(context)) this.autoRecovery.record(identity, error);
+      throw error;
+    }
+  }
+  private async sendImmutable(context: AvailabilityContext, request: AvailabilityRequest): Promise<any> {
     context = this.capture(context);
     const epoch = this.timerEpoch;
     const assertCurrent = (): void => {
@@ -699,6 +815,12 @@ export class RemoteAvailabilityPublisher {
         if (this.ledger.stepReceipt(part)) continue;
         const result = await this.send(context, part); // Preserve original request bytes until baseline commit.
         this.assertCurrent(context);
+        if (result?.[recoveredBootstrapReceipt]) {
+          receipt = result[recoveredBootstrapReceipt];
+          this.validateBootstrapReceipt(receipt, begin);
+          if (receipt.state === 'committed') break;
+          throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'), { httpStatus: 409, bootstrapReceipt: receipt });
+        }
         if (!result || typeof result !== 'object'
           || result.partNo !== undefined && result.partNo !== partNo
           || result.payloadHash !== undefined && result.payloadHash !== part.body.payloadHash
@@ -710,16 +832,18 @@ export class RemoteAvailabilityPublisher {
         }
         this.ledger.confirmStep(part, result);
       }
-      const commit = this.save(context, state, `${state.operationId}:commit`, 'control', `/control/bootstrap/${state.operationId}/commit`,
-        { controlEpoch: state.controlEpoch, manifestHash: checkpoint.manifestHash }, 1, `/control/operations/${state.operationId}`);
-      // A nonterminal operation query cannot substitute for the commit itself.
-      commit.lookup = null;
-      const result = await this.send(context, commit);
-      this.assertCurrent(context);
-      this.validateBootstrapReceipt(result, begin);
-      if (['aborted','expired','superseded'].includes(result.state)) throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'), { httpStatus: 409, bootstrapReceipt: result });
-      if (result.state !== 'committed' || result.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
-      receipt = result;
+      if (receipt.state !== 'committed') {
+        const commit = this.save(context, state, `${state.operationId}:commit`, 'control', `/control/bootstrap/${state.operationId}/commit`,
+          { controlEpoch: state.controlEpoch, manifestHash: checkpoint.manifestHash }, 1, `/control/operations/${state.operationId}`);
+        // A nonterminal operation query cannot substitute for the commit itself.
+        commit.lookup = null;
+        const result = await this.send(context, commit);
+        this.assertCurrent(context);
+        this.validateBootstrapReceipt(result, begin);
+        if (['aborted','expired','superseded'].includes(result.state)) throw Object.assign(new Error('REMOTE_BOOTSTRAP_TERMINAL'), { httpStatus: 409, bootstrapReceipt: result });
+        if (result.state !== 'committed' || result.controlReady !== true) throw new Error('REMOTE_BOOTSTRAP_RECEIPT_INVALID');
+        receipt = result;
+      }
     }
     observeSyncCommit(telemetry, () => this.ledger.db.transaction(() => {
       this.ledger.db.prepare('INSERT OR IGNORE INTO availability_receipts VALUES(?,?)').run(state.operationId, stableJson(receipt));
@@ -878,7 +1002,23 @@ export class RemoteAvailabilityPublisher {
           }
           const query = new URLSearchParams({ deviceId: context.deviceId, sessionId: state.sessionId, localSessionId: state.localId,
             writerGeneration: state.writerGeneration, mode: 'online', connectionGeneration: context.generation });
-          const server = await this.deps.request(`/sync/state?${query}`, 'GET', undefined, 3);
+          const stateRecovery = history.autoRecovery(historyContext);
+          const stateIdentity = this.recoveryIdentity(context, state.localId, AvailabilityRecoveryLane.History,
+            `history-state:${state.writerGeneration}`, payloadHash([state.sessionId, state.writerGeneration, 'history-state']), state);
+          let server: Record<string, any>;
+          try {
+            server = stateRecovery.has(stateIdentity)
+              ? await stateRecovery.probe(stateIdentity, this.recoveryEvidence(context, AvailabilityRecoveryLane.History), this.deps.recoveryLimiter,
+                () => this.recoveryCurrent(context, state.localId, state), () => this.deps.request(`/sync/state?${query}`, 'GET', undefined, 3), result => {
+                  if (!result || result.sessionId !== state.sessionId || result.writerGeneration !== state.writerGeneration
+                    || result.controlEpoch !== state.controlEpoch || result.controlReady !== true || !result.streamEpoch
+                    || !/^(0|[1-9][0-9]*)$/u.test(String(result.historyGeneration)) || !/^(0|[1-9][0-9]*)$/u.test(String(result.historyResolvedSourceSeq))
+                    || BigInt(result.historyGeneration) < BigInt(session.historyGeneration)
+                    || BigInt(result.historyResolvedSourceSeq) < BigInt(session.resolvedSourceSeq)
+                    || BigInt(result.historyResolvedSourceSeq) > BigInt(metadata.sourceSeq)) throw new Error('REMOTE_HISTORY_STATE_INVALID');
+                }, () => this.recoveryDependencyEpoch(context))
+              : await this.deps.request(`/sync/state?${query}`, 'GET', undefined, 3);
+          } catch (error) { if (this.current(context)) stateRecovery.record(stateIdentity, error); throw error; }
           if (!this.current(context)) return;
           const after = String(server.historyResolvedSourceSeq);
           if (!/^(0|[1-9][0-9]*)$/u.test(after) || !server.streamEpoch) throw new Error('REMOTE_HISTORY_STATE_INVALID');
@@ -944,7 +1084,11 @@ export class RemoteAvailabilityPublisher {
       } catch (error) {
         if (!this.current(context)) return;
         const status = (error as { httpStatus?: number }).httpStatus;
-        if (operation && (status === 400 || status === 409)) {
+        const terminal = (error as { bootstrapReceipt?: Record<string, any> }).bootstrapReceipt;
+        const checkpoint = operation?.request.checkpointState as AvailabilitySession | undefined;
+        if (operation && checkpoint && terminal && ['aborted', 'expired', 'superseded'].includes(terminal.state)
+          && terminal.operationId === checkpoint.operationId && terminal.sessionId === operation.context.sessionId
+          && (terminal.writerGeneration === undefined || terminal.writerGeneration === operation.context.writerGeneration)) {
           try { await this.abortRecovery(context,operation); } catch { /* Unknown abort stays durable for reconciliation. */ }
           if (!this.current(context)) return;
         }
@@ -956,7 +1100,7 @@ export class RemoteAvailabilityPublisher {
         remoteDiagnosticLog('remote.history.deferred', { localSessionId: row.local_id, lane: 'history', error, reason: 'REQUEST_FAILED' }, 'warn');
         if (error instanceof SyntaxError || (error instanceof Error && /REMOTE_(RECOVERY|HISTORY)_.*(EVIDENCE|UNCOVERED|CONFLICT|MISSING|INVALID)/u.test(error.message)))
           this.ledger.objectFault(context.scope,row.local_id,'history-recovery',payloadHash(remoteSyncErrorMetadata(error)));
-        this.deferHistory(key,Date.now() + Math.max(status === 400 || status === 409 ? 30 * 60_000 : 60_000,Number((error as { retryAfterMs?: number }).retryAfterMs) || 0));
+        this.deferHistory(key,Date.now() + Math.max(recoveryFailure(error) ? 30_000 : status === 400 || status === 409 ? 30 * 60_000 : 60_000,Number((error as { retryAfterMs?: number }).retryAfterMs) || 0));
       }
     }
   }
@@ -1028,14 +1172,45 @@ export class RemoteAvailabilityPublisher {
   private async recoverHistory(context: AvailabilityContext, operation: HistoryOperation): Promise<void> {
     context = this.capture(context); this.assertCurrent(context);
     if (operation.state === 'complete') return;
+    const state = this.ledger.session(context.scope, operation.context.localId);
+    if (!state) throw new Error('REMOTE_AVAILABILITY_STATE_MISSING');
+    const recovery = this.deps.store.history.autoRecovery(operation.context);
+    const identity = this.recoveryIdentity(context, operation.context.localId, AvailabilityRecoveryLane.History,
+      operation.id, operation.requestHash, state);
+    let verified: Record<string, any> | undefined;
+    if (recovery.has(identity)) {
+      const current = (): boolean => this.recoveryCurrent(context, operation.context.localId, state)
+        && this.deps.store.history.operation(operation.context, operation.id)?.requestHash === operation.requestHash;
+      verified = await recovery.probe(identity, this.recoveryEvidence(context, AvailabilityRecoveryLane.History), this.deps.recoveryLimiter,
+        current, () => this.deps.request(`/sync/recoveries/${operation.id}`, 'GET', undefined, 3), result => this.validateHistoryRecoveryReceipt(operation, result), () => this.recoveryDependencyEpoch(context));
+    }
+    try { await this.recoverHistoryImmutable(context, operation, verified); }
+    catch (error) { if (this.current(context)) recovery.record(identity, error); throw error; }
+  }
+  private validateHistoryRecoveryReceipt(operation: HistoryOperation, receipt: Record<string, any>): void {
+    const begin = operation.request.begin as Record<string, any>;
+    const { mode: _mode, connectionGeneration: _generation, ...business } = begin;
+    if (!receipt || receipt.recoveryId !== operation.id || receipt.sessionId !== operation.context.sessionId
+      || receipt.requestHash !== payloadHash(business) || !['preparing', 'uploading', 'committed', 'expired', 'aborted'].includes(receipt.state))
+      throw new Error('REMOTE_HISTORY_RECEIPT_INVALID');
+    if (receipt.state === 'committed' && (receipt.streamEpoch !== begin.streamEpoch
+      || receipt.resolvedSourceSeq !== begin.frozenThroughSourceSeq || receipt.controlCheckpointReceiptId !== begin.controlCheckpointReceiptId
+      || !/^(0|[1-9][0-9]*)$/u.test(String(receipt.historyGeneration))
+      || BigInt(receipt.historyGeneration) <= BigInt(begin.expectedHistoryGeneration))) throw new Error('REMOTE_HISTORY_RECEIPT_INVALID');
+    if (['preparing', 'uploading'].includes(receipt.state) && (receipt.historyGeneration !== begin.expectedHistoryGeneration
+      || receipt.resolvedSourceSeq !== begin.expectedResolvedSourceSeq)) throw new Error('REMOTE_HISTORY_RECEIPT_INVALID');
+  }
+  private async recoverHistoryImmutable(context: AvailabilityContext, operation: HistoryOperation, verified?: Record<string, any>): Promise<void> {
+    context = this.capture(context); this.assertCurrent(context);
+    if (operation.state === 'complete') return;
     const telemetry = captureRemoteTelemetry({ remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey,
       deviceId: context.deviceId, localSessionId: operation.context.localId, sessionId: operation.context.sessionId,
       operationId: operation.id, operationKind: SyncTelemetry.Kind.History, lane: 'history' });
     const history = this.deps.store.history, begin = operation.request.begin as Record<string,any>;
     const state = this.ledger.session(context.scope,operation.context.localId)!;
     const prefix = `/sync/recoveries/${operation.id}`;
-    let result: any;
-    try { result = await this.deps.request(prefix,'GET',undefined,3); }
+    let result: any = verified;
+    try { if (!result) result = await this.deps.request(prefix,'GET',undefined,3); }
     catch (error) { if ((error as { httpStatus?: number }).httpStatus !== 404) throw error; }
     if (!this.current(context)) throw new Error('REMOTE_AVAILABILITY_CONTEXT_CHANGED');
     telemetry.emit(SyncTelemetry.Event.Reconciled, { stage: result ? SyncTelemetry.Stage.Reconcile : SyncTelemetry.Stage.Replay,
@@ -1180,9 +1355,11 @@ export class RemoteAvailabilityPublisher {
           }
           const request = item.value, key = `${taskKey}:${request.body.objectKind}:${request.body.objectId}`;
           if (!this.eligible(key) || !this.eligible(request.key)) continue;
+          if (request.body.payload?.modelLabel !== undefined && !context.replyModelLabelSupported && !context.publicationResolutionSupported) continue;
           sent++;
           try {
-            if (context.taskCreditsSupported === false && context.publicationResolutionSupported && hasTaskCreditsSnapshot(request.body))
+            if (request.body.payload?.modelLabel !== undefined && !context.replyModelLabelSupported) await this.resolveLive(context, state, request.key);
+            else if (context.taskCreditsSupported === false && context.publicationResolutionSupported && hasTaskCreditsSnapshot(request.body))
               await this.resolveLive(context, state, request.key);
             else await this.publishLive(context, request);
             if (current()) { this.failures.delete(key); this.failures.delete(request.key); }
@@ -1215,7 +1392,8 @@ export class RemoteAvailabilityPublisher {
             const repairableMessage = sameSource && candidate.kind === 'message' && context.publicationResolutionSupported === true
               && (acknowledged.result.state === 'accepted' || acknowledged.result.state === 'superseded' && acknowledged.result.reason === 'ALREADY_REPRESENTED')
               && /^[1-9][0-9]*$/u.test(String(acknowledged.result.projectionRevision));
-            let repairModelLabel = repairableMessage && acknowledged.result.replyModelDisplayVersion !== ReplyModelDisplayVersion;
+            let repairModelLabel = repairableMessage && (acknowledged.result.replyModelDisplayVersion !== ReplyModelDisplayVersion
+              || context.replyModelLabelSupported === true && acknowledged.result.replyModelLabelChecked !== true);
             let repairAnnotation = repairableMessage && candidate.annotationCheck === true
               && acknowledged.result.annotationDisplayVersion !== RemoteAnnotationDisplayVersion;
             const repairTool = sameSource && candidate.kind === 'tool' && candidate.repair === true
@@ -1235,7 +1413,7 @@ export class RemoteAvailabilityPublisher {
             encoding = true; encoded++;
             const projection = await this.encoder.project(this.deps.store.db, { database: this.deps.store.db.name, modelPresetNames: replyModelPresetNames(), annotationLanguage: getLanguage(),
               localId: row.local_id, sessionId: row.session_id, deviceId: context.deviceId, owner: context.owner,
-              environment: context.environment, taskCreditsSupported: context.taskCreditsSupported, objectId: candidate.object_id, objectKind: candidate.kind, revision: String(candidate.revision) });
+              environment: context.environment, taskCreditsSupported: context.taskCreditsSupported, replyModelLabelSupported: context.replyModelLabelSupported, objectId: candidate.object_id, objectKind: candidate.kind, revision: String(candidate.revision) });
             encoding = false;
             if (!current()) return;
             if (projection?.encodingStats) remoteDiagnosticLog('remote.record.probe', { localSessionId: row.local_id,
@@ -1254,8 +1432,8 @@ export class RemoteAvailabilityPublisher {
             if (this.liveScan.size >= 1024) this.liveScan.delete(this.liveScan.keys().next().value!);
             this.liveScan.set(key, Date.now() + 1000);
             if (repairModelLabel && (!projection?.resolvedModelLabel
-              || projection.payload.inputModel?.displayName !== projection.resolvedModelLabel)) {
-              this.ledger.markReplyModelDisplayChecked(context.scope, row.local_id, objectKey, String(candidate.revision));
+              || (projection.payload.modelLabel ?? projection.payload.inputModel?.displayName) !== projection.resolvedModelLabel)) {
+              this.ledger.markReplyModelDisplayChecked(context.scope, row.local_id, objectKey, String(candidate.revision), context.replyModelLabelSupported === true);
               repairModelLabel = false;
             }
             // A model-display inspection may discover annotations after an old pending request completes.
@@ -1284,7 +1462,7 @@ export class RemoteAvailabilityPublisher {
             const request = this.ledger.saveRequest({ key: publicationId, lane: 'live', scope: context.scope, localId: state.localId,
               method: 'POST', pathname: '/sync/live-projections', version: 3, lookupVersion: 3, attempted: false, createdAt: Date.now(),
               lookup: `/sync/live-projections/${publicationId}?sessionId=${encodeURIComponent(row.session_id)}&writerGeneration=${encodeURIComponent(state.writerGeneration)}`,
-              replyModelDisplayVersion: ReplyModelDisplayVersion,
+              replyModelDisplayVersion: ReplyModelDisplayVersion, ...(context.replyModelLabelSupported ? { replyModelLabelChecked: true } : {}),
               ...(candidate.kind === 'message' ? { annotationDisplayVersion: RemoteAnnotationDisplayVersion } : {}),
               ...(repairAnnotation ? { annotationRepair: true } : {}),
               ...(recoveryPublication || repairAnnotation ? { liveEncoderVersion: RemoteLiveEncoderVersion } : {}),
@@ -1368,7 +1546,7 @@ export class RemoteAvailabilityPublisher {
         // The persistent source-specific fault defers this annotation repair without blocking a real new revision.
         return;
       }
-      this.ledger.markReplyModelDisplayChecked(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision);
+      this.ledger.markReplyModelDisplayChecked(context.scope, request.localId, `${request.body.objectKind}:${request.body.objectId}`, request.body.sourceObjectRevision, request.replyModelLabelChecked === true);
       return;
     }
     assertLiveReceipt(request.body, result, request.annotationRepair === true || request.liveEncoderVersion === RemoteLiveEncoderVersion);

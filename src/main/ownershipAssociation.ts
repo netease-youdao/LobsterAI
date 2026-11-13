@@ -2,19 +2,21 @@ import { randomUUID } from 'crypto';
 
 import { AgentId, AgentOwnerKind } from '../shared/agent/constants';
 import {
-  OWNERSHIP_MANUAL_SOURCE, OWNERSHIP_PLAN_TTL_MS, OwnershipContentSyncReason,   OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus,
+  OWNERSHIP_MANUAL_SOURCE, OWNERSHIP_PLAN_TTL_MS, OwnershipAction, OwnershipContentSyncReason,   OwnershipContentSyncState, OwnershipErrorCode, OwnershipResultStatus,
 OwnershipSyncState, OwnershipTargetKind,
 } from '../shared/ownership/constants';
 import type {
   OwnershipAccount, OwnershipCommitRequest, OwnershipCommitResult, OwnershipDetail, OwnershipDisplay,
-  OwnershipPreview, OwnershipResources, OwnershipResult, OwnershipTarget, OwnershipTaskSync,
+  OwnershipPreview, OwnershipPreviewRequest, OwnershipResources, OwnershipResult, OwnershipTarget, OwnershipTaskSync,
 } from '../shared/ownership/types';
 import { type RemoteOwner,RemoteRunStatus } from '../shared/remote/constants';
 import { type AgentOwnerStore, sessionVisibilitySql } from './agentOwnership';
 import {
 type OwnershipAssociationReceipt,   OwnershipAssociationStore, type OwnershipManifest,
 } from './ownershipAssociationStore';
+import { applyPublicationConfirmation, dirtyPublicationConfirmation, isPublicationConfirmationCandidate, type PublicationConfirmation, type PublicationTarget, readPublicationConfirmation } from './ownershipPublication';
 import { payloadHash, sameOwner, stableJson } from './remote/canonical';
+import { RemotePublicationKind } from './remote/remotePublicationOrigins';
 import type { RemoteStore, SessionOwnershipRecord } from './remote/remoteStore';
 
 /** Internal diagnostics only. Never attach account, task, Agent or execution identifiers. */
@@ -42,6 +44,8 @@ interface AssociationDependencies {
   deviceName?(): string;
   syncState?(target: OwnershipTarget): OwnershipSyncState | undefined;
   taskSync?(target: OwnershipTarget): OwnershipTaskSync | undefined;
+  publicationTarget?(): PublicationTarget | null;
+  confirmPublication?(ids: string[], target: PublicationTarget): void;
   afterCommit?(result: OwnershipCommitResult): void;
   now?(): number;
 }
@@ -54,6 +58,7 @@ interface RunRow {
   agent_id: string | null; status: string; session_key: string | null;
 }
 interface Scope {
+  publication?: PublicationConfirmation;
   target: OwnershipTarget; targetTitle: string; agentId: string; resources: OwnershipResources;
   sessions: SessionRow[]; associated: SessionRow[]; retained: SessionRow[]; children: Set<string>; hash: string;
 }
@@ -165,32 +170,44 @@ export class OwnershipAssociationService {
       try { taskSync = this.deps.taskSync?.(target) ?? taskSync; } catch { /* Optional display failure never hides a readable task. */ }
     }
     return { ...common, ...taskSync, title: task.title, ownership, agent: { id: agentId, name: this.agentName(agentId), ownership: this.displayAgent(agentId, actor) },
-      canAssociate: !owner, status: task.status, updatedAt: task.updated_at };
+      canAssociate: !owner, canConfirmPublication: !!owner && this.canConfirmPublication(target, actor.owner), status: task.status, updatedAt: task.updated_at };
   }
 
-  preview(target: OwnershipTarget): OwnershipPreview {
+  private canConfirmPublication(target: OwnershipTarget, owner: RemoteOwner | null): boolean {
+    if (!owner || target.kind !== OwnershipTargetKind.Task || !this.deps.confirmPublication) return false;
+    try {
+      if (!isPublicationConfirmationCandidate(this.remote, target.id, owner) || !this.deps.publicationTarget?.()) return false;
+      return !!this.resolve(target, owner, OwnershipAction.ConfirmPublication).publication;
+    } catch { return false; }
+  }
+
+  preview(request: OwnershipPreviewRequest): OwnershipPreview {
+    const action = request.action ?? OwnershipAction.Associate;
+    if (!Object.values(OwnershipAction).includes(action)) return fail(OwnershipErrorCode.NotAssociable);
+    const target: OwnershipTarget = { kind: request.kind, id: request.id };
     const detail = this.getDetail(target);
     const actor = this.deps.actor();
     const response: OwnershipPreview = {
-      planId: '', planVersion: '', accountGeneration: actor.generation, expiresAt: this.now() + OWNERSHIP_PLAN_TTL_MS,
+      action, planId: '', planVersion: '', accountGeneration: actor.generation, expiresAt: this.now() + OWNERSHIP_PLAN_TTL_MS,
       account: this.account(actor), eligible: false, kind: target.kind, targetId: target.id, targetTitle: detail.title,
       agentId: detail.agent?.id ?? target.id, anonymousTaskCount: 0, subtaskCount: 0, existingOwnedTaskCount: 0,
       tasks: [], agentWillAssociate: target.kind === OwnershipTargetKind.Agent,
     };
     if (!actor.owner) return { ...response, reason: OwnershipErrorCode.AuthRequired };
-    if (!detail.canAssociate) {
+    if (action === OwnershipAction.Associate ? !detail.canAssociate : !detail.canConfirmPublication) {
       logBlocked(OwnershipAssociationBlockReason.TargetNotAnonymous);
       return { ...response, reason: OwnershipErrorCode.NotAssociable };
     }
     try {
-      const scope = this.resolve(target, actor.owner);
+      const scope = this.resolve(target, actor.owner, action);
       this.assertIdle(scope);
       if (this.deps.gate.isBusy(scope.resources)) fail(OwnershipErrorCode.ResourceBusy);
       const preview: OwnershipPreview = { ...response, eligible: true, planId: randomUUID(), planVersion: scope.hash,
         anonymousTaskCount: scope.associated.filter(session => !scope.children.has(session.id)).length,
         subtaskCount: scope.associated.filter(session => scope.children.has(session.id)).length,
         existingOwnedTaskCount: scope.retained.length,
-        tasks: scope.associated.map(session => ({ id: session.id, title: session.title, isSubtask: scope.children.has(session.id) })),
+        ...(scope.publication ? { publicationTarget: { route: scope.publication.target.route } } : {}),
+        tasks: (scope.publication ? scope.retained : scope.associated).map(session => ({ id: session.id, title: session.title, isSubtask: scope.children.has(session.id) })),
       };
       for (const [id, plan] of this.plans) if (plan.preview.expiresAt <= this.now()) this.plans.delete(id);
       if (this.plans.size >= 20) this.plans.delete(this.plans.keys().next().value!);
@@ -202,14 +219,16 @@ export class OwnershipAssociationService {
     }
   }
 
-  private resolve(target: OwnershipTarget, actor: RemoteOwner): Scope {
+  private resolve(target: OwnershipTarget, actor: RemoteOwner, action: OwnershipAction = OwnershipAction.Associate): Scope {
+    const confirming = action === OwnershipAction.ConfirmPublication;
+    if (confirming && (target.kind !== OwnershipTargetKind.Task || !this.deps.confirmPublication)) return fail(OwnershipErrorCode.NotAssociable);
     const task = target.kind === OwnershipTargetKind.Task ? this.readableSession(target.id, actor) : null;
     const agentId = task?.agent_id || (task ? AgentId.Main : target.id);
     if (!this.agents.canView(agentId, actor)) return fail(OwnershipErrorCode.NotAvailable);
     if (target.kind === OwnershipTargetKind.Agent && this.agents.get(agentId)?.ownerKind !== AgentOwnerKind.Anonymous) {
       return blocked(OwnershipAssociationBlockReason.TargetNotAnonymous);
     }
-    if (task && this.remote.ownershipRecord(task.id)) return blocked(OwnershipAssociationBlockReason.TaskAlreadyOwned);
+    if (task && !confirming && this.remote.ownershipRecord(task.id)) return blocked(OwnershipAssociationBlockReason.TaskAlreadyOwned);
     const runs = this.remote.db.prepare(`SELECT id,parent_session_id,child_cowork_session_id,agent_id,status,session_key FROM subagent_runs
       ORDER BY id`).all() as RunRow[];
     const parents = new Map<string, Set<string>>();
@@ -296,14 +315,18 @@ export class OwnershipAssociationService {
     const resources = { agentIds: sorted(agentIds), sessionIds: sorted(references.keys()) };
     const associated = sessions.filter(session => !this.remote.ownershipRecord(session.id));
     const retained = sessions.filter(session => this.remote.ownershipRecord(session.id));
+    const publication = confirming ? readPublicationConfirmation(this.remote, this.receipts, sessions.map(session => session.id), actor,
+      this.deps.publicationTarget?.() ?? null) : null;
+    if (confirming && !publication) return fail(OwnershipErrorCode.NotAssociable);
     const fingerprint = {
-      target, sessions: [...references.values()].sort((a, b) => a.id.localeCompare(b.id)), runs: relevantRuns,
+      ...(publication ? { action, publication: publication.hash } : {}), target, sessions: [...references.values()].sort((a, b) => a.id.localeCompare(b.id)), runs: relevantRuns,
       owners: resources.sessionIds.map(id => this.remote.ownershipRecord(id)),
       agents: resources.agentIds.map(id => this.agents.get(id)),
       control: resources.sessionIds.map(id => this.remote.controlVersion(id)),
+      sources: associated.map(session => this.remote.publicationOrigins.associationSource(RemotePublicationKind.Session, session.id, actor)),
     };
     return { target, targetTitle: task?.title ?? this.agentName(agentId), agentId, resources, sessions,
-      associated, retained, children: new Set(parents.keys()), hash: payloadHash(fingerprint) };
+      associated, retained, ...(publication ? { publication } : {}), children: new Set(parents.keys()), hash: payloadHash(fingerprint) };
   }
 
   private assertIdle(scope: Scope): void {
@@ -364,14 +387,17 @@ export class OwnershipAssociationService {
       result = this.deps.store.runSessionTransaction(() => this.agents.transaction(() => {
         const currentActor = this.deps.actor();
         if (!sameOwner(currentActor.owner, actor.owner) || currentActor.generation !== actor.generation) return fail(OwnershipErrorCode.AccountChanged);
-        const scope = this.resolve(plan.scope.target, actor.owner!);
+        const scope = this.resolve(plan.scope.target, actor.owner!, plan.preview.action);
         if (scope.hash !== input.planVersion) return fail(OwnershipErrorCode.PlanChanged);
         this.assertIdle(scope);
         const now = this.now();
-        const version = scope.target.kind === OwnershipTargetKind.Agent
+        const version = !scope.publication && scope.target.kind === OwnershipTargetKind.Agent
           ? this.agents.associateHistorical(scope.agentId, actor.owner!, now) : null;
         for (const session of scope.associated) this.remote.associateHistorical(session.id, actor.owner!, now);
+        if (scope.publication) applyPublicationConfirmation(this.remote, scope.publication);
         const manifest: OwnershipManifest = {
+          ...(scope.publication ? { action: OwnershipAction.ConfirmPublication, publicationTarget: scope.publication.target,
+            originalOperationId: scope.publication.originalOperationId } : {}),
           kind: scope.target.kind, targetId: scope.target.id, agentId: version ? scope.agentId : null, agentVersion: version,
           associatedSessionIds: scope.associated.map(session => session.id), retainedSessionIds: scope.retained.map(session => session.id),
           affectedAgentIds: scope.resources.agentIds,
@@ -383,6 +409,10 @@ export class OwnershipAssociationService {
           associated_at: now, remote_admissions_json: '{}',
         };
         this.receipts.save(receipt);
+        if (scope.publication) {
+          this.deps.confirmPublication!(scope.publication.sessionIds, scope.publication.target);
+          dirtyPublicationConfirmation(this.remote, scope.publication, now);
+        }
         return this.result(receipt, actor);
       }));
     } catch (error) {
@@ -419,7 +449,7 @@ export class OwnershipAssociationService {
       : states.includes(OwnershipSyncState.WaitingService) ? OwnershipSyncState.WaitingService
       : states.length && states.every(state => state === OwnershipSyncState.Synced || state === OwnershipSyncState.Partial)
         ? states.includes(OwnershipSyncState.Partial) ? OwnershipSyncState.Partial : OwnershipSyncState.Synced : OwnershipSyncState.Pending;
-    return { status: OwnershipResultStatus.Associated, operationId: receipt.operation_id, requestId: receipt.request_id,
+    return { ...(manifest.action ? { action: manifest.action } : {}), status: OwnershipResultStatus.Associated, operationId: receipt.operation_id, requestId: receipt.request_id,
       agentIds: manifest.affectedAgentIds.filter(id => this.agents.canView(id, actor.owner)), sessionIds,
       syncState,
       accountPartition: this.account(actor)!.partition };

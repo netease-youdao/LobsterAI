@@ -30,12 +30,13 @@ function setup(cachedUser: typeof user | null = user) {
   const getQuota = vi.fn(async () => ({ success: true, quota, enterpriseContext: null }));
   const getProfileSummary = vi.fn(async () => ({ success: true, data: profile }));
   const getPricingCatalog = vi.fn(async () => ({ success: true, textModels: [model] }));
+  const logout = vi.fn(async () => {});
   vi.stubGlobal('window', {
     dispatchEvent: vi.fn(),
     electron: {
       auth: {
         getUser, getModels, getQuota, getProfileSummary, getPricingCatalog,
-        logout: vi.fn(async () => {}),
+        logout,
         getPendingCallback: vi.fn(async () => null),
         onCallback: vi.fn(() => () => {}),
         onSessionChanged: vi.fn(() => () => {}),
@@ -48,7 +49,7 @@ function setup(cachedUser: typeof user | null = user) {
     },
   });
   return {
-    getUser, getModels, getQuota, getProfileSummary, getPricingCatalog,
+    getUser, getModels, getQuota, getProfileSummary, getPricingCatalog, logout,
     restoreNetwork: () => { online = true; },
     focusWindow: () => { focus?.({ isFocused: true }); },
   };
@@ -243,4 +244,38 @@ describe('account recovery after offline startup', () => {
     expect(f.getModels).not.toHaveBeenCalled();
     expect(f.getProfileSummary).not.toHaveBeenCalled();
   });
+});
+
+
+test.each([user.yid, 'next-user'])('a delayed logout completion preserves a newer login (%s)', async yid => {
+  const f = setup();
+  f.restoreNetwork();
+  await authService.init();
+  let finishLogout!: () => void;
+  const remoteLogout = new Promise<void>(resolve => { finishLogout = resolve; });
+  f.logout.mockReturnValueOnce(remoteLogout);
+  const logout = authService.logout();
+  await authService.handleSessionChanged({ status: AuthSessionStatus.Unauthenticated, reason: AuthSessionChangeReason.UserLogout });
+  const nextUser = { ...user, yid };
+  f.getUser.mockResolvedValueOnce({ ...restored, user: nextUser });
+  await authService.handleSessionChanged({ status: AuthSessionStatus.Authenticated, reason: AuthSessionChangeReason.UserLogin });
+  const accountGeneration = store.getState().auth.accountGeneration;
+  const models = store.getState().model.availableModels;
+  const catalogCalls = f.getPricingCatalog.mock.calls.length;
+  finishLogout();
+  await logout;
+  expect(store.getState().auth).toMatchObject({
+    isLoggedIn: true, user: nextUser, ownerAccountKey: `personal:${yid}`, accountGeneration,
+  });
+  expect(store.getState().model.availableModels).toBe(models);
+  expect(f.getPricingCatalog).toHaveBeenCalledTimes(catalogCalls);
+});
+
+test('logout completion still clears the original renderer account when no event arrives', async () => {
+  const f = setup();
+  f.restoreNetwork();
+  await authService.init();
+  await authService.logout();
+  expect(store.getState().auth).toMatchObject({ isLoggedIn: false, ownerAccountKey: null });
+  expect(f.getPricingCatalog).toHaveBeenCalledOnce();
 });

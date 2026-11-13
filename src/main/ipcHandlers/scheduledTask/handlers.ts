@@ -110,6 +110,7 @@ export interface ScheduledTaskHandlerDeps {
   captureRemoteOwner?: () => RemoteOwner | null;
   assertRemoteTaskOwner?: (jobId: string) => void;
   recordRemoteTaskOwner?: (jobId: string, owner: RemoteOwner | null) => void;
+  prepareRemoteTaskBinding?: (owner: RemoteOwner | null) => (jobId: string) => void;
   getCronJobService: () => CronJobService;
   getIMGatewayManager: () => {
     getIMStore: () =>
@@ -666,6 +667,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
     const remoteOwner = deps.captureRemoteOwner?.() || null;
     try {
+      const bindRemoteTask = deps.prepareRemoteTaskBinding?.(remoteOwner);
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       console.debug('[ScheduledTask] create input:', JSON.stringify(normalizedInput, null, 2));
       await applyAnnounceDeliveryNormalization(normalizedInput, {
@@ -674,7 +676,10 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       });
 
       const task = await getCronJobService().addJob(normalizedInput);
-      if (task?.id) deps.recordRemoteTaskOwner?.(task.id, remoteOwner);
+      if (task?.id) {
+        if (bindRemoteTask) bindRemoteTask(task.id);
+        else deps.recordRemoteTaskOwner?.(task.id, remoteOwner);
+      }
       console.log('[IPC][scheduledTask:create] result task id:', task?.id, 'name:', task?.name);
       return { success: true, task };
     } catch (error) {

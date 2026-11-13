@@ -1,3 +1,6 @@
+export const OwnershipAction = { Associate: 'associate', ConfirmPublication: 'confirm_publication' } as const;
+export type OwnershipAction = typeof OwnershipAction[keyof typeof OwnershipAction];
+
 export const OwnershipIpc = {
   GetDetail: 'ownership:getDetail', Preview: 'ownership:preview', Commit: 'ownership:commit',
   GetResult: 'ownership:getResult', Changed: 'ownership:changed',
@@ -23,7 +26,7 @@ export const OwnershipContentSyncState = {
   Unknown: 'unknown', Failed: 'failed', Partial: 'partial', Pending: 'pending', Synced: 'synced', Local: 'local', Waiting: 'waiting',
 } as const;
 export type OwnershipContentSyncState = typeof OwnershipContentSyncState[keyof typeof OwnershipContentSyncState];
-export const OwnershipContentSyncReason = { Content: 'content', History: 'history', Connection: 'connection', Unavailable: 'unavailable' } as const;
+export const OwnershipContentSyncReason = { Source: 'source', Content: 'content', History: 'history', Connection: 'connection', Unavailable: 'unavailable' } as const;
 export type OwnershipContentSyncReason = typeof OwnershipContentSyncReason[keyof typeof OwnershipContentSyncReason];
 
 export const OwnershipResultStatus = {
