@@ -78,8 +78,8 @@ describe('WindowsAppTitleBar', () => {
     expect(sidebarActionIndex).toBeGreaterThanOrEqual(0);
     expect(searchActionIndex).toBeGreaterThan(sidebarActionIndex);
     expect(filterActionIndex).toBeGreaterThan(searchActionIndex);
-    expect(html).toContain('class="h-[18px] w-[18px]"');
-    expect(html).toContain('title="Search tasks"');
+    expect(html).toContain('class="sidebar-filter-icon h-[18px] w-[18px]"');
+    expect(html).not.toContain('title="Search tasks');
     expect(html).not.toContain('>Search tasks<');
   });
 

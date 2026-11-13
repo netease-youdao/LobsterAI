@@ -1615,6 +1615,16 @@ const App: React.FC = () => {
       if (showUpdateModal || isPermissionModalOpen || isUpdateInteractionBlocked) return;
 
       if (matchesAction(ShortcutAction.Search)) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent<CoworkTaskSearchRequestEventDetail>(
+          CoworkUiEvent.ShortcutSearch,
+          { detail: { source: CoworkTaskSearchRequestSource.KeyboardShortcut } },
+        ));
+        return;
+      }
+
+      // Find in the open conversation; anywhere else it falls back to task search.
+      if (matchesAction(ShortcutAction.ConversationSearch)) {
         const shortcutTarget = resolveConversationSearchShortcutTarget({
           isCoworkView: mainView === MainView.Cowork,
           hasCurrentSession: Boolean(currentSessionId),
@@ -2117,7 +2127,7 @@ const App: React.FC = () => {
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
       searchLabel={i18nService.t('search')}
-      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === MainView.Cowork}
+      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed}
       filterLabel={i18nService.t('sidebarFilter')}
       taskFilter={taskFilter}
       hasFilterNotice={hasUnreadCompletedTasks}

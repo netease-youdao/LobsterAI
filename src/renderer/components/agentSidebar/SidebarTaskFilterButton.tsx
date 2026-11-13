@@ -4,6 +4,11 @@ import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 import SidebarFilterIcon from '../icons/SidebarFilterIcon';
+import Tooltip from '../ui/Tooltip';
+import {
+  SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME,
+  SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME,
+} from './sidebarHeaderTooltip';
 import {
   DEFAULT_SIDEBAR_TASK_FILTER,
   isSidebarTaskFilterActive,
@@ -50,6 +55,10 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
   // Stays true briefly after closing so the menu can play its exit animation.
   const [isMenuMounted, setIsMenuMounted] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
+  // Focus goes back to the trigger when the menu closes (Esc, Tab, Clear) so keyboard users keep
+  // their place, but that is not a new keyboard step, so the focus ring stays hidden until the
+  // trigger is used from the keyboard again or loses focus.
+  const [isFocusRingSuppressed, setIsFocusRingSuppressed] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -121,6 +130,7 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
 
   const closeAndFocusTrigger = () => {
     setIsOpen(false);
+    setIsFocusRingSuppressed(true);
     triggerRef.current?.focus();
   };
 
@@ -147,37 +157,49 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
 
   return (
     <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setIsOpen(open => !open)}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowDown') {
-            event.preventDefault();
-            setIsOpen(true);
-          } else if (event.key === 'Escape') {
-            setIsOpen(false);
-          }
-        }}
-        className={`relative inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
-          isActive || isOpen
-            ? 'bg-blue-500/10 text-blue-500'
-            : 'text-secondary hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
-        } ${className}`}
-        aria-label={label}
-        aria-haspopup="menu"
-        aria-expanded={isOpen}
-        aria-controls={isOpen ? menuId : undefined}
-        title={label}
+      {/* Hidden while the menu is open so the bubble never covers it. */}
+      <Tooltip
+        className={`shrink-0 ${className}`}
+        bubbleClassName={SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME}
+        content={label}
+        disabled={isOpen}
       >
-        <SidebarFilterIcon className="h-4 w-4" />
-        {hasUnreadCompletedTasks && (
-          <span
-            className="absolute right-1 top-1 h-[7px] w-[7px] rounded-full bg-blue-500"
-            aria-hidden="true"
-          />
-        )}
-      </button>
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setIsOpen(open => !open)}
+          onBlur={() => setIsFocusRingSuppressed(false)}
+          onKeyDown={(event) => {
+            setIsFocusRingSuppressed(false);
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              setIsOpen(true);
+            } else if (event.key === 'Escape') {
+              setIsOpen(false);
+            }
+          }}
+          // Same size, colour and hover as the sidebar toggle and search buttons beside it.
+          className={`sidebar-filter-button relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+            isActive
+              ? 'bg-primary/10 text-primary'
+              : isOpen
+                ? 'bg-black/[0.03] text-foreground/80 dark:bg-white/[0.04]'
+                : 'text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
+          } ${isFocusRingSuppressed ? 'focus:outline-none' : SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME} ${className}`}
+          aria-label={label}
+          aria-haspopup="menu"
+          aria-expanded={isOpen}
+          aria-controls={isOpen ? menuId : undefined}
+        >
+          <SidebarFilterIcon className="h-[18px] w-[18px]" isActive={isActive} />
+          {hasUnreadCompletedTasks && (
+            <span
+              className="absolute right-1 top-1 h-[7px] w-[7px] rounded-full bg-primary"
+              aria-hidden="true"
+            />
+          )}
+        </button>
+      </Tooltip>
       {(isOpen || isMenuMounted) && createPortal(
         <div
           ref={menuRef}

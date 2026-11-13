@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect } from 'react';
 
+import { SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME } from '../agentSidebar/sidebarHeaderTooltip';
 import SidebarTaskFilterButton from '../agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from '../agentSidebar/SidebarTaskSearchButton';
 import type { SidebarTaskFilter } from '../agentSidebar/taskFilter';
@@ -102,7 +103,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={sidebarToggleLabel}
                 title={sidebarToggleLabel}
               >
@@ -127,7 +128,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <button
                 type="button"
                 onClick={handleNewChatClick}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={newChatLabel}
                 title={newChatLabel}
               >

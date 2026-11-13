@@ -1,4 +1,8 @@
-import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import {
+  ChatBubbleBottomCenterTextIcon,
+  ChatBubbleLeftIcon,
+  MagnifyingGlassIcon,
+} from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -22,8 +26,11 @@ const SEARCH_SESSION_LIMIT = 100;
 const SEARCH_CONTENT_LIMIT = 50;
 const SEARCH_DEBOUNCE_MS = 180;
 const TASK_SEARCH_ANALYTICS_SOURCE = 'home_task_search';
-// Hits use the lobster logo's orange as text colour, so a long excerpt keeps its line rhythm.
-const SEARCH_HIT_CLASS_NAME = 'font-medium text-[#FF4523]';
+// Hits are a fixed blue (not the theme primary, which some themes make orange or pink) on a
+// faint tint, so they stand out from the gray excerpt without shifting its line rhythm.
+const SEARCH_HIT_CLASS_NAME = 'rounded-[3px] bg-[#2563EB]/[0.08] font-medium text-[#2563EB] '
+  + 'box-decoration-clone dark:bg-[#60A5FA]/[0.16] dark:text-[#7CB4FF]';
+const SECTION_LABEL_CLASS_NAME = 'px-2.5 pb-1 pt-1.5 text-[11px] font-medium tracking-wide text-secondary/60';
 
 const getSessionAgentId = (session: CoworkSessionSummary) => {
   return session.agentId?.trim() || AgentId.Main;
@@ -402,11 +409,13 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
             Esc
           </button>
         </div>
-        <div className="px-2 pb-1.5 pt-2">
-          <div className="px-2.5 pb-1.5 text-[12px] font-medium text-secondary/80">
-            {hasQuery ? i18nService.t('searchResults') : i18nService.t('searchRecentTasks')}
-          </div>
-          <div className="max-h-[min(420px,48vh)] overflow-y-auto">
+        <div className="px-2 pb-2 pt-1.5">
+          {!hasQuery && (
+            <div className={SECTION_LABEL_CLASS_NAME}>
+              {i18nService.t('searchRecentTasks')}
+            </div>
+          )}
+          <div className="max-h-[min(440px,50vh)] overflow-y-auto">
             {resultRows.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-sm text-secondary">
                 {!isSearching && <MagnifyingGlassIcon className="h-6 w-6 text-secondary/40" />}
@@ -421,16 +430,15 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
                 const isRunning = session.status === CoworkSessionStatusValue.Running;
                 const relativeTime = formatAgentTaskRelativeTime(session.updatedAt || session.createdAt);
                 const isContentRow = row.kind === 'content';
-                const isFirstContentRow = isContentRow && resultRows[index - 1]?.kind !== 'content';
+                const startsSection = hasQuery && resultRows[index - 1]?.kind !== row.kind;
+                const RowIcon = isContentRow ? ChatBubbleBottomCenterTextIcon : ChatBubbleLeftIcon;
                 return (
                   <React.Fragment key={`${row.kind}:${session.id}`}>
-                    {isFirstContentRow && (
-                      <div
-                        className={`px-2.5 pb-1.5 text-[12px] font-medium text-secondary/80 ${
-                          index > 0 ? 'mt-2 border-t border-border pt-2.5' : ''
-                        }`}
-                      >
-                        {i18nService.t('searchContentResults')}
+                    {startsSection && (
+                      <div className={`${SECTION_LABEL_CLASS_NAME} ${index > 0 ? 'mt-2.5' : ''}`}>
+                        {isContentRow
+                          ? i18nService.t('searchContentResults')
+                          : i18nService.t('searchTitleResults')}
                       </div>
                     )}
                     <button
@@ -446,60 +454,67 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
                         if (activeIndex !== index) setActiveIndex(index);
                       }}
                       data-skin-search-result-active={isActive ? 'true' : undefined}
-                      className={`flex w-full flex-col justify-center rounded-lg px-2.5 text-left text-[13px] transition-colors ${
-                        isContentRow ? 'gap-0.5 py-1.5' : 'h-9'
-                      } ${
-                        isActive
-                          ? 'bg-black/[0.05] text-foreground dark:bg-white/[0.08]'
-                          : 'text-secondary'
+                      className={`flex w-full items-start gap-2.5 rounded-[10px] px-2.5 py-2 text-left transition-colors ${
+                        isActive ? 'bg-black/[0.045] dark:bg-white/[0.07]' : ''
                       }`}
                     >
-                      <span className="flex w-full items-center gap-3">
-                        {isRunning && (
-                          <span
-                            className="inline-flex h-3 w-3 shrink-0 items-center justify-center"
-                            title={i18nService.t('myAgentSidebarRunning')}
-                            aria-label={i18nService.t('myAgentSidebarRunning')}
-                          >
-                            <svg className="h-3 w-3 animate-spin text-primary" viewBox="0 0 24 24" fill="none">
-                              <circle
-                                className="opacity-25"
-                                cx="12"
-                                cy="12"
-                                r="10"
-                                stroke="currentColor"
-                                strokeWidth="4"
-                              />
-                              <path
-                                className="opacity-75"
-                                fill="currentColor"
-                                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                              />
-                            </svg>
-                          </span>
+                      <span
+                        className={`flex h-[18px] w-4 shrink-0 items-center justify-center transition-colors ${
+                          isActive ? 'text-secondary' : 'text-secondary/50'
+                        }`}
+                        title={isRunning ? i18nService.t('myAgentSidebarRunning') : undefined}
+                        aria-label={isRunning ? i18nService.t('myAgentSidebarRunning') : undefined}
+                      >
+                        {isRunning ? (
+                          <svg className="h-3.5 w-3.5 animate-spin text-primary" viewBox="0 0 24 24" fill="none">
+                            <circle
+                              className="opacity-25"
+                              cx="12"
+                              cy="12"
+                              r="10"
+                              stroke="currentColor"
+                              strokeWidth="4"
+                            />
+                            <path
+                              className="opacity-75"
+                              fill="currentColor"
+                              d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                            />
+                          </svg>
+                        ) : (
+                          <RowIcon className="h-4 w-4" aria-hidden="true" />
                         )}
-                        <span className="min-w-0 flex-1 truncate font-medium">
-                          {isContentRow ? session.title : renderHighlightedTitle(session.title, searchQuery)}
-                        </span>
-                        {isCurrent && (
-                          <span className="shrink-0 rounded-[5px] bg-primary/10 px-1.5 py-px text-[11px] font-medium text-primary">
-                            {i18nService.t('searchCurrentTask')}
-                          </span>
-                        )}
-                        <span className="max-w-[136px] shrink-0 truncate text-[12px] text-secondary/75">
-                          {agentName}
-                        </span>
-                        <span
-                          className="w-[52px] shrink-0 text-right text-[12px] tabular-nums text-secondary/50"
-                          title={relativeTime.full}
-                        >
-                          {relativeTime.compact}
-                        </span>
                       </span>
-                      {isContentRow && (
-                        <span className="flex w-full items-center gap-3 text-[12px] text-secondary/75">
-                          <span className="min-w-0 flex-1 truncate">
-                            <span className="text-secondary/55">
+                      <span className="flex min-w-0 flex-1 flex-col gap-1">
+                        <span className="flex w-full items-center gap-2.5 text-[13px] leading-[18px]">
+                          <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                            {isContentRow ? session.title : renderHighlightedTitle(session.title, searchQuery)}
+                          </span>
+                          {isCurrent && (
+                            <span className="shrink-0 rounded-[5px] bg-primary/10 px-1.5 text-[11px] font-medium leading-[18px] text-primary">
+                              {i18nService.t('searchCurrentTask')}
+                            </span>
+                          )}
+                          {isContentRow && row.match.matchCount > 1 && (
+                            <span className="shrink-0 text-[11px] tabular-nums text-secondary/55">
+                              {i18nService
+                                .t('searchContentMatchCount')
+                                .replace('{count}', String(row.match.matchCount))}
+                            </span>
+                          )}
+                          <span className="max-w-[136px] shrink-0 truncate text-[12px] text-secondary/70">
+                            {agentName}
+                          </span>
+                          <span
+                            className="min-w-[36px] shrink-0 text-right text-[12px] tabular-nums text-secondary/50"
+                            title={relativeTime.full}
+                          >
+                            {relativeTime.compact}
+                          </span>
+                        </span>
+                        {isContentRow && (
+                          <span className="line-clamp-2 break-words text-[12px] leading-[18px] text-secondary/85">
+                            <span className="text-secondary/50">
                               {row.match.messageType === 'user'
                                 ? i18nService.t('searchContentFromUser')
                                 : i18nService.t('searchContentFromAssistant')}
@@ -510,15 +525,8 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
                               row.match.highlightLength,
                             )}
                           </span>
-                          {row.match.matchCount > 1 && (
-                            <span className="shrink-0 text-[11px] tabular-nums text-secondary/50">
-                              {i18nService
-                                .t('searchContentMatchCount')
-                                .replace('{count}', String(row.match.matchCount))}
-                            </span>
-                          )}
-                        </span>
-                      )}
+                        )}
+                      </span>
                     </button>
                   </React.Fragment>
                 );

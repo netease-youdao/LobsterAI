@@ -23,6 +23,7 @@ import {
   createSessionBatchKey,
 } from './agentSidebar/batchSelection';
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
+import { SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME } from './agentSidebar/sidebarHeaderTooltip';
 import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
 import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './agentSidebar/taskFilter';
@@ -90,7 +91,7 @@ const sidebarNavItemClassName =
   'w-full inline-flex h-9 items-center gap-2.5 rounded-full px-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 const activeSidebarNavItemClassName =
   `${sidebarNavItemClassName} bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] dark:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)] dark:hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)]`;
-const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/75';
+const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/80';
 const sidebarBottomIconButtonClassName =
   'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 
@@ -639,8 +640,10 @@ const Sidebar: React.FC<SidebarProps> = ({
       <div className="pt-3 pb-3">
         {showHeaderRow && (
           <div
-            className={`draggable sidebar-header-drag h-8 flex items-center px-3 ${
-              alignHeaderStart ? 'justify-start gap-0.5' : 'justify-end'
+            // When left-aligned, 13px (not 12px) puts the toggle icon's drawn edge in line
+            // with the nav icons below, whose artwork sits about 1.6px further in.
+            className={`draggable sidebar-header-drag h-8 flex items-center ${
+              alignHeaderStart ? 'justify-start gap-0.5 pl-[13px] pr-3' : 'justify-end px-3'
             }`}
           >
             {!isWindows && (
@@ -648,7 +651,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   type="button"
                   onClick={onToggleCollapse}
-                  className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
+                  className={`non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                   aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
                 >
                   <SidebarToggleIcon className="h-[18px] w-[18px]" isCollapsed={isCollapsed} />
@@ -663,7 +666,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                       className="non-draggable"
                       label={i18nService.t('search')}
                     />
-                    {SIDEBAR_TASK_FILTER_ENABLED && activeView === MainView.Cowork && (
+                    {/* Shown on every page: the task list below is visible and filtered on all of them. */}
+                    {SIDEBAR_TASK_FILTER_ENABLED && (
                       <SidebarTaskFilterButton
                         filter={taskFilter}
                         onChange={onTaskFilterChange}
@@ -678,7 +682,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
         )}
-        <div className="mt-[5px] space-y-0.5 px-3">
+        {/* Keep the highlighted nav item clear of the icon row above it; Windows has no row here. */}
+        <div className={`${showHeaderRow ? 'mt-3' : 'mt-[5px]'} space-y-0.5 px-3`}>
           <button
             type="button"
             data-onboarding-target="new-task"

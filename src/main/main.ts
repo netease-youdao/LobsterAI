@@ -351,6 +351,7 @@ import {
   quitAppWithoutConfirmation,
   showAppQuitConfirmation,
 } from './libs/appQuitConfirmation';
+import { focusAppQuitDialog } from './libs/appQuitDialog';
 import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
@@ -16075,6 +16076,7 @@ if (!gotTheLock) {
       isAppQuitConfirmationEnabled() || hasUnsafeDocumentEdits(),
     );
     if (verdict === AppQuitRequestVerdict.Ignore) {
+      if (!appQuitConfirmationGate.isBypassArmed()) focusAppQuitDialog();
       return;
     }
     if (verdict === AppQuitRequestVerdict.Bypass) {
@@ -16084,7 +16086,7 @@ if (!gotTheLock) {
 
     // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
     // IM replies stop with the app, so ask first.
-    void showAppQuitConfirmation(hasUnsafeDocumentEdits)
+    void showAppQuitConfirmation(hasUnsafeDocumentEdits, mainWindow)
       .then(
         confirmed => confirmed,
         error => {
