@@ -2593,6 +2593,14 @@ export class SkillManager {
   }
 
   startWatching(): void {
+    this.attachWatchers();
+  }
+
+  /**
+   * (Re)attaches native watchers. `baseline` is the snapshot listeners were
+   * last told about; without one the current state becomes the baseline.
+   */
+  private attachWatchers(baseline?: SkillWatchSnapshot): void {
     this.stopWatching();
     const primaryRoot = this.ensureSkillsRoot();
     const roots = this.getSkillRoots(primaryRoot);
@@ -2616,7 +2624,7 @@ export class SkillManager {
 
     let snapshot: SkillWatchSnapshot;
     try {
-      snapshot = readSkillWatchSnapshot(roots, [SKILL_FILE_NAME, SKILLS_CONFIG_FILE]);
+      snapshot = baseline ?? readSkillWatchSnapshot(roots, [SKILL_FILE_NAME, SKILLS_CONFIG_FILE]);
     } catch (error) {
       console.warn('[skills] Failed to read skill watch snapshot:', error);
       return;
@@ -2658,6 +2666,10 @@ export class SkillManager {
       }
     });
     this.watchSnapshot = snapshot;
+    // Native watchers start asynchronously (FSEvents on macOS), and a change made
+    // before they deliver is never reported. Comparing once more after they have
+    // started catches it.
+    this.scheduleCompare();
   }
 
   stopWatching(): void {
@@ -2678,6 +2690,11 @@ export class SkillManager {
 
   private scheduleNotify(scope: SkillWatchScope, event: string): void {
     this.watchDiagnostics.record(scope, event);
+    this.scheduleCompare();
+  }
+
+  /** Compares skill definitions with the last snapshot once changes settle. */
+  private scheduleCompare(): void {
     if (this.notifyTimer) {
       clearTimeout(this.notifyTimer);
     }
@@ -2688,8 +2705,10 @@ export class SkillManager {
         const snapshot = readSkillWatchSnapshot(this.getSkillRoots(), [SKILL_FILE_NAME, SKILLS_CONFIG_FILE]);
         if (snapshot.readError) throw snapshot.readError;
         const previous = this.watchSnapshot;
-        this.watchSnapshot = snapshot;
-        if (snapshot.watchFingerprint !== previous?.watchFingerprint) this.startWatching();
+        // Reattaching keeps this snapshot as the baseline, so a change made while the
+        // new watchers start is still a difference at the comparison that follows.
+        if (snapshot.watchFingerprint !== previous?.watchFingerprint) this.attachWatchers(snapshot);
+        else this.watchSnapshot = snapshot;
         if (snapshot.contentFingerprint !== previous?.contentFingerprint) this.notifySkillsChanged(batch);
       } catch (error) {
         // Retain the last readable snapshot; a transient read failure is not a deletion.
