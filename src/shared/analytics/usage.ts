@@ -72,6 +72,9 @@ export interface UsageContext {
   journeyId?: string;
   presetId?: string;
   catalogVersion?: string;
+  exampleId?: string;
+  exampleMode?: string;
+  exampleWorkflow?: string;
   entry: UsageEntry;
 }
 
@@ -100,6 +103,9 @@ export function readUsageContext(value: unknown): UsageContext | undefined {
     journeyId: isUsageId(item.journeyId) ? item.journeyId : undefined,
     presetId: catalogAnalyticsId(item.presetId),
     catalogVersion: catalogAnalyticsId(item.catalogVersion),
+    exampleId: catalogAnalyticsId(item.exampleId),
+    exampleMode: catalogAnalyticsId(item.exampleMode),
+    exampleWorkflow: catalogAnalyticsId(item.exampleWorkflow),
     entry: Object.values(UsageEntry).includes(item.entry as UsageEntry)
       ? (item.entry as UsageEntry)
       : UsageEntry.Runtime,

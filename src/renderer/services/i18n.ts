@@ -3,6 +3,8 @@ import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy
 import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { pptCreationTranslations } from '../../shared/pptCreation/copy';
+import { pptCoverTranslations } from '../../shared/pptCreation/coverCopy';
 import { modelContextWindowTranslations } from '../../shared/providers/contextWindowCopy';
 import { configService } from './config';
 
@@ -29,6 +31,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     ...imageCreationTranslations.zh,
+    ...pptCreationTranslations.zh,
+    ...pptCoverTranslations.zh,
     officeSaved: '已自动保存',
     officePending: '等待保存…',
     officeSaving: '正在保存…',
@@ -4768,6 +4772,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     ...imageCreationTranslations.en,
+    ...pptCreationTranslations.en,
+    ...pptCoverTranslations.en,
     officeSaved: 'All changes saved',
     officePending: 'Waiting to save…',
     officeSaving: 'Saving…',
