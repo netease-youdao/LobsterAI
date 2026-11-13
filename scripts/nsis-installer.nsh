@@ -1,4 +1,5 @@
 !include "FileFunc.nsh"
+!include "${__FILEDIR__}/nsis-uninstall-analytics.nsh"
 
 ; Build-time payload size metadata, generated into build-tar/ by
 ; scripts/electron-builder-hooks.cjs (afterPack) on every Windows packaging
@@ -1865,6 +1866,7 @@ FunctionEnd
     !insertmacro EnsureInstallerAttemptId
     !insertmacro ResolveTrustedPowerShell
     !insertmacro stopLobsterAIProcesses
+    !insertmacro LobsterPrepareUninstallAnalytics
   !endif
 !macroend
 
@@ -3252,4 +3254,5 @@ FunctionEnd
   Pop $1
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "")i'
   LoopbackFirewallUninstallDone:
+  !insertmacro LobsterReportUninstallAnalytics
 !macroend
