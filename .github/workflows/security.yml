@@ -39,25 +39,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.x'
-      - uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      
-      # npm install 会生成临时 package-lock.json 供 audit 使用
-      - run: npm install
-      
-      # npm audit
+      # Audit the committed dependency graph without installing the application.
       - name: Run npm audit
         run: |
           echo "Running npm audit..."
-          npm audit --audit-level=high || echo "⚠ npm audit found issues (non-blocking)"
+          npm audit --package-lock-only --audit-level=high || echo "⚠ npm audit found issues (non-blocking)"
       
       # 使用 better-npm-audit 获得更好体验
       - name: Run better-npm-audit
         run: |
-          npx better-npm-audit audit --level=high || echo "⚠ better-npm-audit found issues (non-blocking)"
+          npx --yes better-npm-audit audit --level=high || echo "⚠ better-npm-audit found issues (non-blocking)"
 
   # ========== Skill 依赖扫描 ==========
   skills-audit:

@@ -40,6 +40,7 @@ jobs:
               - 'electron-builder.json'
               - 'package.json'
               - 'package-lock.json'
+              - '.npmrc'
               - '.github/workflows/ci.yml'
               - '.github/workflows/electron-verify.yml'
             main:
@@ -61,6 +62,7 @@ jobs:
               - 'vitest.config.ts'
               - 'package.json'
               - 'package-lock.json'
+              - '.npmrc'
               - '.github/workflows/ci.yml'
             docs:
               - 'docs/**'
@@ -101,10 +103,9 @@ jobs:
       - uses: actions/cache@v4
         if: steps.lint-files.outputs.has_typescript == 'true'
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      - run: npm install
+          path: ${{ runner.temp }}/lobsterai-npm-cache/_cacache
+          key: npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('package-lock.json', '.npmrc') }}
+      - run: npm ci --cache "$RUNNER_TEMP/lobsterai-npm-cache" --prefer-offline --no-audit --fund=false
         if: steps.lint-files.outputs.has_typescript == 'true'
       - name: Lint changed files only
         if: steps.lint-files.outputs.has_typescript == 'true'
@@ -126,10 +127,9 @@ jobs:
           node-version: '24.x'
       - uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      - run: npm install
+          path: ${{ runner.temp }}/lobsterai-npm-cache/_cacache
+          key: npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('package-lock.json', '.npmrc') }}
+      - run: npm ci --cache "$RUNNER_TEMP/lobsterai-npm-cache" --prefer-offline --no-audit --fund=false
       - run: npm run build
       - name: Verify Build Structure
         run: |
@@ -158,10 +158,9 @@ jobs:
           node-version: '24.x'
       - uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      - run: npm install
+          path: ${{ runner.temp }}/lobsterai-npm-cache/_cacache
+          key: npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('package-lock.json', '.npmrc') }}
+      - run: npm ci --cache "$RUNNER_TEMP/lobsterai-npm-cache" --prefer-offline --no-audit --fund=false
       - run: npm run compile:electron
       - uses: actions/upload-artifact@v4
         with:
@@ -181,10 +180,9 @@ jobs:
           node-version: '24.x'
       - uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      - run: npm install
+          path: ${{ runner.temp }}/lobsterai-npm-cache/_cacache
+          key: npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('package-lock.json', '.npmrc') }}
+      - run: npm ci --cache "$RUNNER_TEMP/lobsterai-npm-cache" --prefer-offline --no-audit --fund=false
       - run: npm run build:skills
 
   # ========== Stage 6: Vitest ==========
@@ -206,10 +204,9 @@ jobs:
           node-version: '24.x'
       - uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      - run: npm install
+          path: ${{ runner.temp }}/lobsterai-npm-cache/_cacache
+          key: npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('package-lock.json', '.npmrc') }}
+      - run: npm ci --cache "$RUNNER_TEMP/lobsterai-npm-cache" --prefer-offline --no-audit --fund=false
       - run: npm test
 
   # Preserve the verify check while reporting failures from every parallel check.
