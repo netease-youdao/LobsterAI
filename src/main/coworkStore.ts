@@ -83,6 +83,7 @@ import {
   type SessionProjectionChanges,
   SessionProjectionNotifications,
 } from './libs/sessionProjectionNotifications';
+import { parseStoredMessageMetadata } from './libs/storedMessageMetadata';
 
 
 /**
@@ -933,28 +934,6 @@ export class CoworkStore {
     return this.db.prepare(sql).all(...params) as T[];
   }
 
-  private mapConversationMessageRows(sessionId: string, rows: CoworkMessageRow[]): CoworkMessage[] {
-    return rows.map(row => {
-      let metadata: Record<string, unknown> | undefined;
-      if (row.metadata) {
-        try {
-          metadata = JSON.parse(row.metadata);
-        } catch {
-          console.warn(
-            `[CoworkStore] corrupt metadata detected for message ${row.id} in session ${sessionId}, discarding metadata`,
-          );
-        }
-      }
-      return {
-        id: row.id,
-        type: row.type as CoworkMessageType,
-        content: row.content,
-        timestamp: row.created_at,
-        metadata,
-      };
-    });
-  }
-
   private escapeLikePattern(value: string): string {
     return value.replace(/[\\%_]/g, (match) => `\\${match}`);
   }
@@ -1504,16 +1483,11 @@ export class CoworkStore {
   }
 
   private parseStoredMessage(sessionId: string, row: CoworkMessageRow): CoworkMessage {
-    let metadata: Record<string, unknown> | undefined;
-    if (row.metadata) {
-      try {
-        metadata = JSON.parse(row.metadata);
-      } catch {
-        console.warn(
-          `[CoworkStore] corrupt metadata detected for message ${row.id} in session ${sessionId}, discarding metadata`,
-        );
-      }
-    }
+    const metadata = parseStoredMessageMetadata(row.metadata, () => {
+      console.warn(
+        `[CoworkStore] corrupt metadata detected for message ${row.id} in session ${sessionId}, discarding metadata`,
+      );
+    });
     return {
       id: row.id,
       type: row.type as CoworkMessageType,
@@ -2467,7 +2441,7 @@ export class CoworkStore {
       [sessionId, boundedLimit],
     );
 
-    return this.mapConversationMessageRows(sessionId, rows);
+    return rows.map(row => this.parseStoredMessage(sessionId, row));
   }
 
   /**
@@ -2485,7 +2459,7 @@ export class CoworkStore {
       [sessionId],
     );
 
-    return this.mapConversationMessageRows(sessionId, rows);
+    return rows.map(row => this.parseStoredMessage(sessionId, row));
   }
 
   getSessionMessageRailIndex(sessionId: string): CoworkMessageRailIndexItem[] {
@@ -2565,26 +2539,7 @@ export class CoworkStore {
       [sessionId],
     );
 
-    return rows.map(row => {
-      let metadata: Record<string, unknown> | undefined;
-      if (row.metadata) {
-        try {
-          metadata = JSON.parse(row.metadata);
-        } catch {
-          console.warn(
-            `[CoworkStore] corrupt metadata detected for message ${row.id} in session ${sessionId}, discarding metadata`,
-          );
-          metadata = undefined;
-        }
-      }
-      return {
-        id: row.id,
-        type: row.type as CoworkMessageType,
-        content: row.content,
-        timestamp: row.created_at,
-        metadata,
-      };
-    });
+    return rows.map(row => this.parseStoredMessage(sessionId, row));
   }
 
   addMessage(sessionId: string, message: Omit<CoworkMessage, 'id' | 'timestamp'>, timestamp?: number): CoworkMessage {

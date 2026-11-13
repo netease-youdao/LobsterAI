@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import type { SubagentMessageStore } from '../../../subagentMessageStore';
 import type { SubagentRunStore, SubagentRunWithParent } from '../../../subagentRunStore';
+import { parseStoredMessageMetadata } from '../../storedMessageMetadata';
 import {
   parseSubagentGatewayHistoryMessages,
   type SubagentCoworkMessage,
@@ -798,7 +799,11 @@ export class SubagentTracker {
       type: row.type as SubagentCoworkMessage['type'],
       content: row.content,
       timestamp: row.createdAt,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+      metadata: parseStoredMessageMetadata(row.metadata, () => {
+        console.warn(
+          `[SubagentTracker] corrupt metadata detected for message ${row.id} in run ${runId}, discarding metadata`,
+        );
+      }),
     }));
 
     // Populate in-memory cache so subsequent reads skip the DB
