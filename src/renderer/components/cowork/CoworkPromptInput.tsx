@@ -486,8 +486,8 @@ interface CoworkPromptInputProps {
   showNewUserWelcomeLoginOverlay?: boolean;
   onLoginPromptVisibilityChange?: (visible: boolean) => void;
   /**
-   * A narrow card such as the desktop companion's quick panel: the kit and
-   * media pickers move into the add menu, with folder, agent and model controls
+   * A narrow card such as the desktop companion's quick panel: the media
+   * picker moves into the add menu, with folder, agent and model controls
    * sharing one toolbar. The prompt starts as a single line and grows with its content.
    */
   narrow?: boolean;
@@ -3266,6 +3266,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               setShowAddMenu(false);
             }}
           />}
+          <KitsButton
+            onSelectKit={handleSelectKit}
+            onManageKits={handleManageKits}
+            menuItem={{ open: foldedTool === PromptFoldedTool.Kits, side: submenuSide, onOpenChange: handleKitsMenuItemChange }}
+          />
           <button
             ref={skillMenuItemRef}
             type="button"
@@ -3285,11 +3290,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           </button>
           {narrow && (
             <>
-              <KitsButton
-                onSelectKit={handleSelectKit}
-                onManageKits={handleManageKits}
-                menuItem={{ open: foldedTool === PromptFoldedTool.Kits, side: submenuSide, onOpenChange: handleKitsMenuItemChange }}
-              />
               <MediaModelPicker
                 draftKey={draftKey}
                 disabled={disabled || voiceInputLocksEditing}
@@ -3357,17 +3357,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const largeInputActions = !remoteManaged ? (
     <div className="flex items-center gap-0.5">
       {addMenuAction}
-      {!narrow && (
-        <KitsButton
-          onSelectKit={handleSelectKit}
-          onManageKits={handleManageKits}
-          onOpenChange={(open) => {
-            reportPromptControl(open ? 'kit_menu_open' : 'kit_menu_close', {
-              activeKitCount: activeKitIds.length,
-            });
-          }}
-        />
-      )}
     </div>
   ) : null;
 
