@@ -7,6 +7,8 @@ import {
   ConfirmationBehavior,
   MediaConfirmationAction,
   type MediaConfirmationCommand,
+  MediaConfirmationGrant,
+  MediaConfirmationKind,
   MediaConfirmationStatus,
   readMediaConfirmationState,
   readVideoConfirmationDetails,
@@ -20,7 +22,7 @@ const buttonClass = 'inline-flex h-9 shrink-0 items-center justify-center gap-1.
 const formatCredits = (credits: number) => credits.toLocaleString(undefined, { maximumFractionDigits: 1 });
 
 /**
- * Paid video confirmation, docked where questions appear. Cost and the primary
+ * Paid media confirmation, docked where questions appear. Cost and the primary
  * action sit together in the footer; the request reads as a description,
  * its references and parameter chips instead of one paragraph of prose.
  * There is no deadline: confirming re-checks a stale price in the main process.
@@ -35,6 +37,7 @@ export default function MediaConfirmationCard({
   hidden?: boolean;
 }) {
   const state = readMediaConfirmationState(request.permission.toolInput?.mediaConfirmation)!;
+  const Icon = state.kind === MediaConfirmationKind.Image ? PhotoIcon : FilmIcon;
   const question = request.questions[0];
   const rawQuestions = request.permission.toolInput?.questions;
   const details = readVideoConfirmationDetails(Array.isArray(rawQuestions) ? (rawQuestions[0] as { video?: unknown } | undefined)?.video : undefined);
@@ -99,7 +102,7 @@ export default function MediaConfirmationCard({
 
   const visible = state.status === MediaConfirmationStatus.Visible;
   const repricing = state.status === MediaConfirmationStatus.Refreshing;
-  const act = async (action: MediaConfirmationAction, approve?: boolean) => {
+  const act = async (action: MediaConfirmationAction, approve?: boolean, grant?: MediaConfirmationGrant) => {
     if (flight.current) return;
     const api = window.electron?.cowork?.mediaConfirmation;
     if (!api) {
@@ -119,6 +122,7 @@ export default function MediaConfirmationCard({
         ? {
             behavior: ConfirmationBehavior.Allow,
             answers: { [question.title]: question.options[0].label },
+            ...(grant ? { grant } : {}),
           }
         : { behavior: ConfirmationBehavior.Deny };
     try {
@@ -151,7 +155,7 @@ export default function MediaConfirmationCard({
     >
       <header className="!items-center !gap-3 !pb-3">
         <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <FilmIcon className="!h-5 !w-5" />
+          <Icon className="!h-5 !w-5" />
         </span>
         <div className="min-w-0 flex-1">
           <h2>{heading}</h2>
@@ -244,6 +248,18 @@ export default function MediaConfirmationCard({
         >
           {t('mediaVideoConfirmCancel')}
         </button>
+        {state.turnGrant && (
+          <button
+            type="button"
+            className={`${buttonClass} border border-border hover:bg-surface-raised`}
+            disabled={busy || !visible}
+            onClick={() => {
+              void act(MediaConfirmationAction.Respond, true, MediaConfirmationGrant.Turn);
+            }}
+          >
+            {t('mediaImageConfirmTurn')}
+          </button>
+        )}
         <button
           type="button"
           className={`${buttonClass} bg-foreground text-background hover:bg-foreground/90`}
@@ -257,6 +273,9 @@ export default function MediaConfirmationCard({
           {repricing ? t('mediaVideoConfirmRepricing') : question.options[0].label}
         </button>
       </footer>
+      {state.turnGrant && (
+        <p className="cowork-question-hint !pt-2">{t('mediaImageConfirmTurnHint')}</p>
+      )}
       {failed && (
         <p className="cowork-question-hint !text-red-500" role="alert">
           {t('mediaVideoConfirmActionFailed')}

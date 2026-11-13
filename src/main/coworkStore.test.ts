@@ -367,6 +367,72 @@ test('getSessionSearchMessagePage treats corrupt assistant metadata as non-think
   }]);
 });
 
+test('getSessionMessageRailIndex numbers visible messages by full message order', () => {
+  const sid = 'rail-index-session';
+  insertSession(sid);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_order
+    ON cowork_messages(session_id, COALESCE(sequence, created_at), created_at)`);
+
+  insertMessage('user-0', sid, 'user', 'first question', null, 1);
+  insertMessage('tool-1', sid, 'tool_use', 'tool call', JSON.stringify({ large: 'x'.repeat(100_000) }), 2);
+  insertMessage('thinking-2', sid, 'assistant', 'private chain of thought', '{"isThinking":true}', 3);
+  insertMessage('assistant-3', sid, 'assistant', 'visible answer', '{"isThinking":false}', 4);
+  insertMessage('corrupt-4', sid, 'assistant', 'answer with corrupt metadata', '{broken', 5);
+  insertMessage('blank-5', sid, 'assistant', '   ', null, 6);
+  insertMessage('user-6', sid, 'user', 'follow up', null, 7);
+
+  expect(store.getSessionMessageRailIndex(sid).map(item => [item.messageId, item.messageOffset, item.sequence]))
+    .toEqual([['user-0', 0, 1], ['assistant-3', 3, 4], ['corrupt-4', 4, 5], ['user-6', 6, 7]]);
+  expect(store.getSessionMessageRailIndex(sid)[1]).toMatchObject({
+    type: 'assistant',
+    preview: 'visible answer',
+    contentLen: 'visible answer'.length,
+  });
+});
+
+test('findMediaTaskMessages finds the call, its result and status checks of one task', () => {
+  const sid = 'media-task-session';
+  insertSession(sid);
+  insertSession('other-session');
+  insertMessage('generate-call', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-1', toolInput: { prompt: 'cat' } }), 1);
+  insertMessage('generate-result', sid, 'tool_result', '', JSON.stringify({ toolUseId: 'call-1', toolResultDetails: { taskId: '133' } }), 2);
+  insertMessage('status-call', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-2', toolInput: { action: 'status', taskId: 133 } }), 3);
+  insertMessage('status-card', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-3', mediaStatusDetails: { taskId: '133' } }), 4);
+  insertMessage('similar-task', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-4', toolInput: { taskId: '1334' } }), 5);
+  insertMessage('corrupt', sid, 'tool_result', '', '{"toolUseId":"call-1"', 6);
+  insertMessage('assistant', sid, 'assistant', 'call-1 133', JSON.stringify({ toolUseId: 'call-1' }), 7);
+  insertMessage('other-session-call', 'other-session', 'tool_use', '', JSON.stringify({ toolUseId: 'call-1' }), 1);
+
+  const found = store.findMediaTaskMessages(sid, 'call-1', '133');
+
+  expect(found.map(row => row.id).sort()).toEqual(['generate-call', 'generate-result', 'status-call', 'status-card']);
+  expect(found.find(row => row.id === 'status-call')?.metadata.toolUseId).toBe('call-2');
+});
+
+test('message writes keep generated media as file references', () => {
+  const sid = 'media-metadata-session';
+  insertSession(sid);
+  const dataUrl = `data:image/png;base64,${'A'.repeat(200_000)}`;
+  const asset = { type: 'image', url: dataUrl, originalUrl: dataUrl, filePath: '/tmp/generated.png' };
+
+  const added = store.addMessage(sid, {
+    type: 'tool_result',
+    content: 'Task ID: 1',
+    metadata: { toolResultDetails: { mediaType: 'image', resultUrls: [dataUrl], assets: [asset] } },
+  });
+  store.updateMessage(sid, added.id, {
+    metadata: { ...added.metadata, mediaStatusDetails: { mediaType: 'image', resultUrls: [dataUrl], assets: [asset] } },
+  });
+
+  const stored = db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get(added.id) as { metadata: string };
+  expect(stored.metadata).not.toContain('base64');
+  expect(stored.metadata.length).toBeLessThan(2_000);
+  expect(JSON.stringify(added.metadata)).not.toContain('base64');
+  expect(store.getSession(sid)?.messages[0].metadata?.toolResultDetails).toMatchObject({
+    assets: [{ filePath: '/tmp/generated.png', url: expect.stringMatching(/^file:/) }],
+  });
+});
+
 test('getSessionSearchMessagePage bounds user and assistant content while preserving an over-limit sentinel', () => {
   const sid = 'search-content-limit-session';
   insertSession(sid);
@@ -1056,6 +1122,27 @@ test('message patches preserve model preset provenance alongside remote attribut
     modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
     remoteRunId: 'original-run', remoteCommandId: 'original-command', isFinal: true,
   });
+});
+
+test('media compaction preserves remote attribution and frozen model provenance when patching messages', () => {
+  const sid = 'sess-media-remote';
+  insertSession(sid);
+  insertMessage('media-remote', sid, 'tool_result', 'partial', JSON.stringify({
+    remoteRunId: 'run', remoteCommandId: 'command',
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    toolResultDetails: { mediaType: 'image', assets: [{ filePath: '/tmp/image.png', url: 'data:image/png;base64,AAAA' }] },
+  }), 1);
+  store.updateMessage(sid, 'media-remote', { metadata: {
+    remoteRunId: 'forged', remoteCommandId: 'forged', modelPresetId: ModelPresetId.Ultimate,
+    resolvedModelId: 'replacement', toolResultDetails: { status: 'succeeded' },
+  } });
+  const metadata = store.getMessage(sid, 'media-remote')?.metadata;
+  expect(metadata).toMatchObject({
+    remoteRunId: 'run', remoteCommandId: 'command',
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    toolResultDetails: { status: 'succeeded', assets: [{ filePath: '/tmp/image.png', url: 'file:///tmp/image.png' }] },
+  });
+  expect(JSON.stringify(metadata)).not.toContain('data:image');
 });
 
 test('addMessage refreshes the session updated time only for user messages', () => {

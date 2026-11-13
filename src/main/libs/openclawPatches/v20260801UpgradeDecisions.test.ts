@@ -11,7 +11,12 @@ import {
 const RETAINED_PATCHES = [
   'openclaw-aborted-tool-loop-breaker.patch',
   'openclaw-active-exec-sessions-runtime-context.patch',
+  'openclaw-agent-db-clean-close-seal.patch',
+  'openclaw-agent-settings-memory-lock.patch',
+  'openclaw-agent-settings-tool-run-context.patch',
   'openclaw-auth-migration-config-commit.patch',
+  'openclaw-bounded-history-chunked-window.patch',
+  'openclaw-bounded-history-compaction.patch',
   'openclaw-browser-blocked-hostnames.patch',
   'openclaw-browser-cdp-dispatch-rejection.patch',
   'openclaw-browser-navigation-error-containment.patch',
@@ -20,6 +25,7 @@ const RETAINED_PATCHES = [
   'openclaw-cli-startup-metadata-windows-timeout.patch',
   'openclaw-compaction-summary-format.patch',
   'openclaw-compaction-summary-section-order.patch',
+  'openclaw-config-apply-size-drop-allowance.patch',
   'openclaw-config-candidate-cache-invalidation.patch',
   'openclaw-cron-preparation-failure-state.patch',
   'openclaw-cron-run-trace-isolation.patch',
@@ -41,6 +47,7 @@ const RETAINED_PATCHES = [
   'openclaw-managed-image-replay.patch',
   'openclaw-managed-npm-junction-cleanup.patch',
   'openclaw-managed-workspace-alias-follow.patch',
+  'openclaw-memory-knn-child-electron-node-env.patch',
   'openclaw-memory-sidecar-archive-generations.patch',
   'openclaw-model-preset-context-windows.patch',
   'openclaw-model-preset-window-metadata.patch',
@@ -51,6 +58,7 @@ const RETAINED_PATCHES = [
   'openclaw-openai-completions-tool-call-repair.patch',
   'openclaw-openai-oauth-token-proxy.patch',
   'openclaw-plugin-archive-windows-timeout.patch',
+  'openclaw-plugin-realpath-parent-cache.patch',
   'openclaw-project-memory-negative-probe.patch',
   'openclaw-provider-auth-warm-cooperative-exit.patch',
   'openclaw-provider-fetch-transient-retry.patch',
@@ -58,6 +66,7 @@ const RETAINED_PATCHES = [
   'openclaw-safe-error-metadata.patch',
   'openclaw-session-goal-rpc.patch',
   'openclaw-session-migration-duplicate-headers.patch',
+  'openclaw-session-window-preflight-compaction.patch',
   'openclaw-sessions-spawn-agent-id-schema.patch',
   'openclaw-shell-snapshot-electron-node-env.patch',
   'openclaw-skip-disabled-web-search-discovery.patch',
@@ -74,18 +83,25 @@ const RETAINED_PATCHES = [
   'openclaw-web-fetch-proxy.patch',
   'openclaw-web-login-channel-routing.patch',
   'openclaw-windows-file-path-redaction.patch',
+  'openclaw-windows-native-plugin-require.patch',
   'openclaw-windows-private-directory-native.patch',
   'openclaw-windows-process-identity.patch',
+  'openclaw-windows-registry-codepage-native.patch',
   'openclaw-workspace-attestation-quarantine.patch',
   'openclaw-workspace-setup-recovery.patch',
   'zz-openclaw-channel-scheduling-authority.patch',
+  'zz-openclaw-dreaming-cleanup-only-when-enabled.patch',
   'zz-openclaw-error-detail-preview.patch',
   'zz-openclaw-lock-owner-recovery.patch',
   'zz-openclaw-marketplace-clone-retry.patch',
   'zz-openclaw-plan-completion-check.patch',
   'zz-openclaw-task-cwd-system-prompt.patch',
+  'zz-openclaw-windows-process-start-native.patch',
   'zzz-openclaw-plugin-degraded-startup.patch',
   'zzz-openclaw-session-prefix-cache.patch',
+  'zzz-openclaw-stream-drop-reconnect.patch',
+  'zzzz-openclaw-compaction-context-overflow-retry.patch',
+  'zzzz-openclaw-recovery-compaction-events.patch',
 ] as const;
 
 const RETIRED_PATCHES = [
@@ -116,6 +132,30 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
     expectCurrentOpenClawPatchMissing(patchFile);
   });
 
+  test('lets config.apply opt out of only the size-drop guard and skips identical-backup restores', () => {
+    expectPatchContains('openclaw-config-apply-size-drop-allowance.patch', [
+      '+  allowConfigSizeDrop: Type.Optional(Type.Boolean()),',
+      '+        params.allowConfigSizeDrop === true',
+      '+          ? { ...writeOptions, allowConfigSizeDrop: true }',
+      '+  if (!backupRaw || backupRaw === raw) {',
+      'keeps the size-drop check for writers that do not opt in',
+      'recovery leaves a size drop alone when the backup already holds the current bytes',
+    ]);
+  });
+
+  test('lets an unchanged cleanly closed agent database skip its whole-file integrity check', () => {
+    expectPatchContains('openclaw-agent-db-clean-close-seal.patch', [
+      '+export function readSqliteCleanCloseSeal(',
+      '+export function writeSqliteCleanCloseSeal(',
+      '+export const SQLITE_CLEAN_CLOSE_FULL_VERIFICATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1_000;',
+      '+export function withVerifiedSqliteIntegrityReuse<T>(',
+      '+    const cleanCloseProof = takeAgentDatabaseCleanCloseProof(pathname);',
+      '+    writeSqliteCleanCloseSeal(database.path, resolveAgentSchemaIdentity(), { verifiedAt });',
+      '+    revokeAgentDatabaseCleanCloseProof(database.path);',
+      'skips the whole-file check after a clean close and keeps the original check time',
+    ]);
+  });
+
   test('keeps background process snapshots below the system prompt cache boundary', () => {
     expectPatchContains('openclaw-active-exec-sessions-runtime-context.patch', [
       '+export function buildActiveProcessSessionRuntimeFacts',
@@ -124,6 +164,57 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       '+        activeProcessRuntimeFacts,',
       '+        capabilityToolNames: toolSearchRunPlan.capabilityToolNames,',
       'carries background process snapshots as hidden runtime context, not system prompt',
+    ]);
+  });
+
+  test('loads Windows plugin file URLs natively and evicts them on reload', () => {
+    expectPatchContains('openclaw-windows-native-plugin-require.patch', [
+      '+  return modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;',
+      '+    return { ok: true, moduleExport: requireWithOptionalAliases(requirePath, options.aliasMap) };',
+      '+    const resolved = nodeRequire.resolve(toRequirePath(modulePath));',
+      '+  it("clears modules loaded through file URL targets", () => {',
+    ]);
+  });
+
+  test('realpaths plugin paths through cached parent directories', () => {
+    expectPatchContains('openclaw-plugin-realpath-parent-cache.patch', [
+      '+export function realpathThroughParentSync(',
+      '+export function safeRealpathWithParentsSync(',
+      '+        : realpathThroughParentSync(targetPath, (parentPath) =>',
+      '+        const realCursor = safeRealpathWithParentsSync(cursor, cache);',
+    ]);
+  });
+
+  test('reads Windows process start times natively before PowerShell', () => {
+    expectPatchContains('zz-openclaw-windows-process-start-native.patch', [
+      '+function loadNativeStartTimeReader(): NativeStartTimeReader | null {',
+      '+    const getProcessTimes = kernel32.func("__stdcall", "GetProcessTimes", "int32_t", [',
+      '+        return getLastError() === ERROR_INVALID_PARAMETER ? null : undefined;',
+      '+  const nativeStartTime = readNativeStartTime(pid);',
+      '+    "matches .NET Process.StartTime for live processes and rejects gone ones",',
+    ]);
+  });
+
+  test('reads Windows registry values and the console code page natively before spawning', () => {
+    expectPatchContains('openclaw-windows-registry-codepage-native.patch', [
+      '+function loadNativeRegistryReader(): NativeRegistryReader | null {',
+      '+      "int32_t __stdcall RegGetValueW(intptr_t key, str16 subKey, str16 valueName, uint32_t flags, _Out_ uint32_t *type, _Out_ void *data, _Inout_ uint32_t *size)",',
+      '+      for (const view of [RRF_SUBKEY_WOW6464KEY, 0]) {',
+      '+  const nativeValue = readNativeRegistryValue(key, valueName);',
+      '+    const getConsoleOutputCP = kernel32.func("uint32_t __stdcall GetConsoleOutputCP()");',
+      '+      const configured = queryWindowsRegistryDwordNative("HKCU\\\\Console", "CodePage");',
+      '+  const nativeCodePage = readNativeConsoleCodePage();',
+      '+    "matches reg.exe for trusted roots and DWORDs without starting it",',
+      '+    "matches the chcp probe for this process\'s console state",',
+    ]);
+  });
+
+  test('skips the dreaming startup scrub while dreaming is disabled', () => {
+    expectPatchContains('zz-openclaw-dreaming-cleanup-only-when-enabled.patch', [
+      '+  const isStartupDreamingEnabled = (startupCfg: OpenClawConfig): boolean => {',
+      '+      if (isStartupDreamingEnabled(startupConfig)) {',
+      '+  it("skips the startup and deferred scrubs while dreaming is disabled", async () => {',
+      '+  it("reclaims leftovers on the first start after dreaming is enabled again", async () => {',
     ]);
   });
 
@@ -167,6 +258,11 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
     expectPatchContains('openclaw-shell-snapshot-electron-node-env.patch', [
       'ELECTRON_RUN_AS_NODE=1',
     ]);
+    expectPatchContains('openclaw-memory-knn-child-electron-node-env.patch', [
+      '+  if (typeof process.versions.electron === "string") {',
+      '+    childEnv.ELECTRON_RUN_AS_NODE = "1";',
+      'launches the child in Node mode under an Electron host',
+    ]);
     expectPatchContains('openclaw-skip-disabled-web-search-discovery.patch', [
       'const searchEnabled = search?.enabled !== false',
       'searchEnabled && (search || hasPluginWebSearchConfig)',
@@ -185,6 +281,27 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
       'utf8',
     );
     expect(adapter).toContain('traceparent: createLlmTraceparent(llmTrace.traceId)');
+  });
+
+  test('compacts byte-bounded model history instead of sliding its first message', () => {
+    expectPatchContains('openclaw-bounded-history-chunked-window.patch', [
+      '+const BOUNDED_CONTEXT_STEP_DIVISOR = 4;',
+      '+function resolveBoundedContextStart(',
+      '+it("keeps a byte-limited tail start fixed until the tail outgrows a quarter-capacity step", async () => {',
+    ]);
+    expectPatchContains('openclaw-bounded-history-compaction.patch', [
+      '+export function resolveEmbeddedSessionContextLimits(',
+      '+function shouldCompactByModelContextBytes(',
+      '+  const compactionOptional = compactionTrigger === "model_context_bytes";',
+    ]);
+  });
+
+  test('preflight compaction budgets against the session-selected context window', () => {
+    expectPatchContains('openclaw-session-window-preflight-compaction.patch', [
+      '+function resolveSelectedContextWindowTokens(params: {',
+      '+    contextWindow: entry.contextWindow,',
+      '+    contextWindow: entry?.contextWindow,',
+    ]);
   });
 
   test('routes ChatGPT OAuth token requests through the gateway proxy env', () => {

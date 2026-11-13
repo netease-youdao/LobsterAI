@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 
+import { EmbeddingProvider } from '../../../shared/cowork/embedding';
 import { i18nService } from '../../services/i18n';
 
 interface EmbeddingSettingsSectionProps {
@@ -73,11 +74,11 @@ const EmbeddingSettingsSection: React.FC<EmbeddingSettingsSectionProps> = ({
               onChange={(e) => onEmbeddingProviderChange(e.target.value)}
               className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface"
             >
-              <option value="openai">{i18nService.t('coworkMemoryEmbeddingProviderOpenai')}</option>
-              <option value="gemini">{i18nService.t('coworkMemoryEmbeddingProviderGemini')}</option>
-              <option value="voyage">{i18nService.t('coworkMemoryEmbeddingProviderVoyage')}</option>
-              <option value="mistral">{i18nService.t('coworkMemoryEmbeddingProviderMistral')}</option>
-              <option value="ollama">{i18nService.t('coworkMemoryEmbeddingProviderOllama')}</option>
+              <option value={EmbeddingProvider.OpenAI}>{i18nService.t('coworkMemoryEmbeddingProviderOpenai')}</option>
+              <option value={EmbeddingProvider.Gemini}>{i18nService.t('coworkMemoryEmbeddingProviderGemini')}</option>
+              <option value={EmbeddingProvider.Voyage}>{i18nService.t('coworkMemoryEmbeddingProviderVoyage')}</option>
+              <option value={EmbeddingProvider.Mistral}>{i18nService.t('coworkMemoryEmbeddingProviderMistral')}</option>
+              <option value={EmbeddingProvider.Ollama}>{i18nService.t('coworkMemoryEmbeddingProviderOllama')}</option>
             </select>
             <div className="text-xs text-secondary mt-1">
               {i18nService.t('coworkMemoryEmbeddingProviderHint')}

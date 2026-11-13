@@ -11,8 +11,16 @@ export const AgentEventStream = {
   /** A finished answer the same run continues past (zz-openclaw-plan-completion-check.patch). */
   Checkpoint: 'checkpoint',
   Lifecycle: 'lifecycle',
+  /** Transport-drop retries of a model call (zzz-openclaw-stream-drop-reconnect.patch). */
+  ModelRetry: 'model_retry',
   Tool: 'tool',
 } as const;
+
+export const ModelRetryPhase = {
+  Retrying: 'retrying',
+  Exhausted: 'exhausted',
+} as const;
+export type ModelRetryPhase = typeof ModelRetryPhase[keyof typeof ModelRetryPhase];
 
 export const OpenClawChatState = {
   Delta: 'delta',
@@ -24,6 +32,7 @@ export type OpenClawChatState = typeof OpenClawChatState[keyof typeof OpenClawCh
 
 export const OpenClawGatewayMethod = {
   ChatAbort: 'chat.abort',
+  ChatMessageGet: 'chat.message.get',
   ChatSend: 'chat.send',
   SessionsSubscribe: 'sessions.subscribe',
   SessionsAbort: 'sessions.abort',

@@ -208,6 +208,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   desktopCompanion: {
     reportAnalytics: event => ipcRenderer.invoke(DesktopCompanionIpc.ReportAnalytics, event),
+    startLogin: request => ipcRenderer.invoke(DesktopCompanionIpc.LoginStart, request),
     ...createLanguageToolsBridge(),
     openResult: sessionId => ipcRenderer.invoke(CompanionResultIpc.Open, sessionId),
     hideResult: () => ipcRenderer.invoke(CompanionResultIpc.Hide),
@@ -235,7 +236,7 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(DesktopCompanionIpc.MainPageRequested, handler);
     },
     showContextMenu: () => ipcRenderer.invoke(DesktopCompanionIpc.ContextMenu),
-    drag: phase => ipcRenderer.send(DesktopCompanionIpc.Drag, phase),
+    drag: (phase, grab) => ipcRenderer.send(DesktopCompanionIpc.Drag, { phase, grab }),
     orbFileDrag: (phase, kinds) => ipcRenderer.send(DesktopCompanionIpc.OrbFileDrag, { phase, kinds }),
     taskStarted: sessionId => ipcRenderer.invoke(DesktopCompanionIpc.TaskStarted, sessionId),
     taskUpdated: () => ipcRenderer.send(DesktopCompanionIpc.TaskUpdated),
@@ -1051,6 +1052,8 @@ contextBridge.exposeInMainWorld('electron', {
   clipboard: {
     writeText: (text: string) =>
       ipcRenderer.invoke(ClipboardIpc.WriteText, text),
+    writeTextAndHtml: (content: { text: string; html: string }) =>
+      ipcRenderer.invoke(ClipboardIpc.WriteTextAndHtml, content),
     writeImageFromFile: (filePath: string) =>
       ipcRenderer.invoke(ClipboardIpc.WriteImageFromFile, filePath),
     writeImageFromDataUrl: (dataUrl: string) =>

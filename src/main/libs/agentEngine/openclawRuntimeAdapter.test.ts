@@ -22,6 +22,8 @@ import { classifyErrorKey } from '../../../common/coworkErrorClassify';
 import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
+  MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY,
+  ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
 import { buildScheduledTaskEnginePrompt } from '../../../scheduledTask/enginePrompt';
 import {
@@ -279,6 +281,63 @@ test('plan mode treats OpenClaw failure finals as system errors instead of propo
   expect(systemMessage?.content).toContain('session file locked');
   expect(systemMessage?.content).not.toContain('<proposed_plan>');
   expect(adapter.activeTurns.has(session.id)).toBe(false);
+});
+
+test.each([
+  'session file locked (timeout 60000ms)',
+  'Agent failed before reply: upstream unavailable',
+  'Something went wrong while processing your request',
+])('normal final replies may quote runtime diagnostics: %s', async (diagnostic) => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'summarize the stability checklist', timestamp: 1, metadata: {} },
+    ]);
+    session.status = 'running';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const errorSpy = vi.fn();
+    adapter.on('error', errorSpy);
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-diagnostic-quote');
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+    const reply = `The checklist has been saved. Verify that cancellation does not leave \`${diagnostic}\`, and oversized inputs do not show a raw \`gateway closed (1009)\` error.`;
+
+    await adapter.handleChatFinal(session.id, turn, {
+      state: 'final', runId: turn.runId, sessionKey,
+      message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: reply }] },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(session.status).toBe('completed');
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(session.messages.some((message) => message.type === 'assistant' && message.content === reply)).toBe(true);
+    expect(session.messages.some((message) => message.type === 'system' && message.metadata?.error)).toBe(false);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+test.each([
+  'session file locked (timeout 60000ms): pid=47378 alive=true',
+  'Something went wrong while processing your request. Please try again.',
+])('runtime failure final prefixes remain errors: %s', async (text) => {
+  const { session, store } = createReconcileStore([]);
+  session.status = 'running';
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.on('error', vi.fn());
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, 'run-failure-prefix');
+  adapter.activeTurns.set(session.id, turn);
+
+  await adapter.handleChatFinal(session.id, turn, {
+    state: 'final', runId: turn.runId, sessionKey,
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  });
+
+  expect(session.status).toBe('error');
+  expect(session.messages.some((message) => message.type === 'system' && message.metadata?.error)).toBe(true);
 });
 
 test('assistant snapshot jitter does not count as a stream reset', () => {
@@ -2806,6 +2865,47 @@ test('pollChannelSessions clears stale override when channel row matches the age
       options: { touchUpdatedAt: false },
     },
   ]);
+});
+
+test('pollChannelSessions keeps the manual reply model of a scheduled-task conversation', async () => {
+  const jobKey = 'agent:main:cron:daily-brief';
+  const runKey = `${jobKey}:run:run-42`;
+  const { session, store, getUpdateSessionCalls } = createReconcileStore([], {
+    agentModel: 'lobsterai-server/yd-fast',
+    sessionId: 'cron-session-1',
+  });
+  session.modelOverride = 'lobsterai-server/deepseek-v4-flash-inhouse-YoudaoInner';
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { key: runKey, modelProvider: 'lobsterai-server', model: 'yd-fast' },
+            { key: jobKey, modelProvider: 'lobsterai-server', model: 'yd-fast', modelOverride: '' },
+          ],
+        };
+      }
+      return { messages: [] };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      ...store,
+      getSessionIdByScheduledTaskId: () => session.id,
+    } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo',
+  });
+  adapter.knownChannelSessionIds.add(session.id);
+  adapter.fullySyncedSessions.add(session.id);
+
+  await adapter.pollChannelSessions();
+
+  expect(session.modelOverride).toBe('lobsterai-server/deepseek-v4-flash-inhouse-YoudaoInner');
+  expect(getUpdateSessionCalls().filter(call => 'modelOverride' in call.patch)).toEqual([]);
 });
 
 const removedProviderCatalog = { qwen: { models: [{ id: 'qwen3.6-plus' }] } };
@@ -5785,6 +5885,41 @@ test('reconcileWithHistory: missing assistant message — triggers replace', asy
   ]);
 });
 
+test('reconcileWithHistory: restores truncated history previews instead of replacing full local text', async () => {
+  const fullReply = 'x'.repeat(9_000);
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: fullReply, timestamp: 2, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const request = vi.fn(async (method: string) => {
+    if (method === 'chat.message.get') {
+      return { ok: true, message: { role: 'assistant', content: fullReply, __openclaw: { id: 'entry-2' } } };
+    }
+    return {
+      messages: [
+        { role: 'user', content: 'Hello' },
+        {
+          role: 'assistant',
+          content: `${fullReply.slice(0, 8_000)}\n...(truncated)...`,
+          __openclaw: { id: 'entry-2', truncated: true, reason: 'display-cap' },
+        },
+      ],
+    };
+  });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+
+  await adapter.reconcileWithHistory(session.id, 'agent:main:feishu:group:test');
+
+  expect(request).toHaveBeenCalledWith(
+    'chat.message.get',
+    expect.objectContaining({ messageId: 'entry-2' }),
+    expect.anything(),
+  );
+  expect(getReplaceCallCount()).toBe(0);
+  expect(session.messages[1]?.content).toBe(fullReply);
+});
+
 test('reconcileWithHistory: syncs session_status model changes into the local session override', async () => {
   const sessionKey = 'agent:main:openclaw-weixin:bot-1:direct:user-1';
   const { session, store, getUpdateSessionCalls } = createReconcileStore([
@@ -7203,6 +7338,81 @@ test('chat final repairs managed session assistant text from history', async () 
   }
 });
 
+const LONG_REPLY = Array.from({ length: 600 }, (_, index) => `line ${index + 1}: long reply check`).join('\n');
+const LONG_REPLY_PREVIEW = `${LONG_REPLY.slice(0, 8_000)}\n...(truncated)...`;
+
+async function runLongReplyFinal(messageGet: (params: unknown) => Promise<unknown>) {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'print 600 lines', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: LONG_REPLY, timestamp: 2, metadata: { isStreaming: true } },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === 'chat.message.get') return messageGet(params);
+    return {
+      messages: [
+        { role: 'user', content: 'print 600 lines' },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: LONG_REPLY_PREVIEW }],
+          __openclaw: { id: 'entry-2', truncated: true, reason: 'display-cap' },
+        },
+      ],
+    };
+  });
+  adapter.gatewayClient = { start: () => {}, stop: () => {}, request };
+
+  const turn = createActiveTurn(session.id, sessionKey, 'run-1');
+  turn.assistantMessageId = 'msg-2';
+  turn.currentAssistantSegmentText = LONG_REPLY;
+  turn.currentText = LONG_REPLY;
+  turn.currentContentText = LONG_REPLY;
+  turn.currentContentBlocks = [LONG_REPLY];
+  adapter.activeTurns.set(session.id, turn);
+  adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+  adapter.handleChatEvent({
+    state: 'final',
+    runId: 'run-1',
+    sessionKey,
+    message: { role: 'assistant', content: LONG_REPLY },
+  }, 1);
+  await vi.advanceTimersByTimeAsync(0);
+
+  return { session, sessionKey, request };
+}
+
+test('chat final restores a truncated history preview from chat.message.get', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, sessionKey, request } = await runLongReplyFinal(async () => ({
+      ok: true,
+      message: { role: 'assistant', content: [{ type: 'text', text: LONG_REPLY }], __openclaw: { id: 'entry-2' } },
+    }));
+
+    expect(request).toHaveBeenCalledWith(
+      'chat.message.get',
+      { sessionKey, messageId: 'entry-2', maxChars: 1_000_000 },
+      { timeoutMs: 5_000 },
+    );
+    expect(session.messages.find((message) => message.id === 'msg-2')?.content).toBe(LONG_REPLY);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('chat final keeps the streamed text when the full history row is unavailable', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session } = await runLongReplyFinal(async () => ({ ok: false, unavailableReason: 'oversized' }));
+
+    expect(session.messages.find((message) => message.id === 'msg-2')?.content).toBe(LONG_REPLY);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test('chat final repairs last segment with corrupted committed text from tool calls', async () => {
   vi.useFakeTimers();
   try {
@@ -8479,6 +8689,143 @@ test('chat error clears context maintenance after compaction starts', () => {
     message.type === 'system'
     && message.content.includes('模型响应超时')
   ))).toBe(true);
+});
+
+const modelReconnectMessages = (messages: Array<{ metadata?: Record<string, unknown> }>) => messages.filter(
+  (message) => message.metadata?.kind === CoworkSystemMessageKind.ModelReconnect,
+);
+
+test('model retry events show one reconnect row that settles when the resumed call streams', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'fix the build', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const messageSpy = vi.fn();
+  const messageUpdateSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('message', messageSpy);
+  adapter.on('messageUpdate', messageUpdateSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-reconnect'));
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 1, maxAttempts: 5, delayMs: 1000, error: 'terminated', errorCode: 'UND_ERR_SOCKET' },
+  }, 1);
+
+  const rows = modelReconnectMessages(session.messages);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].metadata).toMatchObject({
+    status: ModelReconnectStatus.Retrying,
+    attempt: 1,
+    maxAttempts: 5,
+    errorCode: 'UND_ERR_SOCKET',
+  });
+  expect(messageSpy).toHaveBeenCalledWith(session.id, rows[0]);
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 2, maxAttempts: 5, delayMs: 2000, error: 'terminated' },
+  }, 2);
+
+  expect(modelReconnectMessages(session.messages)).toHaveLength(1);
+  expect(rows[0].metadata).toMatchObject({ status: ModelReconnectStatus.Retrying, attempt: 2 });
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect',
+    sessionKey,
+    stream: 'thinking',
+    data: { text: 'Resumed reasoning.' },
+  }, 3);
+
+  expect(rows[0].metadata).toMatchObject({ status: ModelReconnectStatus.Recovered, attempt: 2 });
+  expect(messageUpdateSpy).toHaveBeenLastCalledWith(
+    session.id,
+    rows[0].id,
+    expect.any(String),
+    expect.objectContaining({ status: ModelReconnectStatus.Recovered }),
+  );
+  expect(adapter.activeTurns.has(session.id)).toBe(true);
+  expect(session.status).toBe('running');
+});
+
+test('a turn that ends after reconnects run out says the connection kept dropping', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'fix the build', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errorSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('error', errorSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-reconnect-exhausted'));
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect-exhausted',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 5, maxAttempts: 5, error: 'terminated' },
+  }, 1);
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect-exhausted',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'exhausted', attempt: 5, maxAttempts: 5, error: 'terminated', errorCode: 'UND_ERR_SOCKET' },
+  }, 2);
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-reconnect-exhausted',
+    sessionKey,
+    errorMessage: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+  }, 3);
+
+  const expectedMessage = t('coworkErrorModelStreamInterrupted', { attempts: 5 });
+  expect(errorSpy).toHaveBeenCalledWith(session.id, expectedMessage);
+  const errorMessage = session.messages.find((message) => (
+    message.type === 'system' && message.metadata?.error === expectedMessage
+  ));
+  expect(errorMessage?.metadata?.[MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY]).toBe(true);
+  expect(errorMessage?.metadata?.errorDetail?.rawErrorMessage).toContain('reconnectAttempts=5/5');
+  expect(errorMessage?.metadata?.errorDetail?.rawErrorMessage).toContain('code=UND_ERR_SOCKET');
+  const rows = modelReconnectMessages(session.messages);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].metadata?.status).toBe(ModelReconnectStatus.Failed);
+  expect(session.status).toBe('error');
+});
+
+test('a reconnect that is still pending settles as failed when an unrelated error ends the turn', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'fix the build', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+
+  session.status = 'running';
+  adapter.on('error', vi.fn());
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-reconnect-other-error'));
+
+  adapter.handleAgentEvent({
+    runId: 'run-reconnect-other-error',
+    sessionKey,
+    stream: AgentEventStream.ModelRetry,
+    data: { phase: 'retrying', attempt: 1, maxAttempts: 5, error: 'terminated' },
+  }, 1);
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-reconnect-other-error',
+    sessionKey,
+    errorMessage: '401 invalid api key',
+  }, 2);
+
+  const errorMessage = session.messages.find((message) => message.type === 'system' && message.metadata?.error);
+  expect(errorMessage?.metadata?.[MODEL_STREAM_INTERRUPTED_ERROR_METADATA_KEY]).toBeUndefined();
+  expect(modelReconnectMessages(session.messages)[0].metadata?.status).toBe(ModelReconnectStatus.Failed);
 });
 
 test('chat error prevents stale empty final history sync from restarting context maintenance', async () => {

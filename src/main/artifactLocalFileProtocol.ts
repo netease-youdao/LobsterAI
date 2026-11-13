@@ -47,6 +47,12 @@ function notFoundResponse(): Response {
 }
 
 import { ArtifactPreviewHost } from '../shared/artifactPreview/constants';
+import {
+  LOCAL_FILE_THUMBNAIL_FIT_PARAM,
+  LOCAL_FILE_THUMBNAIL_PARAM,
+  type LocalFileThumbnailFit,
+  parseLocalFileThumbnailFit,
+} from '../shared/artifactPreview/localFileThumbnail';
 
 const LOCAL_FILE_MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
@@ -174,22 +180,52 @@ function buildLocalFileBaseHeaders(filePath: string, size: number, mimeType: str
   };
 }
 
+export interface LocalFileProtocolOptions {
+  captureAccess?: CaptureFileAccess;
+  /** A downscaled copy to serve for a `thumb` request, or null to serve the file itself. */
+  resolveThumbnail?: (filePath: string, stat: fs.Stats, edge: number, fit: LocalFileThumbnailFit) => Promise<string | null>;
+}
+
+/** Swaps in a thumbnail when one is asked for and can be had; any failure falls back to the file. */
+async function resolveThumbnailFile(
+  requestUrl: string,
+  filePath: string,
+  stat: fs.Stats,
+  options: LocalFileProtocolOptions | undefined,
+): Promise<{ filePath: string; stat: fs.Stats }> {
+  const params = new URL(requestUrl).searchParams;
+  const edge = Number(params.get(LOCAL_FILE_THUMBNAIL_PARAM));
+  if (!options?.resolveThumbnail || !Number.isFinite(edge) || edge <= 0) return { filePath, stat };
+  try {
+    const fit = parseLocalFileThumbnailFit(params.get(LOCAL_FILE_THUMBNAIL_FIT_PARAM));
+    const thumbnailPath = await options.resolveThumbnail(filePath, stat, edge, fit);
+    const thumbnailStat = thumbnailPath ? await fs.promises.stat(thumbnailPath) : null;
+    return thumbnailPath && thumbnailStat?.isFile() ? { filePath: thumbnailPath, stat: thumbnailStat } : { filePath, stat };
+  } catch (error) {
+    console.warn('[ArtifactPreview] local file thumbnail failed; serving the original:', error);
+    return { filePath, stat };
+  }
+}
+
 export async function createLocalFileProtocolResponse(
   request: Request,
-  captureAccess?: CaptureFileAccess,
+  options?: LocalFileProtocolOptions,
 ): Promise<Response> {
   try {
-    const filePath = getLocalFileProtocolPath(request.url);
+    const sourcePath = getLocalFileProtocolPath(request.url);
     const serializedAccess = new URL(request.url).searchParams.get('access');
     const access = serializedAccess === null ? undefined : JSON.parse(serializedAccess) as ArtifactFileAccess;
-    const capturedAccess = captureAccess?.(filePath, access);
-    const assertAllowed = () => capturedAccess?.assertAllowed(filePath);
+    const capturedAccess = options?.captureAccess?.(sourcePath, access);
+    const assertAllowed = () => capturedAccess?.assertAllowed(sourcePath);
     assertAllowed();
-    const stat = await fs.promises.stat(filePath);
+    const sourceStat = await fs.promises.stat(sourcePath);
     assertAllowed();
-    if (!stat.isFile()) {
+    if (!sourceStat.isFile()) {
       return notFoundResponse();
     }
+    const { filePath, stat } = await resolveThumbnailFile(request.url, sourcePath, sourceStat, options);
+    // Thumbnails inherit the original file grant, including revocation during generation or streaming.
+    assertAllowed();
 
     const mimeType = getLocalFileMimeType(filePath);
     const baseHeaders = buildLocalFileBaseHeaders(filePath, stat.size, mimeType);

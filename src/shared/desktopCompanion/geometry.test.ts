@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { DesktopCompanionPanelPlacement, DesktopCompanionSize } from './constants';
 import {
   clampCompanionBounds,
+  companionDragGrabOffset,
   companionMenuOpensUp,
   companionStageOpensLeft,
   resolveCompanionBounds,
@@ -83,6 +84,13 @@ describe('orb placement', () => {
     const area = { x: 100, y: 25, width: orb.width + 60, height: 875 };
     expect(snapCompanionOrbToEdge({ ...orb, x: 120, y: 300 }, area).x).toBe(100);
     expect(snapCompanionOrbToEdge({ ...orb, x: 140, y: 300 }, area).x).toBe(160);
+  });
+
+  test('turns a reported press into a point inside the orb window and rejects malformed ones', () => {
+    expect(companionDragGrabOffset({ x: 0.5, y: 0.25 }, orb)).toEqual({ x: orb.width / 2, y: orb.height / 4 });
+    expect(companionDragGrabOffset({ x: -0.2, y: 1.4 }, orb)).toEqual({ x: 0, y: orb.height });
+    expect(companionDragGrabOffset({ x: Number.NaN, y: 0.5 }, orb)).toBeNull();
+    expect(companionDragGrabOffset(undefined, orb)).toBeNull();
   });
 });
 

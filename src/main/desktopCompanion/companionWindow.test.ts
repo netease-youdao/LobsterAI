@@ -1,10 +1,24 @@
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, BrowserWindowConstructorOptions } from 'electron';
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { dismissCompanionPanelOnBlur } from './companionWindow';
+import { DesktopCompanionSurface } from '../../shared/desktopCompanion/constants';
+import { createCompanionWindow, dismissCompanionPanelOnBlur } from './companionWindow';
 
-vi.mock('electron', () => ({ BrowserWindow: vi.fn() }));
+const { windowOptions } = vi.hoisted(() => ({ windowOptions: [] as BrowserWindowConstructorOptions[] }));
+
+vi.mock('electron', () => ({
+  BrowserWindow: class {
+    webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn() };
+    setMenu = vi.fn();
+    setBounds = vi.fn();
+    setAlwaysOnTop = vi.fn();
+    setVisibleOnAllWorkspaces = vi.fn();
+    loadURL = vi.fn(() => Promise.resolve());
+    loadFile = vi.fn(() => Promise.resolve());
+    constructor(options: BrowserWindowConstructorOptions) { windowOptions.push(options); }
+  },
+}));
 
 class ComposerWindow extends EventEmitter {
   visible = false;
@@ -12,6 +26,8 @@ class ComposerWindow extends EventEmitter {
   focusable = true;
   enabled = true;
   destroyed = false;
+  /** AppKit declined to make the window key. */
+  refusesFocus = false;
   children: ComposerWindow[] = [];
   isDestroyed = () => this.destroyed;
   isVisible = () => this.visible;
@@ -22,6 +38,11 @@ class ComposerWindow extends EventEmitter {
   show() { this.visible = true; this.focused = true; this.emit('show'); }
   showInactive() { this.visible = true; this.focused = false; this.emit('show'); }
   hide() { this.visible = false; this.emit('hide'); }
+  focus() {
+    if (this.refusesFocus || !this.visible) return;
+    this.focused = true;
+    this.emit('focus');
+  }
 }
 
 let win: ComposerWindow;
@@ -138,6 +159,44 @@ describe('composer outside dismissal', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  test('a panel reopened without key focus asks for it again instead of closing', () => {
+    // Closing from the orb can leave the hidden panel marked key, so the next show() opens it unfocused.
+    win.emit('focus');
+    win.showInactive();
+    const focus = vi.spyOn(win, 'focus');
+    vi.advanceTimersByTime(130);
+    expect(focus).toHaveBeenCalledOnce();
+    expect(win.focused).toBe(true);
+    vi.advanceTimersByTime(500);
+    expect(dismiss).not.toHaveBeenCalled();
+    // Once it has had focus, an outside click closes it as usual.
+    win.focused = false;
+    vi.advanceTimersByTime(300);
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
+  test('a panel macOS will not make key stays open rather than flashing closed', () => {
+    win.refusesFocus = true;
+    const focus = vi.spyOn(win, 'focus');
+    win.showInactive();
+    win.emit('blur');
+    vi.advanceTimersByTime(2_000);
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(win.visible).toBe(true);
+    expect(focus).toHaveBeenCalledTimes(2);
+    // Clicking into it gives it focus; leaving it afterwards dismisses it.
+    win.focused = true;
+    vi.advanceTimersByTime(130);
+    win.focused = false;
+    vi.advanceTimersByTime(300);
+    expect(dismiss).toHaveBeenCalledOnce();
+    // The next opening gets its own attempts.
+    win.showInactive();
+    vi.advanceTimersByTime(2_000);
+    expect(focus).toHaveBeenCalledTimes(4);
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
   test('a delayed native hide does not stop outside dismissal after reopening', () => {
     win.show();
     win.hide();
@@ -156,5 +215,31 @@ describe('composer outside dismissal', () => {
     win.emit('blur');
     vi.advanceTimersByTime(200);
     expect(dismiss).toHaveBeenCalledOnce();
+  });
+});
+
+describe('companion window creation', () => {
+  const env = { preloadPath: '/app/preload.js', rendererDirectory: '/app/renderer', title: 'LobsterAI' };
+  const create = (surface: DesktopCompanionSurface): BrowserWindowConstructorOptions => {
+    windowOptions.length = 0;
+    createCompanionWindow(env, { surface, bounds: { x: 0, y: 0, width: 100, height: 100 }, focusable: false });
+    return windowOptions[0];
+  };
+
+  test('hidden content-sized surfaces keep running animation frames, so they are measured before they open', () => {
+    expect(create(DesktopCompanionSurface.Selection).webPreferences?.backgroundThrottling).toBe(false);
+    expect(create(DesktopCompanionSurface.Stage).webPreferences?.backgroundThrottling).toBe(false);
+    expect(create(DesktopCompanionSurface.Panel).webPreferences?.backgroundThrottling).toBe(false);
+    expect(create(DesktopCompanionSurface.Mascot).webPreferences?.backgroundThrottling).toBeUndefined();
+  });
+
+  test('on macOS every surface, task cards included, is a panel so it stays above full-screen apps', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      for (const surface of Object.values(DesktopCompanionSurface)) expect(create(surface).type).toBe('panel');
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 });

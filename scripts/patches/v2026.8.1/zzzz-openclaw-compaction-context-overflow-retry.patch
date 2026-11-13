@@ -1,0 +1,807 @@
+diff --git a/src/agents/compaction.ts b/src/agents/compaction.ts
+--- a/src/agents/compaction.ts
++++ b/src/agents/compaction.ts
+@@ -1,4 +1,7 @@
+-import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
++import {
++  CompactionError,
++  IncompleteSummaryError,
++} from "../../packages/agent-core/src/harness/types.js";
+ /**
+  * Summarization and fallback helpers for transcript compaction.
+  */
+@@ -23,6 +26,7 @@
+ } from "./compaction-planning.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+ import { isTimeoutError } from "./failover-error.js";
++import { isContextOverflowError } from "./failover/context-overflow.js";
+ import type {
+   AgentMessage,
+   CompactionSummaryPrompt,
+@@ -157,13 +161,19 @@
+           // Backoff must honor caller cancellation; otherwise an abort during
+           // the sleep would stall compaction until the full delay elapses.
+           sleep: (ms) => sleepWithAbort(ms, params.signal),
+-          // Caller aborts and transport timeouts are terminal; provider-side
+-          // AbortErrors without caller cancellation remain retryable.
++          // Repeating an oversized summary request cannot reduce its context.
++          // Provider-side AbortErrors without caller cancellation remain retryable.
+           shouldRetry: (err) =>
+-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
++            !params.signal.aborted &&
++            !(err instanceof IncompleteSummaryError) &&
++            !isContextOverflowError(formatErrorMessage(err)) &&
++            (isAbortError(err) || !isTimeoutError(err)),
+         },
+       );
+     } catch (err) {
++      if (err instanceof IncompleteSummaryError) {
++        throw err;
++      }
+       // Caller aborts, transport timeouts, and failures before any completed
+       // chunk cannot produce a recoverable partial summary.
+       if (
+@@ -211,7 +221,7 @@
+     return await summarizeChunks(params);
+   } catch (err) {
+     lastError = err;
+-    if (params.signal.aborted) {
++    if (params.signal.aborted || lastError instanceof IncompleteSummaryError) {
+       throw lastError;
+     }
+     log.warn(`Full summarization failed: ${formatErrorMessage(lastError)}`);
+@@ -237,7 +247,7 @@
+       return partialSummary + oversizedSuffix;
+     } catch (partialError) {
+       lastError = partialError;
+-      if (params.signal.aborted) {
++      if (params.signal.aborted || lastError instanceof IncompleteSummaryError) {
+         throw lastError;
+       }
+       log.warn(`Partial summarization also failed: ${formatErrorMessage(lastError)}`);
+diff --git a/src/agents/compaction.summarize-fallback.test.ts b/src/agents/compaction.summarize-fallback.test.ts
+--- a/src/agents/compaction.summarize-fallback.test.ts
++++ b/src/agents/compaction.summarize-fallback.test.ts
+@@ -3,7 +3,10 @@
+ import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+ import type { UserMessage } from "openclaw/plugin-sdk/llm";
+ import { beforeEach, describe, expect, it, vi } from "vitest";
+-import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
++import {
++  CompactionError,
++  IncompleteSummaryError,
++} from "../../packages/agent-core/src/harness/types.js";
+ import { summarizeWithFallback } from "./compaction.test-support.js";
+
+ const agentSessionMocks = vi.hoisted(() => ({
+@@ -66,6 +69,75 @@
+     ).rejects.toThrow("All summarization attempts failed for 1 messages");
+     // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
+     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
++  });
++
++  it("does not retry the same summary input after a provider context overflow", async () => {
++    agentSessionMocks.generateSummary.mockRejectedValue(
++      new Error(
++        "Summarization failed: This model's maximum context length is 1048576 tokens. " +
++          "However, you requested 1202038 tokens (1202038 in the messages, 0 in the completion).",
++      ),
++    );
++    // The local estimate may fit even when the provider's tokenizer rejects it.
++    const messages: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 }];
++    const originalMessages = structuredClone(messages);
++
++    await expect(
++      summarizeWithFallback({
++        messages,
++        model: testModel,
++        apiKey: "test-key", // pragma: allowlist secret
++        signal: new AbortController().signal,
++        reserveTokens: 1000,
++        maxChunkTokens: 50_000,
++        contextWindow: 200_000,
++      }),
++    ).rejects.toBeInstanceOf(CompactionError);
++
++    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
++    expect(messages).toEqual(originalMessages);
++  });
++
++  it("does not retry or fall back after core reports an incomplete overflow recovery", async () => {
++    agentSessionMocks.generateSummary.mockRejectedValue(
++      new IncompleteSummaryError(new Error("provider unavailable")),
++    );
++    await expect(
++      summarizeWithFallback({
++        messages: [{ role: "user", content: "hello", timestamp: 1 }],
++        model: testModel,
++        apiKey: "test-key", // pragma: allowlist secret
++        signal: new AbortController().signal,
++        reserveTokens: 1_000,
++        maxChunkTokens: 1_000,
++        contextWindow: 10_000,
++      }),
++    ).rejects.toBeInstanceOf(IncompleteSummaryError);
++    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
++  });
++
++  it("does not reuse an old partial summary when core overflow recovery fails in the smaller-message fallback", async () => {
++    agentSessionMocks.generateSummary
++      .mockResolvedValueOnce("incomplete first summary")
++      .mockRejectedValueOnce(new Error("provider unavailable"))
++      .mockRejectedValueOnce(new Error("provider unavailable"))
++      .mockRejectedValueOnce(new Error("provider unavailable"))
++      .mockRejectedValue(new IncompleteSummaryError(new Error("provider unavailable")));
++    await expect(
++      summarizeWithFallback({
++        messages: [
++          { role: "user", content: "keep the task", timestamp: 1 },
++          { role: "user", content: "large material ".repeat(2_000), timestamp: 2 },
++        ],
++        model: testModel,
++        apiKey: "test-key", // pragma: allowlist secret
++        signal: new AbortController().signal,
++        reserveTokens: 1_000,
++        maxChunkTokens: 1_000,
++        contextWindow: 10_000,
++      }),
++    ).rejects.toBeInstanceOf(IncompleteSummaryError);
++    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(5);
+   });
+
+   it("retries provider-side AbortError and returns a real summary when caller signal is not aborted", async () => {
+diff --git a/packages/agent-core/src/harness/types.ts b/packages/agent-core/src/harness/types.ts
+--- a/packages/agent-core/src/harness/types.ts
++++ b/packages/agent-core/src/harness/types.ts
+@@ -20,6 +20,20 @@
+ export class InvalidSummaryOutputError extends CompactionError {
+   constructor(message: string) {
+     super("summarization_failed", message);
++  }
++}
++
++/** Distinguishes a provider context rejection from retryable transport failures. */
++export class SummaryContextOverflowError extends CompactionError {}
++
++/** A failed fragment must not let a host commit an earlier partial summary. */
++export class IncompleteSummaryError extends CompactionError {
++  constructor(error: unknown) {
++    super(
++      "summarization_failed",
++      `Context overflow recovery could not summarize the complete input: ${error instanceof Error ? error.message : String(error)}`,
++      error instanceof Error ? error : undefined,
++    );
+   }
+ }
+
+diff --git a/packages/agent-core/src/harness/compaction/compaction.ts b/packages/agent-core/src/harness/compaction/compaction.ts
+--- a/packages/agent-core/src/harness/compaction/compaction.ts
++++ b/packages/agent-core/src/harness/compaction/compaction.ts
+@@ -1,3 +1,4 @@
++import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+ import {
+   resolveClaudeFable5ModelIdentity,
+   type Model,
+@@ -26,10 +27,12 @@
+   CompactionError,
+   err,
+   InvalidSummaryOutputError,
++  SummaryContextOverflowError,
+   ok,
+   type Result,
+   type SessionTreeEntry,
+ } from "../types.js";
++import { summarizeWithOverflowRecovery } from "./summary-recovery.js";
+ import {
+   computeFileLists,
+   createFileOps,
+@@ -640,8 +643,11 @@
+     );
+   }
+   if (response.stopReason === "error") {
++    const SummaryError = isContextOverflow(response)
++      ? SummaryContextOverflowError
++      : CompactionError;
+     return err(
+-      new CompactionError(
++      new SummaryError(
+         "summarization_failed",
+         `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+       ),
+@@ -685,32 +691,40 @@
+     summaryPrompt?.kind === "turn-prefix"
+       ? TURN_PREFIX_SUMMARIZATION_PROMPT
+       : summaryPrompt?.instructions;
+-  const prompt = summaryPrompt
+-    ? [
+-        previousSummary &&
+-          "Update the previous summary with the new conversation. Preserve relevant facts, decisions, and unresolved asks; remove stale or duplicate detail. Use the format below.",
+-        selectedPrompt,
+-      ]
+-        .filter(Boolean)
+-        .join("\n\n")
+-    : previousSummary
+-      ? UPDATE_SUMMARIZATION_PROMPT
+-      : SUMMARIZATION_PROMPT;
+-  return await runSummarizationCompletion({
++  return await summarizeWithOverflowRecovery({
+     messages: currentMessages,
+-    prompt,
+-    customInstructions,
+     previousSummary,
+-    model,
+-    maxTokens,
+-    apiKey,
+-    headers,
+     signal,
+-    thinkingLevel,
+-    streamFn,
+-    runtime,
+-    errorLabel:
+-      summaryPrompt?.kind === "turn-prefix" ? "Turn prefix summarization" : "Summarization",
++    estimateTokens,
++    summarize: async (messages, runningSummary) => {
++      const prompt = summaryPrompt
++        ? [
++            runningSummary &&
++              "Update the previous summary with the new conversation. Preserve relevant facts, decisions, and unresolved asks; remove stale or duplicate detail. Use the format below.",
++            selectedPrompt,
++          ]
++            .filter(Boolean)
++            .join("\n\n")
++        : runningSummary
++          ? UPDATE_SUMMARIZATION_PROMPT
++          : SUMMARIZATION_PROMPT;
++      return await runSummarizationCompletion({
++        messages,
++        prompt,
++        customInstructions,
++        previousSummary: runningSummary,
++        model,
++        maxTokens,
++        apiKey,
++        headers,
++        signal,
++        thinkingLevel,
++        streamFn,
++        runtime,
++        errorLabel:
++          summaryPrompt?.kind === "turn-prefix" ? "Turn prefix summarization" : "Summarization",
++      });
++    },
+   });
+ }
+
+diff --git a/packages/agent-core/src/harness/compaction/summary-recovery.ts b/packages/agent-core/src/harness/compaction/summary-recovery.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/agent-core/src/harness/compaction/summary-recovery.ts
+@@ -0,0 +1,141 @@
++import type { AgentMessage } from "../../types.js";
++import {
++  createToolCallOccurrenceQueue,
++  extractToolCallsFromAssistant,
++  extractToolResultId,
++} from "../session/tool-result-pairing.js";
++import {
++  CompactionError,
++  err,
++  IncompleteSummaryError,
++  ok,
++  SummaryContextOverflowError,
++  type Result,
++} from "../types.js";
++
++const MAX_OVERFLOW_SPLITS = 8;
++const MIN_FRAGMENT_CHARS = 1024;
++
++function subdivideSummaryMessages(
++  messages: AgentMessage[],
++  estimateTokens: (message: AgentMessage) => number,
++): AgentMessage[][] {
++  const weightedMessages = messages.map((message) => ({
++    message,
++    weight: estimateTokens(message),
++  }));
++  const half = weightedMessages.reduce((sum, entry) => sum + entry.weight, 0) / 2;
++  const pending = createToolCallOccurrenceQueue<true>();
++  let accumulated = 0;
++  let boundary = 0;
++  let distance = Number.POSITIVE_INFINITY;
++  for (const [index, { message, weight }] of weightedMessages.entries()) {
++    accumulated += weight;
++    if (message.role === "assistant") {
++      // Even an aborted assistant can have a real result later in the transcript.
++      for (const call of extractToolCallsFromAssistant(message)) {
++        pending.add(call.id, true);
++      }
++    } else if (message.role === "toolResult") {
++      const id = extractToolResultId(message);
++      if (id) {
++        pending.claim(id);
++      }
++    }
++    // A user turn displaced into an unfinished tool batch cannot split that batch.
++    const nextDistance = Math.abs(accumulated - half);
++    if (pending.size === 0 && index < messages.length - 1 && nextDistance < distance) {
++      boundary = index + 1;
++      distance = nextDistance;
++    }
++  }
++  if (boundary > 0) {
++    return [messages.slice(0, boundary), messages.slice(boundary)];
++  }
++
++  const message = messages[0];
++  // Only plain user text is split internally, in a temporary summary projection.
++  if (messages.length !== 1 || message?.role !== "user") {
++    return [];
++  }
++  const content = message.content;
++  const text =
++    typeof content === "string"
++      ? content
++      : content.every((part) => part.type === "text")
++        ? content.map((part) => (part.type === "text" ? part.text : "")).join("")
++        : undefined;
++  if (!text || text.length < MIN_FRAGMENT_CHARS * 2) {
++    return [];
++  }
++  let middle = Math.floor(text.length / 2);
++  const paragraphEnd = text.lastIndexOf("\n", middle);
++  if (paragraphEnd >= Math.max(middle / 2, MIN_FRAGMENT_CHARS - 1)) {
++    middle = paragraphEnd + 1;
++  }
++  if (
++    /[\uD800-\uDBFF]/.test(text.charAt(middle - 1)) &&
++    /[\uDC00-\uDFFF]/.test(text.charAt(middle))
++  ) {
++    middle--;
++  }
++  return [text.slice(0, middle), text.slice(middle)].map((fragment) => [
++    {
++      ...message,
++      content: typeof content === "string" ? fragment : [{ type: "text", text: fragment }],
++    },
++  ]);
++}
++
++/** Recover rejected summary inputs without replaying successful fragments or changing history. */
++export async function summarizeWithOverflowRecovery(params: {
++  messages: AgentMessage[];
++  previousSummary?: string;
++  signal?: AbortSignal;
++  estimateTokens: (message: AgentMessage) => number;
++  summarize: (
++    messages: AgentMessage[],
++    previousSummary: string | undefined,
++  ) => Promise<Result<string, CompactionError>>;
++}): Promise<Result<string, CompactionError>> {
++  const chunks = [params.messages];
++  let summary = params.previousSummary ?? "";
++  let splits = 0;
++  for (const [index, chunk] of chunks.entries()) {
++    if (params.signal?.aborted) {
++      return err(new CompactionError("aborted", "Summarization aborted"));
++    }
++    let result: Result<string, CompactionError>;
++    try {
++      result = await params.summarize(chunk, summary || undefined);
++    } catch (error) {
++      if (params.signal?.aborted) {
++        return err(new CompactionError("aborted", "Summarization aborted"));
++      }
++      if (splits > 0) {
++        return err(new IncompleteSummaryError(error));
++      }
++      throw error;
++    }
++    if (params.signal?.aborted) {
++      return err(new CompactionError("aborted", "Summarization aborted"));
++    }
++    if (result.ok) {
++      summary = result.value;
++      continue;
++    }
++    if (result.error instanceof SummaryContextOverflowError) {
++      const smaller =
++        splits < MAX_OVERFLOW_SPLITS ? subdivideSummaryMessages(chunk, params.estimateTokens) : [];
++      if (smaller.length > 1) {
++        splits++;
++        // The worklist iterator visits the smaller chunks immediately after this rejection.
++        chunks.splice(index + 1, 0, ...smaller);
++        continue;
++      }
++      return err(new IncompleteSummaryError(result.error));
++    }
++    return splits > 0 ? err(new IncompleteSummaryError(result.error)) : result;
++  }
++  return ok(summary);
++}
+diff --git a/packages/agent-core/src/harness/compaction/compaction.context-overflow.test.ts b/packages/agent-core/src/harness/compaction/compaction.context-overflow.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/agent-core/src/harness/compaction/compaction.context-overflow.test.ts
+@@ -0,0 +1,382 @@
++import { describe, expect, it, vi } from "vitest";
++import { createAssistantMessageEventStream } from "../../llm.js";
++import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
++import type { AgentMessage } from "../../types.js";
++import { compact, generateSummary, type CompactionPreparation } from "./compaction.js";
++import { createFileOps } from "./utils.js";
++
++const model: Model = {
++  id: "summary-model",
++  name: "Summary Model",
++  api: "test-api",
++  provider: "test-provider",
++  baseUrl: "https://example.test",
++  reasoning: false,
++  input: ["text"],
++  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++  contextWindow: 100_000,
++  maxTokens: 8_000,
++};
++const overflowError =
++  "This model's maximum context length is 1048576 tokens. However, you requested 1202037 tokens (1202037 in the messages, 0 in the completion). Please reduce the length of the messages or completion.";
++
++function user(content: string): AgentMessage {
++  return { role: "user", content, timestamp: 1 };
++}
++
++function assistant(text: string, errorMessage?: string): AssistantMessage {
++  return {
++    role: "assistant",
++    content: [{ type: "text", text }],
++    api: model.api,
++    provider: model.provider,
++    model: model.id,
++    usage: {
++      input: 1,
++      output: 0,
++      cacheRead: 0,
++      cacheWrite: 0,
++      totalTokens: 1,
++      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++    },
++    stopReason: errorMessage ? "error" : "stop",
++    ...(errorMessage ? { errorMessage } : {}),
++    timestamp: 2,
++  };
++}
++
++function reply(text: string, errorMessage?: string) {
++  const stream = createAssistantMessageEventStream();
++  const message = assistant(text, errorMessage);
++  if (errorMessage) {
++    stream.push({ type: "error", reason: "error", error: message });
++  } else {
++    stream.push({ type: "done", reason: "stop", message });
++  }
++  stream.end();
++  return stream;
++}
++
++function readPrompt(context: Parameters<StreamFn>[1]): string {
++  const message = context.messages[0];
++  if (message?.role !== "user") {
++    throw new Error("expected a user summary prompt");
++  }
++  return typeof message.content === "string"
++    ? message.content
++    : message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
++}
++
++function readConversation(prompt: string): string {
++  const conversation = prompt.match(/<conversation>\n([\s\S]*?)\n<\/conversation>/)?.[1];
++  if (conversation === undefined) {
++    throw new Error("expected the summary prompt to include the conversation");
++  }
++  return conversation;
++}
++
++function readPreviousSummary(prompt: string): string | undefined {
++  return prompt.match(/<previous-summary>\n([\s\S]*?)\n<\/previous-summary>/)?.[1];
++}
++
++function preparation(history: AgentMessage[], prefix: AgentMessage[] = []): CompactionPreparation {
++  return {
++    firstKeptEntryId: "retained-tail",
++    messagesToSummarize: history,
++    turnPrefixMessages: prefix,
++    isSplitTurn: prefix.length > 0,
++    tokensBefore: 1202037,
++    fileOps: createFileOps(),
++    settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
++  };
++}
++
++describe("core compaction context overflow recovery", () => {
++  it.each([
++    { name: "history-only", history: true, prefix: false, textBlocks: false },
++    { name: "prefix-only", history: false, prefix: true, textBlocks: true },
++    { name: "history and prefix", history: true, prefix: true, textBlocks: false },
++  ])("recovers $name without losing or mutating Unicode input", async (scenario) => {
++    const controller = new AbortController();
++    const texts = {
++      history: `HISTORY-BEGIN\n${"龘🙂".repeat(4096)}\nHISTORY-END`,
++      prefix: `PREFIX-BEGIN\n${"龘🚀".repeat(4096)}\nPREFIX-END`,
++    };
++    const prefixMessage: AgentMessage = scenario.textBlocks
++      ? {
++          role: "user",
++          content: [
++            { type: "text", text: "PREFIX-BEGIN\n" },
++            { type: "text", text: `${"龘🚀".repeat(4096)}\nPREFIX-END` },
++          ],
++          timestamp: 1,
++        }
++      : user(texts.prefix);
++    const input = preparation(
++      scenario.history ? [user(texts.history)] : [],
++      scenario.prefix ? [prefixMessage] : [],
++    );
++    input.previousSummary = "earlier decisions";
++    const original = structuredClone(input);
++    const accepted: Record<"history" | "prefix", string[]> = { history: [], prefix: [] };
++    const rejected = { history: 0, prefix: 0 };
++    const summaries: Record<"history" | "prefix", string | undefined> = {
++      history: input.previousSummary,
++      prefix: undefined,
++    };
++    const usageSink = vi.fn();
++    const streamFn = vi.fn<StreamFn>((_model, context, options) => {
++      const prompt = readPrompt(context);
++      const kind = prompt.includes("## Original Request") ? "prefix" : "history";
++      const conversation = readConversation(prompt);
++      expect(conversation.startsWith("[User]: ")).toBe(true);
++      const fragment = conversation.slice("[User]: ".length);
++      expect(fragment).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
++      expect(fragment).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
++      expect(readPreviousSummary(prompt)).toBe(summaries[kind]);
++      expect(prompt).toContain("Preserve the user's unresolved request.");
++      expect(options?.signal).toBe(controller.signal);
++      expect(options?.maxTokens).toBe(kind === "prefix" ? 500 : 800);
++      if (fragment.length > 2200) {
++        rejected[kind]++;
++        return reply("", overflowError);
++      }
++      accepted[kind].push(fragment);
++      summaries[kind] = `${summaries[kind] ?? ""} ${kind}-${accepted[kind].length}`.trim();
++      return reply(summaries[kind]);
++    });
++
++    const result = await compact(
++      input,
++      model,
++      undefined,
++      undefined,
++      "Preserve the user's unresolved request.",
++      controller.signal,
++      undefined,
++      streamFn,
++      { completeSimple: vi.fn(), internalUsageSink: usageSink },
++    );
++
++    expect(result.ok).toBe(true);
++    if (!result.ok) {
++      throw new Error("expected every summary fragment to succeed");
++    }
++    for (const kind of ["history", "prefix"] as const) {
++      if (scenario[kind]) {
++        expect(rejected[kind]).toBeGreaterThan(1);
++        expect(accepted[kind].length).toBeGreaterThanOrEqual(4);
++        expect(accepted[kind].join("")).toBe(texts[kind]);
++        expect(result.value.summary).toContain(summaries[kind]);
++      }
++    }
++    expect(result.value.firstKeptEntryId).toBe(input.firstKeptEntryId);
++    expect(usageSink).toHaveBeenCalledTimes(streamFn.mock.calls.length);
++    expect(input).toEqual(original);
++  });
++
++  it("returns a compaction result only after the final fragment completes", async () => {
++    const finalStream = createAssistantMessageEventStream();
++    let notifyFinalRequest!: () => void;
++    const finalRequested = new Promise<void>((resolve) => {
++      notifyFinalRequest = resolve;
++    });
++    const streamFn = vi.fn<StreamFn>((_model, context) => {
++      const prompt = readPrompt(context);
++      const conversation = readConversation(prompt);
++      if (conversation.length > 5000) {
++        return reply("", overflowError);
++      }
++      if (!readPreviousSummary(prompt)) {
++        return reply("first fragment summary");
++      }
++      expect(readPreviousSummary(prompt)).toBe("first fragment summary");
++      notifyFinalRequest();
++      return finalStream;
++    });
++    let settled = false;
++    const pending = compact(
++      preparation([user(`${"a".repeat(4096)}${"b".repeat(4096)}`)]),
++      model,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      streamFn,
++    ).then((result) => {
++      settled = true;
++      return result;
++    });
++
++    try {
++      const phase = await Promise.race([
++        finalRequested.then(() => "final-request"),
++        pending.then(() => "finished"),
++      ]);
++      expect(phase).toBe("final-request");
++      expect(settled).toBe(false);
++    } finally {
++      finalStream.push({
++        type: "done",
++        reason: "stop",
++        message: assistant("complete summary of both fragments"),
++      });
++      finalStream.end();
++    }
++    const result = await pending;
++    expect(result.ok && result.value.summary).toBe("complete summary of both fragments");
++  });
++
++  it("does not return completed history when a later prefix fragment fails", async () => {
++    const streamFn = vi.fn<StreamFn>((_model, context) => {
++      const prompt = readPrompt(context);
++      if (!prompt.includes("## Original Request")) {
++        return reply("completed history summary");
++      }
++      if (readConversation(prompt).length > 5000) {
++        return reply("", overflowError);
++      }
++      return readPreviousSummary(prompt)
++        ? reply("", "Provider unavailable")
++        : reply("first prefix fragment summary");
++    });
++    const result = await compact(
++      preparation([user("completed history")], [user("x".repeat(8192))]),
++      model,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      streamFn,
++    );
++
++    expect(result.ok).toBe(false);
++    expect(result).not.toHaveProperty("value");
++    expect(streamFn).toHaveBeenCalledTimes(4);
++  });
++
++  it("bounds repeated overflow failures instead of retrying the same input", async () => {
++    const lengths: number[] = [];
++    const streamFn = vi.fn<StreamFn>((_model, context) => {
++      lengths.push(readConversation(readPrompt(context)).length);
++      return reply("", overflowError);
++    });
++    const result = await generateSummary(
++      [user("x".repeat(1_048_576))],
++      model,
++      1_000,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      streamFn,
++    );
++
++    expect(result.ok).toBe(false);
++    expect(result).not.toHaveProperty("value");
++    expect(lengths.length).toBeGreaterThan(1);
++    expect(lengths.length).toBeLessThanOrEqual(9);
++    expect(lengths).toEqual([...new Set(lengths)].toSorted((left, right) => right - left));
++  });
++
++  it("stops after cancellation even when the in-flight fragment returns text", async () => {
++    const controller = new AbortController();
++    let requests = 0;
++    const streamFn = vi.fn<StreamFn>((_model, _context, options) => {
++      expect(options?.signal).toBe(controller.signal);
++      requests++;
++      if (requests === 1) {
++        return reply("", overflowError);
++      }
++      controller.abort();
++      return reply("late fragment summary");
++    });
++    const result = await generateSummary(
++      [user("x".repeat(8192))],
++      model,
++      1_000,
++      undefined,
++      undefined,
++      controller.signal,
++      undefined,
++      undefined,
++      undefined,
++      streamFn,
++    );
++
++    expect(result.ok).toBe(false);
++    if (result.ok) {
++      throw new Error("expected cancelled compaction to fail");
++    }
++    expect(result.error.code).toBe("aborted");
++    expect(requests).toBe(2);
++  });
++
++  it.each([
++    { name: "normal", stopReason: "toolUse" as const, interveningAssistant: false },
++    { name: "aborted", stopReason: "aborted" as const, interveningAssistant: false },
++    { name: "error", stopReason: "error" as const, interveningAssistant: false },
++    { name: "intervening assistant", stopReason: "toolUse" as const, interveningAssistant: true },
++  ])("keeps $name tool calls paired while splitting surrounding text", async (scenario) => {
++    const messages: AgentMessage[] = [
++      user(`before:${"a".repeat(6000)}`),
++      {
++        ...assistant(""),
++        content: [
++          {
++            type: "toolCall",
++            id: "call-1",
++            name: "lookup_tool",
++            arguments: { key: "sample", input: "x".repeat(3000) },
++          },
++        ],
++        stopReason: scenario.stopReason,
++      },
++      ...(scenario.interveningAssistant ? [assistant("The tool execution is still pending.")] : []),
++      {
++        role: "toolResult",
++        toolCallId: "call-1",
++        toolName: "lookup_tool",
++        content: [{ type: "text", text: `TOOL_RESULT_MARKER:${"r".repeat(1800)}` }],
++        isError: false,
++        timestamp: 3,
++      },
++      user(`after:${"b".repeat(6000)}`),
++    ];
++    const original = structuredClone(messages);
++    const accepted: string[] = [];
++    const streamFn = vi.fn<StreamFn>((_model, context) => {
++      const conversation = readConversation(readPrompt(context));
++      expect(conversation.includes("lookup_tool(")).toBe(
++        conversation.includes("TOOL_RESULT_MARKER"),
++      );
++      if (conversation.length > 5500) {
++        return reply("", overflowError);
++      }
++      accepted.push(conversation);
++      return reply(`summary through fragment ${accepted.length}`);
++    });
++    const result = await generateSummary(
++      messages,
++      model,
++      1_000,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      streamFn,
++    );
++
++    expect(result.ok).toBe(true);
++    expect(streamFn.mock.calls.length).toBeGreaterThan(1);
++    expect(accepted.filter((text) => text.includes("lookup_tool("))).toHaveLength(1);
++    expect(accepted.join("\n")).toContain("TOOL_RESULT_MARKER");
++    expect(messages).toEqual(original);
++  });
++});

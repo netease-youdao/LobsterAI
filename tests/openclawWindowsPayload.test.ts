@@ -89,6 +89,7 @@ async function fixture(target: string = OpenClawPayloadTarget.WindowsX64): Promi
     'dist/control-ui/index.html': '<script src="./assets/app.js"></script>',
     'dist/control-ui/assets/app.js': 'console.log("UI");',
     'dist/worker/worker.mjs': 'export const worker = true;',
+    'dist/build-info.json': '{"builtAt":"2026-11-05T00:00:00.000Z"}',
   };
   const stage = path.join(parent, 'stage');
   for (const [relative, content] of Object.entries(bareFiles)) {
@@ -102,6 +103,7 @@ async function fixture(target: string = OpenClawPayloadTarget.WindowsX64): Promi
   await finished(archiveStream); // Release the fixture's write handle before moving it on Windows.
   write(root, 'gateway-bundle.mjs');
   write(root, 'web-tree-sitter.wasm');
+  write(root, 'build-info.json', bareFiles['dist/build-info.json']);
   write(root, 'dist/control-ui/assets/app.js.br');
   write(root, 'dist/control-ui/assets/app.js.gz');
   write(root, 'dist/control-ui/assets/compressed-only.gz');
@@ -224,7 +226,7 @@ test.each(['single', 'combined'])('slims the %s tar while preserving native SDK 
 
 test.each([
   'openclaw.mjs', 'gateway-bundle.mjs', 'dist/entry.js', 'dist/plugin-sdk/core.js', 'dist/control-ui/index.html',
-  'dist/worker/worker.mjs', 'web-tree-sitter.wasm',
+  'dist/worker/worker.mjs', 'web-tree-sitter.wasm', 'build-info.json',
   controlUiManifest,
   ...nativeRoots.map(root => `${root}/win32-x64-msvc/fs-safe-native.node`),
 ])('rejects an incomplete bare runtime: %s', async relative => {

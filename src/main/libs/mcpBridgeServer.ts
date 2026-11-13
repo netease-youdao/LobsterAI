@@ -45,6 +45,8 @@ export type AskUserRequest = {
     header?: string;
     title?: string;
     subtitle?: string;
+    /** Catalogue pricing fingerprint, so unchanged prose cannot hide a price change. */
+    quoteKey?: string;
     options: Array<{ label: string; description?: string }>;
     multiSelect?: boolean;
     /** Video generation confirmations: what the desktop card lays out. */

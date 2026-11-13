@@ -87,6 +87,11 @@ Requirements:
 - Windows builds may need bundled/portable Git setup: `npm run setup:mingit`.
 - Windows packaging also sets up the Python runtime via
   `npm run setup:python-runtime`.
+- New libraries go in `devDependencies` (`npm install -D`): Vite bundles the
+  main and renderer code, and electron-builder copies every production
+  dependency into `app.asar` again. `dependencies` is only for modules loaded
+  or resolved outside the bundles; `tests/electronBuilderAppFiles.test.ts`
+  lists each one with its reason.
 
 OpenClaw environment variables:
 - `OPENCLAW_SRC`: override the OpenClaw source checkout path. Default is

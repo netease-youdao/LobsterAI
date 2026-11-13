@@ -11,11 +11,13 @@ const fs = require('fs');
 const path = require('path');
 const { parseArgs } = require('util');
 
-const { BuildEnv, CHANNEL_SCOPED_ENV_VARS } = require('./build-env.cjs');
+const { BuildEnv, CHANNEL_SCOPED_ENV_VARS, PackagingEnv } = require('./build-env.cjs');
 const { normalizeKeyfrom } = require('./build-keyfrom.cjs');
+const { packagingEnv, publicBaseUrl } = require('./codown-config.cjs');
+const { artifactUrl, payloadName } = require('./codown-artifacts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const RELEASE_DIR = path.join(REPO_ROOT, 'release');
+const RELEASE_DIR = path.resolve(process.env[PackagingEnv.OutputDir] || path.join(REPO_ROOT, 'release'));
 const WEB_OUTPUT_DIR = path.join(RELEASE_DIR, 'nsis-web');
 const PREPACKAGED_APP_DIR = path.join(RELEASE_DIR, 'win-unpacked');
 const PLACEHOLDER_BASE_URL = 'https://placeholder.invalid/web-package';
@@ -47,9 +49,11 @@ function sha256File(filePath) {
 }
 
 const USAGE = `Usage:
-  npm run dist:win:web -- --keyfrom <channel> [--silent] [--pkg-base-url <cdn-dir> | --pkg-url <package-url>]
+  npm run dist:win:web -- --keyfrom <channel> [--silent] [--codown | --pkg-base-url <cdn-dir> | --pkg-url <package-url>]
 
 Modes:
+  --codown        one-pass build using CODOWN_PUBLIC_BASE_URL from env or .env;
+                  for build + SVN submission, start with release:codown -- --target win-web
   --silent        make direct launches enter NSIS silent mode without requiring /S
   --pkg-base-url  one-pass build; the installer downloads <dir>/<keyfrom>/lobsterai-<version>-x64.nsis.7z
   --pkg-url       stub-only rebuild with the exact package URL (upload-first flow, e.g. NOS)
@@ -69,6 +73,7 @@ try {
     options: {
       keyfrom: { type: 'string' },
       silent: { type: 'boolean', default: false },
+      codown: { type: 'boolean', default: false },
       'pkg-url': { type: 'string' },
       'pkg-base-url': { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
@@ -92,6 +97,13 @@ const silentOnDoubleClick = values.silent === true;
 if (pkgUrl && pkgBaseUrl) {
   fail('--pkg-url and --pkg-base-url are mutually exclusive.');
 }
+if (values.codown && (pkgUrl || pkgBaseUrl)) fail('--codown cannot be combined with --pkg-url or --pkg-base-url.');
+let codownUrl;
+if (values.codown) {
+  try {
+    codownUrl = artifactUrl(publicBaseUrl(packagingEnv(REPO_ROOT)), keyfrom, payloadName(require('../package.json').version, silentOnDoubleClick));
+  } catch (error) { fail(error.message); }
+}
 
 // Leftover shell variables (e.g. from a previous $env: assignment) must never
 // leak into a build; everything relevant is set explicitly below.
@@ -108,7 +120,7 @@ env[BuildEnv.SilentOnDoubleClick] = silentOnDoubleClick ? '1' : '0';
 env[BuildEnv.WebInstaller] = '1';
 
 const stubOnly = pkgUrl !== '';
-const usesPlaceholder = !stubOnly && pkgBaseUrl === '';
+const usesPlaceholder = !values.codown && !stubOnly && pkgBaseUrl === '';
 let command;
 let args;
 let stubSourcePackageHash;
@@ -165,17 +177,18 @@ if (stubOnly) {
     'scripts/electron-builder-config.cjs',
   ];
 } else {
-  env[BuildEnv.WebPkgBaseUrl] = pkgBaseUrl || PLACEHOLDER_BASE_URL;
+  if (codownUrl) env[BuildEnv.WebPkgUrl] = codownUrl;
+  else env[BuildEnv.WebPkgBaseUrl] = pkgBaseUrl || PLACEHOLDER_BASE_URL;
   command = 'npm';
   args = ['run', 'dist:win'];
 }
 
-const mode = stubOnly ? 'stub-only' : usesPlaceholder ? 'full-build-with-placeholder-url' : 'full-build-with-base-url';
+const mode = codownUrl ? 'full-build-with-codown-url' : stubOnly ? 'stub-only' : usesPlaceholder ? 'full-build-with-placeholder-url' : 'full-build-with-base-url';
 console.log(`[WebBuild] keyfrom=${keyfrom} mode=${mode}`);
 console.log(
   `[WebBuild] silentOnDoubleClick=${silentOnDoubleClick} source=${silentOnDoubleClick ? 'cli' : 'default'}`,
 );
-console.log(`[WebBuild] package ${stubOnly ? 'url' : 'base url'}: ${stubOnly ? pkgUrl : env[BuildEnv.WebPkgBaseUrl]}`);
+console.log(`[WebBuild] package ${stubOnly || codownUrl ? 'url' : 'base url'}: ${codownUrl || (stubOnly ? pkgUrl : env[BuildEnv.WebPkgBaseUrl])}`);
 if (usesPlaceholder) {
   console.log('[WebBuild] no URL flag given: building with a placeholder so the .nsis.7z can be uploaded first.');
 }

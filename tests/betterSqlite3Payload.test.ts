@@ -15,17 +15,20 @@ const { getMainFileMatchers, getNodeModuleFileMatcher } = require('app-builder-l
 const { computeFileSets, computeNodeModuleFileSets } = require('app-builder-lib/out/util/appFileCopier');
 const { doMergeConfigs } = require('app-builder-lib/out/util/config');
 const { AsarPackager } = require('app-builder-lib/out/asar/asarUtil');
-const { configureBetterSqlite3MacPayload } = require('../scripts/better-sqlite3-mac-payload.cjs');
+const { configureBetterSqlite3Payload } = require('../scripts/better-sqlite3-payload.cjs');
 const tempDirs: string[] = [];
 const sqlitePath = 'node_modules/better-sqlite3';
 const nativeTargets = [
   'darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64',
   'linux-arm64', 'linux-x64', 'linuxmusl-arm64', 'linuxmusl-x64',
 ];
-const macTargets = [
-  { arch: Arch.arm64, native: 'darwin-arm64' },
-  { arch: Arch.x64, native: 'darwin-x64' },
+const packagedTargets = [
+  { platform: 'darwin', arch: Arch.arm64, native: 'darwin-arm64' },
+  { platform: 'darwin', arch: Arch.x64, native: 'darwin-x64' },
+  { platform: 'win32', arch: Arch.arm64, native: 'win32-arm64' },
+  { platform: 'win32', arch: Arch.x64, native: 'win32-x64' },
 ];
+const macTargets = packagedTargets.filter(target => target.platform === 'darwin');
 
 function tempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-sqlite-payload-'));
@@ -39,7 +42,7 @@ function write(root: string, relative: string, content = relative): void {
   fs.writeFileSync(file, content);
 }
 
-function fixture(arch: number = Arch.arm64, version = '13.0.3') {
+function fixture(arch: number = Arch.arm64, version = '13.0.3', electronPlatformName = 'darwin') {
   const appDir = tempDir();
   write(appDir, 'package.json', JSON.stringify({ name: 'fixture' }));
   write(appDir, `${sqlitePath}/package.json`, JSON.stringify({
@@ -67,9 +70,10 @@ function fixture(arch: number = Arch.arm64, version = '13.0.3') {
       { dir: path.join(appDir, sqlitePath, 'node_modules'), deps: [{ name: 'node-addon-api' }] },
     ]) }),
   };
+  const platform = electronPlatformName === 'win32' ? Platform.WINDOWS : Platform.MAC;
   return {
-    arch, electronPlatformName: 'darwin',
-    packager: { info, config, platform: Platform.MAC, platformSpecificBuildOptions: { files: ['!private-file'] } },
+    arch, electronPlatformName,
+    packager: { info, config, platform, platformSpecificBuildOptions: { files: ['!private-file'] } },
   };
 }
 
@@ -110,22 +114,24 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test.each(macTargets)('packs only $native with consistent ASAR entries and an intact source tree', async ({ arch, native }) => {
-  const context = fixture(arch);
+test.each(packagedTargets)('packs only $native with consistent ASAR entries and an intact source tree', async ({ platform, arch, native }) => {
+  const context = fixture(arch, '13.0.3', platform);
   const appDir = context.packager.info.appDir;
   const before = snapshot(appDir);
-  configureBetterSqlite3MacPayload(context);
+  configureBetterSqlite3Payload(context);
   const once = [...context.packager.platformSpecificBuildOptions.files];
-  configureBetterSqlite3MacPayload(context);
+  configureBetterSqlite3Payload(context);
   expect(context.packager.platformSpecificBuildOptions.files).toEqual(once);
   expect(once).toContain('!private-file');
   const { archive, entries } = await packagedFiles(context);
   expect(entries.filter(entry => entry.startsWith(`${sqlitePath}/prebuilds/`))).toEqual([`${sqlitePath}/prebuilds/${native}.node`]);
   expect(entries.some(entry => entry.startsWith(`${sqlitePath}/deps`) || entry.startsWith(`${sqlitePath}/src`))).toBe(false);
   for (const entry of entries) {
-    const metadata = asar.statFile(archive, entry);
+    // @electron/asar splits archive paths on the host separator.
+    const archiveEntry = entry.split('/').join(path.sep);
+    const metadata = asar.statFile(archive, archiveEntry);
     if (metadata.files) continue;
-    expect(asar.extractFile(archive, entry)).toEqual(fs.readFileSync(path.join(appDir, entry)));
+    expect(asar.extractFile(archive, archiveEntry)).toEqual(fs.readFileSync(path.join(appDir, entry)));
     if (metadata.unpacked) expect(fs.existsSync(path.join(`${archive}.unpacked`, entry))).toBe(true);
   }
   for (const kept of [
@@ -140,7 +146,7 @@ test('resolves the target macro again when one packager builds both macOS archit
   const context = fixture(Arch.arm64);
   for (const { arch, native } of macTargets) {
     context.arch = arch;
-    configureBetterSqlite3MacPayload(context);
+    configureBetterSqlite3Payload(context);
     const { entries } = await packagedFiles(context);
     expect(entries.filter(entry => entry.startsWith(`${sqlitePath}/prebuilds/`))).toEqual([`${sqlitePath}/prebuilds/${native}.node`]);
   }
@@ -162,7 +168,7 @@ test('preserves the complete normalized app file selection without collecting so
   }
   const before = await mainFiles();
   expect(before).toEqual(['dist-electron/main.js', 'dist/app.js', 'package.json']);
-  configureBetterSqlite3MacPayload(context);
+  configureBetterSqlite3Payload(context);
   expect(await mainFiles()).toEqual(before);
   // Root config representation is shared across platforms; its file selection
   // must also remain the same without the mac-only exclusions.
@@ -174,22 +180,31 @@ test.each(['lib/index.js', 'lib/binding.js', 'prebuilds/darwin-arm64.node'])('re
   const context = fixture();
   fs.unlinkSync(path.join(context.packager.info.appDir, sqlitePath, relative));
   const before = [...context.packager.platformSpecificBuildOptions.files];
-  expect(() => configureBetterSqlite3MacPayload(context)).toThrow('Missing SQLite runtime file');
+  expect(() => configureBetterSqlite3Payload(context)).toThrow('Missing SQLite runtime file');
   expect(context.packager.platformSpecificBuildOptions.files).toEqual(before);
 });
 
-test.each(['win32', 'linux'])('does not alter %s packaging', electronPlatformName => {
+test('does not alter linux packaging, which picks glibc or musl at runtime', () => {
   const context = fixture();
-  context.electronPlatformName = electronPlatformName;
+  context.electronPlatformName = 'linux';
   const before = [...context.packager.platformSpecificBuildOptions.files];
-  configureBetterSqlite3MacPayload(context);
+  configureBetterSqlite3Payload(context);
   expect(context.packager.platformSpecificBuildOptions.files).toEqual(before);
+});
+
+test('keeps the Windows payload for an architecture without a prebuild', async () => {
+  const context = fixture(Arch.ia32, '13.0.3', 'win32');
+  const before = [...context.packager.platformSpecificBuildOptions.files];
+  configureBetterSqlite3Payload(context);
+  expect(context.packager.platformSpecificBuildOptions.files).toEqual(before);
+  const { entries } = await packagedFiles(context);
+  expect(entries.filter(entry => entry.startsWith(`${sqlitePath}/prebuilds/`))).toHaveLength(nativeTargets.length);
 });
 
 test.each([Arch.arm64, Arch.x64, Arch.universal])('keeps the universal payload in its arch=%s hook', async arch => {
   const context = fixture(arch);
   context.packager.info.options.targets.set(Platform.MAC, new Map([[Arch.universal, ['dmg']]]));
-  configureBetterSqlite3MacPayload(context);
+  configureBetterSqlite3Payload(context);
   const { entries } = await packagedFiles(context);
   expect(entries.filter(entry => entry.startsWith(`${sqlitePath}/prebuilds/`))).toHaveLength(nativeTargets.length);
   expect(entries).toContain(`${sqlitePath}/deps/sqlite3/sqlite3.c`);
@@ -197,9 +212,9 @@ test.each([Arch.arm64, Arch.x64, Arch.universal])('keeps the universal payload i
 
 test('retains unreviewed versions and removes earlier generated exclusions on reuse', async () => {
   const context = fixture();
-  configureBetterSqlite3MacPayload(context);
+  configureBetterSqlite3Payload(context);
   write(context.packager.info.appDir, `${sqlitePath}/package.json`, JSON.stringify({ name: 'better-sqlite3', version: '14.0.0' }));
-  configureBetterSqlite3MacPayload(context);
+  configureBetterSqlite3Payload(context);
   expect(context.packager.platformSpecificBuildOptions.files).toEqual(['!private-file']);
   const { entries } = await packagedFiles(context);
   expect(entries.filter(entry => entry.startsWith(`${sqlitePath}/prebuilds/`))).toHaveLength(nativeTargets.length);

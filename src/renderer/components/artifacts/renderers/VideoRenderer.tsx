@@ -1,4 +1,9 @@
 import { ArtifactPreviewHost, ArtifactPreviewProtocol } from '@shared/artifactPreview/constants';
+import {
+  LOCAL_FILE_THUMBNAIL_FIT_PARAM,
+  LOCAL_FILE_THUMBNAIL_PARAM,
+  LocalFileThumbnailFit,
+} from '@shared/artifactPreview/localFileThumbnail';
 import type { ArtifactFileAccess } from '@shared/artifactPreview/types';
 import React, { useEffect, useMemo, useState } from 'react';
 
@@ -37,7 +42,16 @@ function normalizeLocalPath(filePath: string): string {
   return normalized.replace(/\\/g, '/');
 }
 
-export function buildLocalFileSrc(filePath: string, cacheKey: number, access?: ArtifactFileAccess): string {
+/**
+ * `thumbnail` asks for a copy downscaled to `edge` pixels on the side its `fit` names; the protocol
+ * serves the original when it is no larger.
+ */
+export function buildLocalFileSrc(
+  filePath: string,
+  cacheKey: number,
+  access?: ArtifactFileAccess,
+  thumbnail?: { edge: number; fit: LocalFileThumbnailFit },
+): string {
   const normalized = normalizeLocalPath(filePath);
   const pathForUrl = normalized.startsWith('/')
     ? normalized
@@ -45,7 +59,10 @@ export function buildLocalFileSrc(filePath: string, cacheKey: number, access?: A
   const encoded = pathForUrl.split('/').map(encodeURIComponent).join('/');
   const accessQuery = access ? `&access=${encodeURIComponent(JSON.stringify(access))}` : '';
   // Standard custom schemes need an authority; an empty host is rejected by Chromium media loading.
-  return `${ArtifactPreviewProtocol.LocalFile}://${ArtifactPreviewHost.LocalFile}${encoded}?v=${cacheKey}${accessQuery}`;
+  const thumbnailQuery = !thumbnail ? ''
+    : `&${LOCAL_FILE_THUMBNAIL_PARAM}=${thumbnail.edge}${thumbnail.fit === LocalFileThumbnailFit.Cover
+      ? `&${LOCAL_FILE_THUMBNAIL_FIT_PARAM}=${thumbnail.fit}` : ''}`;
+  return `${ArtifactPreviewProtocol.LocalFile}://${ArtifactPreviewHost.LocalFile}${encoded}?v=${cacheKey}${accessQuery}${thumbnailQuery}`;
 }
 
 function buildFileUrlSrc(filePath: string): string {

@@ -54,6 +54,25 @@ export function resolveCoworkSessionIdByOpenClawSessionKey(
   return session?.id ?? null;
 }
 
+/**
+ * Spawned children (e.g. visible `agent:<id>:dashboard:<uuid>` sessions) may
+ * have no Cowork row. Their requester session owns the turn's account scope.
+ */
+export function resolveSubagentRequesterCoworkSessionId(
+  db: Database.Database,
+  sessionKey: string | undefined | null,
+): string | null {
+  const normalized = (sessionKey ?? '').trim();
+  if (!normalized) return null;
+  const row = db
+    .prepare(
+      'SELECT parent_session_id FROM subagent_runs WHERE session_key = ? ORDER BY created_at DESC LIMIT 1',
+    )
+    .get(normalized) as { parent_session_id: string | null } | undefined;
+  const parentSessionId = row?.parent_session_id?.trim();
+  return parentSessionId ? getSessionRowById(db, parentSessionId)?.id ?? null : null;
+}
+
 export function getCoworkParentSessionId(
   db: Database.Database,
   sessionId: string | undefined | null,

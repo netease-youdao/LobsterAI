@@ -103,7 +103,7 @@ describe('artifact local file protocol', () => {
     expect(getLocalFileProtocolPath(url)).toBe(filePath);
     const response = await createLocalFileProtocolResponse(new Request(url, {
       headers: { Range: 'bytes=2-5' },
-    }), captureAccess);
+    }), { captureAccess });
     expect(response.status).toBe(206);
     expect(await response.text()).toBe('2345');
     expect(captureAccess).toHaveBeenCalledWith(filePath, access);
@@ -116,7 +116,7 @@ describe('artifact local file protocol', () => {
     const captureAccess = () => { throw new Error('Not found'); };
     const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath), {
       method, headers: { Range: 'bytes=0-1' },
-    }), captureAccess);
+    }), { captureAccess });
     expect(response.status).toBe(404);
     expect(response.headers.get('content-range')).toBeNull();
     expect(response.headers.get('cache-control')).toBe('no-store');
@@ -126,7 +126,7 @@ describe('artifact local file protocol', () => {
   test('rejects invalid access JSON without exposing file content', async () => {
     const filePath = createTempFile('hidden.mp4', 'secret');
     const captureAccess = vi.fn(() => ({ assertAllowed: vi.fn() }));
-    const response = await createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}?access=invalid`), captureAccess);
+    const response = await createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}?access=invalid`), { captureAccess });
     expect(response.status).toBe(404);
     expect(captureAccess).not.toHaveBeenCalled();
   });
@@ -140,11 +140,11 @@ describe('artifact local file protocol', () => {
       allowed = false;
       return stat;
     });
-    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath)), () => ({
+    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath)), { captureAccess: () => ({
       assertAllowed: () => {
         if (!allowed) throw new Error('Not found');
       },
-    }));
+    }) });
     expect(response.status).toBe(404);
     expect(await response.text()).toBe('Not found');
   });
@@ -153,17 +153,93 @@ describe('artifact local file protocol', () => {
     const filePath = createTempFile('preview.mp4', '');
     fs.writeFileSync(filePath, Buffer.alloc(16 * 1024 * 1024, 'a'));
     let epoch = 1;
-    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath)), () => ({
+    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath)), { captureAccess: () => ({
       assertAllowed: () => {
         if (epoch !== 1) throw new Error('Not found');
       },
-    }));
+    }) });
     const reader = response.body!.getReader();
     expect((await reader.read()).done).toBe(false);
     epoch++;
     revalidateLocalFileProtocolStreams();
     await expect((async () => {
       while (!(await reader.read()).done) { /* Drain bytes already delivered before revocation. */ }
+    })()).rejects.toThrow('Not found');
+  });
+
+  test('serves a thumbnail only when one is asked for and available', async () => {
+    const filePath = createTempFile('generated.png', 'original-bytes');
+    const thumbnailPath = path.join(tempDir!, 'thumbnail.jpg');
+    fs.writeFileSync(thumbnailPath, 'thumb');
+    const resolveThumbnail = vi.fn(async (_file: string, _stat: fs.Stats, edge: number, _fit: string) => (edge === 512 ? thumbnailPath : null));
+    const request = (query: string) => createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}${query}`), { resolveThumbnail });
+
+    const thumbnail = await request('?v=1&thumb=512');
+    expect(thumbnail.headers.get('content-type')).toBe('image/jpeg');
+    expect(await thumbnail.text()).toBe('thumb');
+    expect(resolveThumbnail).toHaveBeenLastCalledWith(filePath, expect.anything(), 512, 'contain');
+    await request('?v=1&thumb=512&thumbFit=cover');
+    expect(resolveThumbnail).toHaveBeenLastCalledWith(filePath, expect.anything(), 512, 'cover');
+
+    expect(await (await request('?v=1&thumb=2048')).text()).toBe('original-bytes');
+    expect(await (await request('?v=1')).text()).toBe('original-bytes');
+    expect(resolveThumbnail).toHaveBeenCalledTimes(3);
+
+    resolveThumbnail.mockRejectedValueOnce(new Error('thumbnailer crashed'));
+    const failed = await request('?v=1&thumb=512');
+    expect(failed.headers.get('content-type')).toBe('image/png');
+    expect(await failed.text()).toBe('original-bytes');
+  });
+
+  test.each(['GET', 'HEAD'])('denies a thumbnail before generation when the source grant is hidden: %s', async method => {
+    const filePath = createTempFile('hidden.png', 'private');
+    const resolveThumbnail = vi.fn();
+    const response = await createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}?thumb=512`, { method }), {
+      captureAccess: () => { throw new Error('Not found'); },
+      resolveThumbnail,
+    });
+    expect(response.status).toBe(404);
+    expect(resolveThumbnail).not.toHaveBeenCalled();
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  test.each([false, true])('revocation during thumbnail generation denies both success and fallback (failure: %s)', async fail => {
+    const filePath = createTempFile('private.png', 'private-original');
+    const thumbnailPath = path.join(tempDir!, 'thumb.jpg');
+    fs.writeFileSync(thumbnailPath, 'private-thumbnail');
+    let allowed = true;
+    const response = await createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}?thumb=512`), {
+      captureAccess: () => ({ assertAllowed: () => { if (!allowed) throw new Error('Not found'); } }),
+      resolveThumbnail: async () => {
+        allowed = false;
+        if (fail) throw new Error('thumbnailer failed');
+        return thumbnailPath;
+      },
+    });
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('Not found');
+  });
+
+  test('thumbnail streams retain the source file grant and stop after account revocation', async () => {
+    const filePath = createTempFile('private.png', 'original');
+    const thumbnailPath = path.join(tempDir!, 'thumb.jpg');
+    fs.writeFileSync(thumbnailPath, Buffer.alloc(16 * 1024 * 1024, 'a'));
+    let allowed = true;
+    const assertAllowed = vi.fn((target: string | undefined) => {
+      expect(target).toBe(filePath);
+      if (!allowed) throw new Error('Not found');
+    });
+    const response = await createLocalFileProtocolResponse(new Request(`${toLocalFileUrl(filePath)}?thumb=512`), {
+      captureAccess: () => ({ assertAllowed }),
+      resolveThumbnail: async () => thumbnailPath,
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    allowed = false;
+    revalidateLocalFileProtocolStreams();
+    await expect((async () => {
+      while (!(await reader.read()).done) { /* Drain bytes queued before revocation. */ }
     })()).rejects.toThrow('Not found');
   });
 });

@@ -42,6 +42,7 @@ function fixture(ids = ['task']) {
     pendingMediaTasks: new Set(), mediaTaskOwnerById: new Map(), mediaSelectionBySession: new Map(),
     mediaTurnAccountScopeBySession: new Map(), mediaTasksHandledByStatusPolling: new Set(), mediaStatusPollCounts: new Map(),
     agentBrowserHost: { dispose: asyncRecord('browser-close') },
+    stopDshFeatureRuntimes: asyncRecord('dsh-stop'),
     remoteTelemetryRuntime: { dispose: asyncRecord('telemetry-close') }, remoteNetworkTransport: { dispose: record('transport-close') },
     remoteSettingsController: { dispose: record('settings-close') }, remotePerformance: { stop: record('performance-stop') },
     getSkillServiceManager: () => ({ stopAll: asyncRecord('skills-stop') }), imGatewayManager: { stopAll: asyncRecord('im-stop') },
@@ -69,6 +70,7 @@ describe('app quit run recovery', () => {
     expect(f.events).not.toContain('transport-close');
     f.gatewayExit.resolve(); await closing;
     expect(f.events.indexOf('gateway-process-stop')).toBeLessThan(f.events.indexOf('sync-stop'));
+    expect(f.events.indexOf('dsh-stop')).toBeLessThan(f.events.indexOf('confirm-stop'));
     expect(f.events.indexOf('sync-stop')).toBeLessThan(f.events.indexOf('database-close'));
     expect(f.events.at(-1)).toBe('tray-close');
   });
