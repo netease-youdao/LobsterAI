@@ -512,6 +512,7 @@ import {
 import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { mediaConfirmationQuote } from './libs/mediaConfirmationRequests';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
+import { formatMediaLayerLines } from './libs/mediaLayers';
 import { compactMediaDetails, compactMessageMetadataMedia, mediaSourceKey } from './libs/mediaMetadataCompaction';
 import { migrateInlineMediaMetadata } from './libs/mediaMetadataMigration';
 import {
@@ -6915,6 +6916,7 @@ if (!gotTheLock) {
         let resultLines: string[];
         let detailsAssets: unknown[] = composesImageEditLocally(statusImageEdit?.operation) ? [] : assets;
         let savedCount = 0;
+        let savedImageAssets: PersistedGeneratedImageAsset[] = [];
         if (status === 'succeeded' && statusMediaType === 'image' && ownerSessionId) {
           const persistResult = await persistGeneratedImages(ownerSessionId, assets, statusImageEdit, String(task.taskId));
           if (!isRequestAccountCurrent()) return staleAccountResult();
@@ -6922,6 +6924,7 @@ if (!gotTheLock) {
           if (persistResult && persistResult.saved.length > 0) {
             savedCount = persistResult.saved.length;
             detailsAssets = persistResult.saved;
+            savedImageAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
               `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
             );
@@ -6960,6 +6963,7 @@ if (!gotTheLock) {
           ...(task.protocolVersion === MediaProtocol.Durable && !TERMINAL_MEDIA_TASK_STATUSES.has(status) ? ['This task continues in the background. Do not regenerate. Dependent steps must wait for a saved result.'] : []),
           ...(task.progress ? [`Progress: ${task.progress}%`] : []),
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
+          ...formatMediaLayerLines(task.layers, savedImageAssets),
           ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
         ];
         const details = compactMediaDetails({
@@ -7085,6 +7089,9 @@ if (!gotTheLock) {
         if (args.output_format) params.output_format = args.output_format;
         if (args.temperature != null) params.temperature = args.temperature;
         if (args.imageSize) params.imageSize = args.imageSize;
+        if (args.layerDecomposition != null) params.layer_decomposition = args.layerDecomposition;
+        if (args.layerDecompositionOptions) params.layer_decomposition_options = args.layerDecompositionOptions;
+        if (args.background) params.background = args.background;
       }
       if (args.count) params.count = args.count;
       if (args.durationSeconds != null) params.durationSeconds = args.durationSeconds;
@@ -7487,7 +7494,7 @@ if (!gotTheLock) {
           const fileLines = persistResult.saved.map(asset =>
             `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
           );
-          lines.push(`Results:\n${fileLines.join('\n')}`);
+          lines.push(`Results:\n${fileLines.join('\n')}`, ...formatMediaLayerLines(task.layers, persistResult.saved));
         } else if (assets.length > 0 && !composesImageEditLocally(imageEdit?.operation)) {
           const resultLines = resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           lines.push(`Results:\n${resultLines.join('\n')}`);
@@ -7772,7 +7779,8 @@ if (!gotTheLock) {
               continue;
             }
             const content = status === MediaTaskStatus.Succeeded
-              ? (saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))).join('\n')
+              ? [...(saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))),
+                ...formatMediaLayerLines(task.layers, saved?.saved)].join('\n')
               : String(task.errorMessage || t(status === MediaTaskStatus.Timeout ? 'mediaTaskTimedOut'
                 : status === MediaTaskStatus.Cancelled ? 'mediaTaskCancelled' : 'mediaTaskFailed'));
             emitMediaTaskMessage(tracker.sessionId, content, { toolResultDetails: details }, tracker);
