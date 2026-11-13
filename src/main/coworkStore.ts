@@ -7,7 +7,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
-import { AgentId, normalizeAgentAvatarIcon } from '../shared/agent';
+import { AgentId, AgentModelSelectionMode, normalizeAgentAvatarIcon } from '../shared/agent';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
@@ -441,6 +441,7 @@ export interface Agent {
   systemPrompt: string;
   identity: string;
   model: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   icon: string;
@@ -465,6 +466,7 @@ export interface CreateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
@@ -480,6 +482,7 @@ export interface UpdateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;
@@ -3754,8 +3757,8 @@ export class CoworkStore {
       this.db
         .prepare(
           `
-        INSERT INTO agents (id, name, description, system_prompt, identity, model, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
+        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -3765,6 +3768,7 @@ export class CoworkStore {
           request.systemPrompt || '',
           request.identity || '',
           request.model || '',
+          request.modelSelectionMode ?? AgentModelSelectionMode.Explicit,
           normalizeAgentThinkingLevel(request.thinkingLevel),
           request.workingDirectory || '',
           normalizeAgentAvatarIcon(request.icon),
@@ -3790,8 +3794,8 @@ export class CoworkStore {
     if (!normalizedModelId) return 0;
 
     const result = this.db
-      .prepare("UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, '')) = ''")
-      .run(normalizedModelId, Date.now());
+      .prepare("UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, '')) = '' AND model_selection_mode != ?")
+      .run(normalizedModelId, Date.now(), AgentModelSelectionMode.Inherit);
 
     return result.changes;
   }
@@ -3823,6 +3827,10 @@ export class CoworkStore {
     if (updates.model !== undefined) {
       setClauses.push('model = ?');
       values.push(updates.model);
+    }
+    if (updates.modelSelectionMode !== undefined) {
+      setClauses.push('model_selection_mode = ?');
+      values.push(updates.modelSelectionMode);
     }
     if (updates.thinkingLevel !== undefined) {
       setClauses.push('thinking_level = ?');
@@ -3936,6 +3944,7 @@ export class CoworkStore {
     system_prompt: string;
     identity: string;
     model: string;
+    model_selection_mode?: string;
     thinking_level?: string | null;
     working_directory?: string | null;
     icon: string;
@@ -3961,6 +3970,8 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       identity: row.identity,
       model: row.model,
+      modelSelectionMode: row.model_selection_mode === AgentModelSelectionMode.Inherit
+        ? AgentModelSelectionMode.Inherit : AgentModelSelectionMode.Explicit,
       thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       workingDirectory: row.working_directory || '',
       icon: row.icon,

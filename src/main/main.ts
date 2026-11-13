@@ -524,6 +524,7 @@ import { MediaUsageStore } from './libs/mediaUsageStore';
 import { modelContextWindowOwnerKey, registerModelContextWindowIpc, rememberedContextWindow } from './libs/modelContextWindows';
 import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
 import { bindNativeRunUsageOwner, claimNativeRunTurnUsage, configureNativeUsageSessionTitleResolver, getNativeRunMediaUsageContext, recordNativeRunMediaTask } from './libs/nativeRunTurnUsage';
+import { deleteOpenClawAgent } from './libs/openclawAgentDeletion';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -660,6 +661,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { startUninstallAnalytics } from './libs/uninstallAnalytics';
 import { TaskUsageAnalytics } from './libs/usageAnalytics';
 import { type UsageTitleOutbox, UsageTitleSync } from './libs/usageTitleSync';
 import { getWebSearchBridgeFilePath, removeWebSearchBridgeFile, writeWebSearchBridgeFile } from './libs/webSearchBridgeFile';
@@ -12061,6 +12063,18 @@ if (!gotTheLock) {
     refreshImSessionWorkingDirectoriesForAgent,
     resolveAgentWorkspacePath,
     resolveDefaultAgentModelRef,
+    deleteAgentWithRuntime: (agentId, commitLocalDeletion) => {
+      const deletion = deleteOpenClawAgent({
+        agentId, commitLocalDeletion, previousConfigSync: openClawConfigApplyQueue,
+        getGatewayState: () => ({
+          phase: getOpenClawEngineManager().getStatus().phase,
+          processId: getOpenClawEngineManager().getGatewayProcessPid(),
+        }),
+        ensureRpcClient: async () => openClawRuntimeAdapter?.ensureGatewayRpcClient() ?? null,
+      });
+      openClawConfigApplyQueue = deletion.then(() => {}, () => {});
+      return deletion;
+    },
     syncOpenClawConfig,
   });
 
@@ -16222,6 +16236,15 @@ if (!gotTheLock) {
 
     initializeKeyfromAttribution(store);
     refreshEndpointsTestMode(store);
+
+    startUninstallAnalytics({
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      executablePath: app.getPath('exe'),
+      userDataPath: app.getPath('userData'),
+      store,
+      captureContext: () => getMainLogReporter().captureContext(),
+    });
 
     // Background persistence services require the initialized store and restored endpoints.
     const usageTitleSync = new UsageTitleSync({

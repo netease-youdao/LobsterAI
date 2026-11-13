@@ -5,9 +5,10 @@ import path from 'node:path';
 import { BrowserWindow, ipcMain } from 'electron';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
-import { AgentIpcChannel } from '../../../shared/agent/constants';
+import { AgentId, AgentIpcChannel } from '../../../shared/agent/constants';
 import { ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
-import { type AgentHandlerDeps,registerAgentHandlers } from './handlers';
+import { ModelThinkingLevel } from '../../../shared/providers/modelThinking';
+import { type AgentHandlerDeps, registerAgentHandlers } from './handlers';
 
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: vi.fn() },
@@ -39,6 +40,7 @@ function setup(
   existingAgents: unknown[] = [],
 ) {
   const addPresetAgent = vi.fn().mockResolvedValue(agent);
+  const resolveDefaultAgentModelRef = vi.fn(() => 'provider/model');
   const sender = { id: 1, send: vi.fn() };
   const otherWindowSend = vi.fn();
   vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
@@ -48,17 +50,43 @@ function setup(
   registerAgentHandlers({
     getAgentManager: () => ({ addPresetAgent, listAgents: () => existingAgents }),
     resolveAgentWorkspacePath,
-    resolveDefaultAgentModelRef: () => 'provider/model',
+    resolveDefaultAgentModelRef,
     syncOpenClawConfig,
   } as unknown as AgentHandlerDeps);
   const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.AddPreset)![1];
   return {
-    invoke: () => handler({ sender } as unknown as Electron.IpcMainInvokeEvent, ExpertFixtureId.Data),
+    invoke: (selection?: unknown) => handler({ sender } as unknown as Electron.IpcMainInvokeEvent, ExpertFixtureId.Data, selection),
     addPresetAgent,
+    resolveDefaultAgentModelRef,
     otherWindowSend,
     senderSend: sender.send,
   };
 }
+
+test('summon uses the renderer new-task selection instead of re-resolving a global custom model', async () => {
+  const { invoke, addPresetAgent, resolveDefaultAgentModelRef } = setup(vi.fn().mockResolvedValue({ success: true }));
+  expect(await invoke({ model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High })).toMatchObject({ success: true });
+  expect(addPresetAgent).toHaveBeenCalledExactlyOnceWith(ExpertFixtureId.Data, 'lobsterai-server/yd-fast', ModelThinkingLevel.High);
+  expect(resolveDefaultAgentModelRef).not.toHaveBeenCalled();
+});
+
+test('an explicitly empty new-task selection is not replaced with a global custom default', async () => {
+  const { invoke, addPresetAgent, resolveDefaultAgentModelRef } = setup(vi.fn().mockResolvedValue({ success: true }));
+  await invoke({ model: '', thinkingLevel: '' });
+  expect(addPresetAgent).toHaveBeenCalledExactlyOnceWith(ExpertFixtureId.Data, '', '');
+  expect(resolveDefaultAgentModelRef).not.toHaveBeenCalled();
+});
+
+test('invalid model selection fails before saving an expert or synchronizing OpenClaw', async () => {
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const sync = vi.fn();
+  const { invoke, addPresetAgent } = setup(sync);
+  expect(await invoke({ model: 123 })).toMatchObject({ success: false });
+  expect(await invoke({ model: 'provider/model', thinkingLevel: 'invalid' })).toMatchObject({ success: false });
+  expect(addPresetAgent).not.toHaveBeenCalled();
+  expect(sync).not.toHaveBeenCalled();
+  errorLog.mockRestore();
+});
 
 test('summon waits for OpenClaw synchronization before reporting success and notifying other windows', async () => {
   let resolveSync!: (result: { success: boolean; changed: boolean }) => void;
@@ -191,4 +219,71 @@ test('working directory change hot-reloads OpenClaw config without restarting th
   expect(result).toMatchObject({ success: true });
   expect(refreshImSessionWorkingDirectoriesForAgent).toHaveBeenCalledExactlyOnceWith('main');
   expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: 'agent-working-directory-updated' });
+});
+
+function setupDeletion(deleteAgentWithRuntime: AgentHandlerDeps['deleteAgentWithRuntime']) {
+  const deleteAgent = vi.fn(() => true);
+  const syncOpenClawConfig = vi.fn().mockResolvedValue({ success: true, changed: true });
+  const stopSession = vi.fn();
+  const onSessionDeleted = vi.fn();
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+  registerAgentHandlers({
+    getAgentManager: () => ({
+      getAgent: (id: string) => id === ExpertFixtureId.Data ? { id } : null,
+      deleteAgent,
+    }),
+    getCoworkStore: () => ({ listSessionIdsByAgent: () => ['expert-session'] }),
+    getCoworkEngineRouter: () => ({ stopSession, onSessionDeleted }),
+    getIMGatewayManager: () => null,
+    deleteAgentWithRuntime,
+    syncOpenClawConfig,
+  } as unknown as AgentHandlerDeps);
+  const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.Delete)![1];
+  return {
+    invoke: (id: string = ExpertFixtureId.Data) => handler({ sender: { id: 1 } } as Electron.IpcMainInvokeEvent, id),
+    deleteAgent, syncOpenClawConfig, stopSession, onSessionDeleted,
+  };
+}
+
+test('deletion commits local records and syncs only after the runtime deletion succeeds', async () => {
+  let finishRuntime!: () => void;
+  const ready = new Promise<void>(resolve => { finishRuntime = resolve; });
+  const deleteAgentWithRuntime = vi.fn(async (_id: string, commit: () => boolean) => {
+    await ready;
+    return commit();
+  });
+  const { invoke, deleteAgent, syncOpenClawConfig, stopSession, onSessionDeleted } = setupDeletion(deleteAgentWithRuntime);
+  const pending = invoke();
+  await Promise.resolve();
+  expect(stopSession).toHaveBeenCalledExactlyOnceWith('expert-session');
+  expect(deleteAgent).not.toHaveBeenCalled();
+  expect(syncOpenClawConfig).not.toHaveBeenCalled();
+  expect(onSessionDeleted).not.toHaveBeenCalled();
+
+  finishRuntime();
+  expect(await pending).toEqual({ success: true, deleted: true, deletedSessionIds: ['expert-session'] });
+  expect(deleteAgent).toHaveBeenCalledExactlyOnceWith(ExpertFixtureId.Data);
+  expect(onSessionDeleted).toHaveBeenCalledExactlyOnceWith('expert-session');
+  expect(syncOpenClawConfig).toHaveBeenCalledExactlyOnceWith({ reason: 'agent-deleted' });
+});
+
+test('gateway deletion failure keeps the local expert and task records for retry', async () => {
+  const failure = new Error('Gateway unavailable');
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const { invoke, deleteAgent, syncOpenClawConfig, onSessionDeleted } = setupDeletion(vi.fn().mockRejectedValue(failure));
+  expect(await invoke()).toEqual({ success: false, error: failure.message });
+  expect(deleteAgent).not.toHaveBeenCalled();
+  expect(syncOpenClawConfig).not.toHaveBeenCalled();
+  expect(onSessionDeleted).not.toHaveBeenCalled();
+  expect(errorLog).toHaveBeenCalledExactlyOnceWith('[Agents] Failed to delete agent:', ExpertFixtureId.Data, failure);
+});
+
+test.each([AgentId.Main, 'missing-agent'])('deleting %s does not change the gateway roster', async id => {
+  const deleteAgentWithRuntime = vi.fn();
+  const { invoke, deleteAgent, syncOpenClawConfig, stopSession } = setupDeletion(deleteAgentWithRuntime);
+  expect(await invoke(id)).toEqual({ success: true, deleted: false, deletedSessionIds: [] });
+  expect(deleteAgentWithRuntime).not.toHaveBeenCalled();
+  expect(deleteAgent).not.toHaveBeenCalled();
+  expect(syncOpenClawConfig).not.toHaveBeenCalled();
+  expect(stopSession).not.toHaveBeenCalled();
 });

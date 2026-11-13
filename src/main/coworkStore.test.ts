@@ -22,7 +22,7 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
-import { AgentId, AgentSource } from '../shared/agent/constants';
+import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
@@ -32,6 +32,7 @@ import {
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { ModelPresetId } from '../shared/modelPresets/constants';
+import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
@@ -135,6 +136,7 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
+      model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}',
       thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
@@ -1516,6 +1518,18 @@ test('agent CRUD stores model preferences and working directory independently', 
   expect(updated?.workingDirectory).toBe('/tmp/docs-next');
   expect(store.getAgent(agent.id)?.thinkingLevel).toBe('max');
   expect(store.getAgent(agent.id)?.workingDirectory).toBe('/tmp/docs-next');
+});
+
+test('inherited expert bindings persist independently and startup backfill does not freeze an empty inheritance', () => {
+  const expert = store.createAgent({ name: 'Inherited expert', source: AgentSource.Preset, modelSelectionMode: AgentModelSelectionMode.Inherit });
+  const custom = store.createAgent({ name: 'Custom agent' });
+  expect(store.backfillEmptyAgentModels('custom/fallback')).toBe(1);
+  expect(store.getAgent(expert.id)).toMatchObject({ model: '', modelSelectionMode: AgentModelSelectionMode.Inherit });
+  expect(store.getAgent(custom.id)).toMatchObject({ model: 'custom/fallback', modelSelectionMode: AgentModelSelectionMode.Explicit });
+  store.updateAgent(expert.id, { model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High });
+  expect(store.listAgents().find(agent => agent.id === expert.id)).toMatchObject({
+    model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High, modelSelectionMode: AgentModelSelectionMode.Inherit,
+  });
 });
 
 test('deleteAgent removes its task history before an agent with the same name is recreated', () => {

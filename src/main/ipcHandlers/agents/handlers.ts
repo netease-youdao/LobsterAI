@@ -5,7 +5,9 @@ import {
   AgentIpcChannel,
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
+  AgentSource,
 } from '../../../shared/agent/constants';
+import { parseAgentModelSelection } from '../../../shared/agent/modelSelection';
 import { usageFailureCode, UsageOutcome, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
@@ -32,6 +34,7 @@ export interface AgentHandlerDeps {
   refreshImSessionWorkingDirectoriesForAgent: (agentId: string) => number;
   resolveAgentWorkspacePath: (agentId: string) => string;
   resolveDefaultAgentModelRef: () => string;
+  deleteAgentWithRuntime: (agentId: string, commitLocalDeletion: () => boolean) => Promise<boolean>;
   syncOpenClawConfig: SyncOpenClawConfig;
 }
 
@@ -217,13 +220,14 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
   ipcMain.handle(AgentIpcChannel.Delete, async (event, id: string) => {
     try {
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
-      const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
+      if (!agentExists) return { success: true, deleted: false, deletedSessionIds: [] };
+      const deletedSessionIds = getCoworkStore().listSessionIdsByAgent(id);
       const router = getCoworkEngineRouter();
       for (const sessionId of deletedSessionIds) {
         router.stopSession(sessionId);
       }
 
-      const result = getAgentManager().deleteAgent(id);
+      const result = await deps.deleteAgentWithRuntime(id, () => getAgentManager().deleteAgent(id));
 
       try {
         const imStore = getIMGatewayManager()?.getIMStore();
@@ -268,6 +272,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       notifyAgentsChanged(event.sender);
       return { success: true, deleted: result, deletedSessionIds: result ? deletedSessionIds : [] };
     } catch (error) {
+      console.error('[Agents] Failed to delete agent:', id, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete agent',
@@ -307,7 +312,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     }
   });
 
-  ipcMain.handle(AgentIpcChannel.AddPreset, async (event, presetId: string) => {
+  ipcMain.handle(AgentIpcChannel.AddPreset, async (event, presetId: string, rawModelSelection?: unknown) => {
     const startedAt = Date.now();
     let failureStage: PresetPreparationStage = PresetPreparationStage.Catalog;
     let prepareMode: PresetPreparationMode = PresetPreparationMode.Install;
@@ -329,9 +334,14 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       };
     };
     try {
-      const existing = getAgentManager().listAgents().find(agent => agent.source === 'preset' && agent.presetId === presetId);
+      const existing = getAgentManager().listAgents().find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
       prepareMode = existing ? existing.enabled ? PresetPreparationMode.Reuse : PresetPreparationMode.Reenable : PresetPreparationMode.Install;
-      const agent = await getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
+      const modelSelection = parseAgentModelSelection(rawModelSelection);
+      const agent = await getAgentManager().addPresetAgent(
+        presetId,
+        modelSelection ? modelSelection.model : resolveDefaultAgentModelRef(),
+        modelSelection?.thinkingLevel,
+      );
       if (!agent) return fail(new Error(`Preset agent not found: ${presetId}`), 'preset_not_found');
       // A reused or re-enabled instance keeps the persona its workspace already has.
       if (prepareMode === PresetPreparationMode.Install) writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);

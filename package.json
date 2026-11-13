@@ -499,6 +499,7 @@
     "micromark-util-normalize-identifier": "^1.1.0",
     "patch-package": "^8.0.1",
     "pdfjs-dist": "^4.10.38",
+    "plist": "^3.1.0",
     "postcss": "^8.4.35",
     "prettier": "^3.8.1",
     "qrcode.react": "^4.2.0",

@@ -502,6 +502,7 @@ const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
 ].join('\n');
 
 const BUNDLED_BROWSER_PLUGIN_ID = 'browser';
+const BUNDLED_XAI_PLUGIN_ID = 'xai';
 
 const MANAGED_BROWSER_POLICY_PROMPT = [
   '## Browser Policy',
@@ -2660,7 +2661,11 @@ export class OpenClawConfigSync {
     // model compat hooks (e.g. only grok-4.3 accepts reasoningEffort) plus the
     // OAuth refresh hook for credentials in the auth-profiles store. Declare
     // it only when the runtime actually bundles it (older runtimes pruned it).
-    const hasXaiPlugin = hasRuntimeBundledOpenClawExtension('xai');
+    const hasXaiPlugin = hasRuntimeBundledOpenClawExtension(BUNDLED_XAI_PLUGIN_ID);
+    // An enabled xai plugin is loaded on every gateway start and pulls in over
+    // a hundred modules nothing else needs, so it stays off until an xAI
+    // provider is configured. It serves no other provider.
+    const xaiPluginEnabled = hasXaiPlugin && Object.hasOwn(allProvidersMap, OpenClawProviderId.Xai);
     // The selected embedding provider exists only while its bundled plugin is
     // allowed; without it OpenClaw silently falls back to keyword search.
     const memoryEmbeddingProvider = coworkConfig.embeddingEnabled
@@ -2964,7 +2969,9 @@ export class OpenClawConfigSync {
           // Qwen/DashScope URLs. Declare it only when the plugin actually
           // exists, otherwise it becomes a stale entry on every startup.
           ...(hasQwenProvider && qwenPortalAuthPluginId ? { [qwenPortalAuthPluginId]: { enabled: true } } : {}),
-          ...(hasXaiPlugin ? { xai: { enabled: true } } : {}),
+          // Written as disabled rather than left out: a preserved entry from an
+          // earlier sync would otherwise keep it enabled.
+          ...(hasXaiPlugin ? { [BUNDLED_XAI_PLUGIN_ID]: { enabled: xaiPluginEnabled } } : {}),
           ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId
             ? { [memoryEmbeddingPluginId]: { enabled: true } }
             : {}),
@@ -2984,7 +2991,7 @@ export class OpenClawConfigSync {
         const existingAllow = Array.isArray((existingPlugins as Record<string, unknown>).allow)
           ? ((existingPlugins as Record<string, unknown>).allow as unknown[])
               .filter((id): id is string => typeof id === 'string' && id.length > 0)
-              .filter(id => id !== OPENCLAW_MODEL_COMPAT_PLUGIN_ID)
+              .filter(id => id !== OPENCLAW_MODEL_COMPAT_PLUGIN_ID && id !== BUNDLED_XAI_PLUGIN_ID)
           : [];
         const trustedPluginAllow = Array.from(new Set([
           ...existingAllow,
@@ -2994,7 +3001,7 @@ export class OpenClawConfigSync {
           // (manifest-owner-policy "not-in-allowlist"), so runtime-bundled
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
-          ...(hasXaiPlugin ? ['xai'] : []),
+          ...(xaiPluginEnabled ? [BUNDLED_XAI_PLUGIN_ID] : []),
           ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId ? [memoryEmbeddingPluginId] : []),
           ...(hasModelRoutingPlugin ? ['lobster-model-routing'] : []),
           ...(hasModelCompatConfig

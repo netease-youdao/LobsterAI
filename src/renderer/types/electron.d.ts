@@ -9,6 +9,8 @@ import type {
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
+import type { AgentModelSelectionMode } from '../../shared/agent/constants';
+import type { AgentModelSelection } from '../../shared/agent/modelSelection';
 import type { ExpertCatalog } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
@@ -855,6 +857,7 @@ interface IElectronAPI {
         systemPrompt?: string;
         identity?: string;
         model?: string;
+        modelSelectionMode?: AgentModelSelectionMode;
         thinkingLevel?: Agent['thinkingLevel'];
         workingDirectory?: string;
         icon?: string;
@@ -871,7 +874,7 @@ interface IElectronAPI {
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
     expertCatalog: () => Promise<ExpertCatalog>;
-    addPreset: (presetId: string) => Promise<Agent>;
+    addPreset: (presetId: string, modelSelection?: AgentModelSelection) => Promise<Agent>;
     /** Another window changed agents; reload them. */
     onChanged?: (callback: () => void) => () => void;
   };
