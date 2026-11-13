@@ -371,6 +371,34 @@ test('paged metadata: valid and null metadata and empty pages remain unchanged w
   }
 });
 
+test.each([
+  { name: 'getRecentConversationMessages', read: (id: string) => store.getRecentConversationMessages(id, 3) },
+  { name: 'getAllConversationMessages', read: (id: string) => store.getAllConversationMessages(id) },
+])('$name preserves messages with corrupt stored metadata', ({ read }) => {
+  const sid = 'conversation-metadata';
+  insertSession(sid);
+  insertMessage('excluded-tool', sid, 'tool_use', 'excluded tool', '{broken', 1, 1000);
+  insertMessage('valid', sid, 'user', 'valid content', '{"nested":{"keep":true}}', 2, 4000);
+  insertMessage('corrupt', sid, 'assistant', 'preserved content', '{broken', 3, 2000);
+  insertMessage('null', sid, 'assistant', 'null metadata', null, 4, 3000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(read(sid)).toEqual([
+      { id: 'valid', type: 'user', content: 'valid content', timestamp: 4000, metadata: { nested: { keep: true } } },
+      { id: 'corrupt', type: 'assistant', content: 'preserved content', timestamp: 2000, metadata: undefined },
+      { id: 'null', type: 'assistant', content: 'null metadata', timestamp: 3000, metadata: undefined },
+    ]);
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message corrupt in session ${sid}, discarding metadata`,
+    );
+    expect(db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get('corrupt'))
+      .toEqual({ metadata: '{broken' });
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
 test('getSessionSearchMessagePage keeps absolute mixed-message offsets without returning metadata or tool content', () => {
   const sid = 'search-page-session';
   insertSession(sid);
