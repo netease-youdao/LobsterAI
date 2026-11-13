@@ -4645,6 +4645,45 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(agentsMd).toContain('"Local time:" line');
   });
 
+  test('writes one Office editing section and slims pristine template sections around user content', async () => {
+    const sync = await createSync();
+    const marker = '<!-- LobsterAI managed: do not edit below this line -->';
+    const workspaceDir = path.join(stateDir, 'workspace-main');
+    const agentsMdPath = path.join(workspaceDir, 'AGENTS.md');
+    const userSection = '## My Rules\n\n- Always answer in Chinese.';
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(agentsMdPath, [
+      '# AGENTS.md - Your Workspace',
+      '',
+      userSection,
+      '',
+      // Verbatim from OpenClaw's bundled template; its link does not resolve in a workspace.
+      '## Related',
+      '',
+      '- [Default AGENTS.md](/reference/AGENTS.default)',
+      '',
+      marker,
+      '',
+      '## Stale managed section',
+      '',
+    ].join('\n'), 'utf8');
+
+    expect(sync.sync('agents-md-slim').ok).toBe(true);
+
+    const [userContent, managedContent] = fs.readFileSync(agentsMdPath, 'utf8').split(marker);
+    expect(userContent).toBe(`# AGENTS.md - Your Workspace\n\n${userSection}\n\n`);
+    expect(managedContent).not.toContain('Stale managed section');
+    // Every request carries this file: the Office rules are stated once, not once per format.
+    expect(managedContent.match(/^## Editing Existing/gm)).toHaveLength(1);
+    expect(managedContent).toContain('`.xlsx`: `excel_read` / `excel_edit`');
+    expect(managedContent).toContain('another read verifies nothing and costs a full extra model request');
+
+    // A second sync finds nothing left to slim and leaves the file alone.
+    const firstWrite = fs.readFileSync(agentsMdPath, 'utf8');
+    expect(sync.sync('agents-md-slim-again').ok).toBe(true);
+    expect(fs.readFileSync(agentsMdPath, 'utf8')).toBe(firstWrite);
+  });
+
   test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
     const { OpenClawConfigSync } = await import('./openclawConfigSync');
     const { OFFICE_EDITORS } = await import('../../shared/office/editors');

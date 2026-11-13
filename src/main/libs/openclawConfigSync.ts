@@ -26,6 +26,7 @@ import { DECISION_MODEL_PLUGIN_ID } from '../../shared/decisionModel/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
+import { buildOfficeAgentPrompt } from '../../shared/office/core/officeAgentPrompt';
 import { OFFICE_EDITORS } from '../../shared/office/editors';
 import {
   OPENCLAW_AUTOMATIONS_TOOL_NAME,
@@ -90,6 +91,7 @@ import {
   resolveManagedSessionModelTarget,
   resolveQualifiedAgentModelRef,
 } from './openclawAgentModels';
+import { slimPristineAgentsTemplateSections } from './openclawAgentsTemplate';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
@@ -102,7 +104,7 @@ import {
 import { OpenClawEmbeddingPluginId, resolveOpenClawEmbeddingProvider } from './openclawEmbeddingPlugins';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { escapeOpenClawEnvTemplate, escapeOpenClawEnvTemplateRecord } from './openclawEnvTemplate';
-import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
+import { repairHeartbeatFile } from './openclawHeartbeatRepair';
 import { MANAGED_LOCAL_TIME_POLICY_PROMPT } from './openclawLocalTimeContextPrompt';
 import {
   withManagedOpenClawModelPolicy,
@@ -717,10 +719,10 @@ const readBundledOpenClawAgentsTemplate = (): string => {
       const content = fs.readFileSync(templatePath, 'utf8');
       const trimmed = stripTemplateFrontMatter(content);
       if (trimmed) {
-        // The bundled template tells the model to invent periodic checks and
-        // write them into HEARTBEAT.md; strip that section so new workspaces
-        // are not seeded with guidance that contradicts the heartbeat policy.
-        return stripProactiveHeartbeatSection(trimmed);
+        // Seed the slim form: the bundled template's proactive section tells
+        // the model to invent recurring checks, which contradicts the
+        // heartbeat policy, and its group-chat and tool notes are verbose.
+        return slimPristineAgentsTemplateSections(trimmed).trimEnd();
       }
     } catch {
       // Ignore missing/unreadable bundled templates and fall back below.
@@ -4179,9 +4181,8 @@ export class OpenClawConfigSync {
       sections.push(MANAGED_BROWSER_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
       sections.push(MANAGED_DELIVERABLE_LINKS_PROMPT);
-      for (const editor of OFFICE_EDITORS) {
-        if (editor.agent.prompt) sections.push(editor.agent.prompt);
-      }
+      const officePrompt = buildOfficeAgentPrompt(OFFICE_EDITORS);
+      if (officePrompt) sections.push(officePrompt);
       // Static policies that used to ride uncached in each session's first
       // message or each turn; here they sit in the cached prefix.
       sections.push(MANAGED_MEDIA_GENERATION_POLICY_PROMPT);
@@ -4210,7 +4211,10 @@ export class OpenClawConfigSync {
       const markerIdx = existingContent.indexOf(MARKER);
       const userContent =
         markerIdx >= 0 ? existingContent.slice(0, markerIdx).trimEnd() : existingContent.trimEnd();
-      const preservedUserContent = userContent || readBundledOpenClawAgentsTemplate();
+      // Sections the user or the agent edited do not match a shipped template
+      // and stay untouched; see openclawAgentsTemplate.ts.
+      const preservedUserContent =
+        slimPristineAgentsTemplateSections(userContent).trimEnd() || readBundledOpenClawAgentsTemplate();
 
       if (sections.length === 0) {
         // No managed content — remove the managed section if present,
