@@ -18,7 +18,6 @@ import { compareVersions,resolveLocalizedText, skillService } from '../../servic
 import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
 import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
-import { DETAIL_ACTION_PILL_CLASS } from '../common/actionPillStyles';
 import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
 import CardToggle from '../common/CardToggle';
 import ManagementSearchHeader from '../common/ManagementSearchHeader';
@@ -1015,7 +1014,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           type="button"
           onClick={() => handleUpgradeSkill(skill)}
           disabled={upgradeState?.isActive === true}
-          className={DETAIL_ACTION_PILL_CLASS}
+          className={SKILL_DETAIL_USE_CLASS}
         >
           {i18nService.t('skillUpgrade')}
         </button>
@@ -1047,7 +1046,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
         type="button"
         onClick={() => handleInstallMarketplaceSkill(skill)}
         disabled={installingSkillId !== null}
-        className={DETAIL_ACTION_PILL_CLASS}
+        className={SKILL_DETAIL_USE_CLASS}
       >
         {installingSkillId === skill.id && <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />}
         {installingSkillId === skill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
@@ -1727,7 +1726,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                     <span className="w-20 flex-shrink-0 text-secondary">{i18nService.t('skillDetailProject')}</span>
                     <button
                       type="button"
-                      className="min-w-0 break-all text-left text-primary hover:underline"
+                      className="min-w-0 cursor-pointer break-all text-left text-foreground transition-colors hover:text-primary hover:underline"
                       onClick={(e) => { e.stopPropagation(); window.electron.shell.openExternal(selectedMarketplaceSkill.source.url); }}
                     >
                       {selectedMarketplaceSkill.source.url}
@@ -1880,7 +1879,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                       <span className="w-20 flex-shrink-0 text-secondary">{i18nService.t('skillDetailProject')}</span>
                       <button
                         type="button"
-                        className="min-w-0 break-all text-left text-primary hover:underline"
+                        className="min-w-0 cursor-pointer break-all text-left text-foreground transition-colors hover:text-primary hover:underline"
                         onClick={(e) => { e.stopPropagation(); window.electron.shell.openExternal(mp.source.url); }}
                       >
                         {mp.source.url}
