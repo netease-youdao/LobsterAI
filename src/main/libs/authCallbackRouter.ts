@@ -8,6 +8,7 @@ export interface AuthCallbackTarget {
 interface AuthCallbackRouterOptions {
   getTarget: () => AuthCallbackTarget | null;
   onParseError?: (error: unknown) => void;
+  acceptsCallback?: () => boolean;
 }
 
 interface NavigationStartedOptions {
@@ -44,7 +45,11 @@ export class AuthCallbackRouter {
     this.listenerReady = true;
     const code = this.pendingAuthCode;
     this.pendingAuthCode = null;
-    return code;
+    return this.options.acceptsCallback?.() === false ? null : code;
+  }
+
+  clearPending(): void {
+    this.pendingAuthCode = null;
   }
 
   markRendererUnavailable(): void {
@@ -58,6 +63,7 @@ export class AuthCallbackRouter {
   }
 
   private deliverOrBuffer(code: string): void {
+    if (this.options.acceptsCallback?.() === false) return;
     if (this.listenerReady) {
       const target = this.options.getTarget();
       if (target && !target.isDestroyed()) {

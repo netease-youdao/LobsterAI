@@ -217,6 +217,8 @@ contextBridge.exposeInMainWorld('electron', {
     dismissContextMenu: () => ipcRenderer.invoke(CompanionContextMenuIpc.Dismiss),
     drag: (phase, grab) => ipcRenderer.send(DesktopCompanionIpc.Drag, { phase, grab }),
     orbFileDrag: (phase, kinds) => ipcRenderer.send(DesktopCompanionIpc.OrbFileDrag, { phase, kinds }),
+    orbHover: hovering => ipcRenderer.send(DesktopCompanionIpc.OrbHover, hovering),
+    setStagePassThrough: passThrough => ipcRenderer.send(DesktopCompanionIpc.StagePassThrough, passThrough),
     taskStarted: sessionId => ipcRenderer.invoke(DesktopCompanionIpc.TaskStarted, sessionId),
     taskUpdated: () => ipcRenderer.send(DesktopCompanionIpc.TaskUpdated),
     setPanelPassThrough: passThrough => ipcRenderer.send(DesktopCompanionIpc.PanelPassThrough, passThrough),
@@ -1540,6 +1542,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   auth: {
     login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
+    cancelLogin: () => ipcRenderer.invoke(AuthIpcChannel.CancelLogin),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),

@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 import { LogReporterEndpoint } from '../src/shared/analytics/constants';
 import { UninstallAnalytics, UninstallAnalyticsKey } from '../src/shared/analytics/uninstall';
 
-const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8');
+const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8').replace(/\r\n/g, '\n');
 const analytics = read('scripts/nsis-uninstall-analytics.nsh');
 const installer = read('scripts/nsis-installer.nsh');
 const uninstaller = read('node_modules/app-builder-lib/templates/nsis/uninstaller.nsh');
