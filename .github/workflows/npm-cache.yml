@@ -1,0 +1,38 @@
+name: Warm npm Cache
+
+on:
+  push:
+    branches: [main, develop, 'release/**']
+    paths:
+      - 'package-lock.json'
+      - '.npmrc'
+      - '.github/workflows/npm-cache.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: npm-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  warm-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      # Base-branch caches can be restored by PRs targeting that branch.
+      # Keep only this lockfile's downloads, without accumulated npx packages.
+      - uses: actions/cache@v4
+        id: downloads
+        with:
+          path: ${{ runner.temp }}/lobsterai-npm-cache/_cacache
+          key: npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('package-lock.json', '.npmrc') }}
+      - run: npm ci --cache "$RUNNER_TEMP/lobsterai-npm-cache" --prefer-offline --no-audit --fund=false
+        if: steps.downloads.outputs.cache-hit != 'true'
