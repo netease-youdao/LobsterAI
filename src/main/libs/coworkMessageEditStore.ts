@@ -6,9 +6,16 @@ import type { CoworkMessage } from '../coworkStore';
 export interface CoworkMessageEditOperation extends CoworkMessageEditPending {
   sessionId: string;
   sessionKey: string;
-  entryId: string;
-  originalLeafId: string;
-  originalTranscriptId: string;
+  /**
+   * Gateway entry the transcript was rewound to. Absent when nothing from the
+   * edited message onward reached the gateway, so the edit rewound nothing.
+   */
+  entryId?: string;
+  /** Branch tip to return to; absent only when the gateway transcript was empty. */
+  originalLeafId?: string;
+  /** Fork point to rewind back to after returning to that tip, when the transcript stopped at one. */
+  originalCutEntryId?: string;
+  originalTranscriptId?: string;
   runId: string;
   prefixEntryIds: string[];
 }
@@ -116,6 +123,12 @@ export class CoworkMessageEditStore {
       this.db.prepare('INSERT INTO cowork_message_edits VALUES (?, ?, ?, ?, ?)')
         .run(operation.operationId, operation.sessionId, operation.phase, JSON.stringify(operation), JSON.stringify(snapshot));
     });
+  }
+
+  /** Drops an edit that never touched either transcript, so it needs no recovery. */
+  cancelPrepared(operation: CoworkMessageEditOperation): void {
+    this.db.prepare('DELETE FROM cowork_message_edits WHERE operation_id = ? AND phase = ?')
+      .run(operation.operationId, CoworkMessageEditPhase.Prepared);
   }
 
   setPhase(operation: CoworkMessageEditOperation, phase: CoworkMessageEditPhase): void {
