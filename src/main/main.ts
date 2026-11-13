@@ -62,6 +62,7 @@ import {
   AuthIpcChannel,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  AuthLoginFailureReason,
   AuthRefreshOutcome,
   AuthRefreshReason,
   type AuthSessionChangedEvent,
@@ -358,7 +359,8 @@ import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdate
 import { ArtifactFileWatcher } from './libs/artifactFileWatcher';
 import { openBrowserLogin } from './libs/authBrowserLogin';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
-import { startAuthLocalCallback } from './libs/authLocalCallbackServer';
+import { startAuthLocalCallback, stopAuthLocalCallback } from './libs/authLocalCallbackServer';
+import { AuthLoginAttempt } from './libs/authLoginAttempt';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
@@ -5333,7 +5335,9 @@ if (!gotTheLock) {
     app.setAsDefaultProtocolClient('lobsterai');
   }
 
+  const authLoginAttempt = new AuthLoginAttempt();
   const authCallbackRouter = new AuthCallbackRouter({
+    acceptsCallback: () => authLoginAttempt.acceptsCallback(),
     getTarget: () => {
       if (!mainWindow || mainWindow.isDestroyed()) return null;
       return mainWindow.webContents;
@@ -8266,17 +8270,32 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, (_event, { loginUrl }: { loginUrl?: string } = {}) => openBrowserLogin({
-    baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
-    openExternal: url => shell.openExternal(url),
-    // The callback may be shared by another login page and cleans itself up on timeout.
-    startLocalCallback: () => startAuthLocalCallback({
-      onCode: code => {
-        authCallbackRouter.handleAuthCode(code);
-        focusMainWindow('local auth callback');
-      },
-    }),
-  }));
+  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
+    const generation = authLoginAttempt.begin();
+    authCallbackRouter.clearPending();
+    await Promise.all([stopAuthLocalCallback(), authLoginAttempt.waitForExchange()]);
+    const isCurrent = () => authLoginAttempt.isCurrent(generation);
+    if (!isCurrent()) return { success: false, reason: AuthLoginFailureReason.Cancelled };
+    return openBrowserLogin({
+      baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
+      openExternal: url => shell.openExternal(url),
+      isCurrent,
+      startLocalCallback: () => startAuthLocalCallback({
+        onCode: code => {
+          if (!isCurrent()) return;
+          authCallbackRouter.handleAuthCode(code);
+          focusMainWindow('local auth callback');
+        },
+      }),
+    });
+  });
+
+  ipcMain.handle(AuthIpcChannel.CancelLogin, async () => {
+    authLoginAttempt.cancel();
+    authCallbackRouter.clearPending();
+    await Promise.all([stopAuthLocalCallback(), authLoginAttempt.waitForExchange()]);
+    return { success: true };
+  });
 
   registerFeedbackIpc({
     ipcMain,
@@ -8310,11 +8329,12 @@ if (!gotTheLock) {
     fetchWithAuth,
   });
 
-  const activateLowCreditPurchaseOffer = async (): Promise<Record<string, unknown> | null> => {
+  const activateLowCreditPurchaseOffer = async (signal?: AbortSignal): Promise<Record<string, unknown> | null> => {
     try {
       const response = await fetchWithAuth(`${getServerApiBaseUrl()}/api/purchase-offers/low-credit/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
       });
       if (!response.ok) return null;
       const body = (await response.json()) as {
@@ -8329,7 +8349,7 @@ if (!gotTheLock) {
     }
   };
 
-  ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
+  ipcMain.handle(AuthIpcChannel.Exchange, (_event, { code }: { code: string }) => authLoginAttempt.runExchange(async (loginAttempt) => {
     const startingTokens = getAuthTokens();
     const startingUser = getAuthUser();
     const startingEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
@@ -8358,6 +8378,7 @@ if (!gotTheLock) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(withKeyfromBody({ authCode: code })),
+        signal: AbortSignal.any([loginAttempt.signal, AbortSignal.timeout(30_000)]),
       });
       if (!resp.ok) {
         return { success: false, error: `Exchange failed: ${resp.status}` };
@@ -8375,7 +8396,7 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
-      if (!isExchangeIntentCurrent()) {
+      if (!isExchangeIntentCurrent() || !loginAttempt.isCurrent()) {
         return { success: false, error: t('authAccountChanged') };
       }
 
@@ -8395,6 +8416,7 @@ if (!gotTheLock) {
       saveAuthUser(body.data.user);
       committedExchangeGeneration = exchangeAccountGeneration;
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
+      if (!loginAttempt.isCurrent()) throw new Error('Login was cancelled or replaced');
       const requiresEnterpriseContext = (
         readAccountMode(body.data) === EnterpriseAccountMode.Enterprise
         || body.data.quota.subscriptionStatus === AuthSubscriptionStatus.Enterprise
@@ -8421,7 +8443,8 @@ if (!gotTheLock) {
         `[Auth] exchange completed; enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
       const quota = normalizeQuota(body.data.quota);
-      const purchaseOffer = await activateLowCreditPurchaseOffer();
+      const purchaseOffer = await activateLowCreditPurchaseOffer(loginAttempt.signal);
+      if (!loginAttempt.isCurrent()) throw new Error('Login was cancelled or replaced');
       if (
         authAccountGeneration !== exchangeAccountGeneration
         || authExchangeIntentSequence !== exchangeIntent.intentId
@@ -8480,7 +8503,8 @@ if (!gotTheLock) {
         });
         console.warn('[Auth] rolled back local credentials after an incomplete exchange');
       }
-      console.error('[Auth] exchange failed:', error);
+      if (loginAttempt.isCurrent()) console.error('[Auth] exchange failed:', error);
+      else console.debug('[Auth] cancelled or replaced login exchange settled');
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Exchange failed',
@@ -8490,7 +8514,7 @@ if (!gotTheLock) {
         activeAuthExchangeIntent = null;
       }
     }
-  });
+  }));
 
   ipcMain.handle(AuthIpcChannel.GetUser, async () => {
     const createUnavailableResponse = () => {

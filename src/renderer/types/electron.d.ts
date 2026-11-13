@@ -2126,6 +2126,7 @@ interface IElectronAPI {
   };
   auth: {
     login: (loginUrl?: string) => Promise<AuthLoginResult>;
+    cancelLogin: () => Promise<{ success: boolean }>;
     exchange: (
       code: string,
     ) => Promise<{
