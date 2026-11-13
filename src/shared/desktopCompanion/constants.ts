@@ -4,6 +4,7 @@ import type { CompanionContextMenuBridge, CompanionContextMenuState } from './co
 import type { CompanionFileKind } from './fileKinds';
 import type { CompanionHintTopic } from './hintPolicy';
 import type { LanguageToolResume, LanguageToolsBridge, SpeechStatus } from './languageTools';
+import type { CompanionLauncherAction } from './launcher';
 import type { CompanionPermissionGuideBridge } from './permissionGuide';
 import type { CompanionResultsBridge, CompanionResultState } from './results';
 import type { CompanionScreenshotBridge } from './screenshot';
@@ -30,7 +31,11 @@ export const DesktopCompanionIpc = {
   Drag: 'desktop-companion:drag',
   Changed: 'desktop-companion:changed',
   OrbFileDrag: 'desktop-companion:orb-file-drag',
+  /** The pointer came to rest on the orb, or left it. */
+  OrbHover: 'desktop-companion:orb-hover',
   StageCommand: 'desktop-companion:stage-command',
+  /** The launcher's window lets clicks through its transparent margin, which reaches over the orb. */
+  StagePassThrough: 'desktop-companion:stage-pass-through',
   ResizeSurface: 'desktop-companion:resize-surface',
   Selection: 'desktop-companion:selection',
   SelectionCommand: 'desktop-companion:selection-command',
@@ -139,7 +144,7 @@ export interface DesktopCompanionDraft {
   selectionContext?: CompanionSelectionTaskContext;
 }
 
-export const DesktopCompanionStageKind = { None: 'none', Hint: 'hint', Drop: 'drop', Task: 'task' } as const;
+export const DesktopCompanionStageKind = { None: 'none', Hint: 'hint', Drop: 'drop', Task: 'task', Launcher: 'launcher' } as const;
 export type DesktopCompanionStageKind = typeof DesktopCompanionStageKind[keyof typeof DesktopCompanionStageKind];
 
 export const DesktopCompanionStageSide = { Left: 'left', Right: 'right' } as const;
@@ -167,7 +172,8 @@ export type DesktopCompanionStage =
     files: DesktopCompanionDropFile[];
     kinds: CompanionFileKind[];
   }
-  | { kind: typeof DesktopCompanionStageKind.Task; id: string; sessionId: string };
+  | { kind: typeof DesktopCompanionStageKind.Task; id: string; sessionId: string }
+  | { kind: typeof DesktopCompanionStageKind.Launcher; id: string };
 
 export interface DesktopCompanionCapabilities {
   selection: CompanionCapability;
@@ -221,6 +227,7 @@ export const DesktopCompanionStageCommandType = {
   DropCancel: 'drop-cancel',
   TaskOpen: 'task-open',
   TaskDismiss: 'task-dismiss',
+  LauncherRun: 'launcher-run',
 } as const;
 
 export type DesktopCompanionStageCommand =
@@ -233,7 +240,8 @@ export type DesktopCompanionStageCommand =
   | { type: typeof DesktopCompanionStageCommandType.DropStarted; sessionId: string }
   | { type: typeof DesktopCompanionStageCommandType.DropCancel }
   | { type: typeof DesktopCompanionStageCommandType.TaskOpen }
-  | { type: typeof DesktopCompanionStageCommandType.TaskDismiss };
+  | { type: typeof DesktopCompanionStageCommandType.TaskDismiss }
+  | { type: typeof DesktopCompanionStageCommandType.LauncherRun; action: CompanionLauncherAction };
 
 export const DesktopCompanionSelectionMode = { Toolbar: 'toolbar', Answer: 'answer' } as const;
 export type DesktopCompanionSelectionMode = typeof DesktopCompanionSelectionMode[keyof typeof DesktopCompanionSelectionMode];
@@ -351,6 +359,9 @@ export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionSc
   /** Start carries where the press landed; the drag keeps that point under the pointer. */
   drag(phase: DesktopCompanionDragPhase, grab?: DesktopCompanionDragGrab): void;
   orbFileDrag(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[]): void;
+  /** Hovering the orb opens its launcher after a short rest. */
+  orbHover(hovering: boolean): void;
+  setStagePassThrough(passThrough: boolean): void;
   taskStarted(sessionId: string): Promise<void>;
   taskUpdated(): void;
   setPanelPassThrough(passThrough: boolean): void;
@@ -410,6 +421,8 @@ export const DesktopCompanionSize = {
   PanelCompactHeight: 280,
   Task: { width: 420, height: 112 },
   Hint: { width: 320, height: 168 },
+  // The hover launcher: a 232px action card over an input-shaped button, plus the shadow margin.
+  Launcher: { width: 276, height: 260 },
   // A 420px card with generous drop targets, plus its transparent shadow margin.
   Drop: { width: 464, height: 188 },
   // A 48px toolbar plus the margin; the window always reserves ToolbarMenu space below or above it.
@@ -432,5 +445,10 @@ export const DesktopCompanionTiming = {
   DropExpandDelayMs: 180,
   DropProximityPollMs: 60,
   DropLingerMs: 450,
+  // The orb sits at the screen edge, beside scrollbars: a pointer passing over it must not open the launcher.
+  LauncherOpenDelayMs: 250,
+  // Long enough to cross from the orb to the card, or to overshoot it and come back.
+  LauncherCloseDelayMs: 300,
+  LauncherPollMs: 100,
   SnoozeHourMs: 60 * 60_000,
 } as const;

@@ -1,4 +1,4 @@
-import { PaperClipIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { PaperClipIcon as DropPaperClipIcon, ViewfinderCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 
 import { CompanionAnalyticsAction, CompanionAnalyticsOutcome, CompanionAnalyticsSource, CompanionAnalyticsStage,
@@ -17,7 +17,11 @@ import {
   type CompanionFileKind,
 } from '../../../shared/desktopCompanion/fileKinds';
 import { COMPANION_WELCOME_TOPIC, companionHintCopyKeys } from '../../../shared/desktopCompanion/hintPolicy';
+import { COMPANION_LAUNCHER_ROWS, CompanionLauncherAction } from '../../../shared/desktopCompanion/launcher';
 import { i18nService } from '../../services/i18n';
+import ComposeIcon from '../icons/ComposeIcon';
+import OpenAppIcon from '../icons/OpenAppIcon';
+import PaperClipIcon from '../icons/PaperClipIcon';
 import { beginCompanionTask, reportCompanionAnalytics } from './analytics';
 import { CompanionPhase, companionPhase } from './companionPresentation';
 import { fileKindsFromDataTransfer, filesToAttachments, hasFiles, startCompanionTask } from './companionTasks';
@@ -196,7 +200,7 @@ function DropZone({ stage }: { stage: DropStage }) {
     >
       <header className="drop-header">
         <span className="drop-file" title={stage.files.map(file => file.name).join('\n')}>
-          <PaperClipIcon aria-hidden="true" />
+          <DropPaperClipIcon aria-hidden="true" />
           <span className="drop-file-name">{first?.name ?? t('desktopCompanionDropTitleIdle')}</span>
           {stage.files.length > 1 && <span className="drop-file-more">+{stage.files.length - 1}</span>}
         </span>
@@ -228,6 +232,63 @@ function DropZone({ stage }: { stage: DropStage }) {
   );
 }
 
+const LAUNCHER_ICONS: Record<CompanionLauncherAction, React.ComponentType<{ className?: string }>> = {
+  [CompanionLauncherAction.Ask]: ComposeIcon,
+  [CompanionLauncherAction.Screenshot]: ViewfinderCircleIcon,
+  [CompanionLauncherAction.Files]: PaperClipIcon,
+  [CompanionLauncherAction.OpenApp]: OpenAppIcon,
+};
+
+/**
+ * Opens when the pointer rests on the orb: what the companion can do, above a
+ * button shaped like an input on the orb's own row. The button opens the quick
+ * panel in the same place; a real input here would take focus from the app the
+ * user is working in just for hovering.
+ */
+function Launcher() {
+  const api = window.electron.desktopCompanion;
+  // The window's transparent margin reaches over the orb's edge; only the cards themselves take the mouse.
+  useEffect(() => {
+    let passThrough: boolean | null = null;
+    const onMove = (event: MouseEvent) => {
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      const next = !target?.closest('[data-launcher-card]');
+      if (next === passThrough) return;
+      passThrough = next;
+      api.setStagePassThrough(next);
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [api]);
+  const run = (action: CompanionLauncherAction) => {
+    void api.stageCommand({ type: DesktopCompanionStageCommandType.LauncherRun, action })
+      .catch(error => console.error('[DesktopCompanion] Launcher action failed', error));
+  };
+  const AskIcon = LAUNCHER_ICONS[CompanionLauncherAction.Ask];
+  return (
+    <div className="stage-launcher" role="group" aria-label={t('desktopCompanionLauncherLabel')}>
+      <div className="launcher-menu" data-launcher-card>
+        {COMPANION_LAUNCHER_ROWS.map(row => {
+          const Icon = LAUNCHER_ICONS[row.action];
+          return (
+            <React.Fragment key={row.action}>
+              {row.divided && <div className="launcher-divider" role="separator" />}
+              <button type="button" className="launcher-row" onClick={() => run(row.action)}>
+                <span className="launcher-icon" aria-hidden="true"><Icon /></span>
+                <span>{t(row.labelKey)}</span>
+              </button>
+            </React.Fragment>
+          );
+        })}
+      </div>
+      <button type="button" className="launcher-ask" data-launcher-card onClick={() => run(CompanionLauncherAction.Ask)}>
+        <span className="launcher-icon" aria-hidden="true"><AskIcon /></span>
+        <span>{t('desktopCompanionLauncherAsk')}</span>
+      </button>
+    </div>
+  );
+}
+
 export default function CompanionStage({ state }: { state: DesktopCompanionState }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const stage = state.stage;
@@ -239,6 +300,7 @@ export default function CompanionStage({ state }: { state: DesktopCompanionState
         {stage.kind === DesktopCompanionStageKind.Hint && <HintBubble stage={stage} />}
         {stage.kind === DesktopCompanionStageKind.Drop && <DropZone stage={stage} />}
         {stage.kind === DesktopCompanionStageKind.Task && <TaskStrip stage={stage} />}
+        {stage.kind === DesktopCompanionStageKind.Launcher && <Launcher />}
       </div>
     </div>
   );

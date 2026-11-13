@@ -85,6 +85,9 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
     setDropHover(false);
   };
 
+  // The window can be destroyed under the pointer; a hover it reported must not outlive it.
+  useEffect(() => () => api.orbHover(false), [api]);
+
   return (
     <div
       className="orb-surface"
@@ -135,7 +138,11 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
         style={skinKind === CompanionSkinKind.Brand ? { width: DesktopCompanionSize.BrandMark + 8, height: DesktopCompanionSize.BrandMark + 8 } : undefined}
         aria-expanded={expanded}
         aria-label={label}
-        title={label}
+        // At rest the hover launcher says what the orb is for; a tooltip would sit on top of it.
+        title={expanded ? label : undefined}
+        // A held button is a drag passing over, not a visit.
+        onPointerEnter={event => { if (event.buttons === 0) api.orbHover(true); }}
+        onPointerLeave={() => api.orbHover(false)}
         onPointerDown={event => {
           if (event.button !== 0) return;
           pointer.current = { x: event.screenX, y: event.screenY, dragging: false };

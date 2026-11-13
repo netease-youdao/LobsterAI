@@ -176,6 +176,27 @@ svg { flex-shrink: 0; }
 .stage-drop[data-status="failed"] .drop-file { display: none; }
 .stage-drop[data-status="failed"] .drop-hint { flex: 1; color: var(--c-accent-ink); }
 @keyframes drop-appear { from { opacity: 0; } to { opacity: 1; } }
+/*
+ * The hover launcher: actions above, and on the orb's own row a button shaped like an input.
+ * The main process reserves DesktopCompanionSize.Launcher for it: 232px wide plus the shadow margin.
+ */
+.stage-launcher { display: flex; flex-direction: column; gap: 6px; width: 232px; user-select: none; animation: fade-up 0.16s ease-out; }
+.launcher-menu { padding: 5px; background: var(--c-surface); border: 1px solid var(--c-line); border-radius: 14px; box-shadow: var(--c-shadow); }
+.launcher-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; border-radius: 9px;
+  color: var(--c-ink); font-size: 13.5px; text-align: left; transition: background 0.12s;
+}
+.launcher-row:hover, .launcher-row:focus-visible { background: var(--c-surface-2); }
+.launcher-icon { display: inline-flex; flex-shrink: 0; }
+.launcher-row svg, .launcher-ask svg { width: 17px; height: 17px; color: var(--c-ink-2); }
+.launcher-row > span:last-child, .launcher-ask > span:last-child { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.launcher-divider { height: 1px; margin: 4px 8px; background: var(--c-line); }
+.launcher-ask {
+  display: flex; align-items: center; gap: 9px; width: 100%; height: 42px; padding: 0 16px 0 14px;
+  background: var(--c-surface); border: 1px solid var(--c-line-strong); border-radius: 21px; box-shadow: var(--c-shadow);
+  color: var(--c-ink-3); font-size: 13.5px; text-align: left; cursor: text; transition: border-color 0.12s, color 0.12s;
+}
+.launcher-ask:hover, .launcher-ask:focus-visible { border-color: color-mix(in srgb, var(--c-accent) 55%, transparent); color: var(--c-ink-2); }
 
 /* ── Orb menu (macOS) ──────────────────────────────────── */
 
