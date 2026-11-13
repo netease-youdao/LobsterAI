@@ -2408,6 +2408,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentDefaultWorkingDirectory: 'Agent 默认工作目录',
     agentDefaultWorkingDirectoryHint: '新建会话默认在此目录执行',
     agentModelInvalidHint: '当前模型已不可用，请重新选择',
+    sessionModelPresetInvalidHint: '“{preset}”原绑定的模型已不可用，请重新选择以匹配可用模型',
     agentSystemPromptPlaceholder:
       '定义这个 Agent 的角色、工作方式和回答风格，例如：你是专业的办公文档助理，擅长起草报告、润色邮件、整理表格要点，并保持格式清晰。',
     agentSkills: '技能',
@@ -7261,6 +7262,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentDefaultWorkingDirectory: 'Agent Default Working Directory',
     agentDefaultWorkingDirectoryHint: 'New sessions run in this directory by default',
     agentModelInvalidHint: 'Model unavailable. Please select another',
+    sessionModelPresetInvalidHint: 'The model previously assigned to {preset} is unavailable. Select it again to find an available model.',
     agentSystemPromptPlaceholder:
       "Define this Agent's role, workflow, and response style. Example: you are a professional office document assistant who drafts reports, polishes emails, summarizes spreadsheet highlights, and keeps formatting clear.",
     agentSkills: 'Skills',
