@@ -101,6 +101,8 @@ const sanitizeArgsForLog = (args: Record<string, unknown>): Record<string, unkno
     output_format: args.output_format,
     temperature: args.temperature,
     imageSize: args.imageSize,
+    layerDecomposition: args.layerDecomposition,
+    background: args.background,
     durationSeconds: args.durationSeconds,
   };
 };
@@ -234,6 +236,12 @@ const ImageGenerateSchema = Type.Object({
   outputFormat: Type.Optional(Type.String({ description: 'Output image format, e.g. "png", "jpeg", "webp".' })),
   output_format: Type.Optional(Type.String({ description: 'Output image format, e.g. "png", "jpeg", "webp". Alias of outputFormat.' })),
   temperature: Type.Optional(Type.Number({ description: 'Sampling temperature for image models that support it.', minimum: 0, maximum: 2 })),
+  layerDecomposition: Type.Optional(Type.Boolean({ description: 'Split one input image into a base image and transparent PNG layers (text, subjects, background). Requires exactly one image and a model whose parameterSpec lists layer_decomposition. Each output image is billed.' })),
+  layerDecompositionOptions: Type.Optional(Type.Object({
+    max_images: Type.Optional(Type.Number({ description: 'Maximum output images including the base image. Default 30. Credits are reserved for this many images.', minimum: 2, maximum: 100 })),
+    text_recognition: Type.Optional(Type.Boolean({ description: 'Return rich-text OCR for regular text layers.' })),
+  }, { description: 'Options for layerDecomposition.' })),
+  background: Type.Optional(Type.String({ description: 'Alpha channel for models that support it: "auto", "transparent" (needs png output) or "opaque". Not allowed with layerDecomposition.' })),
   filename: Type.Optional(Type.String({ description: 'Suggested filename for the output.' })),
   taskId: Type.Optional(Type.String({ description: 'Task ID for status queries.' })),
   waitForResult: Type.Optional(Type.Boolean({ description: 'For status: wait for the saved result when later steps depend on it, including AI skin creation. Otherwise return to the conversation after a short observation.' })),
