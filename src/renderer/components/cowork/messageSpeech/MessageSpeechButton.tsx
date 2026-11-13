@@ -29,7 +29,9 @@ export default function MessageSpeechButton({ messageId, content, className }: M
     <MessageActionButton
       label={label}
       pressed={active}
-      className={`${className ?? ''}${active ? ' !bg-primary/10 !text-primary-hover hover:!bg-primary/15' : ''}`}
+      // While reading, only the icon changes: an ink-colored outline stop square in the
+      // same line style as its neighbors, with no fill so the toolbar stays even.
+      className={`${className ?? ''}${active ? ' !text-neutral-950 dark:!text-white' : ''}`}
       onClick={event => {
         event.stopPropagation();
         if (active) messageSpeechService.stop();
@@ -38,7 +40,7 @@ export default function MessageSpeechButton({ messageId, content, className }: M
       }}
     >
       {loading ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" aria-hidden="true" />
-        : active ? <StopIcon className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+        : active ? <StopIcon className="h-3.5 w-3.5" aria-hidden="true" />
         : <SpeakerWaveIcon className="h-3.5 w-3.5" aria-hidden="true" />}
     </MessageActionButton>
   );
