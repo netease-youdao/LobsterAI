@@ -224,7 +224,7 @@
     "protobufjs": "^7.2.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "selection-hook": "^2.1.1",
+    "selection-hook": "2.1.2",
     "utf-8-validate": "^6.0.6",
     "zod": "^4.3.6"
   },
