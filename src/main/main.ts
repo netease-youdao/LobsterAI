@@ -199,6 +199,7 @@ import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationG
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
+import { hasLayerDecompositionWarning } from '../shared/media/warnings';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
 import { isChatPresetSession, type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
 import {
@@ -6964,6 +6965,7 @@ if (!gotTheLock) {
           ...(task.progress ? [`Progress: ${task.progress}%`] : []),
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
           ...formatMediaLayerLines(task.layers, savedImageAssets),
+          ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
           ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
         ];
         const details = compactMediaDetails({
@@ -6980,6 +6982,7 @@ if (!gotTheLock) {
           status,
           generationStatus: task.status,
           billingStatus: task.billingStatus,
+          warnings: task.warnings,
           errorMessage: task.errorMessage,
           ...(deliveryPending ? { phase: MediaTaskPhase.Fetching, deliveryStatus: MediaDeliveryStatus.Retrying } : {}),
           ...(task.protocolVersion === MediaProtocol.Durable && status === MediaTaskStatus.Succeeded
@@ -7483,6 +7486,7 @@ if (!gotTheLock) {
         ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
         `Status: ${status}`,
         ...(task.quotaRemaining != null ? [`Quota remaining: ${task.quotaRemaining}`] : []),
+        ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
       ];
 
       if (status === 'succeeded' && mediaType === 'image' && ownerSessionId) {
@@ -7551,6 +7555,7 @@ if (!gotTheLock) {
           taskId: String(task.taskId),
           clientStartedAt,
           protocolVersion: task.protocolVersion,
+          warnings: task.warnings,
           createdAt: task.createdAt,
           deadlineAt: task.deadlineAt,
           phase: task.phase,
@@ -7780,7 +7785,8 @@ if (!gotTheLock) {
             }
             const content = status === MediaTaskStatus.Succeeded
               ? [...(saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))),
-                ...formatMediaLayerLines(task.layers, saved?.saved)].join('\n')
+                ...formatMediaLayerLines(task.layers, saved?.saved),
+                ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : [])].join('\n')
               : String(task.errorMessage || t(status === MediaTaskStatus.Timeout ? 'mediaTaskTimedOut'
                 : status === MediaTaskStatus.Cancelled ? 'mediaTaskCancelled' : 'mediaTaskFailed'));
             emitMediaTaskMessage(tracker.sessionId, content, { toolResultDetails: details }, tracker);
@@ -7799,13 +7805,15 @@ if (!gotTheLock) {
               const fileLines = persistResult.saved.map(asset => `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`);
               emitMediaTaskMessage(
                 tracker.sessionId,
-                `Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
+                [`Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
+                  ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : [])].join('\n'),
                 {
                   toolResultDetails: {
                     taskId,
                     status: 'succeeded',
                     mediaType: 'image',
                     assets: persistResult.saved,
+                    warnings: task.warnings,
                   },
                 },
               );
@@ -7813,6 +7821,7 @@ if (!gotTheLock) {
               const resultLines = resultUrls.map((_url, index) => `  - Generated image ${index + 1}`);
               emitMediaTaskMessage(tracker.sessionId, [
                 'Image generation succeeded.',
+                ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
                 `Task ID: ${taskId}`,
                 `Model: ${displayModel}`,
                 ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
