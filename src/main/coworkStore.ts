@@ -2190,13 +2190,7 @@ export class CoworkStore {
       [sessionId, limit, offset],
     );
 
-    return rows.map(row => ({
-      id: row.id,
-      type: row.type as CoworkMessageType,
-      content: row.content,
-      timestamp: row.created_at,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-    }));
+    return rows.map(row => this.parseStoredMessage(sessionId, row));
   }
 
   /**
