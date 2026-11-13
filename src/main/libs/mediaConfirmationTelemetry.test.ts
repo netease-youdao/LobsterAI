@@ -55,7 +55,7 @@ test('renewals stay in one media job and soft expiry is not a cancelled acceptan
   });
 });
 
-test('final timeout keeps its specific cause instead of a user cancellation', async () => {
+test.each(['image', 'video'] as const)('%s timeout keeps its specific cause instead of a user cancellation', async mediaType => {
   const report = vi.fn();
   const tracker = new MediaUsageAnalytics({
     getOwner: () => 'owner',
@@ -63,7 +63,7 @@ test('final timeout keeps its specific cause instead of a user cancellation', as
     report,
   });
   await tracker.run(
-    { sessionId: 'session', mediaType: 'video', action: 'generate', callId: 'call' },
+    { sessionId: 'session', mediaType, action: 'generate', callId: 'call' },
     async () => ({
       isError: true,
       content: [],

@@ -91,6 +91,7 @@ import {
   readOpenClawConfigRaw,
   resolveOpenClawOwnedSections,
 } from './openclawConfigTarget';
+import { OpenClawEmbeddingPluginId, resolveOpenClawEmbeddingProvider } from './openclawEmbeddingPlugins';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { escapeOpenClawEnvTemplate, escapeOpenClawEnvTemplateRecord } from './openclawEnvTemplate';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
@@ -111,6 +112,7 @@ const gwDiagTs = (): string => {
   return `[GW-RESTART-DIAG] ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
 };
 import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenClawExtension, hasRuntimeBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
+import { rebaseRuntimeExtensionLoadPaths } from './openclawPluginRepairPaths';
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
 import { withRequiredOpenClawSessionStoreOwner } from './openclawSessionStoreOwner';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
@@ -175,6 +177,14 @@ const asConfigRecord = (value: unknown): Record<string, unknown> | undefined => 
     ? value as Record<string, unknown>
     : undefined
 );
+
+/** Keep a preserved `plugins.load.paths` from loading another install's runtime extensions. */
+const withCurrentRuntimeExtensionLoadPaths = (plugins: Record<string, unknown>): Record<string, unknown> => {
+  const load = asConfigRecord(plugins.load);
+  if (!load || !Array.isArray(load.paths)) return plugins;
+  const paths = rebaseRuntimeExtensionLoadPaths(load.paths, findBundledExtensionsDir());
+  return { ...plugins, load: { ...load, paths } };
+};
 
 export const modelCompatConfigChangeRequiresRestart = (
   previousConfig: unknown,
@@ -2181,6 +2191,44 @@ export class OpenClawConfigSync {
     };
   }
 
+  /**
+   * OpenClaw's native `mcp` section. Every server is rendered from LobsterAI
+   * state, and stdio launches point into the running install (its Electron
+   * binary, app path and generated files), so the section is never carried
+   * over from an existing config.
+   */
+  private buildMcpConfig(browserWebAccess: BrowserWebAccessConfig): { servers: Record<string, Record<string, unknown>> } | undefined {
+    // OpenClaw handles connection, tool discovery, and execution natively.
+    const resolvedMcpServers = this.getResolvedMcpServers?.() ?? [];
+    const nativeMcpServers = buildOpenClawMcpServers(resolvedMcpServers);
+    if (browserWebAccess.displayMode === BrowserDisplayMode.InApp) {
+      const browserMcpLaunch = this.getLobsterBrowserMcpStdioLaunch?.();
+      if (browserMcpLaunch) {
+        nativeMcpServers[BrowserCredentialMcpServer.Name] = {
+          command: browserMcpLaunch.command,
+          args: [...browserMcpLaunch.args, BrowserCredentialMcpServer.ToolSetArgument],
+          ...(Object.keys(browserMcpLaunch.env).length > 0
+            ? { env: browserMcpLaunch.env }
+            : {}),
+          toolFilter: {
+            include: [BrowserCredentialLoginTool.Name],
+          },
+        };
+      }
+    }
+    // LobsterAI's Office editor tools edit the document open in the right-side panel live.
+    for (const [serverName, launch] of Object.entries(this.getOfficeMcpServers?.() ?? {})) {
+      nativeMcpServers[serverName] = {
+        command: launch.command,
+        args: launch.args,
+        ...(Object.keys(launch.env).length > 0 ? { env: launch.env } : {}),
+      };
+    }
+    const nativeMcpServerCount = Object.keys(nativeMcpServers).length;
+    console.log(`[OpenClawConfigSync] mcp.servers: ${nativeMcpServerCount} server(s)`);
+    return nativeMcpServerCount > 0 ? { servers: nativeMcpServers } : undefined;
+  }
+
   /** Prepare the config without writing a running Gateway's source file. */
   prepare(reason: string): OpenClawConfigSyncResult {
     return this.sync(reason, false);
@@ -2224,7 +2272,9 @@ export class OpenClawConfigSync {
       } else {
         // This also happens during logout or before server models finish
         // loading. Keep existing non-provider state so IM stays configured.
-        const result = this.writeMinimalConfig(configPath, reason, skillReviewMode, memoryFlushEnabled, persist);
+        const result = this.writeMinimalConfig(configPath, {
+          skillReviewMode, memoryFlushEnabled, browserWebAccess, persist,
+        });
         // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
         // may already be set and should be available when the user configures a model.
         const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
@@ -2499,6 +2549,25 @@ export class OpenClawConfigSync {
     // OAuth refresh hook for credentials in the auth-profiles store. Declare
     // it only when the runtime actually bundles it (older runtimes pruned it).
     const hasXaiPlugin = hasRuntimeBundledOpenClawExtension('xai');
+    // The selected embedding provider exists only while its bundled plugin is
+    // allowed; without it OpenClaw silently falls back to keyword search.
+    const memoryEmbeddingProvider = coworkConfig.embeddingEnabled
+      ? resolveOpenClawEmbeddingProvider(coworkConfig.embeddingProvider)
+      : null;
+    const memoryEmbeddingPluginId = memoryEmbeddingProvider
+      ? OpenClawEmbeddingPluginId[memoryEmbeddingProvider]
+      : null;
+    // Core providers ship in dist/extensions; others arrive as preinstalled
+    // official npm plugins, which are already allowed below.
+    const hasMemoryEmbeddingPlugin = memoryEmbeddingPluginId !== null
+      && (hasRuntimeBundledOpenClawExtension(memoryEmbeddingPluginId)
+        || hasPreinstalledPlugin(memoryEmbeddingPluginId));
+    if (memoryEmbeddingPluginId && !hasMemoryEmbeddingPlugin) {
+      console.warn(
+        `[OpenClawConfigSync] embedding provider ${memoryEmbeddingProvider} needs bundled plugin `
+        + `${memoryEmbeddingPluginId}, which this runtime lacks; memory search will use keyword results only`,
+      );
+    }
     const qwenPortalAuthPluginId = resolveOpenClawExtensionPluginId('qwen-portal-auth');
 
     // Detect if any provider uses Qwen/Aliyun DashScope URLs — OpenClaw auto-injects
@@ -2600,11 +2669,7 @@ export class OpenClawConfigSync {
       memory: {
         search: {
           enabled: true,
-          provider: coworkConfig.embeddingEnabled
-            ? (['openai', 'gemini', 'voyage', 'mistral', 'ollama'].includes(coworkConfig.embeddingProvider)
-              ? coworkConfig.embeddingProvider
-              : 'openai')
-            : 'none',
+          provider: memoryEmbeddingProvider ?? 'none',
           ...(coworkConfig.embeddingEnabled && coworkConfig.embeddingModel ? { model: coworkConfig.embeddingModel } : {}),
           ...(coworkConfig.embeddingEnabled ? {
             remote: {
@@ -2751,7 +2816,9 @@ export class OpenClawConfigSync {
             ? { feishu: { enabled: false } }
             : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
-          ...(hasMediaGenPlugin ? { 'lobster-media-generation': { enabled: true } } : {}),
+          ...(hasMediaGenPlugin ? {
+            'lobster-media-generation': { enabled: true, hooks: { allowConversationAccess: true } },
+          } : {}),
           ...(hasModelRoutingPlugin ? {
             'lobster-model-routing': getOpenClawTokenProxyPort() ? {
               enabled: true,
@@ -2786,6 +2853,9 @@ export class OpenClawConfigSync {
           // exists, otherwise it becomes a stale entry on every startup.
           ...(hasQwenProvider && qwenPortalAuthPluginId ? { [qwenPortalAuthPluginId]: { enabled: true } } : {}),
           ...(hasXaiPlugin ? { xai: { enabled: true } } : {}),
+          ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId
+            ? { [memoryEmbeddingPluginId]: { enabled: true } }
+            : {}),
           // User-installed plugins: merge enabled state and config from user_plugins table
           ...Object.fromEntries(
             userPlugins.map(p => [p.pluginId, {
@@ -2813,6 +2883,7 @@ export class OpenClawConfigSync {
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
           ...(hasXaiPlugin ? ['xai'] : []),
+          ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId ? [memoryEmbeddingPluginId] : []),
           ...(hasModelRoutingPlugin ? ['lobster-model-routing'] : []),
           ...(hasAgentSettingsPlugin ? ['lobster-agent-settings'] : []),
           ...(hasModelCompatConfig
@@ -2857,40 +2928,8 @@ export class OpenClawConfigSync {
       })())
     };
 
-    // Sync MCP servers into OpenClaw's native mcp.servers config field.
-    // OpenClaw handles connection, tool discovery, and execution natively.
-    const resolvedMcpServers = this.getResolvedMcpServers?.() ?? [];
-    const nativeMcpServers = buildOpenClawMcpServers(resolvedMcpServers);
-    if (browserWebAccess.displayMode === BrowserDisplayMode.InApp) {
-      const browserMcpLaunch = this.getLobsterBrowserMcpStdioLaunch?.();
-      if (browserMcpLaunch) {
-        nativeMcpServers[BrowserCredentialMcpServer.Name] = {
-          command: browserMcpLaunch.command,
-          args: [...browserMcpLaunch.args, BrowserCredentialMcpServer.ToolSetArgument],
-          ...(Object.keys(browserMcpLaunch.env).length > 0
-            ? { env: browserMcpLaunch.env }
-            : {}),
-          toolFilter: {
-            include: [BrowserCredentialLoginTool.Name],
-          },
-        };
-      }
-    }
-    // LobsterAI's Office editor tools edit the document open in the right-side panel live.
-    for (const [serverName, launch] of Object.entries(this.getOfficeMcpServers?.() ?? {})) {
-      nativeMcpServers[serverName] = {
-        command: launch.command,
-        args: launch.args,
-        ...(Object.keys(launch.env).length > 0 ? { env: launch.env } : {}),
-      };
-    }
-    const nativeMcpServerCount = Object.keys(nativeMcpServers).length;
-    if (nativeMcpServerCount > 0) {
-      (managedConfig as Record<string, unknown>).mcp = {
-        servers: nativeMcpServers,
-      };
-    }
-    console.log(`[OpenClawConfigSync] mcp.servers: ${nativeMcpServerCount} server(s)`);
+    const mcpConfig = this.buildMcpConfig(browserWebAccess);
+    if (mcpConfig) (managedConfig as Record<string, unknown>).mcp = mcpConfig;
 
     // Sync AskUserQuestion plugin config
     const askUserCallbackUrl = this.getAskUserCallbackUrl?.();
@@ -2913,6 +2952,9 @@ export class OpenClawConfigSync {
       const entries = plugins.entries as Record<string, Record<string, unknown>>;
       entries['lobster-media-generation'] = {
         enabled: true,
+        // Media tools need the run-owner hooks (before_model_resolve/agent_end)
+        // outside desktop session keys, e.g. visible subagents, IM and cron runs.
+        hooks: { allowConversationAccess: true },
         config: {
           callbackUrl: mediaCallbackUrl,
           secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
@@ -4324,13 +4366,17 @@ export class OpenClawConfigSync {
   /**
    * Start fresh installs without a provider, or remove unavailable providers
    * from an existing config while preserving IM and other runtime state.
+   * Paths into the running install are rendered, not preserved: the profile
+   * may have been written by another install of LobsterAI.
    */
   private writeMinimalConfig(
     configPath: string,
-    _reason: string,
-    skillReviewMode: OpenClawSkillReviewMode,
-    memoryFlushEnabled: boolean,
-    persist: boolean,
+    { skillReviewMode, memoryFlushEnabled, browserWebAccess, persist }: {
+      skillReviewMode: OpenClawSkillReviewMode;
+      memoryFlushEnabled: boolean;
+      browserWebAccess: BrowserWebAccessConfig;
+      persist: boolean;
+    },
   ): OpenClawConfigSyncResult {
     const baseMinimalConfig: Record<string, unknown> = {
       gateway: {
@@ -4371,12 +4417,17 @@ export class OpenClawConfigSync {
         // the corresponding IM channels remain enabled. Plugin-index-managed
         // keys (`installs`) are filtered out — see omitPluginIndexManagedKeys.
         if (existing?.plugins) {
-          mergedConfig.plugins = omitPluginIndexManagedKeys(existing.plugins);
+          mergedConfig.plugins = withCurrentRuntimeExtensionLoadPaths(omitPluginIndexManagedKeys(existing.plugins));
         }
       } catch {
         // Malformed JSON — overwrite with base minimal config.
       }
     }
+    // Owned like in a full sync: stdio launches name this install's Electron
+    // binary and app path, and an inherited section would start another one's.
+    const mcpConfig = this.buildMcpConfig(browserWebAccess);
+    if (mcpConfig) mergedConfig.mcp = mcpConfig;
+    else delete mergedConfig.mcp;
 
     // Apply maintenance preferences even before models load or after logout.
     // Preserve the rest of compaction and memory settings when disabling only flush.
@@ -4419,7 +4470,7 @@ export class OpenClawConfigSync {
     if (asConfigRecord(agentDefaults?.modelPolicy)) {
       mergedConfig = withManagedOpenClawModelPolicy(mergedConfig, mergedConfig);
     }
-    const minimalOwnedSections = ['models'];
+    const minimalOwnedSections = ['models', 'mcp'];
     const overlaid = overlaySession?.apply(mergedConfig, minimalOwnedSections);
     if (overlaid) mergedConfig = overlaid.config;
     const target = createOpenClawConfigTarget(

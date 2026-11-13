@@ -7,6 +7,7 @@
 //   -> load a profile-local external ESM plugin through the production launcher
 //   -> RPC-assert the provider/model are live (the workbench surface)
 //   -> boot again through the production launcher and keep that host live
+//   -> reach the bundled pnpm through that launcher with no pnpm on PATH
 //   -> open the native directory picker and assert the OS dialog really shows
 //      (win32 only) -> tear the home down and assert the runtime survived it.
 // Every step is a hard assertion; exit 0 means the whole flow works.
@@ -16,6 +17,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { pathToFileURL } = require('url');
 
 const { removeTree } = require('./dsh-remove-tree.cjs');
 
@@ -105,10 +107,69 @@ function startMockLlmServer(answerText) {
   });
 }
 
+// Writes the launcher DshEngineManager generates for a runtime that bundles
+// pnpm, from the same compiled helpers. Node shims are left out: they need the
+// app's userData, and nothing below runs a dependency build script.
+function writeProductionLauncher(installedRoot, launcherDir) {
+  const {
+    buildDshLauncherSource,
+    buildDshPackageManager,
+    DSH_LAUNCHER_FILENAME,
+    DSH_PNPM_PACKAGE_RELPATH,
+    parseDshPnpmBinRelPath,
+    resolveDshBundledGitBinDir,
+  } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshRuntime.js'));
+  const pnpmRoot = path.join(installedRoot, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
+  const binRelPath = parseDshPnpmBinRelPath(fs.readFileSync(path.join(pnpmRoot, 'package.json'), 'utf8'));
+  if (!binRelPath) fail(`installed runtime bundles no usable pnpm at ${pnpmRoot}`);
+  const packageManager = buildDshPackageManager({
+    electronPath: require('electron'),
+    pnpmEntry: path.join(pnpmRoot, ...binRelPath.split('/')),
+    nodeShimDir: null,
+    npmBinDir: null,
+    gitBinDir: resolveDshBundledGitBinDir(path.join(rootDir, 'resources'), process.platform, fs.existsSync, path.join),
+    baseEnv: process.env,
+    delimiter: path.delimiter,
+  });
+  const launcherPath = path.join(launcherDir, DSH_LAUNCHER_FILENAME);
+  const entryUrl = pathToFileURL(path.join(installedRoot, 'lib', 'bin.js')).href;
+  fs.writeFileSync(launcherPath, buildDshLauncherSource(entryUrl, packageManager));
+  return launcherPath;
+}
+
+// dsh's plugin manager runs pnpm from the package manager the launcher hands to
+// runCli. `dsh plugin ... --version` forwards to that pnpm, so a bare PATH that
+// holds no pnpm proves the launcher, not the machine, supplied it. Offline: no
+// package is fetched.
+function assertBundledPnpmThroughLauncher(launcherPath, dshHome, expectedVersion) {
+  const bareEnv = {
+    HOME: os.homedir(),
+    PATH: process.platform === 'win32' ? process.env.SystemRoot || 'C:\\Windows' : '/usr/bin:/bin:/usr/sbin:/sbin',
+    DSH_HOME: dshHome,
+    DSH_TELEMETRY_DISABLED: '1',
+    ELECTRON_RUN_AS_NODE: '1',
+    ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot || 'C:\\Windows' } : {}),
+  };
+  const result = spawnSync(
+    require('electron'),
+    ['--expose-internals', launcherPath, 'plugin', '--profile', 'web', '--version'],
+    { cwd: os.tmpdir(), env: bareEnv, encoding: 'utf8' }
+  );
+  const lines = (result.stdout || '').trim().split(/\r?\n/);
+  const reported = lines[lines.length - 1];
+  if (result.status !== 0 || reported !== expectedVersion) {
+    fail(
+      `pnpm through the launcher: expected ${expectedVersion}, got "${reported}" (exit ${result.status})\n` +
+        `${result.stdout || ''}${result.stderr || ''}`
+    );
+  }
+  log(`   bundled pnpm ${reported} reached through the launcher with no pnpm on PATH`);
+}
+
 // Boots through the same launcher, arguments, and launch-token exchange that
 // DshEngineManager uses, and resolves once the web server serves the session;
 // the caller owns the returned child and uses the cookie for RPCs.
-function bootDsh(installedRoot, dshHome, extraEnv) {
+function bootDsh(installedRoot, launcherPath, dshHome, extraEnv) {
   const electronPath = require('electron');
   const libsDir = path.join(rootDir, 'dist-electron', 'main', 'libs');
   const { spawnDshProcess } = require(path.join(libsDir, 'dshProcessLauncher.js'));
@@ -116,11 +177,10 @@ function bootDsh(installedRoot, dshHome, extraEnv) {
   const { exchangeDshLaunchToken, parseDshWebLaunchUrl, probeDshWebIndex, redactDshWebToken } = require(
     path.join(libsDir, 'dshWebAuth.js')
   );
-  const entry = path.join(installedRoot, 'lib', 'bin.js');
   const port = 31400 + Math.floor(Math.random() * 400);
   const child = spawnDshProcess({
     executablePath: electronPath,
-    args: buildDshWebArgs(entry, port),
+    args: buildDshWebArgs(launcherPath, port),
     cwd: installedRoot,
     env: { ...process.env, ...extraEnv, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' },
   });
@@ -182,6 +242,9 @@ function startRpc(booted, method, timeoutMs) {
     port: booted.port,
     path: `/api/${method}`,
     method: 'POST',
+    // Synchronous checks can outlive the server's keep-alive timeout while
+    // preventing Node from processing the old socket's close event.
+    agent: false,
     timeout: timeoutMs,
     headers: {
       'Content-Type': 'application/json',
@@ -362,7 +425,10 @@ async function main() {
   if (fs.existsSync(manifestPath)) {
     try {
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      needsPack = manifest.patchHash !== buildInfo.patchHash || manifest.version !== buildInfo.dshVersion;
+      needsPack =
+        manifest.patchHash !== buildInfo.patchHash ||
+        manifest.version !== buildInfo.dshVersion ||
+        manifest.pnpmVersion !== buildInfo.pnpmVersion;
     } catch {
       needsPack = true;
     }
@@ -439,8 +505,16 @@ async function main() {
   const fromManifest = resolveDshArtifactFromManifest(distDir, manifestName);
   if (fromManifest.sha256 !== artifact.sha256) fail('manifest and config descriptors disagree');
 
+  if (process.platform === 'win32') {
+    step('Git plugin install without system Git', process.execPath, [
+      path.join(rootDir, 'scripts', 'verify-dsh-git-install.cjs'), installed.root,
+    ]);
+  }
+
   // [4/8] Start the mock LLM upstream, then render a LobsterAI provider that
-  // points at it — settings.yaml on disk, the API key only in the child env.
+  // points at it — the web profile patch on disk, the API key only in the
+  // child env. The patch already holds the probe's insert row, which the sync
+  // must keep.
   const ANSWER = 'E2E mock upstream answer.';
   const mock = await startMockLlmServer(ANSWER);
   log(`>> mock OpenAI upstream at 127.0.0.1:${mock.port}`);
@@ -469,9 +543,11 @@ async function main() {
     fail(`unexpected rendered routes: ${routeIds.join(', ')} (skipped: ${JSON.stringify(managed.skipped)})`);
   }
   const written = await writeDshManagedSettings(dshHome, managed);
-  log(`>> provider settings rendered at ${written.settingsPath}`);
+  log(`>> provider settings rendered at ${written.patchPath}`);
 
-  // [5/8] Boot the installed runtime and assert provider + model over RPC.
+  // [5/8] Boot the installed runtime and assert provider + model over RPC. The
+  // assertions run as soon as the server answers: the routes must be live from
+  // boot, not only after a later settings import and reload.
   step(
     'boot installed runtime (web smoke + provider RPC assertions)',
     process.execPath,
@@ -495,7 +571,9 @@ async function main() {
   // fresh marker proves this second child loaded the plugin.
   fs.rmSync(externalPluginMarker, { force: true });
   log('>> boot installed runtime through the production launcher');
-  const booted = await bootDsh(installed.root, dshHome, {
+  const launcherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-launcher-'));
+  const launcherPath = writeProductionLauncher(installed.root, launcherDir);
+  const booted = await bootDsh(installed.root, launcherPath, dshHome, {
     ...managed.envVars,
     DSH_E2E_PLUGIN_MARKER: externalPluginMarker,
   });
@@ -505,6 +583,10 @@ async function main() {
   }
   assertExternalPluginMarker(externalPluginMarker, 'production launcher');
   log(`   dsh live at ${booted.url}`);
+  // A separate home: the live host above owns dshHome's profile write lock.
+  const pnpmCheckHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-pnpm-home-'));
+  assertBundledPnpmThroughLauncher(launcherPath, pnpmCheckHome, buildInfo.pnpmVersion);
+  removeTree(pnpmCheckHome);
 
   // [7/8] Native workspace picker. Only win32 drives a spawned dialog worker;
   // the mac/linux backends shell out to osascript/zenity, which this step does
@@ -561,6 +643,7 @@ async function main() {
   log(`   home teardown left the runtime intact (${runtimeFilesAfter} files)`);
 
   removeTree(installBase);
+  fs.rmSync(launcherDir, { recursive: true, force: true });
   log('E2E foundation flow passed.');
   process.exit(0);
 }

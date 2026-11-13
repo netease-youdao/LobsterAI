@@ -14,7 +14,9 @@ const packages = new Map();
 const noticeSections = [];
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const roots = [...Object.keys(packageJson.dependencies).filter(name => name.startsWith('@univerjs/')).sort(), 'rxjs', 'fflate', 'echarts'];
+// Renderer libraries are devDependencies: Vite bundles them, so they stay out of app.asar/node_modules.
+const declared = { ...packageJson.dependencies, ...packageJson.devDependencies };
+const roots = [...Object.keys(declared).filter(name => name.startsWith('@univerjs/')).sort(), 'rxjs', 'fflate', 'echarts'];
 
 /** Tarballs without a full license text, completed from the project's own source. */
 const UPSTREAM = {

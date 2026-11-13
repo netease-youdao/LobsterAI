@@ -23,10 +23,19 @@ export const LanguageToolsIpc = {
   SpeechCommand: 'desktop-tools:speech-command', Reset: 'desktop-tools:reset',
 } as const;
 
+/** What a card reopened after a sign-in picks up again, besides rerunning its own tool. */
+export interface LanguageToolResume {
+  /** The follow-up question that was waiting for the sign-in, sent once the translation is back. */
+  question?: string;
+}
+
 export interface LanguageToolInput {
   tool: LanguageTool; text?: string; id?: string;
   /** How tall the card may grow beside the selection before it scrolls. */
   cardMaxHeight?: number;
+  /** The card opens pinned, as it does when it comes back after a sign-in. */
+  pinned?: boolean;
+  resume?: LanguageToolResume;
 }
 export interface LanguageToolRequest {
   requestId: string; tool: LanguageTool; text: string; targetLanguage?: TranslationTarget;

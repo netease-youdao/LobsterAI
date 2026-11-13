@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import { MediaConfirmationReason } from '../../shared/media/confirmation';
 import { McpBridgeServer } from './mcpBridgeServer';
 
-test('closing a media callback interrupts its pending confirmation and cannot submit', async () => {
+test.each(['lobsterai_video_generate', 'lobsterai_image_generate'])('closing %s interrupts its pending confirmation and cannot submit', async tool => {
   const server = new McpBridgeServer('test-secret');
   let shown!: () => void;
   const published = new Promise<void>(resolve => { shown = resolve; });
@@ -23,7 +23,7 @@ test('closing a media callback interrupts its pending confirmation and cannot su
     const controller = new AbortController();
     const pending = fetch(server.mediaCallbackUrl!, { method: 'POST',
       headers: { 'content-type': 'application/json', 'x-lobster-media-secret': 'test-secret' },
-      body: JSON.stringify({ tool: 'lobsterai_video_generate', args: {}, context: { sessionKey: 'session', toolCallId: 'call' } }),
+      body: JSON.stringify({ tool, args: {}, context: { sessionKey: 'session', toolCallId: 'call' } }),
       signal: controller.signal,
     }).catch(() => undefined);
     await published;

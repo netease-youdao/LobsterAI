@@ -30,6 +30,15 @@ function isPoint(value: unknown): value is CompanionPoint {
   return !!point && Number.isFinite(point.x) && Number.isFinite(point.y);
 }
 
+/** Where a press landed inside an orb window of `size`, from the fractions the renderer reports. */
+export function companionDragGrabOffset(grab: unknown, size: CompanionSize): CompanionPoint | null {
+  if (!isPoint(grab)) return null;
+  return {
+    x: Math.round(Math.min(Math.max(grab.x, 0), 1) * size.width),
+    y: Math.round(Math.min(Math.max(grab.y, 0), 1) * size.height),
+  };
+}
+
 /** Restores the orb at its saved spot, or the lower-right corner of the work area. */
 export function resolveCompanionBounds(position: unknown, workArea: CompanionRect, size: CompanionSize = DesktopCompanionSize.Orb): CompanionRect {
   return clampCompanionBounds({

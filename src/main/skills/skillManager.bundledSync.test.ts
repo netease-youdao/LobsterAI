@@ -170,3 +170,23 @@ test('a locked retired backup is not restored and cleanup retries on the next st
   manager.recoverInterruptedUpgrades();
   expect(fs.existsSync(backup)).toBe(false);
 });
+
+test('a newer bundled web-search version replaces the stale copy and keeps user credentials', () => {
+  const writeWebSearch = (root: string, version: string, startServer: string): string => {
+    const dir = path.join(root, 'web-search');
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: web-search\ndescription: test skill\nversion: ${version}\n---\n# web-search\n`);
+    fs.writeFileSync(path.join(dir, 'scripts', 'start-server.sh'), startServer);
+    return dir;
+  };
+  const userDir = writeWebSearch(userRoot, '1.0.2', 'old\n');
+  fs.writeFileSync(path.join(userDir, 'tsconfig.json'), '{}\n');
+  fs.writeFileSync(path.join(userDir, '.env'), 'TOKEN=keep\n');
+  writeWebSearch(bundledRoot, '1.0.3', 'new\n');
+
+  manager.syncBundledSkillsToUserData();
+
+  expect(fs.readFileSync(path.join(userDir, 'scripts', 'start-server.sh'), 'utf8')).toBe('new\n');
+  expect(fs.existsSync(path.join(userDir, 'tsconfig.json'))).toBe(false);
+  expect(fs.readFileSync(path.join(userDir, '.env'), 'utf8')).toBe('TOKEN=keep\n');
+});

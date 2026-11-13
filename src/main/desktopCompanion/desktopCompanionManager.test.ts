@@ -16,6 +16,8 @@ import {
   DesktopCompanionIpc,
   DesktopCompanionMainPage,
   DesktopCompanionPanelPlacement,
+  DesktopCompanionSelectionCommandType,
+  DesktopCompanionSelectionMode,
   DesktopCompanionSize,
   DesktopCompanionSnoozeMode,
   DesktopCompanionStageCommandType,
@@ -32,7 +34,7 @@ import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectio
 import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../shared/desktopCompanion/selectionToolbar';
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { CompanionScreenshotController } from './companionScreenshot';
-import { CompanionSelectionController } from './companionSelection';
+import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { DesktopCompanionManager } from './desktopCompanionManager';
 import { FileDragEvent } from './fileDragMonitor';
 import type { CompanionLanguageClient } from './languageToolClient';
@@ -96,6 +98,7 @@ vi.mock('electron', async () => {
       getCursorScreenPoint: () => ({ x: 100, y: 100 }),
       getDisplayNearestPoint: () => ({ workArea }),
       getDisplayMatching: () => ({ workArea }),
+      screenToDipPoint: (point: unknown) => point,
     }),
     Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
     dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
@@ -123,6 +126,18 @@ class FakeMonitor extends EventEmitter {
   isUserBusy = () => false;
 }
 
+class FakeSelectionHook extends EventEmitter {
+  static FilterMode = { EXCLUDE_LIST: 2 };
+  static PositionLevel = { SEL_FULL: 3 };
+  static last: FakeSelectionHook | null = null;
+  constructor() { super(); FakeSelectionHook.last = this; }
+  start() { return true; }
+  stop() { return true; }
+  cleanup() {}
+  setGlobalFilterMode() { return true; }
+  getCurrentSelection() { return null; }
+}
+
 let manager: DesktopCompanionManager;
 let main: BrowserWindow;
 let values: Map<string, unknown>;
@@ -133,7 +148,8 @@ let fileDrag: FakeMonitor;
 let getTaskInfo: ReturnType<typeof vi.fn<(id: string) => CompanionTaskInfo | null>>;
 let reportAnalytics: ReturnType<typeof vi.fn>;
 
-function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running) {
+function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running,
+  loadSelectionHook: () => SelectionHookModule | null = () => null) {
   reportAnalytics = vi.fn();
   main = new BrowserWindow();
   openMain = vi.fn();
@@ -155,7 +171,7 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
     onPreferencesChanged: vi.fn(),
     openMain,
     openSettings,
-    services: { foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook: () => null, languageClient },
+    services: { foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook, languageClient },
   });
 }
 
@@ -166,6 +182,10 @@ function invoke(channel: string, value?: unknown, sender = main.webContents) {
 /** The orb is the first companion window created after the main window. */
 function orb() {
   return mocks.windows[1];
+}
+
+function emitDrag(phase: DesktopCompanionDragPhase, grab?: { x: number; y: number }) {
+  ipcMain.emit(DesktopCompanionIpc.Drag, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, { phase, grab });
 }
 
 function dragOverOrb(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[] = []) {
@@ -192,6 +212,7 @@ beforeEach(() => {
   mocks.windows.length = 0;
   mocks.quickAnswers.length = 0;
   mocks.handlers.clear();
+  FakeSelectionHook.last = null;
   // Most lifecycle cases start with the orb explicitly disabled and open surfaces on demand.
   values = new Map<string, unknown>([
     [DesktopCompanionStoreKey.Greeted, true],
@@ -259,6 +280,61 @@ test('a screenshot finishing after an account reset cannot restore the previous 
 });
 
 describe('gateway readiness', () => {
+  test('keeps a sessionless answer open through a gateway restart and still honors disabling selection', () => {
+    vi.useFakeTimers();
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create(undefined, OpenClawEnginePhase.Running, () => FakeSelectionHook);
+    FakeSelectionHook.last!.emit('text-selection', {
+      text: 'Selected project update', programName: 'chrome.exe', posLevel: 0, mousePosEnd: { x: 500, y: 400 },
+    });
+    vi.advanceTimersByTime(200);
+    const selection = mocks.windows.at(-1);
+    invoke(DesktopCompanionIpc.SelectionCommand, {
+      type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Summarize,
+    }, selection.webContents);
+    expect(selection.isVisible()).toBe(true);
+    selection.webContents.send.mockClear();
+    foreground.stop.mockClear();
+
+    for (const phase of [OpenClawEnginePhase.Starting, OpenClawEnginePhase.Error, OpenClawEnginePhase.Running]) {
+      manager.setEnginePhase(phase);
+      expect(selection.isVisible()).toBe(true);
+      expect(manager.getState().capabilities.selection).toBe(CompanionCapability.Ready);
+      expect(selection.webContents.send).not.toHaveBeenCalledWith(DesktopCompanionIpc.Selection, null);
+    }
+    expect(foreground.stop).not.toHaveBeenCalled();
+    manager.setPreferences({ selectionToolbar: false });
+    expect(selection.isVisible()).toBe(false);
+    expect(manager.getState().capabilities.selection).toBe(CompanionCapability.Off);
+  });
+
+  test('allows standalone selection tools before the gateway is ready while task entry stays deferred', () => {
+    vi.useFakeTimers();
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create(undefined, OpenClawEnginePhase.Starting, () => FakeSelectionHook);
+    expect(manager.getState().capabilities.selection).toBe(CompanionCapability.Ready);
+    expect(foreground.start).toHaveBeenCalled();
+    FakeSelectionHook.last!.emit('text-selection', {
+      text: 'Selected text', programName: 'chrome.exe', posLevel: 0, mousePosEnd: { x: 500, y: 400 },
+    });
+    vi.advanceTimersByTime(200);
+    const selection = mocks.windows.at(-1);
+    expect(selection.isVisible()).toBe(true);
+    expect(selection.webContents.send).toHaveBeenCalledWith(DesktopCompanionIpc.Selection,
+      expect.objectContaining({ mode: DesktopCompanionSelectionMode.Toolbar, text: 'Selected text' }));
+    manager.togglePanel(AnalyticsSource.Shortcut);
+    expect(manager.getState().panelVisible).toBe(false);
+    foreground.emit('change', 'notepad.exe');
+    expect(selection.isVisible()).toBe(false);
+    FakeSelectionHook.last!.emit('text-selection', {
+      text: 'Another selection', programName: 'notepad.exe', posLevel: 0, mousePosEnd: { x: 500, y: 400 },
+    });
+    vi.advanceTimersByTime(200);
+    expect(selection.isVisible()).toBe(true);
+    manager.setPreferences({ enabled: false });
+    expect(selection.isVisible()).toBe(false);
+  });
+
   test.each(Object.values(OpenClawEnginePhase).filter(phase => phase !== OpenClawEnginePhase.Running))(
     'keeps the enabled companion hidden during %s until the gateway runs', phase => {
       values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
@@ -335,8 +411,11 @@ describe('orb edge snapping', () => {
   const rightEdge = 1280 - DesktopCompanionSize.BrandOrb.width;
   const drag = (phase: DesktopCompanionDragPhase, x: number, y = 330) => {
     vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x, y });
-    ipcMain.emit(DesktopCompanionIpc.Drag,
-      { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, phase);
+    // Like the renderer, a press reports where it landed in the orb window.
+    const { bounds } = orb();
+    emitDrag(phase, phase === DesktopCompanionDragPhase.Start
+      ? { x: (x - bounds.x) / bounds.width, y: (y - bounds.y) / bounds.height }
+      : undefined);
   };
 
   beforeEach(() => {
@@ -389,6 +468,31 @@ describe('orb edge snapping', () => {
     drag(DesktopCompanionDragPhase.Cancel, x + 30);
     expect(orb().bounds).toMatchObject({ x, y: 300 });
     expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x, y: 300 });
+  });
+
+  test('keeps the pressed point under the pointer when the press arrives after the cursor moved on', () => {
+    create();
+    // Pressed at the orb's center, but the cursor is 100px further by the time the press arrives.
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: 330, y: 330 });
+    emitDrag(DesktopCompanionDragPhase.Start, { x: 0.5, y: 0.5 });
+    drag(DesktopCompanionDragPhase.Move, 430);
+    expect(orb().bounds).toMatchObject({ x: 400, y: 300 });
+    drag(DesktopCompanionDragPhase.End, 430);
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 400, y: 300 });
+  });
+
+  test('does not move the orb again for pointer events while the cursor stays still', () => {
+    create();
+    drag(DesktopCompanionDragPhase.Start, 230);
+    drag(DesktopCompanionDragPhase.Move, 330);
+    expect(orb().bounds).toMatchObject({ x: 300, y: 300 });
+    // The window moves under the still cursor, which reports pointer events of its own.
+    orb().bounds = { ...orb().bounds, x: 200 };
+    const setBounds = vi.spyOn(orb(), 'setBounds');
+    drag(DesktopCompanionDragPhase.Move, 330);
+    expect(setBounds).not.toHaveBeenCalled();
+    drag(DesktopCompanionDragPhase.Move, 340);
+    expect(orb().bounds).toMatchObject({ x: 310, y: 300 });
   });
 
   test.each([
@@ -528,7 +632,7 @@ describe('desktop companion lifecycle', () => {
     invoke(DesktopCompanionIpc.SetPreferences, { enabled: true });
     invoke(DesktopCompanionIpc.GetState);
     invoke(DesktopCompanionIpc.SetDraft, { prompt: 'secret', attachments: [] });
-    ipcMain.emit(DesktopCompanionIpc.Drag, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Move);
+    emitDrag(DesktopCompanionDragPhase.Move);
     const changes = reportAnalytics.mock.calls.map(([event]) => event).filter(event => event.action === AnalyticsAction.SettingChanged);
     expect(changes).toEqual([{ action: AnalyticsAction.SettingChanged, source: AnalyticsSource.Settings, setting: CompanionAnalyticsSetting.Enabled, enabled: true }]);
     expect(JSON.stringify(reportAnalytics.mock.calls)).not.toContain('secret');
@@ -1239,11 +1343,9 @@ describe('desktop companion lifecycle', () => {
 });
 
 describe('orb surface toggle', () => {
-  const press = () => ipcMain.emit(DesktopCompanionIpc.Drag,
-    { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Start);
+  const press = () => emitDrag(DesktopCompanionDragPhase.Start, { x: 0.5, y: 0.5 });
   const release = () => {
-    ipcMain.emit(DesktopCompanionIpc.Drag,
-      { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Cancel);
+    emitDrag(DesktopCompanionDragPhase.Cancel);
     invoke(DesktopCompanionIpc.ToggleOrb, true, orb().webContents);
   };
 
@@ -1307,8 +1409,7 @@ describe('orb surface toggle', () => {
     invoke(DesktopCompanionIpc.ToggleOrb, undefined, orb().webContents);
     readyPanel();
     press();
-    ipcMain.emit(DesktopCompanionIpc.Drag,
-      { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, DesktopCompanionDragPhase.Cancel);
+    emitDrag(DesktopCompanionDragPhase.Cancel);
     mocks.windows.at(-1).blur();
     vi.advanceTimersByTime(200);
     invoke(DesktopCompanionIpc.ToggleOrb, undefined, orb().webContents);
@@ -1995,7 +2096,7 @@ describe('stage: hints and drops', () => {
     expect(panel.bounds.width).toBe(cardWidth + DesktopCompanionSize.ComposerSideRoom);
     const drag = (phase: DesktopCompanionDragPhase, x: number) => {
       vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x, y: 800 });
-      ipcMain.emit(DesktopCompanionIpc.Drag, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, phase);
+      emitDrag(phase);
     };
     drag(DesktopCompanionDragPhase.Start, 1200);
     drag(DesktopCompanionDragPhase.Move, 200);
@@ -2080,5 +2181,140 @@ describe('stage: hints and drops', () => {
     expect(fileDrag.start).not.toHaveBeenCalled();
     fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+  });
+});
+
+describe('sign-in from a companion card', () => {
+  const journeyId = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const events = (interactionType: string) => reportAnalytics.mock.calls.map(([event]) => event)
+    .filter(event => event.interactionType === interactionType);
+
+  function openTranslation() {
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Translate, text: 'Selected words' });
+    const window = mocks.windows[1];
+    window.focus();
+    return window;
+  }
+
+  test('ordinary account changes cancel a pending login continuation', () => {
+    create();
+    const window = openTranslation();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'translate' }, window.webContents);
+    manager.resetForAccountChange();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+    expect(invoke(LanguageToolsIpc.GetInput, undefined, window.webContents)).toBeNull();
+    expect(events(Interaction.LoginSuccess)).toEqual([]);
+  });
+
+  test('only the explicit selection sign-in survives guest login fences', () => {
+    create();
+    const window = new BrowserWindow();
+    vi.spyOn(CompanionSelectionController.prototype, 'webContentsId', 'get').mockReturnValue(window.webContents.id);
+    const reset = vi.spyOn(CompanionSelectionController.prototype, 'resetForAccountChange');
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'explain' }, window.webContents);
+    manager.resetForAccountChange(true);
+    manager.resetForAccountChange(true);
+    expect(reset).not.toHaveBeenCalled();
+    expect(manager.getState()).toMatchObject({ sessionId: null, draft: { prompt: '', attachments: [] } });
+    manager.handleLoginSucceeded();
+    expect(events(Interaction.LoginSuccess)).toHaveLength(1);
+    manager.resetForAccountChange(true);
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
+  test('a translation card stays through the browser, survives the login reset and reopens with its follow-up', () => {
+    create();
+    const window = openTranslation();
+    const firstInput = invoke(LanguageToolsIpc.GetInput, undefined, window.webContents);
+    reportAnalytics.mockClear();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'ask', journeyId, resume: { question: '  Which tense is this?  ' } }, window.webContents);
+    expect(window.webContents.send).toHaveBeenCalledWith(LanguageToolsIpc.Pinned, true);
+    expect(events(Interaction.LoginClick)).toEqual([expect.objectContaining({
+      action: AnalyticsAction.Action, source: AnalyticsSource.LanguageTools, tool: 'ask', journeyId,
+    })]);
+    // The browser takes focus; the pinned card stays.
+    window.blur();
+    expect(window.visible).toBe(true);
+    // The exchange resets language tools before the companion hears about the login.
+    manager.resetForAccountChange(true);
+    // Credential storage and the session event each enforce the same reset before continuation.
+    manager.resetForAccountChange(true);
+    expect(window.visible).toBe(false);
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(true);
+    expect(window.focused).toBe(false);
+    const sent = window.webContents.send.mock.calls.filter(([channel]: [string]) => channel === LanguageToolsIpc.Input).at(-1)[1];
+    expect(sent).toMatchObject({
+      tool: LanguageTool.Translate, text: 'Selected words', pinned: true, resume: { question: 'Which tense is this?' },
+    });
+    expect(sent.id).not.toBe(firstInput.id);
+    // The question is delivered once; a renderer that reloads reads the card without it.
+    const input = invoke(LanguageToolsIpc.GetInput, undefined, window.webContents);
+    expect(input).toMatchObject({ id: sent.id, pinned: true });
+    expect(input.resume).toBeUndefined();
+    expect(events(Interaction.LoginSuccess)).toEqual([expect.objectContaining({
+      source: AnalyticsSource.LanguageTools, tool: 'ask', journeyId, durationMs: expect.any(Number),
+    })]);
+    // Continuing is not a new use of the tool.
+    expect(events(Interaction.Run)).toEqual([]);
+    window.blur();
+    expect(window.visible).toBe(true);
+    // A later login does not bring it back again.
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+  });
+
+  test('closing the card, a new request or a stale sign-in drops the continuation', () => {
+    vi.useFakeTimers();
+    create();
+    let window = openTranslation();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'ask', resume: { question: 'Why?' } }, window.webContents);
+    invoke(LanguageToolsIpc.Close, undefined, window.webContents);
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+    // The sign-in still came from the prompt.
+    expect(events(Interaction.LoginSuccess)).toHaveLength(1);
+
+    window = openTranslation();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'tts' }, window.webContents);
+    invoke(LanguageToolsIpc.Open, { tool: LanguageTool.Tts, text: 'Something else' });
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+
+    window = openTranslation();
+    invoke(DesktopCompanionIpc.LoginStart, { tool: 'translate' }, window.webContents);
+    vi.advanceTimersByTime(31 * 60_000);
+    manager.resetLanguageTools();
+    manager.handleLoginSucceeded();
+    expect(window.visible).toBe(false);
+    expect(events(Interaction.LoginSuccess)).toHaveLength(2);
+  });
+
+  test('only selection and language tools cards report the prompt or start a sign-in', () => {
+    create();
+    const selectionWindow = new BrowserWindow();
+    const selectionId = vi.spyOn(CompanionSelectionController.prototype, 'webContentsId', 'get')
+      .mockReturnValue(selectionWindow.webContents.id);
+    const hold = vi.spyOn(CompanionSelectionController.prototype, 'holdForLogin');
+    try {
+      const shown = { action: AnalyticsAction.Action, source: AnalyticsSource.Panel, interactionType: Interaction.LoginShown, tool: 'explain', journeyId };
+      invoke(DesktopCompanionIpc.ReportAnalytics, shown, selectionWindow.webContents);
+      invoke(DesktopCompanionIpc.ReportAnalytics, shown);
+      expect(events(Interaction.LoginShown)).toEqual([expect.objectContaining({ source: AnalyticsSource.Selection, tool: 'explain', journeyId })]);
+
+      invoke(DesktopCompanionIpc.LoginStart, { tool: 'explain' });
+      invoke(DesktopCompanionIpc.LoginStart, { tool: 'shell' }, selectionWindow.webContents);
+      expect(hold).not.toHaveBeenCalled();
+      invoke(DesktopCompanionIpc.LoginStart, { tool: 'explain', journeyId }, selectionWindow.webContents);
+      expect(hold).toHaveBeenCalledTimes(1);
+      expect(events(Interaction.LoginClick)).toEqual([expect.objectContaining({ source: AnalyticsSource.Selection, tool: 'explain', journeyId })]);
+    } finally {
+      selectionId.mockRestore();
+      hold.mockRestore();
+    }
   });
 });

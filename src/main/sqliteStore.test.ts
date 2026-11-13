@@ -573,6 +573,37 @@ test('committed authentication fences precede optional observers and cannot be s
     store.onCriticalChange('auth_tokens', () => { throw new Error('security failure'); });
     expect(() => store.delete('auth_tokens')).toThrow('security failure');
   } finally { store.close(); }
+  });
+
+test('kv change listeners keep receiving previous values for the keys they watch', async () => {
+  const store = await SqliteStore.create(createTempUserDataPath());
+  const changes: Array<[unknown, unknown]> = [];
+  const unsubscribe = store.onDidChange<number>('watched', (newValue, oldValue) => changes.push([newValue, oldValue]));
+
+  store.set('watched', 1);
+  store.set('watched', 2);
+  store.set('unwatched', 3);
+  store.delete('watched');
+  expect(changes).toEqual([[1, undefined], [2, 1], [undefined, 2]]);
+  expect(store.get('unwatched')).toBe(3);
+
+  unsubscribe();
+  unsubscribe();
+  const second = store.onDidChange<number>('watched', (newValue, oldValue) => changes.push([newValue, oldValue]));
+  store.set('watched', 4);
+  expect(changes.at(-1)).toEqual([4, undefined]);
+  second();
+  store.set('watched', 5);
+  expect(changes).toHaveLength(4);
+  store.close();
+});
+
+test('kv delete of an unwatched key removes the value', async () => {
+  const store = await SqliteStore.create(createTempUserDataPath());
+  store.set('media.intentBody.v1:key', 'body');
+  store.delete('media.intentBody.v1:key');
+  expect(store.get('media.intentBody.v1:key')).toBeUndefined();
+  store.close();
 });
 
 

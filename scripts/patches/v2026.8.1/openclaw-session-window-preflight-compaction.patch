@@ -1,0 +1,263 @@
+diff --git a/src/auto-reply/reply/agent-runner-memory.test.ts b/src/auto-reply/reply/agent-runner-memory.test.ts
+index fe129975..125c2213 100644
+--- a/src/auto-reply/reply/agent-runner-memory.test.ts
++++ b/src/auto-reply/reply/agent-runner-memory.test.ts
+@@ -2961,6 +2961,79 @@ describe("runMemoryFlushIfNeeded", () => {
+     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+   });
+ 
++  it.each([
++    { label: "the selected session window", contextWindow: "yd-fast", compacts: true },
++    { label: "the native model window", contextWindow: undefined, compacts: false },
++  ])("preflight compacts against $label", async ({ contextWindow, compacts }) => {
++    registerMemoryFlushPlanResolverForTest(() => null);
++    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
++      ok: true,
++      compacted: false,
++      reason: "already under target",
++    });
++    const sessionEntry: SessionEntry = {
++      sessionId: "session",
++      updatedAt: Date.now(),
++      totalTokens: 390_000,
++      totalTokensFresh: true,
++      totalTokensVersion: 1,
++      ...(contextWindow ? { contextWindow } : {}),
++    };
++    const modelId = "deepseek-flash-YoudaoInner";
++
++    await runSessionCompactionIfNeeded({
++      cfg: {
++        agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
++        models: {
++          providers: {
++            "lobsterai-server": {
++              baseUrl: "http://127.0.0.1:9/v1",
++              models: [
++                {
++                  id: modelId,
++                  name: modelId,
++                  api: "openai-completions",
++                  reasoning: true,
++                  input: ["text"],
++                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++                  contextWindow: 1_000_000,
++                  maxTokens: 32_768,
++                  contextWindows: [
++                    { id: "model-default", label: "1000000", contextWindow: 1_000_000 },
++                    { id: "yd-fast", label: "400000", contextWindow: 400_000 },
++                  ],
++                  contextWindowDefault: "model-default",
++                },
++              ],
++            },
++          },
++        },
++      } as never,
++      followupRun: createTestFollowupRun({
++        provider: "lobsterai-server",
++        model: modelId,
++        sessionId: "session",
++        sessionKey: "main",
++      }),
++      defaultModel: modelId,
++      sessionEntry,
++      sessionStore: { main: sessionEntry },
++      sessionKey: "main",
++      storePath: path.join(rootDir, "sessions.json"),
++      isHeartbeat: false,
++      ...createCompactionLifecycle(createReplyOperation()),
++    });
++
++    if (compacts) {
++      expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
++        preflightCompactionTrigger: "tokens",
++        contextTokenBudget: 400_000,
++      });
++    } else {
++      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
++    }
++  });
++
+   it.each([
+     ["without provider usage", undefined],
+     ["after provider usage", 20_000],
+diff --git a/src/auto-reply/reply/agent-runner-memory.ts b/src/auto-reply/reply/agent-runner-memory.ts
+index c419c9d8..b093b9eb 100644
+--- a/src/auto-reply/reply/agent-runner-memory.ts
++++ b/src/auto-reply/reply/agent-runner-memory.ts
+@@ -865,6 +865,7 @@ export async function runSessionCompactionIfNeeded(params: {
+       config: params.cfg,
+     }),
+     modelId: params.followupRun.run.model ?? params.defaultModel,
++    contextWindow: entry.contextWindow,
+   });
+   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
+   const reserveTokensFloor =
+@@ -1323,6 +1324,7 @@ export async function runMemoryFlushIfNeeded(params: {
+       runtimePolicySessionKey: params.runtimePolicySessionKey,
+     }),
+     modelId: params.followupRun.run.model ?? params.defaultModel,
++    contextWindow: entry?.contextWindow,
+   });
+   let memoryFlushPlan: MemoryFlushPlan | null;
+   try {
+diff --git a/src/auto-reply/reply/memory-flush.test.ts b/src/auto-reply/reply/memory-flush.test.ts
+index ed64d1b0..0c6dc9a5 100644
+--- a/src/auto-reply/reply/memory-flush.test.ts
++++ b/src/auto-reply/reply/memory-flush.test.ts
+@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
+ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
+ import type { OpenClawConfig } from "../../config/types.openclaw.js";
+ import { modelKey } from "../../shared/model-key.js";
+-import { resolveResponsesServerCompactionThreshold } from "./memory-flush.js";
++import {
++  resolveMemoryFlushContextWindowTokens,
++  resolveResponsesServerCompactionThreshold,
++} from "./memory-flush.js";
+ 
+ const TEST_MODEL_ID = "gpt-5.4";
+ const TEST_CONTEXT_WINDOW = 200_000;
+@@ -279,3 +282,75 @@ describe("Anthropic server compaction host threshold", () => {
+     ).toBe(expected);
+   });
+ });
++
++describe("resolveMemoryFlushContextWindowTokens session windows", () => {
++  const provider = "lobsterai-server";
++  const modelId = "deepseek-flash-YoudaoInner";
++  function buildConfig(contextWindow: number | undefined): OpenClawConfig {
++    return {
++      models: {
++        providers: {
++          [provider]: {
++            baseUrl: "http://127.0.0.1:9/v1",
++            models: [
++              {
++                id: modelId,
++                name: modelId,
++                api: "openai-completions",
++                reasoning: true,
++                input: ["text"],
++                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++                ...(contextWindow ? { contextWindow } : {}),
++                maxTokens: 32_768,
++                contextWindows: [
++                  {
++                    id: "model-default",
++                    label: String(contextWindow ?? 200_000),
++                    contextWindow: contextWindow ?? 200_000,
++                  },
++                  { id: "yd-fast", label: "400000", contextWindow: 400_000 },
++                ],
++                contextWindowDefault: "model-default",
++              },
++            ],
++          },
++        },
++      },
++    } as OpenClawConfig;
++  }
++
++  it("budgets preflight against the session-selected window like the embedded run", () => {
++    const cfg = buildConfig(1_000_000);
++    expect(
++      resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow: "yd-fast" }),
++    ).toBe(400_000);
++    expect(resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId })).toBe(1_000_000);
++  });
++
++  it("keeps the model window for unknown selections and never raises it", () => {
++    expect(
++      resolveMemoryFlushContextWindowTokens({
++        cfg: buildConfig(1_000_000),
++        provider,
++        modelId,
++        contextWindow: "retired-option",
++      }),
++    ).toBe(1_000_000);
++    expect(
++      resolveMemoryFlushContextWindowTokens({
++        cfg: buildConfig(262_144),
++        provider,
++        modelId,
++        contextWindow: "yd-fast",
++      }),
++    ).toBe(262_144);
++  });
++
++  it("uses the selected window like the run when the model declares no native window", () => {
++    const cfg = buildConfig(undefined);
++    expect(
++      resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId, contextWindow: "yd-fast" }),
++    ).toBe(400_000);
++    expect(resolveMemoryFlushContextWindowTokens({ cfg, provider, modelId })).toBe(200_000);
++  });
++});
+diff --git a/src/auto-reply/reply/memory-flush.ts b/src/auto-reply/reply/memory-flush.ts
+index 7c032a1b..427ff644 100644
+--- a/src/auto-reply/reply/memory-flush.ts
++++ b/src/auto-reply/reply/memory-flush.ts
+@@ -3,6 +3,7 @@ import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anth
+ import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+ import { resolveContextTokensForModel } from "../../agents/context.js";
+ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
++import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
+ import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
+ import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
+ import { normalizeProviderId } from "../../agents/model-selection.js";
+@@ -18,15 +19,46 @@ export function resolveMemoryFlushContextWindowTokens(params: {
+   modelId?: string;
+   cfg?: OpenClawConfig;
+   provider?: string;
++  /** Session-selected context-window option id (`SessionEntry.contextWindow`). */
++  contextWindow?: string;
+ }): number {
+-  return (
+-    resolveContextTokensForModel({
+-      cfg: params.cfg,
+-      provider: params.provider,
+-      model: params.modelId,
+-      allowAsyncLoad: false,
+-    }) ?? DEFAULT_CONTEXT_TOKENS
+-  );
++  const modelTokens = resolveContextTokensForModel({
++    cfg: params.cfg,
++    provider: params.provider,
++    model: params.modelId,
++    allowAsyncLoad: false,
++  });
++  // The embedded run budgets against the selected option; preflight must use the same window or
++  // the session compacts against the native one. Like the run, never exceed a known native window,
++  // and use the selection instead of the generic default when the model declares none.
++  const selectedTokens = resolveSelectedContextWindowTokens(params);
++  if (selectedTokens === undefined) {
++    return modelTokens ?? DEFAULT_CONTEXT_TOKENS;
++  }
++  return modelTokens === undefined ? selectedTokens : Math.min(selectedTokens, modelTokens);
++}
++
++function resolveSelectedContextWindowTokens(params: {
++  modelId?: string;
++  cfg?: OpenClawConfig;
++  provider?: string;
++  contextWindow?: string;
++}): number | undefined {
++  const selected = params.contextWindow?.trim();
++  const provider = params.provider?.trim();
++  const modelId = params.modelId?.trim();
++  if (!selected || !provider || !modelId) {
++    return undefined;
++  }
++  const normalizedProvider = normalizeProviderId(provider);
++  const normalizeModelId = (value: string) =>
++    normalizeStaticProviderModelId(normalizedProvider, value).trim().toLowerCase();
++  const configuredModel = resolveMergedModelProviderModels({
++    models: resolveMergedModelProviderConfig(params.cfg, provider)?.models,
++    normalizeModelId,
++  }).get(normalizeModelId(modelId));
++  const profile = resolveModelContextWindowProfile({ catalogEntry: configuredModel, selected });
++  return profile.contextWindow === selected ? profile.contextTokens : undefined;
+ }
+ 
+ export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {

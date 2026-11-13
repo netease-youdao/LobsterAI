@@ -1,0 +1,467 @@
+diff --git a/src/config/sessions/session-accessor.sqlite-active-context.ts b/src/config/sessions/session-accessor.sqlite-active-context.ts
+index 8dacf4fa5fb..f7b8ec1fffc 100644
+--- a/src/config/sessions/session-accessor.sqlite-active-context.ts
++++ b/src/config/sessions/session-accessor.sqlite-active-context.ts
+@@ -89,6 +89,77 @@ function readBoundedRetentionRanges(
+   return ranges;
+ }
+ 
++// A byte-limited tail advances in quarter-capacity steps (openclaw/openclaw#159799, #168157).
++const BOUNDED_CONTEXT_STEP_DIVISOR = 4;
++
++function isUserMessageEvent(event: TranscriptEvent): boolean {
++  const entry = asOptionalRecord(event);
++  return entry?.type === "message" && asOptionalRecord(entry.message)?.role === "user";
++}
++
++/** First active position the latest boundary keeps visible to the model. */
++function resolveBoundedContextStart(
++  projection: CurrentTranscriptProjection,
++  boundary: { event_json: string; active_position: number } | undefined,
++): number | undefined {
++  if (!boundary) {
++    return undefined;
++  }
++  const firstKeptEntryId = asOptionalRecord(JSON.parse(boundary.event_json))?.firstKeptEntryId;
++  if (typeof firstKeptEntryId === "string") {
++    const firstKept = executeSqliteQueryTakeFirstSync(
++      projection.database.db,
++      getActiveTranscriptKysely(projection.database)
++        .selectFrom("transcript_event_identities as identity")
++        .innerJoin("session_transcript_active_events as active", (join) =>
++          join
++            .onRef("active.session_id", "=", "identity.session_id")
++            .onRef("active.event_seq", "=", "identity.seq"),
++        )
++        .select("active.active_position")
++        .where("identity.session_id", "=", projection.resolved.sessionId)
++        .where("identity.event_id", "=", firstKeptEntryId),
++    );
++    if (firstKept && firstKept.active_position < boundary.active_position) {
++      return firstKept.active_position;
++    }
++  }
++  return boundary.active_position + 1;
++}
++
++/** Serialized bytes of the model-visible tail, excluding history behind the latest boundary. */
++function readBoundedContextBytes(
++  projection: CurrentTranscriptProjection,
++  params: { boundarySeq?: number; contextStart?: number; beforeRawSeq?: number },
++): number {
++  const row = executeSqliteQueryTakeFirstSync(
++    projection.database.db,
++    getActiveTranscriptKysely(projection.database)
++      .selectFrom("session_transcript_active_events as active")
++      .innerJoin("transcript_events as event", (join) =>
++        join
++          .onRef("event.session_id", "=", "active.session_id")
++          .onRef("event.seq", "=", "active.event_seq"),
++      )
++      .select(
++        /* kysely-allow-raw: each serialized event carries one terminating newline. */
++        sql<number>`COALESCE(SUM(OCTET_LENGTH(event.event_json)), 0) + COUNT(*)`.as("size_bytes"),
++      )
++      .where("active.session_id", "=", projection.resolved.sessionId)
++      .where("active.context_eligible", "=", 1)
++      .$if(params.beforeRawSeq !== undefined, (query) =>
++        query.where("active.event_seq", "<", params.beforeRawSeq!),
++      )
++      .$if(params.boundarySeq !== undefined, (query) =>
++        query.where("active.event_seq", "!=", params.boundarySeq!),
++      )
++      .$if(params.contextStart !== undefined, (query) =>
++        query.where("active.active_position", ">=", params.contextStart!),
++      ),
++  );
++  return row?.size_bytes ?? 0;
++}
++
+ /** Reads one byte-bounded active branch without materializing abandoned transcript history. */
+ export function readSessionTranscriptBoundedActiveContextCore(
+   scope: SessionTranscriptReadScope,
+@@ -133,6 +204,47 @@ export function readSessionTranscriptBoundedActiveContextCore(
+     if (headerBytes > maxBytes) {
+       throw new RangeError("Session transcript header exceeds the active-context byte limit");
+     }
++    const boundary = executeSqliteQueryTakeFirstSync(
++      projection.database.db,
++      db
++        .selectFrom("transcript_event_identities as identity")
++        .innerJoin("session_transcript_active_events as active", (join) =>
++          join
++            .onRef("active.session_id", "=", "identity.session_id")
++            .onRef("active.event_seq", "=", "identity.seq"),
++        )
++        .innerJoin("transcript_events as event", (join) =>
++          join
++            .onRef("event.session_id", "=", "identity.session_id")
++            .onRef("event.seq", "=", "identity.seq"),
++        )
++        .select(["event.event_json", "identity.seq", "active.active_position"])
++        .where("identity.session_id", "=", projection.resolved.sessionId)
++        .where("identity.event_type", "in", ["compaction", "reset"])
++        .$if(fence !== undefined, (query) => query.where("identity.seq", "<", fence!.beforeRawSeq))
++        .orderBy("active.active_position", "desc")
++        .limit(1),
++    );
++    const boundaryCount = executeSqliteQueryTakeFirstSync(
++      projection.database.db,
++      db
++        .selectFrom("transcript_event_identities as identity")
++        .innerJoin("session_transcript_active_events as active", (join) =>
++          join
++            .onRef("active.session_id", "=", "identity.session_id")
++            .onRef("active.event_seq", "=", "identity.seq"),
++        )
++        .select((eb) => eb.fn.count<number>("identity.seq").as("boundary_count"))
++        .where("identity.session_id", "=", projection.resolved.sessionId)
++        .where("identity.event_type", "in", ["compaction", "reset"])
++        .$if(fence !== undefined, (query) => query.where("identity.seq", "<", fence!.beforeRawSeq)),
++    )?.boundary_count;
++    // Reserve the latest boundary before sizing the tail, so its summary never depends on
++    // how much room the newest events happened to leave.
++    const boundaryBytes = boundary ? Buffer.byteLength(boundary.event_json, "utf8") + 1 : 0;
++    const boundaryOmitted = boundary !== undefined && headerBytes + boundaryBytes > maxBytes;
++    const reservedBytes = headerBytes + (boundary && !boundaryOmitted ? boundaryBytes : 0);
++    const capacity = maxBytes - reservedBytes;
+     const metadata = executeSqliteQuerySync(
+       projection.database.db,
+       db
+@@ -152,24 +264,24 @@ export function readSessionTranscriptBoundedActiveContextCore(
+         .$if(fence !== undefined, (query) =>
+           query.where("active.event_seq", "<", fence!.beforeRawSeq),
+         )
++        .$if(boundary !== undefined, (query) =>
++          query.where("active.event_seq", "!=", boundary!.seq),
++        )
+         .where("active.context_eligible", "=", 1)
+         .orderBy("active.active_position", "desc")
+         .limit(maxEvents + 1),
+     ).rows;
+-    const selectedSequences: number[] = [];
+-    let serializedBytes = headerBytes;
++    const newestFirst: typeof metadata = [];
++    let tailBytes = 0;
+     for (const row of metadata) {
+-      if (
+-        selectedSequences.length >= maxEvents ||
+-        serializedBytes + row.serialized_bytes > maxBytes
+-      ) {
++      if (newestFirst.length >= maxEvents || tailBytes + row.serialized_bytes > capacity) {
+         break;
+       }
+-      selectedSequences.push(row.event_seq);
+-      serializedBytes += row.serialized_bytes;
++      newestFirst.push(row);
++      tailBytes += row.serialized_bytes;
+     }
+-    const selectedRows =
+-      selectedSequences.length === 0
++    const fetchedRows =
++      newestFirst.length === 0
+         ? []
+         : executeSqliteQuerySync(
+             projection.database.db,
+@@ -177,66 +289,69 @@ export function readSessionTranscriptBoundedActiveContextCore(
+               .selectFrom("transcript_events")
+               .select(["event_json", "seq"])
+               .where("session_id", "=", projection.resolved.sessionId)
+-              .where("seq", "in", selectedSequences)
++              .where(
++                "seq",
++                "in",
++                newestFirst.map((row) => row.event_seq),
++              )
+               .orderBy("seq", "asc"),
+-          ).rows;
+-    const boundary = executeSqliteQueryTakeFirstSync(
+-      projection.database.db,
+-      db
+-        .selectFrom("transcript_event_identities as identity")
+-        .innerJoin("session_transcript_active_events as active", (join) =>
+-          join
+-            .onRef("active.session_id", "=", "identity.session_id")
+-            .onRef("active.event_seq", "=", "identity.seq"),
+-        )
+-        .innerJoin("transcript_events as event", (join) =>
+-          join
+-            .onRef("event.session_id", "=", "identity.session_id")
+-            .onRef("event.seq", "=", "identity.seq"),
+-        )
+-        .select(["event.event_json", "identity.seq"])
+-        .where("identity.session_id", "=", projection.resolved.sessionId)
+-        .where("identity.event_type", "in", ["compaction", "reset"])
+-        .$if(fence !== undefined, (query) => query.where("identity.seq", "<", fence!.beforeRawSeq))
+-        .orderBy("active.active_position", "desc")
+-        .limit(1),
+-    );
+-    const boundaryCount = executeSqliteQueryTakeFirstSync(
+-      projection.database.db,
+-      db
+-        .selectFrom("transcript_event_identities as identity")
+-        .innerJoin("session_transcript_active_events as active", (join) =>
+-          join
+-            .onRef("active.session_id", "=", "identity.session_id")
+-            .onRef("active.event_seq", "=", "identity.seq"),
+-        )
+-        .select((eb) => eb.fn.count<number>("identity.seq").as("boundary_count"))
+-        .where("identity.session_id", "=", projection.resolved.sessionId)
+-        .where("identity.event_type", "in", ["compaction", "reset"])
+-        .$if(fence !== undefined, (query) => query.where("identity.seq", "<", fence!.beforeRawSeq)),
+-    )?.boundary_count;
+-    const events: TranscriptEvent[] = header ? [JSON.parse(header.event_json)] : [];
+-    const rows: Array<{ event: TranscriptEvent; seq: number }> = [];
+-    let injectedBoundary: { id?: unknown } | undefined;
+-    let boundaryOmitted = false;
+-    if (boundary && !selectedSequences.includes(boundary.seq)) {
+-      const boundaryBytes = Buffer.byteLength(boundary.event_json, "utf8") + 1;
+-      if (serializedBytes + boundaryBytes <= maxBytes) {
+-        const event: TranscriptEvent = JSON.parse(boundary.event_json);
+-        events.push(event);
+-        rows.push({ event, seq: boundary.seq });
+-        if (event !== null && typeof event === "object" && "id" in event) {
+-          injectedBoundary = event;
++          ).rows.map((row) => ({
++            event: JSON.parse(row.event_json) as TranscriptEvent,
++            seq: row.seq,
++          }));
++    let selectedRows = fetchedRows;
++    const contextStart =
++      metadata.length > newestFirst.length
++        ? resolveBoundedContextStart(projection, boundary)
++        : undefined;
++    const contextBytes =
++      metadata.length > newestFirst.length
++        ? readBoundedContextBytes(projection, {
++            boundarySeq: boundary?.seq,
++            contextStart,
++            beforeRawSeq: fence?.beforeRawSeq,
++          })
++        : 0;
++    if (contextBytes > capacity) {
++      // Cut at an absolute quarter-capacity step from the retained start, then at the next
++      // user turn: appending events leaves the first model message unchanged until the
++      // tail outgrows another step, instead of sliding it on every turn.
++      const step = Math.max(1, Math.floor(capacity / BOUNDED_CONTEXT_STEP_DIVISOR));
++      const stepLimit = contextBytes - Math.ceil((contextBytes - capacity) / step) * step;
++      const stepSequences = new Set<number>();
++      let stepBytes = 0;
++      for (const row of newestFirst) {
++        if (stepBytes + row.serialized_bytes > stepLimit) {
++          break;
+         }
+-        serializedBytes += boundaryBytes;
+-      } else {
+-        boundaryOmitted = true;
++        stepSequences.add(row.event_seq);
++        stepBytes += row.serialized_bytes;
++      }
++      const stepRows = fetchedRows.filter((row) => stepSequences.has(row.seq));
++      const turnStart = stepRows.findIndex((row) => isUserMessageEvent(row.event));
++      // A newest turn larger than one step keeps the plain newest-first fallback.
++      if (turnStart >= 0) {
++        selectedRows = stepRows.slice(turnStart);
+       }
+     }
++    const selectedBytes = new Map(newestFirst.map((row) => [row.event_seq, row.serialized_bytes]));
++    const serializedBytes = selectedRows.reduce(
++      (total, row) => total + (selectedBytes.get(row.seq) ?? 0),
++      reservedBytes,
++    );
++    const contextRows =
++      boundary && !boundaryOmitted
++        ? [
++            { event: JSON.parse(boundary.event_json) as TranscriptEvent, seq: boundary.seq },
++            ...selectedRows,
++          ].toSorted((left, right) => left.seq - right.seq)
++        : selectedRows;
++    const events: TranscriptEvent[] = header ? [JSON.parse(header.event_json)] : [];
++    const rows: Array<{ event: TranscriptEvent; seq: number }> = [];
+     const opaqueParents = new Map<string, string | null>();
+-    let previousId = injectedBoundary?.id;
+-    for (const row of selectedRows) {
+-      const event: TranscriptEvent = JSON.parse(row.event_json);
++    let previousId: unknown;
++    for (const row of contextRows) {
++      const event = row.event;
+       if (event !== null && typeof event === "object" && "id" in event && "parentId" in event) {
+         // Omitted display payloads retain an opaque ancestry link, never a fabricated event.
+         if (
+@@ -249,7 +364,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
+         previousId = event.id;
+       }
+       events.push(event);
+-      rows.push({ event, seq: row.seq });
++      rows.push(row);
+     }
+     const activeLeafEntryId = fence
+       ? fence.admission.effectiveParentId
+@@ -268,7 +383,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
+       events,
+       serializedBytes,
+       totalEvents: projection.state.activeEventCount,
+-      truncated: boundaryOmitted || metadata.length > selectedSequences.length,
++      truncated: boundaryOmitted || metadata.length > selectedRows.length,
+     };
+   });
+ }
+diff --git a/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts b/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+index 6545241d538..e21900b7d26 100644
+--- a/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
++++ b/src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+@@ -512,3 +512,154 @@ it("counts paired reset tool results without counting discarded orphan results",
+     expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(3);
+   });
+ });
++
++async function appendBoundedTestTurns(
++  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
++  params: { from: number; count: number; parentId: string | null; padding: number },
++): Promise<string | null> {
++  let parentId = params.parentId;
++  for (let turn = params.from; turn < params.from + params.count; turn += 1) {
++    await persistSessionTranscriptTurn(scope, {
++      messages: [
++        {
++          eventId: `turn-${turn}-user`,
++          parentId,
++          message: { role: "user", content: `question ${turn} ${"q".repeat(params.padding)}` },
++        },
++        {
++          eventId: `turn-${turn}-assistant`,
++          parentId: `turn-${turn}-user`,
++          message: { role: "assistant", content: `answer ${turn} ${"a".repeat(params.padding)}` },
++        },
++      ],
++      touchSessionEntry: false,
++    });
++    parentId = `turn-${turn}-assistant`;
++  }
++  return parentId;
++}
++
++function boundedEventIds(context: { events: unknown[] }): string[] {
++  return context.events.slice(1).map((event) => (event as { id: string }).id);
++}
++
++it("keeps a byte-limited tail start fixed until the tail outgrows a quarter-capacity step", async () => {
++  await withBoundedContextScope(async (scope) => {
++    let parentId = await appendBoundedTestTurns(scope, {
++      from: 0,
++      count: 40,
++      parentId: null,
++      padding: 200,
++    });
++    const limits = { maxBytes: 8_000, maxEvents: 10_000 };
++    const starts: string[] = [];
++    for (let turn = 40; turn < 52; turn += 1) {
++      const context = readSessionTranscriptBoundedActiveContextCore(scope, limits);
++      expect(context.truncated).toBe(true);
++      expect(context.serializedBytes).toBeLessThanOrEqual(limits.maxBytes);
++      const [first] = boundedEventIds(context);
++      expect(first).toMatch(/^turn-\d+-user$/);
++      starts.push(first!);
++      parentId = await appendBoundedTestTurns(scope, {
++        from: turn,
++        count: 1,
++        parentId,
++        padding: 200,
++      });
++    }
++    // Each turn is about a quarter of a step, so twelve appends move the start a few times
++    // instead of on every append, and only forward.
++    const distinct = [...new Set(starts)];
++    expect(distinct.length).toBeGreaterThan(1);
++    expect(distinct.length).toBeLessThanOrEqual(5);
++    const turnNumbers = starts.map((id) => Number(id.split("-")[1]));
++    expect(turnNumbers).toEqual(turnNumbers.toSorted((left, right) => left - right));
++  });
++});
++
++it("reserves the latest compaction boundary before sizing a byte-limited tail", async () => {
++  await withBoundedContextScope(async (scope) => {
++    const keptParent = await appendBoundedTestTurns(scope, {
++      from: 0,
++      count: 2,
++      parentId: null,
++      padding: 100,
++    });
++    await appendTranscriptEvent(scope, {
++      type: "compaction",
++      id: "boundary",
++      parentId: keptParent,
++      timestamp: "2026-08-25T00:00:00.000Z",
++      summary: `earlier ${"s".repeat(1_500)}`,
++      firstKeptEntryId: "turn-1-user",
++      tokensBefore: 10_000,
++    });
++    let parentId: string | null = "boundary";
++    let truncatedIds: string[] | undefined;
++    for (let turn = 2; turn < 30; turn += 1) {
++      parentId = await appendBoundedTestTurns(scope, {
++        from: turn,
++        count: 1,
++        parentId,
++        padding: 150,
++      });
++      const context = readSessionTranscriptBoundedActiveContextCore(scope, {
++        maxBytes: 6_000,
++        maxEvents: 10_000,
++      });
++      const ids = boundedEventIds(context);
++      expect(ids).toContain("boundary");
++      expect(context.serializedBytes).toBeLessThanOrEqual(6_000);
++      if (context.truncated) {
++        truncatedIds = ids;
++      }
++    }
++    expect(truncatedIds?.[0]).toBe("boundary");
++    expect(truncatedIds?.[1]).toMatch(/^turn-\d+-user$/);
++  });
++});
++
++it("sizes the byte-limited tail from the retained compaction start, not compacted history", async () => {
++  await withBoundedContextScope(async (scope) => {
++    const compactedParent = await appendBoundedTestTurns(scope, {
++      from: 0,
++      count: 30,
++      parentId: null,
++      padding: 200,
++    });
++    const keptParent = await appendBoundedTestTurns(scope, {
++      from: 30,
++      count: 2,
++      parentId: compactedParent,
++      padding: 200,
++    });
++    await appendTranscriptEvent(scope, {
++      type: "compaction",
++      id: "boundary",
++      parentId: keptParent,
++      timestamp: "2026-08-25T00:00:00.000Z",
++      summary: "earlier work",
++      firstKeptEntryId: "turn-30-user",
++      tokensBefore: 10_000,
++    });
++    await appendBoundedTestTurns(scope, { from: 32, count: 3, parentId: "boundary", padding: 200 });
++
++    const context = readSessionTranscriptBoundedActiveContextCore(scope, {
++      maxBytes: 8_000,
++      maxEvents: 10_000,
++    });
++    const ids = boundedEventIds(context);
++    // The retained tail and everything after the boundary fit, so no step cut applies to them.
++    for (const id of [
++      "turn-30-user",
++      "turn-31-assistant",
++      "boundary",
++      "turn-32-user",
++      "turn-34-assistant",
++    ]) {
++      expect(ids).toContain(id);
++    }
++    expect(ids.indexOf("boundary")).toBeGreaterThan(ids.indexOf("turn-31-assistant"));
++    expect(ids.indexOf("boundary")).toBeLessThan(ids.indexOf("turn-32-user"));
++  });
++});

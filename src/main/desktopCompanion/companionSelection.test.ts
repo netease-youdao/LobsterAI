@@ -28,7 +28,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
 
-const { CompanionSelectionController } = await import('./companionSelection');
+const { CompanionSelectionController, SelectionGestureFit, selectionGestureFit } = await import('./companionSelection');
 
 class FakeHook extends EventEmitter {
   static FilterMode = { EXCLUDE_LIST: 2 };
@@ -124,6 +124,20 @@ function drag() {
 
 // What a direct read returns: no gesture, so the mouse position is (0, 0).
 const chromeSelection = { text: 'first selection', programName: 'com.google.Chrome', posLevel: 0, mousePosEnd: { x: 0, y: 0 } };
+
+/** A direct read with the bounds of the first and last selected characters. */
+function placedSelection(left: number, right: number, lineTop: number, lastLineTop = lineTop) {
+  return {
+    text: 'placed selection',
+    programName: 'com.apple.Notes',
+    posLevel: 3,
+    startTop: { x: left, y: lineTop },
+    startBottom: { x: left, y: lineTop + 20 },
+    endTop: { x: right, y: lastLineTop },
+    endBottom: { x: right, y: lastLineTop + 20 },
+    mousePosEnd: { x: 0, y: 0 },
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -538,6 +552,89 @@ describe('selection toolbar', () => {
     expect(quickAnswer.abortOwnedBy).toHaveBeenCalledWith(77);
   });
 
+  test('a sign-in pins only an answer card, so clicking into the browser does not close it', () => {
+    const controller = create();
+    select();
+    vi.advanceTimersByTime(200);
+    // The toolbar has no request to continue.
+    controller.holdForLogin();
+    expect(sentSelection()).toMatchObject({ mode: DesktopCompanionSelectionMode.Toolbar, pinned: false });
+    controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+    controller.holdForLogin();
+    expect(sentSelection()).toMatchObject({ mode: DesktopCompanionSelectionMode.Answer, action: CompanionSelectionAction.Explain, pinned: true });
+    FakeHook.last!.emit('mouse-down', { x: 5, y: 5, button: 0 });
+    expect(win.visible).toBe(true);
+  });
+
+  describe('when the toolbar becomes unavailable', () => {
+    let available: boolean;
+    let capturing: boolean;
+    function createWithAvailability() {
+      available = true;
+      capturing = false;
+      win = new FakeWindow();
+      quickAnswer = { abortOwnedBy: vi.fn() };
+      const controller = new CompanionSelectionController({
+        preferences: () => preferences,
+        isAvailable: () => available,
+        isCapturing: () => capturing,
+        createWindow: () => win as never,
+        setPreferences: patch => { preferences = { ...preferences, ...patch }; },
+        publish: vi.fn(),
+        openSettings: vi.fn(),
+      }, quickAnswer as never, () => FakeHook as never);
+      controller.sync();
+      select();
+      vi.advanceTimersByTime(200);
+      return controller;
+    }
+
+    test('a pinned answer outlives the gateway restart that follows a sign-in, and keeps its request', () => {
+      const controller = createWithAvailability();
+      controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+      controller.holdForLogin();
+      quickAnswer.abortOwnedBy.mockClear();
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(true);
+      // The answer that started on the new session keeps streaming.
+      expect(quickAnswer.abortOwnedBy).not.toHaveBeenCalled();
+      available = true;
+      controller.sync();
+      expect(win.visible).toBe(true);
+      expect(sentSelection()).toMatchObject({ mode: DesktopCompanionSelectionMode.Answer, pinned: true });
+    });
+
+    test('a toolbar or an unpinned answer still closes', () => {
+      const controller = createWithAvailability();
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(false);
+      available = true;
+      controller.sync();
+      select();
+      vi.advanceTimersByTime(200);
+      controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(false);
+    });
+
+    test.each([
+      ['the toolbar is turned off', () => { preferences = { ...preferences, selectionToolbar: false }; }],
+      ['the companion is turned off', () => { preferences = { ...preferences, enabled: false }; }],
+      ['a screenshot needs the screen', () => { capturing = true; }],
+    ])('a pinned answer closes when %s', (_reason, change) => {
+      const controller = createWithAvailability();
+      controller.handleCommand({ type: DesktopCompanionSelectionCommandType.Run, action: CompanionSelectionAction.Explain });
+      controller.holdForLogin();
+      change();
+      available = false;
+      controller.sync();
+      expect(win.visible).toBe(false);
+    });
+  });
+
   test('"hide in this app" remembers the app and closes the toolbar', () => {
     const controller = create();
     select('text', 'com.tencent.xinWeChat');
@@ -554,6 +651,43 @@ describe('selection toolbar', () => {
     expect(controller.capability).toBe(CompanionCapability.Off);
     vi.advanceTimersByTime(60 * 60_000 + 2_000);
     expect(controller.capability).toBe(CompanionCapability.Ready);
+  });
+});
+
+describe('selectionGestureFit', () => {
+  const { Covers, Touches, Apart, Unknown } = SelectionGestureFit;
+  const along = (startX: number, endX: number, y = 210) => ({ start: { x: startX, y }, end: { x: endX, y } });
+
+  test('covers a drag that runs a little past the end of the line or starts in the margin', () => {
+    const line = placedSelection(300, 480, 200);
+    expect(selectionGestureFit(line, 3, along(300, 528))).toBe(Covers);
+    expect(selectionGestureFit(line, 3, along(252, 480))).toBe(Covers);
+    expect(selectionGestureFit(line, 3, along(300, 529))).toBe(Touches);
+    expect(selectionGestureFit(line, 3, along(20, 900))).toBe(Touches);
+  });
+
+  test('allows a line of slack above and below the selected lines', () => {
+    const lines = placedSelection(300, 200, 200, 240);
+    expect(selectionGestureFit(lines, 3, { start: { x: 300, y: 181 }, end: { x: 200, y: 279 } })).toBe(Covers);
+    expect(selectionGestureFit(lines, 3, { start: { x: 300, y: 179 }, end: { x: 200, y: 262 } })).toBe(Touches);
+    expect(selectionGestureFit(lines, 3, { start: { x: 300, y: 205 }, end: { x: 200, y: 281 } })).toBe(Touches);
+    expect(selectionGestureFit(lines, 3, { start: { x: 300, y: 179 }, end: { x: 200, y: 281 } })).toBe(Apart);
+  });
+
+  test('caps the slack when an app reports the whole selection as one rectangle', () => {
+    const block = { ...placedSelection(100, 600, 200), endTop: { x: 600, y: 200 }, endBottom: { x: 600, y: 400 } };
+    expect(selectionGestureFit(block, 3, { start: { x: 120, y: 161 }, end: { x: 580, y: 439 } })).toBe(Covers);
+    expect(selectionGestureFit(block, 3, { start: { x: 120, y: 159 }, end: { x: 580, y: 300 } })).toBe(Touches);
+  });
+
+  test('is apart from a gesture made away from the selected lines, as on a title bar', () => {
+    expect(selectionGestureFit(placedSelection(300, 480, 400), 3, along(300, 480))).toBe(Apart);
+  });
+
+  test('needs the selection position', () => {
+    expect(selectionGestureFit(placedSelection(300, 480, 200), 4, along(320, 460))).toBe(Unknown);
+    expect(selectionGestureFit({ ...placedSelection(300, 480, 200), startBottom: undefined }, 3, along(320, 460))).toBe(Unknown);
+    expect(selectionGestureFit({ ...placedSelection(300, 480, 200), endTop: { x: -99999, y: -99999 } }, 3, along(320, 460))).toBe(Unknown);
   });
 });
 
@@ -584,10 +718,118 @@ describe('a selection the hook missed on macOS', () => {
     expect(win.visible).toBe(false);
   }));
 
-  test('is not invented from text that was readable right after the gesture', () => onMac(() => {
+  // selection-hook 2.1.1 matches the I-beam by exact hot spot and skipped every gesture on
+  // macOS 26.6, while the text it skipped was readable right away and was dropped here too.
+  test('is shown right away when the drag was made on it, whatever the pointer looked like', () => onMac(() => {
     create();
     const hook = FakeHook.last!;
-    hook.getCurrentSelection.mockReturnValue(chromeSelection);
+    hook.getCurrentSelection.mockReturnValue(placedSelection(300, 480, 200));
+    drag();
+    vi.advanceTimersByTime(100);
+    expect(sentSelection()).toMatchObject({ text: 'placed selection', appId: 'com.apple.Notes' });
+    vi.advanceTimersByTime(200);
+    expect(win.visible).toBe(true);
+    vi.advanceTimersByTime(10_000);
+    expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+  }));
+
+  test('is shown right away after a double-click on a word', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.getCurrentSelection.mockReturnValue(placedSelection(380, 430, 200));
+    for (let click = 0; click < 2; click += 1) {
+      hook.emit('mouse-down', { x: 400, y: 210, button: 0 });
+      hook.emit('mouse-up', { x: 400, y: 210, button: 0 });
+    }
+    vi.advanceTimersByTime(300);
+    expect(win.visible).toBe(true);
+  }));
+
+  // AppKit apps such as Notes show the arrow over selected text, so selection-hook skips every
+  // attempt to select the same word again.
+  test('is shown again each time the same word is selected again', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    const word = placedSelection(380, 430, 200);
+    hook.emit('text-selection', { ...word, mousePosEnd: { x: 430, y: 218 } });
+    vi.advanceTimersByTime(300);
+    expect(win.visible).toBe(true);
+    hook.getCurrentSelection.mockReturnValue(word);
+    for (let round = 0; round < 3; round += 1) {
+      hook.emit('mouse-down', { x: 382, y: 210, button: 0 });
+      expect(win.visible).toBe(false);
+      hook.emit('mouse-up', { x: 432, y: 212, button: 0 });
+      vi.advanceTimersByTime(300);
+      expect(win.visible).toBe(true);
+      vi.advanceTimersByTime(1_000);
+    }
+  }));
+
+  // AppKit only updates the pointer when it moves, so a drag pressed as the pointer reached the
+  // text is skipped too, and was dropped here when it ran well past the end of the line.
+  test('is shown when a drag that changed it ran past the end of the line', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.getCurrentSelection.mockReturnValue(placedSelection(300, 400, 200));
+    drag();
+    vi.advanceTimersByTime(300);
+    expect(win.visible).toBe(true);
+  }));
+
+  test('is shown after a triple-click right of the last line of a paragraph', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    const click = () => {
+      hook.emit('mouse-down', { x: 500, y: 240, button: 0 });
+      hook.emit('mouse-up', { x: 500, y: 240, button: 0 });
+    };
+    click();
+    click();
+    hook.emit('text-selection', { ...placedSelection(480, 530, 230), text: 'middle', mousePosEnd: { x: 500, y: 240 } });
+    vi.advanceTimersByTime(150);
+    expect(win.visible).toBe(true);
+    // The third click was made over the selected word, under the arrow.
+    hook.getCurrentSelection.mockReturnValue({ ...placedSelection(100, 250, 200, 260), text: 'whole paragraph' });
+    click();
+    vi.advanceTimersByTime(300);
+    expect(sentSelection()).toMatchObject({ text: 'whole paragraph' });
+    expect(win.visible).toBe(true);
+  }));
+
+  test('is shown from an app that reports no position once it changed, where the gesture ended', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.getCurrentSelection.mockReturnValue({ ...chromeSelection, programName: 'com.example.editor' });
+    drag();
+    vi.advanceTimersByTime(300);
+    expect(sentSelection()).toMatchObject({ text: 'first selection', appId: 'com.example.editor' });
+    expect(win.visible).toBe(true);
+    expect(win.bounds.x + win.bounds.width / 2).toBe(480);
+  }));
+
+  test.each([
+    ['has no position', chromeSelection],
+    ['was left elsewhere, as by a window drag', placedSelection(300, 480, 400)],
+    ['only the press was made on, as when dragged text is dropped', placedSelection(260, 320, 200)],
+  ])('is not shown again from a selection seen before that %s', (_case, selection) => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.emit('text-selection', selection);
+    vi.advanceTimersByTime(300);
+    hook.emit('mouse-down', { x: 5, y: 5, button: 0 });
+    hook.emit('mouse-up', { x: 5, y: 5, button: 0 });
+    expect(win.visible).toBe(false);
+    hook.getCurrentSelection.mockReturnValue(selection);
+    drag();
+    vi.advanceTimersByTime(10_000);
+    expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);
+    expect(win.visible).toBe(false);
+  }));
+
+  test('is not invented from a selection left away from the gesture, even one not seen before', () => onMac(() => {
+    create();
+    const hook = FakeHook.last!;
+    hook.getCurrentSelection.mockReturnValue(placedSelection(300, 480, 400));
     drag();
     vi.advanceTimersByTime(10_000);
     expect(hook.getCurrentSelection).toHaveBeenCalledTimes(1);

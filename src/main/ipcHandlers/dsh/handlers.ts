@@ -4,7 +4,7 @@
 // server and no task is forwarded to it through LobsterAI. Keeps all dsh
 // wiring out of main.ts except one register call.
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -15,8 +15,11 @@ import {
   DshIpcChannel,
 } from '../../../shared/dshEngine/constants';
 import type { ProviderConfig } from '../../../shared/providers/types';
+import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../../libs/coworkUtil';
 import { DshManagedSettings, DshPlanProviderInput, renderDshManagedSettings } from '../../libs/dshConfigSync';
-import { getDshEngineManager } from '../../libs/dshEngineManager';
+import { DshNodeToolchain, getDshEngineManager } from '../../libs/dshEngineManager';
+import { reapOrphanedDshRuntimes } from '../../libs/dshOrphanReaper';
+import { resolveDshBundledGitBinDir } from '../../libs/dshRuntime';
 import {
   clearWriterLock,
   DshSharedHomeDecision,
@@ -40,6 +43,24 @@ export interface DshHandlerDeps {
 
 let moduleDeps: DshHandlerDeps | null = null;
 let workbenchWindow: BrowserWindow | null = null;
+let orphanReap: Promise<number> | null = null;
+
+// Stops runtimes an earlier run left behind (see dshOrphanReaper). Concurrent
+// callers share one scan.
+function reclaimOrphanedDshRuntimes(): Promise<number> {
+  orphanReap ??= reapOrphanedDshRuntimes().finally(() => {
+    orphanReap = null;
+  });
+  return orphanReap;
+}
+
+// At launch, so a leftover stops holding its port and the dsh home even when
+// the workbench is never opened this run. Only users who turned dsh on can
+// have one, so everyone else skips the process scan.
+export function reclaimOrphanedDshRuntimesOnStartup(): void {
+  if (!moduleDeps || !isDshFeatureEnabled(moduleDeps.getStore())) return;
+  void reclaimOrphanedDshRuntimes();
+}
 
 // The canonical dsh home. Using it directly — rather than a private copy —
 // is what makes installed plugins, credentials, agent presets, settings, and
@@ -88,11 +109,38 @@ function computeManagedSettings(): DshManagedSettings | null {
   return renderDshManagedSettings(providers, { preferredDefault, planProvider });
 }
 
+// The bundled pnpm runs dependency build scripts that call `node`, `npm`, or
+// `npx`. These are the same Electron-as-Node shims cowork and the gateway use.
+// Git-sourced plugins also need the Git shipped with the Windows app.
+function resolveDshNodeToolchain(): DshNodeToolchain {
+  const electronPath = getElectronNodeRuntimePath();
+  const npmBinDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+    : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+  const hasNpm = fs.existsSync(npmBinDir);
+  return {
+    electronPath,
+    nodeShimDir: ensureElectronNodeShim(electronPath, hasNpm ? npmBinDir : undefined),
+    npmBinDir: hasNpm ? npmBinDir : null,
+    gitBinDir: resolveDshBundledGitBinDir(
+      app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources'),
+      process.platform,
+      fs.existsSync,
+      path.join
+    ),
+  };
+}
+
 // Starts the engine on demand (settings sync included) and resolves the
 // authenticated web URL for the workbench window. The URL carries the
 // runtime's launch token, so it stays in the main process.
 export async function ensureDshEngineReady(): Promise<string> {
   const manager = getDshEngineManager();
+
+  // A leftover runtime from an earlier run still writes the shared home, and
+  // its writer lock names a main process that is gone, so the check below
+  // would read the home as free. Stop it first.
+  await reclaimOrphanedDshRuntimes();
 
   // The workbench runs against the machine's dsh home so plugins, credentials,
   // settings, and history are the same ones a standalone dsh uses. dsh allows
@@ -114,6 +162,7 @@ export async function ensureDshEngineReady(): Promise<string> {
   manager.setHomeDirectorySource(() => resolution.dataHome);
   manager.setManagedSettingsSource(computeManagedSettings);
   manager.setWorkingDirectorySource(() => moduleDeps?.getDefaultCwd() ?? '');
+  manager.setNodeToolchainSource(resolveDshNodeToolchain);
   manager.setSharedHomeLock(
     resolution.dataHome
       ? { claim: (port) => writeWriterLock(sharedHome, port), release: () => clearWriterLock(sharedHome) }

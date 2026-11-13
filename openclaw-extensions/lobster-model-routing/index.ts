@@ -1,5 +1,7 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
+import { resolveSpawnModel, SESSIONS_SPAWN_TOOL_NAME } from './spawnModel';
+
 const SERVER_PROVIDER = 'lobsterai-server';
 const VIRTUAL_MODELS = new Set(['yd-fast', 'yd-ultra']);
 // Mirrors NATIVE_RUN_LLM_TRACE_PROXY_PATH in src/shared/cowork/llmTurnUsage.ts.
@@ -17,6 +19,26 @@ export default {
   id: 'lobster-model-routing',
   name: 'LobsterModelRouting',
   register(api: OpenClawPluginApi) {
+    // The run's model as selected, before virtual presets resolve, so children keep the preset.
+    const selectedModelByRun = new Map<string, string>();
+    api.on('before_model_resolve', (_event, ctx) => {
+      if (ctx.runId && ctx.modelProviderId && ctx.modelId) {
+        rememberBounded(selectedModelByRun, ctx.runId, `${ctx.modelProviderId}/${ctx.modelId}`);
+      }
+    });
+    api.on('before_tool_call', (event, ctx) => {
+      if (event.toolName !== SESSIONS_SPAWN_TOOL_NAME) return;
+      const runId = ctx.runId ?? event.runId;
+      const model = resolveSpawnModel({
+        spawnParams: event.params,
+        requesterAgentId: ctx.agentId,
+        requesterModel: runId ? selectedModelByRun.get(runId) : undefined,
+      });
+      if (!model) return;
+      api.logger.info(`[lobster-model-routing] sessions_spawn model ${String(event.params.model ?? '-')} -> ${model}`);
+      return { params: { model } };
+    });
+
     const config = api.pluginConfig as { proxyUrl?: string; token?: string } | undefined;
     if (!config?.proxyUrl || !config.token) return;
     // Virtual model each run resolved, so its usage report can name the preset.

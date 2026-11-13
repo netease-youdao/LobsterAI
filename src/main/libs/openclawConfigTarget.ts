@@ -150,7 +150,10 @@ function rotateOpenClawConfigBackups(backupPath: string): void {
  * last-known-good baseline, e.g. the >50% size drop after sign-out removes the
  * plan model catalog. Host writes bypass OpenClaw's backup rotation, so a stale
  * `.bak` would silently bring back an old model/provider setup on every start.
- * Keep the host-approved content there; older backups move down the ring.
+ * Keep the host-approved content there; older backups move down the ring. The
+ * patched gateway finds nothing to recover in a `.bak` holding the current bytes
+ * (openclaw-config-apply-size-drop-allowance.patch), so a sign-out persisted
+ * while it was stopped starts without a restore.
  */
 export function alignOpenClawConfigBackup(configPath: string, raw: string): boolean {
   const backupPath = `${configPath}.bak`;

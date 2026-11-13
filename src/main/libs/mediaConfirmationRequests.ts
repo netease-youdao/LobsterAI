@@ -5,6 +5,8 @@ import {
   MediaConfirmationAction,
   type MediaConfirmationCommand,
   type MediaConfirmationEvent,
+  MediaConfirmationGrant,
+  type MediaConfirmationKind,
   MediaConfirmationOutcome,
   MediaConfirmationPolicy,
   MediaConfirmationReason,
@@ -15,10 +17,16 @@ import {
 import type { AskUserRequest } from './mcpBridgeServer';
 
 export interface RecoverableMediaConfirmation {
+  kind?: MediaConfirmationKind;
   isCurrent: () => boolean;
   refresh: () => Promise<AskUserRequest['questions']>;
   onEvent: (event: MediaConfirmationEvent) => void;
   signal?: AbortSignal;
+  /**
+   * Offers approving the rest of a turn. Approving one request that way also
+   * approves the pending requests of the same group at the same quote.
+   */
+  turnGroup?: string;
 }
 
 interface Pending {
@@ -34,13 +42,13 @@ interface Pending {
 }
 
 /** What the user agreed to pay; a re-read catalogue with the same quote keeps their consent valid. */
-const quoteOf = (questions: AskUserRequest['questions']): string =>
+export const mediaConfirmationQuote = (questions: AskUserRequest['questions']): string =>
   JSON.stringify(questions.map(question => [
-    question.subtitle ?? '', question.video?.estimatedCredits ?? null, question.video?.pricingNote ?? '',
+    question.subtitle ?? '', question.video?.estimatedCredits ?? null, question.video?.pricingNote ?? '', question.quoteKey ?? '',
   ]));
 
 /**
- * Paid video consent. There is no review deadline: a quote older than
+ * Paid media consent. There is no short review deadline: a quote older than
  * `QuoteFreshMs` is re-read when the user confirms, submitting at once if the
  * price is unchanged and asking again otherwise. Requests end after `RetentionMs`.
  */
@@ -74,11 +82,12 @@ export class MediaConfirmationRequests {
           questions,
           sessionKey,
           mediaConfirmation: {
-            kind: MediaConfirmationPolicy.Kind,
+            kind: options.kind ?? MediaConfirmationPolicy.Kind,
             revision: 0,
             sequence: 0,
             status: MediaConfirmationStatus.Waiting,
             retainedUntil: startedAt + MediaConfirmationPolicy.RetentionMs,
+            ...(options.turnGroup ? { turnGrant: true } : {}),
           },
         },
         options,
@@ -232,11 +241,13 @@ export class MediaConfirmationRequests {
     }
     if (state.status !== MediaConfirmationStatus.Visible) return false;
     const question = entry.request.questions[0];
+    const grant = response?.grant ?? MediaConfirmationGrant.Once;
     const valid =
       entry.request.questions.length === 1 &&
       response?.behavior === ConfirmationBehavior.Allow &&
       !response.skippedQuestionIds?.length &&
-      response.answers?.[question.question] === question.options[0]?.label;
+      response.answers?.[question.question] === question.options[0]?.label &&
+      (grant === MediaConfirmationGrant.Once || (grant === MediaConfirmationGrant.Turn && state.turnGrant === true));
     if (!valid) {
       this.finish(
         entry,
@@ -255,10 +266,33 @@ export class MediaConfirmationRequests {
   }
 
   private allow(entry: Pending, response: MediaConfirmationResponse): void {
+    if (response.grant !== MediaConfirmationGrant.Turn) {
+      this.finish(entry, MediaConfirmationOutcome.Allowed, undefined, {
+        behavior: ConfirmationBehavior.Allow,
+        answers: response.answers,
+      });
+      return;
+    }
+    const quote = mediaConfirmationQuote(entry.request.questions);
+    const group = entry.options.turnGroup;
     this.finish(entry, MediaConfirmationOutcome.Allowed, undefined, {
       behavior: ConfirmationBehavior.Allow,
       answers: response.answers,
+      grant: MediaConfirmationGrant.Turn,
+      quote,
     });
+    // The same consent covers requests already queued in this turn, but only at the price the user saw.
+    for (const other of [...this.pending.values()]) {
+      const question = other.request.questions[0];
+      if (!group || other.options.turnGroup !== group || other.request.questions.length !== 1
+        || mediaConfirmationQuote(other.request.questions) !== quote || !this.current(other)) continue;
+      this.finish(other, MediaConfirmationOutcome.Allowed, undefined, {
+        behavior: ConfirmationBehavior.Allow,
+        answers: { [question.question]: question.options[0]?.label ?? '' },
+        grant: MediaConfirmationGrant.Turn,
+        quote,
+      });
+    }
   }
 
   /** Re-reads a stale quote at confirmation: an unchanged price submits, a new one needs a fresh answer. */
@@ -284,7 +318,7 @@ export class MediaConfirmationRequests {
     }
     if (!this.current(entry)) return false;
     entry.quotedAt = this.now();
-    if (quoteOf(questions) === quoteOf(previous.questions)) {
+    if (mediaConfirmationQuote(questions) === mediaConfirmationQuote(previous.questions)) {
       this.allow(entry, response);
       return true;
     }

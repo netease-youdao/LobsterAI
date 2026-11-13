@@ -1,7 +1,13 @@
+import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { AppIpcChannel } from '../../shared/app/constants';
-import { collectOpenWithArgv, OpenWithPathQueue, type OpenWithPathQueueTarget } from './openWithPathQueue';
+import {
+  collectOpenWithArgv,
+  findBundledPathArg,
+  OpenWithPathQueue,
+  type OpenWithPathQueueTarget,
+} from './openWithPathQueue';
 
 function createTarget(): { target: OpenWithPathQueueTarget; sent: string[]; destroy: () => void } {
   const sent: string[] = [];
@@ -161,5 +167,73 @@ describe('collectOpenWithArgv', () => {
     );
 
     expect(entries).toEqual([{ arg: 'notes.md', path: 'C:\\work\\notes.md' }]);
+  });
+});
+
+describe('findBundledPathArg', () => {
+  const installDir = 'E:\\Software\\Lobster AI\\LobsterAI';
+  const exe = `${installDir}\\LobsterAI.exe`;
+  const resourcesPath = `${installDir}\\resources`;
+  const knnChild = `${resourcesPath}\\cfmind\\dist\\extensions\\memory-core\\memory-search-knn.child.js`;
+  const options = { cwd: `${resourcesPath}\\cfmind`, bundledRoots: [resourcesPath], pathApi: path.win32 };
+
+  test('flags an OpenClaw child that booted the app instead of Node', () => {
+    // The command line a field log recorded for the memory search KNN child.
+    const commandLine = [
+      exe,
+      '--allow-file-access-from-files',
+      '--secure-schemes=localfile,lobster-skin',
+      '--no-sandbox',
+      '--source-app-id',
+      knnChild,
+    ];
+
+    expect(findBundledPathArg(commandLine, options)).toBe(knnChild);
+  });
+
+  test('compares bundle paths case-insensitively and resolves relative arguments', () => {
+    expect(findBundledPathArg([exe, knnChild.toLowerCase()], options)).toBe(knnChild.toLowerCase());
+    expect(findBundledPathArg([exe, 'dist\\gateway-entry.js'], options)).toBe('dist\\gateway-entry.js');
+  });
+
+  test('flags a dev runtime script outside the Electron resources', () => {
+    const runtimeRoot = 'C:\\repo\\vendor\\openclaw-runtime\\win-x64';
+    const child = `${runtimeRoot}\\dist\\extensions\\memory-core\\memory-search-knn.child.js`;
+
+    expect(findBundledPathArg(['C:\\repo\\node_modules\\electron\\dist\\electron.exe', child], {
+      cwd: runtimeRoot,
+      bundledRoots: ['C:\\repo\\node_modules\\electron\\dist\\resources', runtimeRoot],
+      pathApi: path.win32,
+    })).toBe(child);
+  });
+
+  test('leaves user launches alone', () => {
+    const userLaunches = [
+      [exe],
+      [exe, '--allow-file-access-from-files', 'lobsterai://auth/callback?code=abc'],
+      [exe, 'C:\\Users\\me\\project\\memory-search.js'],
+      [exe, 'D:\\notes.md'],
+      // The install directory and resources themselves, and look-alike siblings.
+      [exe, installDir],
+      [exe, resourcesPath],
+      [exe, `${installDir}\\resources-backup\\note.md`],
+    ];
+
+    for (const commandLine of userLaunches) {
+      expect(findBundledPathArg(commandLine, { ...options, cwd: 'C:\\Users\\me' })).toBeNull();
+    }
+  });
+
+  test('handles POSIX command lines', () => {
+    const appResources = '/opt/LobsterAI/resources';
+
+    expect(findBundledPathArg(
+      ['/opt/LobsterAI/lobsterai', `${appResources}/cfmind/dist/extensions/memory-core/memory-search-knn.child.js`],
+      { cwd: '/', bundledRoots: [appResources], pathApi: path.posix },
+    )).toBe(`${appResources}/cfmind/dist/extensions/memory-core/memory-search-knn.child.js`);
+    expect(findBundledPathArg(
+      ['/opt/LobsterAI/lobsterai', '/home/me/notes.md'],
+      { cwd: '/', bundledRoots: [appResources], pathApi: path.posix },
+    )).toBeNull();
   });
 });

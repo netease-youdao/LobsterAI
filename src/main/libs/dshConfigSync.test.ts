@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as yaml from 'js-yaml';
 import * as os from 'os';
@@ -10,10 +11,12 @@ import {
   DSH_MANAGED_LABEL_PREFIX,
   DSH_PLAN_ANTHROPIC_ROUTE_ID,
   DSH_PLAN_ROUTE_ID,
+  DSH_WEB_PROFILE,
   mapApiFormatToDshProtocol,
-  mergeDshSettingsText,
+  mergeDshProfilePatchText,
   renderDshManagedSettings,
   sanitizeDshRouteId,
+  splitLegacyDshSettings,
   writeDshManagedSettings,
 } from './dshConfigSync';
 
@@ -223,99 +226,272 @@ describe('plan provider (token proxy)', () => {
   });
 });
 
-describe('mergeDshSettingsText', () => {
+describe('mergeDshProfilePatchText', () => {
   const managed = renderDshManagedSettings(
     { gw: providerFixture() },
     { preferredDefault: { providerId: 'gw', modelId: 'model-a' } }
   );
 
-  test('creates the document from scratch and seeds the default model', () => {
-    const { text, warnings } = mergeDshSettingsText(null, managed, { seedDefaultModel: true });
-    const doc = yaml.load(text) as Record<string, Record<string, unknown>>;
-    expect(warnings).toHaveLength(0);
-    expect((doc['llm-pi-ai'].providers as Record<string, unknown>)['lobsterai-gw']).toBeDefined();
-    expect(doc['agent-default-model']).toEqual({ provider: 'lobsterai-gw', model: 'model-a' });
+  test('creates the patch from scratch and seeds the default model', () => {
+    const { text, changed } = mergeDshProfilePatchText(null, managed, { seedDefaultModel: true });
+    expect(changed).toBe(true);
+    const rows = loadPatch(text);
+    const piAi = findRow(rows, 'llm-pi-ai');
+    expect(piAi?.name).toBe('@deepseek-ai/dsh-llm-pi-ai');
+    expect(providersOf(rows)['lobsterai-gw']).toBeDefined();
+    expect(findRow(rows, 'agent-default-model')).toEqual({
+      id: 'agent-default-model',
+      name: '@deepseek-ai/dsh-agent-default-model',
+      config: { provider: 'lobsterai-gw', model: 'model-a' },
+    });
   });
 
-  test('preserves user routes and foreign namespaces, replaces stale managed routes', () => {
-    const existing = yaml.dump({
-      'ui-onboarding': { done: true },
-      'llm-pi-ai': {
-        providers: {
-          'user-route': { apiKeyEnv: 'USER_KEY', api: 'openai-completions', baseURL: 'https://u.example', models: [{ id: 'u' }] },
-          'lobsterai-stale': { apiKeyEnv: 'STALE', api: 'openai-completions', baseURL: 'https://s.example', models: [{ id: 's' }] },
-        },
-      },
-      'agent-default-model': { provider: 'user-route', model: 'u' },
-    });
-    const { text } = mergeDshSettingsText(existing, managed);
-    const doc = yaml.load(text) as Record<string, Record<string, unknown>>;
-    const providers = doc['llm-pi-ai'].providers as Record<string, unknown>;
+  test('preserves user routes, other rows, and !!js expressions; drops stale managed routes', () => {
+    const existing = [
+      '- insert:',
+      '    - id: probe',
+      '      name: probe-plugin',
+      '      disabled: !!js "!ctx.get(\'profileContext\')"',
+      '- id: llm-pi-ai',
+      '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+      '  config:',
+      '    providers:',
+      '      user-route: { apiKeyEnv: USER_KEY, api: openai-completions, baseURL: "https://u.example", models: [{ id: u }] }',
+      '      lobsterai-stale: { apiKeyEnv: STALE, api: openai-completions, baseURL: "https://s.example", models: [{ id: s }] }',
+      '- id: agent-default-model',
+      '  name: "@deepseek-ai/dsh-agent-default-model"',
+      '  config: { provider: user-route, model: u }',
+      '',
+    ].join('\n');
+    const { text } = mergeDshProfilePatchText(existing, managed);
+    const providers = providersOf(loadPatch(text));
     expect(providers['user-route']).toBeDefined();
     expect(providers['lobsterai-stale']).toBeUndefined();
     expect(providers['lobsterai-gw']).toBeDefined();
-    expect(doc['ui-onboarding']).toEqual({ done: true });
+    expect(text).toContain("disabled: !!js '!ctx.get(''profileContext'')'");
     // The user's default model pick must never be clobbered.
-    expect(doc['agent-default-model']).toEqual({ provider: 'user-route', model: 'u' });
+    expect(findRow(loadPatch(text), 'agent-default-model')?.config).toEqual({ provider: 'user-route', model: 'u' });
   });
 
-  // dsh's own default belongs to the machine (and to any standalone dsh
-  // sharing this home), so it is never rewritten.
-  test('leaves the shipped DeepSeek default alone', () => {
-    const existing = yaml.dump({ 'agent-default-model': { provider: 'deepseek-official', model: 'deepseek-v4-flash' } });
-    const doc = yaml.load(mergeDshSettingsText(existing, managed).text) as Record<string, unknown>;
-    expect(doc['agent-default-model']).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4-flash' });
+  // The shipped default belongs to the user (and to any standalone dsh sharing
+  // this home), so it is never rewritten.
+  test('leaves a DeepSeek default the user picked alone', () => {
+    const existing = yaml.dump([
+      { id: 'agent-default-model', name: '@deepseek-ai/dsh-agent-default-model', config: { provider: 'deepseek-official', model: 'deepseek-flash' } },
+    ]);
+    const rows = loadPatch(mergeDshProfilePatchText(existing, managed, { seedDefaultModel: true }).text);
+    expect(findRow(rows, 'agent-default-model')?.config).toEqual({ provider: 'deepseek-official', model: 'deepseek-flash' });
   });
 
-  test('does not seed a default into a home that already has settings', () => {
-    const existing = yaml.dump({ locale: { preference: 'zh' } });
-    const doc = yaml.load(mergeDshSettingsText(existing, managed).text) as Record<string, unknown>;
-    expect('agent-default-model' in doc).toBe(false);
+  test('does not seed a default into a profile that already exists', () => {
+    const rows = loadPatch(mergeDshProfilePatchText('[]\n', managed).text);
+    expect(findRow(rows, 'agent-default-model')).toBeUndefined();
   });
 
   test('repairs a default pinned to a managed route that no longer exists', () => {
-    const existing = yaml.dump({ 'agent-default-model': { provider: 'lobsterai-removed', model: 'gone' } });
-    const doc = yaml.load(mergeDshSettingsText(existing, managed).text) as Record<string, unknown>;
-    expect(doc['agent-default-model']).toEqual({ provider: 'lobsterai-gw', model: 'model-a' });
+    const existing = yaml.dump([{ id: 'agent-default-model', config: { provider: 'lobsterai-removed', model: 'gone' } }]);
+    const rows = loadPatch(mergeDshProfilePatchText(existing, managed).text);
+    expect(findRow(rows, 'agent-default-model')?.config).toEqual({ provider: 'lobsterai-gw', model: 'model-a' });
   });
 
-  test('replaces unparseable content with a warning', () => {
-    const { text, warnings } = mergeDshSettingsText('{not yaml: [', managed);
-    expect(warnings).toHaveLength(1);
-    expect((yaml.load(text) as Record<string, unknown>)['llm-pi-ai']).toBeDefined();
+  test('refuses to rewrite a patch it cannot read', () => {
+    expect(() => mergeDshProfilePatchText('- [not yaml', managed)).toThrow();
+    expect(() => mergeDshProfilePatchText('llm-pi-ai: {}\n', managed)).toThrow(/not a YAML sequence/);
+  });
+
+  test('reports no change, and returns the text untouched, when the managed rows already match', () => {
+    const first = mergeDshProfilePatchText(null, managed, { seedDefaultModel: true }).text;
+    const commented = `# my notes\n${first}# trailing note\n`;
+    expect(mergeDshProfilePatchText(commented, managed)).toEqual({ text: commented, changed: false });
+  });
+
+  test('keeps the leading header comment when it rewrites the patch', () => {
+    const existing = '# Your patch layer for this dsh profile.\n# Second line.\n[]\n';
+    const { text } = mergeDshProfilePatchText(existing, managed);
+    expect(text.startsWith('# Your patch layer for this dsh profile.\n# Second line.\n- ')).toBe(true);
+  });
+
+  test('clears our routes when nothing is managed, dropping a row left bare but keeping a customized one', () => {
+    const none = renderDshManagedSettings({});
+    const bare = yaml.dump([{ id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'lobsterai-gw': {} } } }]);
+    expect(loadPatch(mergeDshProfilePatchText(bare, none).text)).toEqual([]);
+
+    const customized = yaml.dump([{ id: 'llm-pi-ai', disabled: true, config: { providers: { 'lobsterai-gw': {} } } }]);
+    expect(loadPatch(mergeDshProfilePatchText(customized, none).text)).toEqual([{ id: 'llm-pi-ai', disabled: true }]);
+  });
+
+  test('writes nothing for an empty profile with nothing to manage', () => {
+    expect(mergeDshProfilePatchText(null, renderDshManagedSettings({}), { seedDefaultModel: true }).changed).toBe(false);
+  });
+
+  test('folds legacy sections over the profile rows, minus stale managed routes', () => {
+    const { text } = mergeDshProfilePatchText('[]\n', managed, {
+      legacy: {
+        'llm-pi-ai': {
+          providers: {
+            'user-route': { apiKeyEnv: 'USER_KEY', api: 'openai-completions', baseURL: 'https://u.example', models: [{ id: 'u' }] },
+            'lobsterai-stale': { apiKeyEnv: 'STALE', api: 'openai-completions', baseURL: 'https://s.example', models: [{ id: 's' }] },
+          },
+        },
+        'agent-default-model': { provider: 'user-route', model: 'u' },
+      },
+    });
+    const rows = loadPatch(text);
+    expect(Object.keys(providersOf(rows)).sort()).toEqual(['lobsterai-gw', 'user-route']);
+    expect(findRow(rows, 'agent-default-model')?.config).toEqual({ provider: 'user-route', model: 'u' });
+  });
+
+  test('repairs a legacy default pinned to a managed route that no longer exists', () => {
+    const { text } = mergeDshProfilePatchText(null, managed, {
+      legacy: { 'agent-default-model': { provider: 'lobsterai-removed', model: 'gone' } },
+    });
+    expect(findRow(loadPatch(text), 'agent-default-model')?.config).toEqual({ provider: 'lobsterai-gw', model: 'model-a' });
+  });
+});
+
+describe('splitLegacyDshSettings', () => {
+  test('takes the owned sections and leaves the rest for dsh', () => {
+    const split = splitLegacyDshSettings(
+      yaml.dump({ 'llm-pi-ai': { providers: {} }, 'agent-default-model': { provider: 'p', model: 'm' }, locale: { preference: 'zh' } })
+    );
+    expect(split?.owned).toEqual({ 'llm-pi-ai': { providers: {} }, 'agent-default-model': { provider: 'p', model: 'm' } });
+    expect(yaml.load(split?.remainder ?? '')).toEqual({ locale: { preference: 'zh' } });
+  });
+
+  test('has no remainder once only owned sections were present', () => {
+    expect(splitLegacyDshSettings(yaml.dump({ 'llm-pi-ai': { providers: {} } }))?.remainder).toBeNull();
+  });
+
+  test('leaves a document without owned sections alone', () => {
+    expect(splitLegacyDshSettings(yaml.dump({ locale: { preference: 'zh' } }))).toBeNull();
+    expect(splitLegacyDshSettings('')).toBeNull();
+  });
+
+  test('throws on a document it cannot read', () => {
+    expect(() => splitLegacyDshSettings('- a\n- b\n')).toThrow(/not a map/);
   });
 });
 
 describe('writeDshManagedSettings', () => {
-  test('round-trips to disk with 0600 mode and cleans up its lock', async () => {
+  function makeHome(): string {
     const dshHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-config-sync-'));
     tempDirs.push(dshHome);
+    return dshHome;
+  }
+
+  test('writes the web profile patch with 0600 mode, seeds a fresh profile, and cleans up its lock', async () => {
+    const dshHome = makeHome();
     const managed = renderDshManagedSettings({ gw: providerFixture() });
 
     const first = await writeDshManagedSettings(dshHome, managed);
     expect(first.warnings).toHaveLength(0);
-    // A fresh home is ours to initialize, so the default model is seeded.
-    expect(
-      (yaml.load(fs.readFileSync(first.settingsPath, 'utf8')) as Record<string, unknown>)['agent-default-model']
-    ).toBeDefined();
-    const doc = yaml.load(fs.readFileSync(first.settingsPath, 'utf8')) as Record<string, Record<string, unknown>>;
-    expect((doc['llm-pi-ai'].providers as Record<string, unknown>)['lobsterai-gw']).toBeDefined();
+    expect(first.patchPath).toBe(path.join(dshHome, 'profiles', DSH_WEB_PROFILE, 'cordis.patch.yml'));
+    const rows = loadPatch(fs.readFileSync(first.patchPath, 'utf8'));
+    expect(providersOf(rows)['lobsterai-gw']).toBeDefined();
+    // A fresh profile is ours to initialize, so the default model is seeded.
+    expect(findRow(rows, 'agent-default-model')?.config).toEqual({ provider: 'lobsterai-gw', model: 'model-a' });
     if (process.platform !== 'win32') {
-      expect(fs.statSync(first.settingsPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(first.patchPath).mode & 0o777).toBe(0o600);
     }
-    expect(fs.existsSync(`${first.settingsPath}.lock`)).toBe(false);
+    expect(fs.existsSync(path.join(dshHome, 'profiles', DSH_WEB_PROFILE, 'package.json.lock'))).toBe(false);
+    // dsh scaffolds the rest of the profile itself; the retired document stays retired.
+    expect(fs.existsSync(path.join(dshHome, 'profiles', DSH_WEB_PROFILE, 'package.json'))).toBe(false);
+    expect(fs.existsSync(path.join(dshHome, 'settings.yaml'))).toBe(false);
+  });
 
-    // Second write is a merge, not a clobber.
-    fs.writeFileSync(
-      first.settingsPath,
-      yaml.dump({ ...(yaml.load(fs.readFileSync(first.settingsPath, 'utf8')) as object), locale: { preference: 'zh' } })
+  test('a later sync merges into the patch and keeps the default the user picked', async () => {
+    const dshHome = makeHome();
+    const first = await writeDshManagedSettings(dshHome, renderDshManagedSettings({ gw: providerFixture() }));
+    const rows = loadPatch(fs.readFileSync(first.patchPath, 'utf8')).map((row) =>
+      row.id === 'agent-default-model' ? { ...row, config: { provider: 'deepseek-official', model: 'deepseek-flash' } } : row
     );
-    const second = await writeDshManagedSettings(dshHome, managed);
-    const merged = yaml.load(fs.readFileSync(second.settingsPath, 'utf8')) as Record<string, unknown>;
-    expect(merged.locale).toEqual({ preference: 'zh' });
+    rows.push({ id: 'locale', config: { preference: 'zh' } });
+    fs.writeFileSync(first.patchPath, yaml.dump(rows));
 
-    // The composition layer must stay untouched: a stock dsh home keeps every
-    // shipped provider, tool, and plugin exactly as dsh ships it.
-    expect(fs.existsSync(path.join(dshHome, 'cordis.patch.yml'))).toBe(false);
+    const second = await writeDshManagedSettings(dshHome, renderDshManagedSettings({ other: providerFixture() }));
+    const merged = loadPatch(fs.readFileSync(second.patchPath, 'utf8'));
+    expect(Object.keys(providersOf(merged))).toEqual(['lobsterai-other']);
+    expect(findRow(merged, 'locale')?.config).toEqual({ preference: 'zh' });
+    expect(findRow(merged, 'agent-default-model')?.config).toEqual({ provider: 'deepseek-official', model: 'deepseek-flash' });
+  });
+
+  test('leaves the file untouched when nothing changed', async () => {
+    const dshHome = makeHome();
+    const managed = renderDshManagedSettings({ gw: providerFixture() });
+    const { patchPath } = await writeDshManagedSettings(dshHome, managed);
+    const commented = `# kept\n${fs.readFileSync(patchPath, 'utf8')}`;
+    fs.writeFileSync(patchPath, commented);
+    await writeDshManagedSettings(dshHome, managed);
+    expect(fs.readFileSync(patchPath, 'utf8')).toBe(commented);
+  });
+
+  test('folds a legacy settings.yaml in and leaves its other sections for dsh', async () => {
+    const dshHome = makeHome();
+    fs.writeFileSync(
+      path.join(dshHome, 'settings.yaml'),
+      yaml.dump({
+        'ui-onboarding': { done: true },
+        'llm-pi-ai': {
+          providers: {
+            'user-route': { apiKeyEnv: 'USER_KEY', api: 'openai-completions', baseURL: 'https://u.example', models: [{ id: 'u' }] },
+            'lobsterai-stale': { apiKeyEnv: 'STALE', api: 'openai-completions', baseURL: 'https://s.example', models: [{ id: 's' }] },
+          },
+        },
+        'agent-default-model': { provider: 'user-route', model: 'u' },
+      })
+    );
+    const { patchPath } = await writeDshManagedSettings(dshHome, renderDshManagedSettings({ gw: providerFixture() }));
+    const rows = loadPatch(fs.readFileSync(patchPath, 'utf8'));
+    expect(Object.keys(providersOf(rows)).sort()).toEqual(['lobsterai-gw', 'user-route']);
+    expect(findRow(rows, 'agent-default-model')?.config).toEqual({ provider: 'user-route', model: 'u' });
+    expect(yaml.load(fs.readFileSync(path.join(dshHome, 'settings.yaml'), 'utf8'))).toEqual({ 'ui-onboarding': { done: true } });
+  });
+
+  test('retires a legacy settings.yaml once nothing else is left in it', async () => {
+    const dshHome = makeHome();
+    fs.writeFileSync(path.join(dshHome, 'settings.yaml'), yaml.dump({ 'llm-pi-ai': { providers: {} } }));
+    await writeDshManagedSettings(dshHome, renderDshManagedSettings({ gw: providerFixture() }));
+    expect(fs.existsSync(path.join(dshHome, 'settings.yaml'))).toBe(false);
+    expect(fs.existsSync(path.join(dshHome, 'settings.yaml.imported'))).toBe(true);
+  });
+
+  test('warns about, and keeps, a legacy settings.yaml it cannot read', async () => {
+    const dshHome = makeHome();
+    const legacyPath = path.join(dshHome, 'settings.yaml');
+    fs.writeFileSync(legacyPath, '{not yaml: [');
+    const { warnings } = await writeDshManagedSettings(dshHome, renderDshManagedSettings({ gw: providerFixture() }));
+    expect(warnings).toHaveLength(1);
+    expect(fs.readFileSync(legacyPath, 'utf8')).toBe('{not yaml: [');
+  });
+
+  test('takes over a profile lock whose writer has exited', async () => {
+    const dshHome = makeHome();
+    const profileDir = path.join(dshHome, 'profiles', DSH_WEB_PROFILE);
+    fs.mkdirSync(profileDir, { recursive: true });
+    const exited = spawnSync(process.execPath, ['-e', '']);
+    fs.writeFileSync(path.join(profileDir, 'package.json.lock'), `${exited.pid}\n`);
+    const { patchPath } = await writeDshManagedSettings(dshHome, renderDshManagedSettings({ gw: providerFixture() }));
+    expect(providersOf(loadPatch(fs.readFileSync(patchPath, 'utf8')))['lobsterai-gw']).toBeDefined();
+    expect(fs.existsSync(path.join(profileDir, 'package.json.lock'))).toBe(false);
   });
 });
+
+type PatchRow = Record<string, unknown>;
+
+// Reads a patch in dsh's dialect, where `!!js` marks an expression.
+const PATCH_SCHEMA = yaml.JSON_SCHEMA.extend(
+  new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: (data: string) => ({ __jsExpr: data }) })
+);
+
+function loadPatch(text: string): PatchRow[] {
+  return (yaml.load(text, { schema: PATCH_SCHEMA }) as PatchRow[] | undefined) ?? [];
+}
+
+function findRow(rows: PatchRow[], id: string): PatchRow | undefined {
+  return rows.findLast((row) => row.id === id && !('insert' in row));
+}
+
+function providersOf(rows: PatchRow[]): Record<string, unknown> {
+  const config = findRow(rows, 'llm-pi-ai')?.config as { providers?: Record<string, unknown> } | undefined;
+  return config?.providers ?? {};
+}

@@ -71,6 +71,7 @@ import {
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
 import { VISIBLE_COWORK_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
+import { compactMessageMetadataMedia } from './libs/mediaMetadataCompaction';
 import {
   type SessionProjection,
   type SessionProjectionChanges,
@@ -83,6 +84,13 @@ import { RemoteStore } from './remote/remoteStore';
 import { remoteDiagnosticLog } from './remote/remoteSyncLog';
 import { captureRemoteTelemetry } from './remote/remoteTelemetry';
 
+
+/**
+ * Media details may still carry generated images as inline data URLs; they are copied into
+ * several rows and re-read on every page load, so stored metadata keeps file references only.
+ */
+const serializeMessageMetadata = (metadata: CoworkMessageMetadata | null | undefined): string | null =>
+  metadata ? JSON.stringify(compactMessageMetadataMedia(metadata)) : null;
 
 // Default working directory for new users
 const getDefaultWorkingDirectory = (): string => {
@@ -1112,6 +1120,11 @@ export class CoworkStore {
     });
   }
 
+  /** Existence check for polling loops; getSession also loads a page of messages. */
+  sessionExists(id: string): boolean {
+    return this.getOne<{ found: number }>('SELECT 1 AS found FROM cowork_sessions WHERE id = ?', [id]) !== undefined;
+  }
+
   getSession(id: string, messageLimit = COWORK_MESSAGE_PAGE_SIZE): CoworkSession | null {
     interface SessionRow {
       id: string;
@@ -1639,7 +1652,7 @@ export class CoworkStore {
             : {}),
         }));
       }
-      return Object.keys(sanitized).length > 0 ? JSON.stringify(sanitized) : null;
+      return Object.keys(sanitized).length > 0 ? serializeMessageMetadata(sanitized) : null;
     } catch {
       return null;
     }
@@ -2278,53 +2291,52 @@ export class CoworkStore {
   }
 
   getSessionMessageRailIndex(sessionId: string): CoworkMessageRailIndexItem[] {
+    // Offsets are numbered from the order index alone, then only visible rows are read back.
+    // Tool rows can carry megabytes of metadata, and sequence/created_at are stored after it:
+    // numbering the table rows directly walks every row's overflow pages and materializes
+    // the whole session's metadata, which blocked the main process for seconds.
     const rows = this.getAll<{
       id: string;
       type: string;
       preview_content: string;
       content_len: number;
-      metadata: string | null;
+      is_thinking: number;
       created_at: number;
       sequence: number | null;
       message_offset: number;
-      is_visible: number;
     }>(
       `
-      SELECT id, type, preview_content, content_len, metadata, created_at, sequence, message_offset
-      FROM (
+      WITH ordered AS (
         SELECT
-          id,
-          type,
-          substr(content, 1, 2000) as preview_content,
-          length(content) as content_len,
-          metadata,
-          created_at,
-          sequence,
+          rowid AS row_id,
           ROW_NUMBER() OVER (
-            ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
-          ) - 1 as message_offset,
-          CASE
-            WHEN type IN ('user', 'assistant') AND TRIM(content) <> '' THEN 1
-            ELSE 0
-          END as is_visible
+            ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, rowid ASC
+          ) - 1 AS message_offset
         FROM cowork_messages
         WHERE session_id = ?
       )
-      WHERE is_visible = 1
-      ORDER BY message_offset ASC
+      SELECT
+        m.id,
+        m.type,
+        substr(m.content, 1, 2000) AS preview_content,
+        length(m.content) AS content_len,
+        CASE
+          WHEN m.type = 'assistant' AND json_valid(m.metadata)
+            AND json_type(m.metadata, '$.isThinking') = 'true' THEN 1
+          ELSE 0
+        END AS is_thinking,
+        m.created_at,
+        m.sequence,
+        ordered.message_offset
+      FROM ordered
+      JOIN cowork_messages m ON m.rowid = ordered.row_id
+      WHERE m.type IN ('user', 'assistant') AND TRIM(m.content) <> ''
+      ORDER BY ordered.message_offset ASC
     `,
       [sessionId],
     );
 
-    const visibleRows = rows.filter((row) => {
-      if (row.type !== 'assistant' || !row.metadata) return true;
-      try {
-        const metadata = JSON.parse(row.metadata) as CoworkMessageMetadata;
-        return metadata.isThinking !== true;
-      } catch {
-        return true;
-      }
-    });
+    const visibleRows = rows.filter(row => row.is_thinking !== 1);
 
     return visibleRows.map((row, index) => ({
       messageId: row.id,
@@ -2400,6 +2412,7 @@ export class CoworkStore {
           resolvedModelId: selection.model_override.split('/').slice(1).join('/') } };
       }
     }
+    const metadata = compactMessageMetadataMedia(message.metadata);
 
     const seqRow = this.db
       .prepare(
@@ -2425,7 +2438,7 @@ export class CoworkStore {
           sessionId,
           message.type,
           message.content,
-          message.metadata ? JSON.stringify(message.metadata) : null,
+          metadata ? JSON.stringify(metadata) : null,
           now,
           sequence,
         );
@@ -2456,7 +2469,7 @@ export class CoworkStore {
       type: message.type,
       content: message.content,
       timestamp: now,
-      metadata: message.metadata,
+      metadata,
     };
   }
 
@@ -2505,7 +2518,7 @@ export class CoworkStore {
           sessionId,
           message.type,
           message.content,
-          message.metadata ? JSON.stringify(message.metadata) : null,
+          serializeMessageMetadata(message.metadata),
           now,
           targetSequence,
         );
@@ -2667,7 +2680,7 @@ export class CoworkStore {
           sessionId,
           message.type,
           message.content,
-          message.metadata ? JSON.stringify(message.metadata) : null,
+          serializeMessageMetadata(message.metadata),
           messageTimestamp,
           sequence++,
         );
@@ -2679,6 +2692,35 @@ export class CoworkStore {
           .run(lastUserMessageAt, sessionId);
       }
     });
+  }
+
+  /**
+   * Tool rows that show a media task: its own call and result, and status checks naming the task.
+   * Runs on every status poll, so a plain substring test narrows the rows before any JSON parsing.
+   */
+  findMediaTaskMessages(
+    sessionId: string,
+    toolCallId: string,
+    taskId: string,
+  ): Array<{ id: string; metadata: CoworkMessageMetadata }> {
+    const rows = this.getAll<{ id: string; metadata: string }>(
+      `
+      SELECT id, metadata
+      FROM cowork_messages
+      WHERE session_id = ?
+        AND type IN ('tool_use', 'tool_result')
+        AND (instr(metadata, ?) > 0 OR instr(metadata, ?) > 0)
+        AND json_valid(metadata)
+        AND (
+          json_extract(metadata, '$.toolUseId') = ?
+          OR CAST(json_extract(metadata, '$.toolInput.taskId') AS TEXT) = ?
+          OR CAST(json_extract(metadata, '$.toolResultDetails.taskId') AS TEXT) = ?
+          OR CAST(json_extract(metadata, '$.mediaStatusDetails.taskId') AS TEXT) = ?
+        )
+    `,
+      [sessionId, toolCallId, taskId, toolCallId, taskId, taskId, taskId],
+    );
+    return rows.map(row => ({ id: row.id, metadata: JSON.parse(row.metadata) as CoworkMessageMetadata }));
   }
 
   updateMessage(
@@ -2718,7 +2760,7 @@ export class CoworkStore {
         if (!isMobilePreset || hasResolvedModel) merged.resolvedModelId = metadata.resolvedModelId;
       }
       setClauses.push('metadata = ?');
-      values.push(JSON.stringify(merged));
+      values.push(serializeMessageMetadata(merged));
     }
 
     if (setClauses.length === 0) return;

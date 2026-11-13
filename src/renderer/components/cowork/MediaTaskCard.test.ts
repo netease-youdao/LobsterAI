@@ -49,4 +49,13 @@ describe('media task placeholder', () => {
     expect(html).toContain('Prompt rejected');
     expect(html).toContain('mediaTaskRefunded');
   });
+
+  test('a recovered image is complete and tells the user its location changed', () => {
+    const details = { taskId: 1, status: MediaTaskStatus.Succeeded, deliveryStatus: MediaDeliveryStatus.Saved,
+      assets: [{ savedToRecoveryDirectory: true }] };
+    expect(isMediaTaskSettled(details)).toBe(true);
+    const html = renderToStaticMarkup(createElement(MediaTaskCard, { details }));
+    expect(html).toContain('mediaImageSavedToRecovery');
+    expect(html).not.toContain('aria-busy');
+  });
 });

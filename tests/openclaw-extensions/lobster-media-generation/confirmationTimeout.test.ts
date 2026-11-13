@@ -8,7 +8,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test('video confirmation uses the configured retention budget and propagates an explicit stop', async () => {
+test.each(['lobsterai_video_generate', 'lobsterai_image_generate'])('%s confirmation uses the configured retention budget and propagates an explicit stop', async toolName => {
   vi.useFakeTimers();
   const factories: Array<
     (context: {
@@ -43,11 +43,11 @@ test('video confirmation uses the configured retention budget and propagates an 
     on: vi.fn(),
     registerTool: (factory: (typeof factories)[number]) => factories.push(factory),
   } as never);
-  const video = factories
+  const tool = factories
     .map(factory => factory({ sessionKey: 'agent:main:lobsterai:session-test' }))
-    .find(tool => tool?.name === 'lobsterai_video_generate')!;
+    .find(tool => tool?.name === toolName)!;
   const controller = new AbortController();
-  const pending = video.execute('call', { action: 'generate' }, controller.signal);
+  const pending = tool.execute('call', { action: 'generate' }, controller.signal);
   await vi.advanceTimersByTimeAsync(270_001);
   expect(bridgeSignal?.aborted).toBe(false);
   controller.abort();
