@@ -1,4 +1,4 @@
-import { SpeakerWaveIcon, StopIcon } from '@heroicons/react/24/outline';
+import { SpeakerWaveIcon } from '@heroicons/react/24/outline';
 import { useMemo, useSyncExternalStore } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -29,7 +29,8 @@ export default function MessageSpeechButton({ messageId, content, className }: M
     <MessageActionButton
       label={label}
       pressed={active}
-      className={`${className ?? ''}${active ? ' !bg-primary/10 !text-primary-hover hover:!bg-primary/15' : ''}`}
+      // Active state matches the composer's voice input button: neutral fill, ink-colored stop square.
+      className={`${className ?? ''}${active ? ' !bg-neutral-100 !text-neutral-950 hover:!bg-neutral-200 dark:!bg-white/10 dark:!text-white dark:hover:!bg-white/15' : ''}`}
       onClick={event => {
         event.stopPropagation();
         if (active) messageSpeechService.stop();
@@ -38,7 +39,7 @@ export default function MessageSpeechButton({ messageId, content, className }: M
       }}
     >
       {loading ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" aria-hidden="true" />
-        : active ? <StopIcon className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+        : active ? <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden="true" />
         : <SpeakerWaveIcon className="h-3.5 w-3.5" aria-hidden="true" />}
     </MessageActionButton>
   );
