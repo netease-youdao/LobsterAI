@@ -171,6 +171,12 @@ function parseBooleanConfig(value: string | undefined, fallback: boolean): boole
   return fallback;
 }
 
+function parseExecutionMode(value: string | undefined): CoworkExecutionMode {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'auto' || normalized === 'sandbox' || normalized === 'local') return normalized;
+  return 'local';
+}
+
 function clampMemoryUserMemoriesMaxItems(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS;
   return Math.max(
@@ -2922,7 +2928,7 @@ export class CoworkStore {
     return {
       workingDirectory: cfg.get('workingDirectory') || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
-      executionMode: 'local' as CoworkExecutionMode,
+      executionMode: parseExecutionMode(cfg.get('executionMode')),
       agentEngine: 'openclaw' as CoworkAgentEngine,
       memoryEnabled: parseBooleanConfig(cfg.get('memoryEnabled'), DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(

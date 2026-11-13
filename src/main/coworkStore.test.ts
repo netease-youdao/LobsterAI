@@ -1811,6 +1811,18 @@ test('getConfig defaults OpenClaw heartbeat to disabled when config is missing',
   expect(config.openClawHeartbeatEnabled).toBe(false);
 });
 
+test('getConfig returns the stored executionMode instead of forcing local', () => {
+  // #735: executionMode is written by setConfig but used to be hardcoded back to 'local'.
+  expect(store.getConfig().executionMode).toBe('local');
+
+  store.setConfig({ executionMode: 'auto' });
+  expect(store.getConfig().executionMode).toBe('auto');
+  expect(new CoworkStore(db).getConfig().executionMode).toBe('auto');
+
+  store.setConfig({ executionMode: 'sandbox' });
+  expect(new CoworkStore(db).getConfig().executionMode).toBe('sandbox');
+});
+
 test('defaults automatic skill review to disabled for users without the setting', () => {
   store.setConfig({ openClawHeartbeatEnabled: true });
 
