@@ -23,7 +23,7 @@ describe('Windows uninstall analytics integration contracts', () => {
     expect(analytics).toContain(`!define LOBSTER_UNINSTALL_ANALYTICS_SCHEMA "${UninstallAnalytics.SchemaVersion}"`);
     expect(analytics).toContain(`!define LOBSTER_UNINSTALL_ANALYTICS_ENDPOINT "${LogReporterEndpoint.YoudaoAnalyzer}"`);
     for (const key of Object.values(UninstallAnalyticsKey)) expect(analytics).toContain(`"${key}"`);
-    expect(installer).toContain('!include "${__FILEDIR__}/nsis-uninstall-analytics.nsh"');
+    expect(installer).toContain('!include "${__FILEDIR__}\\nsis-uninstall-analytics.nsh"');
   });
 
   test('captures only after confirmation/process stop, before file and optional user-data removal', () => {
