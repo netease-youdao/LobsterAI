@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, test } from 'vitest';
 
-import { BUNDLED_SKILL_DISPLAY_NAMES } from './bundledSkillNames';
+import { BUNDLED_SKILL_DISPLAY_NAMES, LEGACY_BUNDLED_SKILL_DISPLAY_NAMES } from './bundledSkillNames';
 
 const SKILLS_CONFIG_PATH = path.resolve(__dirname, '../../../../SKILLs/skills.config.json');
 
@@ -26,6 +26,23 @@ describe('BUNDLED_SKILL_DISPLAY_NAMES', () => {
 
   test('provides both languages for every entry', () => {
     for (const [id, name] of Object.entries(BUNDLED_SKILL_DISPLAY_NAMES)) {
+      expect(name.zh, `${id} is missing a zh name`).toBeTruthy();
+      expect(name.en, `${id} is missing an en name`).toBeTruthy();
+    }
+  });
+});
+
+describe('LEGACY_BUNDLED_SKILL_DISPLAY_NAMES', () => {
+  test('keeps legacy display names separate from the current built-in skill list', () => {
+    const bundledIds = new Set(readBundledSkillIds());
+    for (const id of Object.keys(LEGACY_BUNDLED_SKILL_DISPLAY_NAMES)) {
+      expect(bundledIds.has(id), `${id} is still configured as built-in`).toBe(false);
+      expect(BUNDLED_SKILL_DISPLAY_NAMES).not.toHaveProperty(id);
+    }
+  });
+
+  test('provides both languages for every legacy entry', () => {
+    for (const [id, name] of Object.entries(LEGACY_BUNDLED_SKILL_DISPLAY_NAMES)) {
       expect(name.zh, `${id} is missing a zh name`).toBeTruthy();
       expect(name.en, `${id} is missing an en name`).toBeTruthy();
     }

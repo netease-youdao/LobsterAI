@@ -3,6 +3,11 @@ import path from 'path';
 
 // Keep retired IDs after removing their bundled files so upgrades also remove
 // the copies installed by older app versions in userData/SKILLs.
+//
+// Retire a skill only when existing users must lose it too. Cleanup runs on
+// every startup, so a retired ID can never be installed again, not even from
+// the skill store. To merely stop shipping a skill, delete it from SKILLs/ and
+// skills.config.json: copies in userData stay as user-owned skills.
 export const RetiredBundledSkillId = {
   FilmsSearch: 'films-search',
   MusicSearch: 'music-search',
