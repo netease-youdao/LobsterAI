@@ -26,6 +26,7 @@ import type { LibrarySessionRef } from '../shared/library/types';
 import { OpenClawEnginePhase } from '../shared/openclawEngine/constants';
 import { ProviderName, ProviderRegistry } from '../shared/providers';
 import { SIDEBAR_TASK_FILTER_ENABLED } from './components/agentSidebar/SidebarTaskFilterButton';
+import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './components/agentSidebar/taskFilter';
 import { CoworkView } from './components/cowork';
 import {
   CoworkShortcutDirection,
@@ -254,7 +255,7 @@ const App: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<ToastEventDetail | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isTaskFilterActive, setIsTaskFilterActive] = useState(false);
+  const [taskFilter, setTaskFilter] = useState<SidebarTaskFilter>(DEFAULT_SIDEBAR_TASK_FILTER);
   const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const initialOpenClawEngineStatusRef = useRef(coworkService.getOpenClawEngineStatusSnapshot());
@@ -912,25 +913,26 @@ const App: React.FC = () => {
     setIsSidebarCollapsed((prev) => !prev);
   }, [isSidebarCollapsed, mainView]);
 
-  const handleToggleTaskFilter = useCallback(() => {
-    const nextActive = !isTaskFilterActive;
-    const message = `task activity toggle requested activeView=${mainView} nextActive=${nextActive} hasUnreadCompleted=${hasUnreadCompletedTasks} platform=${window.electron.platform}`;
-    console.debug(`[TaskActivity] ${message}`);
+  const handleTaskFilterChange = useCallback((nextFilter: SidebarTaskFilter) => {
+    if (nextFilter.status === taskFilter.status && nextFilter.time === taskFilter.time) return;
+    const message = `task filter change requested activeView=${mainView} status=${nextFilter.status} time=${nextFilter.time} platform=${window.electron.platform}`;
+    console.debug(`[TaskFilter] ${message}`);
     try {
-      window.electron?.log?.fromRenderer?.('debug', 'TaskActivity', message);
+      window.electron?.log?.fromRenderer?.('debug', 'TaskFilter', message);
     } catch {
       // Diagnostics must never block the sidebar interaction.
     }
     void reportYdAnalyzer({
       action: LogReporterAction.SidebarAction,
       source: 'home_sidebar',
-      actionType: 'task_filter_toggle',
+      actionType: 'task_filter_change',
       activeView: mainView,
       isCollapsed: isSidebarCollapsed,
-      targetSelected: nextActive,
+      filterStatus: nextFilter.status,
+      filterTime: nextFilter.time,
     });
-    setIsTaskFilterActive(nextActive);
-  }, [hasUnreadCompletedTasks, isSidebarCollapsed, isTaskFilterActive, mainView]);
+    setTaskFilter(nextFilter);
+  }, [isSidebarCollapsed, mainView, taskFilter]);
 
   const handleOpenTaskSearch = useCallback(() => {
     void reportYdAnalyzer({
@@ -1620,6 +1622,16 @@ const App: React.FC = () => {
       if (showUpdateModal || isPermissionModalOpen || isUpdateInteractionBlocked) return;
 
       if (matchesAction(ShortcutAction.Search)) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent<CoworkTaskSearchRequestEventDetail>(
+          CoworkUiEvent.ShortcutSearch,
+          { detail: { source: CoworkTaskSearchRequestSource.KeyboardShortcut } },
+        ));
+        return;
+      }
+
+      // Find in the open conversation; anywhere else it falls back to task search.
+      if (matchesAction(ShortcutAction.ConversationSearch)) {
         const shortcutTarget = resolveConversationSearchShortcutTarget({
           isCoworkView: mainView === MainView.Cowork,
           hasCurrentSession: Boolean(currentSessionId),
@@ -2122,11 +2134,11 @@ const App: React.FC = () => {
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
       searchLabel={i18nService.t('search')}
-      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed && mainView === MainView.Cowork}
+      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed}
       filterLabel={i18nService.t('sidebarFilter')}
-      isFilterActive={isTaskFilterActive}
+      taskFilter={taskFilter}
       hasFilterNotice={hasUnreadCompletedTasks}
-      onToggleFilter={handleToggleTaskFilter}
+      onTaskFilterChange={handleTaskFilterChange}
       newChatLabel={i18nService.t('newChat')}
       updateBadge={canUseWindowsCollapsedTopBarActions ? updateBadge : null}
     />
@@ -2242,9 +2254,9 @@ const App: React.FC = () => {
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
-          isTaskFilterActive={isTaskFilterActive}
+          taskFilter={taskFilter}
           hasUnreadCompletedTasks={hasUnreadCompletedTasks}
-          onToggleTaskFilter={handleToggleTaskFilter}
+          onTaskFilterChange={handleTaskFilterChange}
           onTaskFilterSummaryChange={setHasUnreadCompletedTasks}
           onWidthChange={setSidebarWidth}
           updateNotice={!isSidebarCollapsed && !isUpdateInteractionBlocked ? updateCard : null}

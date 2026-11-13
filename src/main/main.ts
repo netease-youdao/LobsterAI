@@ -45,7 +45,12 @@ import {
   PromptAnalyticsConversationState,
 } from '../shared/analytics/constants';
 import { UsageAnalytics, type UsageContext, UsageOrigin, UsageStage } from '../shared/analytics/usage';
-import { AppIpcChannel, type OpenSettingsRequest, OpenSettingsTab } from '../shared/app/constants';
+import {
+  AppIpcChannel,
+  type OpenSettingsRequest,
+  OpenSettingsTab,
+  WindowIpcChannel,
+} from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
@@ -134,6 +139,7 @@ import {
   type CoworkSelectedTextSnippet,
   normalizeCoworkSelectedTextSnippets,
 } from '../shared/cowork/selectedText';
+import type { CoworkSessionFilterQuery } from '../shared/cowork/sessionFilter';
 import {
   CoworkSteerRejectReason,
   CoworkSteerStatus,
@@ -345,6 +351,7 @@ import {
   quitAppWithoutConfirmation,
   showAppQuitConfirmation,
 } from './libs/appQuitConfirmation';
+import { focusAppQuitDialog } from './libs/appQuitDialog';
 import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
@@ -5792,6 +5799,10 @@ if (!gotTheLock) {
 
   ipcMain.handle('window:isMaximized', () => {
     return mainWindow?.isMaximized() ?? false;
+  });
+
+  ipcMain.handle(WindowIpcChannel.IsFullscreen, () => {
+    return mainWindow?.isFullScreen() ?? false;
   });
 
   ipcMain.on(
@@ -11879,6 +11890,63 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
+    CoworkIpcChannel.ListFilteredSessions,
+    async (_event, query: CoworkSessionFilterQuery) => {
+      try {
+        const startedAt = Date.now();
+        const sessions = getCoworkStore().listFilteredSessions({
+          statuses: Array.isArray(query?.statuses) ? query.statuses : undefined,
+          sessionIds: Array.isArray(query?.sessionIds) ? query.sessionIds : undefined,
+          updatedSince: typeof query?.updatedSince === 'number' ? query.updatedSince : undefined,
+          limit: typeof query?.limit === 'number' ? query.limit : undefined,
+        });
+        console.debug(
+          `[CoworkIPC] listed filtered sessions; statuses=${query?.statuses?.length ?? 0}, `
+          + `ids=${query?.sessionIds?.length ?? 0}, since=${query?.updatedSince ?? 'none'}, `
+          + `returned ${sessions.length} in ${Date.now() - startedAt}ms.`,
+        );
+        return { success: true, sessions };
+      } catch (error) {
+        console.error('[CoworkIPC] failed to list filtered sessions:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to list filtered sessions',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    CoworkIpcChannel.SearchSessionContent,
+    async (_event, options: { query: string; limit?: number; agentId?: string }) => {
+      try {
+        const query = typeof options?.query === 'string' ? options.query.trim() : '';
+        const requestedLimit = options?.limit ?? 50;
+        const limit = Number.isFinite(requestedLimit)
+          ? Math.max(1, Math.min(100, Math.floor(requestedLimit)))
+          : 50;
+        const startedAt = Date.now();
+        const results = getCoworkStore().searchSessionContent({
+          query,
+          limit,
+          agentId: options?.agentId,
+        });
+        console.debug(
+          `[CoworkIPC] searched session content; query length ${query.length}, `
+          + `returned ${results.length} sessions in ${Date.now() - startedAt}ms.`,
+        );
+        return { success: true, results };
+      } catch (error) {
+        console.error('[CoworkIPC] failed to search session content:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to search session content',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
     CoworkIpcChannel.GetSessionSearchMessages,
     async (_event, options: {
       sessionId: string;
@@ -16022,6 +16090,7 @@ if (!gotTheLock) {
       isAppQuitConfirmationEnabled() || hasUnsafeDocumentEdits(),
     );
     if (verdict === AppQuitRequestVerdict.Ignore) {
+      if (!appQuitConfirmationGate.isBypassArmed()) focusAppQuitDialog();
       return;
     }
     if (verdict === AppQuitRequestVerdict.Bypass) {
@@ -16031,7 +16100,7 @@ if (!gotTheLock) {
 
     // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
     // IM replies stop with the app, so ask first.
-    void showAppQuitConfirmation(hasUnsafeDocumentEdits)
+    void showAppQuitConfirmation(hasUnsafeDocumentEdits, mainWindow)
       .then(
         confirmed => confirmed,
         error => {

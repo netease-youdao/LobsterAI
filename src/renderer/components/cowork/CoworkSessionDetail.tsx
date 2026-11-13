@@ -207,6 +207,7 @@ import {
 } from './messageDisplayUtils';
 import { getLastMessageSpeechTurnIndex, isMessageSpeechTurnCompleted } from './messageSpeech/eligibility';
 import MessageSpeechSession from './messageSpeech/MessageSpeechSession';
+import { takePendingConversationSearch } from './pendingConversationSearch';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -1744,6 +1745,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const conversationSearchActiveMatchKeyRef = useRef<string | null>(null);
   const conversationSearchLastNavigatedMatchKeyRef = useRef<string | null>(null);
   const conversationSearchManualViewportMatchKeyRef = useRef<string | null>(null);
+  // Bumped when a task-search hit is picked, so picking the hit the search already shows still
+  // scrolls back to it after the user scrolled away.
+  const [conversationSearchRevealRequestKey, setConversationSearchRevealRequestKey] = useState(0);
+  const conversationSearchHandledRevealRequestKeyRef = useRef(0);
   const scrollToBottomRequestRef = useRef(0);
   const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
   const [isRailHovered, setIsRailHovered] = useState(false);
@@ -5398,6 +5403,26 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     };
   }, [handleOpenConversationSearch]);
 
+  // The task search can open a session on a content hit; pre-fill the
+  // conversation search so it jumps to the match. Runs after the search hook's
+  // own session-change reset, so the query is not cleared again.
+  const applyPendingConversationSearch = useCallback(() => {
+    if (!sessionId) return;
+    const pendingQuery = takePendingConversationSearch(sessionId);
+    if (!pendingQuery) return;
+    handleOpenConversationSearch();
+    setConversationSearchQuery(pendingQuery);
+    setConversationSearchRevealRequestKey(value => value + 1);
+  }, [handleOpenConversationSearch, sessionId, setConversationSearchQuery]);
+
+  useEffect(() => {
+    applyPendingConversationSearch();
+    window.addEventListener(CoworkUiEvent.PendingConversationSearch, applyPendingConversationSearch);
+    return () => {
+      window.removeEventListener(CoworkUiEvent.PendingConversationSearch, applyPendingConversationSearch);
+    };
+  }, [applyPendingConversationSearch]);
+
   useEffect(() => {
     if (isConversationSearchOpen) return undefined;
     clearConversationSearchPresentation();
@@ -5439,6 +5464,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       'cowork-conversation-search-fallback',
     );
     conversationSearchFallbackElementRef.current = null;
+
+    // A fresh reveal request drops the "user scrolled away", "already scrolled here" and
+    // "loading it failed" guards so the active match is brought into view again.
+    if (conversationSearchHandledRevealRequestKeyRef.current !== conversationSearchRevealRequestKey) {
+      conversationSearchHandledRevealRequestKeyRef.current = conversationSearchRevealRequestKey;
+      conversationSearchManualViewportMatchKeyRef.current = null;
+      conversationSearchLastNavigatedMatchKeyRef.current = null;
+      conversationSearchFailedTargetRef.current = null;
+    }
 
     if (
       !isConversationSearchOpen
@@ -5742,6 +5776,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     conversationSearchLoadVersion,
     conversationSearchMatches,
     conversationSearchQuery,
+    conversationSearchRevealRequestKey,
     isActiveConversationSearchMessageLoaded,
     isConversationSearchOpen,
     updateShouldAutoScroll,

@@ -25,8 +25,10 @@ import {
   resolveArtifactAutoPreviewEnabled,
   ShortcutAction,
   type ShortcutConfig,
+  SHORTCUTS_MIGRATION_VERSION,
   UI_FONT_SIZE_MIGRATION_VERSION,
 } from '../config';
+import { getShortcutConflictSignature } from './shortcuts';
 import { localStore } from './store';
 
 export const ConfigServiceEvent = {
@@ -225,7 +227,48 @@ const legacyShortcutDefaults: Partial<Record<ShortcutAction, string[]>> = {
   [ShortcutAction.OpenMcp]: ['Ctrl+5'],
 };
 
-const normalizeShortcutsConfig = (storedShortcuts?: AppConfig['shortcuts']): ShortcutConfig => {
+// Defaults moved by SHORTCUTS_MIGRATION_VERSION 1, in the order they are applied:
+// focus prompt leaves Cmd/Ctrl+K first so task search can take it.
+const MOVED_SHORTCUT_DEFAULTS_V1: Array<{ action: ShortcutAction; previous: string }> = [
+  { action: ShortcutAction.FocusPrompt, previous: 'CommandOrControl+K' },
+  { action: ShortcutAction.Search, previous: 'CommandOrControl+F' },
+];
+
+const isShortcutUsedByOtherAction = (
+  shortcuts: ShortcutConfig,
+  action: ShortcutAction,
+  binding: string,
+): boolean => {
+  // Platform-independent check: a clash on either macOS or Windows/Linux counts.
+  const signatures = [true, false].map(isMac => getShortcutConflictSignature(binding, { isMac }));
+  return Object.values(ShortcutAction).some((otherAction) => {
+    if (otherAction === action) return false;
+    return [true, false].some((isMac, index) => {
+      const signature = getShortcutConflictSignature(shortcuts[otherAction], { isMac });
+      return signature !== null && signature === signatures[index];
+    });
+  });
+};
+
+const migrateMovedShortcutDefaults = (shortcuts: ShortcutConfig): void => {
+  MOVED_SHORTCUT_DEFAULTS_V1.forEach(({ action, previous }) => {
+    const nextDefault = defaultConfig.shortcuts![action];
+    if (shortcuts[action] === previous && !isShortcutUsedByOtherAction(shortcuts, action, nextDefault)) {
+      shortcuts[action] = nextDefault;
+    }
+  });
+
+  // Find in conversation is new: leave it unbound rather than steal a key the user already uses.
+  const conversationSearch = shortcuts[ShortcutAction.ConversationSearch];
+  if (isShortcutUsedByOtherAction(shortcuts, ShortcutAction.ConversationSearch, conversationSearch)) {
+    shortcuts[ShortcutAction.ConversationSearch] = '';
+  }
+};
+
+const normalizeShortcutsConfig = (
+  storedShortcuts?: AppConfig['shortcuts'],
+  storedMigrationVersion = 0,
+): ShortcutConfig => {
   const shortcuts = {
     ...defaultConfig.shortcuts!,
     ...(storedShortcuts ?? {}),
@@ -240,6 +283,10 @@ const normalizeShortcutsConfig = (storedShortcuts?: AppConfig['shortcuts']): Sho
       shortcuts[action] = defaultConfig.shortcuts![action];
     }
   });
+
+  if (storedMigrationVersion < SHORTCUTS_MIGRATION_VERSION) {
+    migrateMovedShortcutDefaults(shortcuts);
+  }
 
   return shortcuts;
 };
@@ -685,7 +732,11 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
       ...defaultConfig.app,
       ...storedConfig.app,
     },
-    shortcuts: normalizeShortcutsConfig(storedConfig.shortcuts),
+    shortcuts: normalizeShortcutsConfig(storedConfig.shortcuts, storedConfig.shortcutsMigrationVersion),
+    shortcutsMigrationVersion: Math.max(
+      storedConfig.shortcutsMigrationVersion ?? 0,
+      SHORTCUTS_MIGRATION_VERSION,
+    ),
     providers: mergedProviders as AppConfig['providers'],
     providerModelMigrationVersions,
     // One-time forced resets to the current defaults (see
