@@ -1,7 +1,6 @@
-import { EyeIcon } from '@heroicons/react/24/outline';
 import { useState } from 'react';
 
-import { type PptExample, PptExampleMode } from '../../../shared/pptCreation/constants';
+import type { PptExample } from '../../../shared/pptCreation/constants';
 import { i18nService } from '../../services/i18n';
 
 export function PptPreviewImage({ url, alt, className = '' }: { url: string; alt: string; className?: string }) {
@@ -12,9 +11,9 @@ export function PptPreviewImage({ url, alt, className = '' }: { url: string; alt
   </div>;
 }
 
-export default function PptExampleGallery({ examples, full = false, busy, onSelect, onPreview }: {
+export default function PptExampleGallery({ examples, full = false, busy, onSelect }: {
   examples: PptExample[]; full?: boolean; busy: boolean;
-  onSelect: (example: PptExample) => void; onPreview: (example: PptExample) => void;
+  onSelect: (example: PptExample) => void;
 }) {
   const language = i18nService.getLanguage();
   const t = (key: string) => i18nService.t(key);
@@ -23,15 +22,10 @@ export default function PptExampleGallery({ examples, full = false, busy, onSele
       {(full ? examples : examples.slice(0, 8)).map((example, index) => <div key={example.id}
         className={`group relative min-w-0 ${full ? '' : index >= 6 ? '[@container_(max-width:639px)]:hidden' : index >= 4 ? '[@container_(max-width:459px)]:hidden' : ''}`}>
         <button type="button" disabled={busy} data-ppt-example={example.id} onClick={() => onSelect(example)}
-          aria-label={`${example.title[language]} · ${t(example.defaultMode === PptExampleMode.Direct ? 'pptCreationDirect' : 'pptCreationGuided')}`}
+          aria-label={`${example.title[language]} · ${t('pptCreationPreview')}`}
           className="w-full rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-4 focus-visible:ring-offset-background disabled:opacity-60">
           <PptPreviewImage url={example.previews[0].url} alt="" className="aspect-[8/5] border border-border-subtle transition-shadow group-hover:shadow-subtle" />
           <p className="mt-2 truncate px-0.5 text-[13px] leading-5 text-foreground">{example.title[language]}</p>
-        </button>
-        <button type="button" disabled={busy} data-ppt-preview={example.id} onClick={() => onPreview(example)}
-          aria-label={`${example.title[language]} · ${t('pptCreationPreview')}`} title={t('pptCreationPreview')}
-          className="absolute right-1.5 top-1.5 rounded-md border border-border-subtle bg-surface/95 p-1.5 text-secondary opacity-0 transition-opacity hover:text-primary focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
-          <EyeIcon className="h-3.5 w-3.5" />
         </button>
       </div>)}
     </div>

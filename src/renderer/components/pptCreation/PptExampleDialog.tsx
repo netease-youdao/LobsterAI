@@ -14,7 +14,7 @@ import type { PptCoverSeed } from './PptCoverWizard';
 import { PptPreviewImage } from './PptExampleGallery';
 
 const OWN_TEMPLATE = 'uploaded';
-const inputClass = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none disabled:opacity-50';
+const inputClass = 'scrollbar-hidden w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none disabled:opacity-50';
 async function readMaterial(file: File): Promise<PptPreparedFile> {
   const extension = file.name.split('.').pop()?.toLowerCase();
   if (!file.size || file.size > PptCreation.MaxAssetBytes || !Object.values(PptAssetKind).includes(extension as PptAssetKind)) throw new Error('Invalid PPT material');
@@ -97,7 +97,7 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
   };
   const dismiss = () => { if (!busy) onClose(); };
   return <Modal onClose={dismiss} onEscape={dismiss} className="w-[min(1080px,94vw)] rounded-2xl border border-border bg-surface shadow-float">
-    <div role="dialog" aria-modal="true" aria-labelledby="ppt-example-title" data-ppt-example-dialog className="relative max-h-[88vh] overflow-y-auto rounded-2xl p-5 md:p-7"
+    <div role="dialog" aria-modal="true" aria-labelledby="ppt-example-title" data-ppt-example-dialog className="relative flex h-[min(780px,90vh)] flex-col overflow-hidden rounded-2xl p-5 md:p-7"
       onKeyDown={event => {
         if (event.key !== 'Tab') return;
         const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled):not([type=file]), textarea:not(:disabled), select:not(:disabled)'));
@@ -105,12 +105,14 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
         if (event.shiftKey && document.activeElement === first && last) { event.preventDefault(); last.focus(); }
         else if (!event.shiftKey && document.activeElement === last && first) { event.preventDefault(); first.focus(); }
       }}>
+      <div className="shrink-0">
       <button ref={close} type="button" disabled={busy} onClick={dismiss} aria-label={t('close')} className="absolute right-4 top-4 z-10 rounded-lg bg-surface p-1.5 text-secondary hover:bg-surface-raised disabled:opacity-40"><XMarkIcon className="h-5 w-5" /></button>
       <p className="mb-2 text-xs text-primary">{t('pptCreationReal')}</p>
       <h2 id="ppt-example-title" className="pr-8 text-xl font-semibold text-foreground">{example.title[language]}</h2>
       <p className="mt-2 text-sm text-secondary">{coverSeed ? t('pptCoverContinueHint') : example.description[language]}</p>
-      <div className="mt-5 grid gap-6 md:grid-cols-2">
-        <div>
+      </div>
+      <div className="scrollbar-hidden mt-5 flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto md:grid md:grid-cols-2 md:overflow-hidden">
+        <div className="scrollbar-hidden min-h-0 shrink-0 md:overflow-y-auto md:overscroll-contain">
           <PptPreviewImage url={coverSeed ? `data:image/png;base64,${coverSeed.previewBase64}` : example.previews[slide].url} alt={coverSeed ? coverSeed.fields.title : `${example.title[language]} · ${t('pptCreationPage').replace('{page}', String(example.previews[slide].slide))}`} className="aspect-video border border-border-subtle" />
           {!coverSeed && <div className="mt-3 flex gap-2">{example.previews.map((preview, index) => <button type="button" key={preview.slide} onClick={() => setSlide(index)} aria-pressed={slide === index}
             className={`min-w-0 flex-1 rounded-lg border p-1 ${slide === index ? 'border-primary' : 'border-border-subtle'}`}>
@@ -121,12 +123,13 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
           {example.cover && onCover && !coverSeed && <button type="button" disabled={busy} onClick={onCover} className="mt-4 w-full rounded-xl border border-primary bg-primary-muted px-4 py-3 text-sm font-medium text-primary">{t('pptCoverEntry')}</button>}
           {coverSeed && <p className="mt-4 rounded-lg bg-primary-muted p-3 text-xs leading-5 text-primary">{t('pptCoverContinueHint')}</p>}
         </div>
-        <div className="space-y-4">
-          <div className="flex gap-2" role="group" aria-label={t('pptCreationWorkflow')}>{(coverSeed ? [PptExampleMode.Guided] : [PptExampleMode.Direct, PptExampleMode.Guided]).map(value => <button key={value} type="button" disabled={busy} aria-pressed={mode === value} onClick={() => { setMode(value); setError(''); }}
+        <div className="flex min-h-[30rem] shrink-0 flex-col gap-4 md:min-h-0">
+          <div className="flex shrink-0 gap-2" role="group" aria-label={t('pptCreationWorkflow')}>{(coverSeed ? [PptExampleMode.Guided] : [PptExampleMode.Direct, PptExampleMode.Guided]).map(value => <button key={value} type="button" disabled={busy} aria-pressed={mode === value} onClick={() => { setMode(value); setError(''); }}
             className={`rounded-full border px-4 py-2 text-sm ${mode === value ? 'border-primary bg-primary-muted text-primary' : 'border-border text-secondary'}`}>{t(value === PptExampleMode.Direct ? 'pptCreationDirect' : 'pptCreationGuided')}</button>)}</div>
-          {direct ? <label className="block text-xs font-medium text-secondary">{t('pptCreationPrompt')}<textarea aria-label={t('pptCreationPrompt')} value={prompt} onChange={event => setPrompt(event.target.value)} disabled={busy} className={`${inputClass} mt-2 h-64 resize-y leading-6`} /></label> : <>
+          <div key={mode} data-ppt-example-content className="scrollbar-hidden min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain">
+          {direct ? <label className="flex h-full min-h-56 flex-col text-xs font-medium text-secondary">{t('pptCreationPrompt')}<textarea aria-label={t('pptCreationPrompt')} value={prompt} onChange={event => setPrompt(event.target.value)} disabled={busy} className={`${inputClass} mt-2 min-h-48 flex-1 leading-6`} /></label> : <>
             {!coverSeed && <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={useDemo} disabled={busy} onChange={event => setUseDemo(event.target.checked)} />{t('pptCreationDemo')}</label>}
-            <label className="block text-xs font-medium text-secondary">{t('pptCreationTopic')}<textarea aria-label={t('pptCreationTopic')} value={topic} onChange={event => setTopic(event.target.value)} placeholder={t('pptCreationTopicPlaceholder')} disabled={busy} className={`${inputClass} mt-2 min-h-24 resize-y`} /></label>
+            <label className="block text-xs font-medium text-secondary">{t('pptCreationTopic')}<textarea aria-label={t('pptCreationTopic')} value={topic} onChange={event => setTopic(event.target.value)} placeholder={t('pptCreationTopicPlaceholder')} disabled={busy} className={`${inputClass} mt-2 h-24`} /></label>
             <div className="grid grid-cols-[1fr_100px] gap-3">
               <label className="block text-xs text-secondary">{t('pptCreationAudience')}<input value={audience} onChange={event => setAudience(event.target.value)} disabled={busy} className={`${inputClass} mt-1`} /></label>
               <label className="block text-xs text-secondary">{t('pptCreationSlideCount')}<input type="number" min={3} max={40} value={slideCount} disabled={busy} onChange={event => setSlideCount(Number(event.target.value))} className={`${inputClass} mt-1`} /></label>
@@ -154,10 +157,13 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
             </select></label>
             {workflow !== PptWorkflow.Generate && <p className="text-xs text-muted">{t(workflow === PptWorkflow.Outline ? 'pptCreationOutlineHint' : 'pptCreationStrictHint')}</p>}
           </>}
+          </div>
+          <div data-ppt-example-actions className="shrink-0 space-y-2 border-t border-border-subtle pt-4">
           {error && <p role="alert" className="text-xs text-red-500">{error}</p>}
           <button type="button" disabled={busy || (direct ? !prompt.trim() : !Number.isInteger(slideCount) || slideCount < 3 || slideCount > 40)} onClick={() => void submit()}
-            className="flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-white disabled:opacity-50">{busy ? t('pptCreationPreparing') : t('pptCreationFill')}<ArrowRightIcon className="h-4 w-4" /></button>
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-white disabled:opacity-50">{busy ? t('pptCreationPreparing') : t(coverSeed ? 'pptCreationContinue' : 'pptCreationFill')}<ArrowRightIcon className="h-4 w-4" /></button>
           <p className="text-xs leading-5 text-muted">{t('pptCreationDraftHint')}</p>
+          </div>
         </div>
       </div>
     </div>
