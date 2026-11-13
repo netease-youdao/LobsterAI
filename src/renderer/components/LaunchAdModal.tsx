@@ -25,6 +25,10 @@ const DIALOG_SELECTOR = '[data-app-modal], [role="dialog"], [aria-modal="true"]'
 const otherDialogOpen = (): boolean => Array.from(document.querySelectorAll(DIALOG_SELECTOR))
   .some(node => node.getClientRects().length > 0);
 
+// Matches the overlay's `duration-200`: the ad fades out instead of vanishing, so whatever
+// answers the click underneath (e.g. the startup screen's destination row) is seen taking over.
+const CLOSE_FADE_MS = 200;
+
 /** One pop-up decision per app session, even if the component remounts. */
 let launchAdDecided = false;
 
@@ -41,6 +45,8 @@ interface LaunchAdModalProps {
 const LaunchAdModal: React.FC<LaunchAdModalProps> = ({ enabled, onOpenChange }) => {
   const { banners, loading } = useClientBanners(ClientBannerPlacement.DesktopLaunchModal);
   const [banner, setBanner] = useState<ClientBanner | null>(null);
+  const [closing, setClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
   const stateRef = useRef<LaunchAdState | null>(null);
   const mountedAtRef = useRef(Date.now());
 
@@ -68,21 +74,26 @@ const LaunchAdModal: React.FC<LaunchAdModalProps> = ({ enabled, onOpenChange }) 
     onOpenChange?.(banner !== null);
   }, [banner, onOpenChange]);
 
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
   const close = useCallback(() => {
-    if (!banner) return;
+    if (!banner || closing) return;
     const nextState = markLaunchAdDismissed(stateRef.current ?? { versions: {} }, banner);
     stateRef.current = nextState;
-    setBanner(null);
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => setBanner(null), CLOSE_FADE_MS);
     void localStore.setItem(LAUNCH_AD_STATE_KEY, nextState).catch(error => {
       logSidebarExperienceDiagnostic('warn', 'failed to persist launch ad dismissal', error);
     });
-  }, [banner]);
+  }, [banner, closing]);
 
   const openLink = useCallback(() => {
-    if (!banner) return;
+    if (!banner || closing) return;
     void openClientBannerLink(banner);
     close();
-  }, [banner, close]);
+  }, [banner, close, closing]);
 
   if (!banner) return null;
 
@@ -95,7 +106,9 @@ const LaunchAdModal: React.FC<LaunchAdModalProps> = ({ enabled, onOpenChange }) 
     <Modal
       onClose={close}
       onEscape={close}
-      overlayClassName="fixed inset-0 z-[220] flex items-center justify-center bg-black/45 p-4"
+      overlayClassName={`fixed inset-0 z-[220] flex items-center justify-center bg-black/45 p-4 transition-opacity duration-200 motion-reduce:transition-none ${
+        closing ? 'pointer-events-none opacity-0' : 'opacity-100'
+      }`}
       className="relative max-w-[90vw]"
     >
       <div

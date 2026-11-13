@@ -75,7 +75,7 @@ import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selector
 import { SkinProvider } from './providers/SkinProvider';
 import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
-import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
+import { AppDeepLinkEvent, type AppDeepLinkTarget, describeAppDeepLinkTarget } from './services/appDeepLink';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
@@ -230,6 +230,11 @@ const App: React.FC = () => {
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
   const [isLaunchAdOpen, setIsLaunchAdOpen] = useState(false);
+  // An in-app link followed while the engine startup screen still covers the app.
+  const [startupDestination, setStartupDestination] = useState<{
+    target: AppDeepLinkTarget;
+    previousView: MainView;
+  } | null>(null);
   const [trialTaskCreatedSignal, setTrialTaskCreatedSignal] = useState(0);
   const [isNewUserOnboardingDismissed, setIsNewUserOnboardingDismissed] = useState(false);
   const [enterpriseConfig, setEnterpriseConfig] = useState<{
@@ -748,6 +753,11 @@ const App: React.FC = () => {
     const handleDeepLink = (event: Event) => {
       const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
       if (!target) return;
+      if (target.kind === 'view' && target.view === MainView.Experts && !ENABLE_EXPERT_PLAZA_UI) return;
+      // The page opens underneath the startup screen, which says where the user is headed.
+      if (isEngineStartupOverlayVisible) {
+        setStartupDestination(pending => ({ target, previousView: pending?.previousView ?? mainView }));
+      }
       if (target.kind === 'settings') {
         handleShowSettings({ initialTab: target.tab });
         return;
@@ -759,7 +769,19 @@ const App: React.FC = () => {
     };
     window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
     return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
-  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
+  }, [handleShowExperts, handleShowLibrary, handleShowSettings, isEngineStartupOverlayVisible, mainView]);
+
+  // Once the startup screen is gone the destination is on screen; nothing is pending any more.
+  useEffect(() => {
+    if (!isEngineStartupOverlayVisible) setStartupDestination(null);
+  }, [isEngineStartupOverlayVisible]);
+
+  const handleCancelStartupDestination = useCallback(() => {
+    if (!startupDestination) return;
+    if (startupDestination.target.kind === 'settings') setShowSettings(false);
+    else setMainView(startupDestination.previousView);
+    setStartupDestination(null);
+  }, [startupDestination]);
 
   const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);
@@ -1923,7 +1945,12 @@ const App: React.FC = () => {
             {mainView !== MainView.Cowork && (
               <SkinBackdrop variant={SkinBackdropVariant.Management} />
             )}
-            <EngineStartupOverlay />
+            <EngineStartupOverlay
+              destinationLabel={startupDestination
+                ? describeAppDeepLinkTarget(startupDestination.target, key => i18nService.t(key))
+                : null}
+              onCancelDestination={handleCancelStartupDestination}
+            />
             {mainView === MainView.Skills || mainView === MainView.Connectors || mainView === MainView.Kits ? (
               <SkillsAndConnectorsView
                 activeSection={mainView === MainView.Connectors ? SkillsConnectorsSection.Connectors : mainView === MainView.Kits ? SkillsConnectorsSection.Kits : SkillsConnectorsSection.Skills}
