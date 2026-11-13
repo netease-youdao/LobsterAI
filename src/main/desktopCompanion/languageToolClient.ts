@@ -1,7 +1,7 @@
 import { CompanionAnalyticsOutcome as Outcome, CompanionAnalyticsSource,companionLanguageErrorReason } from '../../shared/desktopCompanion/analytics';
 import {
   LANGUAGE_TOOL_DEVICE_HEADER, LANGUAGE_TRANSLATION_MAX_CHARS, LANGUAGE_TTS_MAX_CHARS,
-  LanguageTool, LanguageToolCode, type LanguageToolEvent, LanguageToolEventType, type LanguageToolQuotas,
+  LanguageTool, LanguageToolCode, LanguageToolErrorReason, type LanguageToolEvent, LanguageToolEventType, type LanguageToolFailure, type LanguageToolQuotas,
   type LanguageToolRequest, type LanguageToolResult, TranslationTarget,
 } from '../../shared/desktopCompanion/languageTools';
 import { splitSseEvents } from '../libs/sse';
@@ -9,6 +9,7 @@ import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companion
 
 interface LanguageClientDeps {
   reportAnalytics?: CompanionAnalyticsReporter;
+  analyticsSource?: CompanionAnalyticsSource;
   fetchWithAuth(url: string, options?: RequestInit): Promise<Response>;
   fetchAnonymous(url: string, options?: RequestInit): Promise<Response>;
   getInstallationId(): string | null;
@@ -51,7 +52,7 @@ export class CompanionLanguageClient {
       || (request.targetLanguage !== undefined && !Object.values(TranslationTarget).includes(request.targetLanguage))) {
       return { success: false, code: LanguageToolCode.InvalidInput };
     }
-    const finish = this.analytics.tool({ source: CompanionAnalyticsSource.LanguageTools, tool: request.tool });
+    const finish = this.analytics.tool({ source: this.deps.analyticsSource ?? CompanionAnalyticsSource.LanguageTools, tool: request.tool });
     const blocked = (code: number): LanguageToolResult => {
       finish(Outcome.Blocked, companionLanguageErrorReason(code));
       return { success: false, code };
@@ -113,9 +114,11 @@ export class CompanionLanguageClient {
         signal: controller.signal,
       });
       if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
-        const body = await response.json().catch((): null => null) as { code?: number } | null;
+        const body = await response.json().catch((): null => null) as { code?: number; data?: LanguageToolFailure } | null;
         emit({ requestId: request.requestId, type: LanguageToolEventType.Error,
-          code: this.errorCode(response.status, body?.code) });
+          code: this.errorCode(response.status, body?.code),
+          ...(body?.data?.reason === LanguageToolErrorReason.AnonymousTranslationDailyLimit
+            ? { reason: body.data.reason, quota: body.data.quota } : {}) });
         return;
       }
       reader = response.body.getReader();

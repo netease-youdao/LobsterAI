@@ -2,6 +2,7 @@ import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  AuthLoginFailureReason,
   type AuthLoginResult,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
@@ -19,6 +20,7 @@ import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles
 
 import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/types';
 import { parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
+import { parseContextWindowOptions } from '../../shared/providers/modelContextWindow';
 import {
   applyEnterpriseAccountContext,
   refreshEnterpriseAccountContext,
@@ -50,6 +52,7 @@ import {
   setServerModels,
 } from '../store/slices/modelSlice';
 import { AuthRecovery } from './authRecovery';
+import { browserLoginSession, BrowserLoginStatus } from './browserLoginSession';
 import { i18nService } from './i18n';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 import { getCreditQuotaSnapshot } from './lowCreditPurchaseOffer';
@@ -98,6 +101,7 @@ export interface PricingCatalogTextModel extends PricingCatalogBaseModel {
   supportsThinking?: boolean;
   thinkingConfig?: ModelThinkingConfig;
   contextWindow?: number | null;
+  contextWindowOptions?: number[] | null;
   costMultiplier?: number;
   moreModel?: boolean;
 }
@@ -132,6 +136,7 @@ export interface AvailableServerModelEntry {
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
+  contextWindowOptions?: number[];
   maxTokens?: number;
   explicitContextCache?: boolean;
   costMultiplier?: number;
@@ -173,6 +178,10 @@ export const isAuthAccountRequestCurrent = (
   && current.ownerAccountKey === expected.ownerAccountKey
   && current.accountGeneration === expected.accountGeneration
 );
+
+// Overmind normally answers in a few hundred ms; past this, use a fallback URL.
+const LOGIN_URL_LOOKUP_TIMEOUT_MS = 3_000;
+const LOGIN_URL_LOOKUP_TIMED_OUT = Symbol('loginUrlLookupTimedOut');
 
 const writeAuthRendererLog = (
   level: AuthRendererLogLevel,
@@ -290,6 +299,7 @@ export function mapAvailableServerModelsToModels(
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
+      contextWindowOptions: parseContextWindowOptions(model.contextWindowOptions),
       maxTokens: model.maxTokens,
       explicitContextCache: model.explicitContextCache ?? false,
       description: model.description,
@@ -363,6 +373,8 @@ class AuthService {
   private quotaRefreshSequence = 0;
   private lastRefreshTime = 0;
   private loginAttemptSequence = 0;
+  private lastResolvedLoginUrl: { lookupUrl: string; value: string } | null = null;
+  private unsubBrowserLoginCompletion: (() => void) | null = null;
   private enterpriseQuotaBoundaryTimer: ReturnType<typeof setTimeout> | null = null;
   private lastTriggeredEnterpriseQuotaBoundary = '';
 
@@ -542,33 +554,110 @@ class AuthService {
    * Initiate login (opens system browser).
    */
   async login(): Promise<AuthLoginResult> {
+    const replacesAttempt = browserLoginSession.getSnapshot() !== null || browserLoginSession.isCancelled();
     const attemptId = ++this.loginAttemptSequence;
     writeAuthRendererLog('info', `login attempt ${attemptId} started`);
+    browserLoginSession.start();
 
     try {
+      if (replacesAttempt) await window.electron.auth.cancelLogin();
       const loginUrl = await this.fetchLoginUrl();
+      if (attemptId !== this.loginAttemptSequence) {
+        return { success: false, reason: AuthLoginFailureReason.Cancelled };
+      }
       const result = await window.electron.auth.login(loginUrl);
+      // A newer click owns the session; this result only matters to its caller.
+      const isLatestAttempt = attemptId === this.loginAttemptSequence;
       if (result.success) {
         writeAuthRendererLog('info', `login attempt ${attemptId} handed off to the system browser`);
+        if (isLatestAttempt && browserLoginSession.getSnapshot()?.status === BrowserLoginStatus.Opening) {
+          browserLoginSession.handOff(result.redirectUrl ?? null);
+          this.clearBrowserLoginSessionOnLogin();
+        }
       } else {
-        writeAuthRendererLog('warn', `login attempt ${attemptId} could not open the system browser`);
+        writeAuthRendererLog(
+          'warn',
+          `login attempt ${attemptId} could not open the system browser reason=${result.reason ?? 'unknown'}`,
+        );
+        if (isLatestAttempt && browserLoginSession.getSnapshot()?.status === BrowserLoginStatus.Opening) {
+          browserLoginSession.fail(result.redirectUrl ?? null);
+        }
       }
       return result;
     } catch (error) {
       writeAuthRendererLog('warn', `login attempt ${attemptId} failed before browser handoff`, error);
+      if (attemptId === this.loginAttemptSequence) browserLoginSession.fail(null);
       throw error;
     }
   }
 
+  async cancelLogin(): Promise<void> {
+    this.loginAttemptSequence += 1;
+    this.cancelAuthRecovery();
+    store.dispatch(invalidateAuthAccountContext());
+    this.unsubBrowserLoginCompletion?.();
+    this.unsubBrowserLoginCompletion = null;
+    browserLoginSession.cancel();
+    try {
+      await window.electron.auth.cancelLogin();
+    } catch (error) {
+      writeAuthRendererLog('warn', 'failed to cancel browser login in the main process', error);
+    }
+  }
+
+  /** Ends the visible login wait once the account is signed in, by any path. */
+  private clearBrowserLoginSessionOnLogin(): void {
+    this.unsubBrowserLoginCompletion?.();
+    if (store.getState().auth.isLoggedIn) {
+      this.unsubBrowserLoginCompletion = null;
+      browserLoginSession.clear();
+      return;
+    }
+    const unsubscribe = store.subscribe(() => {
+      if (!store.getState().auth.isLoggedIn) return;
+      unsubscribe();
+      if (this.unsubBrowserLoginCompletion === unsubscribe) this.unsubBrowserLoginCompletion = null;
+      browserLoginSession.clear();
+    });
+    this.unsubBrowserLoginCompletion = unsubscribe;
+  }
+
   /**
    * Fetch login URL from overmind, fallback to Portal login page.
+   *
+   * The lookup is capped: the browser cannot open until it settles, and on a
+   * flaky network it can take many seconds while the login button shows no
+   * progress at all.
    */
   private async fetchLoginUrl(): Promise<string> {
-    const { getLoginOvermindUrl } = await import('./endpoints');
-    const url = getLoginOvermindUrl();
+    const { getLoginOvermindUrl, getPortalLoginUrl } = await import('./endpoints');
+    const lookupUrl = getLoginOvermindUrl();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const resolved = await Promise.race([
+      this.lookupLoginUrl(lookupUrl),
+      new Promise<typeof LOGIN_URL_LOOKUP_TIMED_OUT>(resolve => {
+        timer = setTimeout(() => resolve(LOGIN_URL_LOOKUP_TIMED_OUT), LOGIN_URL_LOOKUP_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+
+    if (typeof resolved === 'string') return resolved;
+    if (resolved === LOGIN_URL_LOOKUP_TIMED_OUT) {
+      writeAuthRendererLog('warn', `login URL lookup did not finish within ${LOGIN_URL_LOOKUP_TIMEOUT_MS}ms`);
+    }
+    if (this.lastResolvedLoginUrl?.lookupUrl === lookupUrl) {
+      writeAuthRendererLog('info', 'using the last resolved login URL');
+      return this.lastResolvedLoginUrl.value;
+    }
+    // Fallback: use Portal login page directly
+    writeAuthRendererLog('info', 'using fallback portal login URL');
+    return getPortalLoginUrl();
+  }
+
+  private async lookupLoginUrl(lookupUrl: string): Promise<string | null> {
     try {
       const response = await window.electron.api.fetch({
-        url,
+        url: lookupUrl,
         method: 'GET',
         headers: { Accept: 'application/json' },
       });
@@ -576,25 +665,28 @@ class AuthService {
         const value = (response.data as any)?.data?.value;
         if (typeof value === 'string' && value.trim()) {
           writeAuthRendererLog('debug', 'resolved login URL from overmind');
+          // Kept for later attempts whose lookup times out.
+          this.lastResolvedLoginUrl = { lookupUrl, value: value.trim() };
           return value.trim();
         }
       }
     } catch (e) {
       writeAuthRendererLog('warn', 'failed to resolve login URL from overmind', e);
     }
-    // Fallback: use Portal login page directly
-    const { getPortalLoginUrl } = await import('./endpoints');
-    writeAuthRendererLog('info', 'using fallback portal login URL');
-    return getPortalLoginUrl();
+    return null;
   }
 
   /**
    * Handle OAuth callback with auth code.
    */
   async handleCallback(code: string): Promise<boolean> {
+    if (browserLoginSession.isCancelled()) return false;
+    const attemptId = this.loginAttemptSequence;
+    browserLoginSession.verify();
     writeAuthRendererLog('info', 'received login callback; starting token exchange');
     try {
       const result = await window.electron.auth.exchange(code);
+      if (attemptId !== this.loginAttemptSequence || browserLoginSession.isCancelled()) return false;
       if (result.success && result.user) {
         writeAuthRendererLog('info', 'login callback exchange succeeded');
         this.cancelAuthRecovery();
@@ -606,6 +698,7 @@ class AuthService {
           result.purchaseOffer,
           result.enterpriseContext,
         );
+        browserLoginSession.clear();
         await this.loadServerModels();
         void this.refreshQuota({ refreshProfileSummary: true });
         return true;
@@ -613,6 +706,9 @@ class AuthService {
       writeAuthRendererLog('warn', 'login callback exchange was rejected');
     } catch (e) {
       writeAuthRendererLog('warn', 'login callback exchange failed', e);
+    }
+    if (attemptId === this.loginAttemptSequence && !browserLoginSession.isCancelled()) {
+      browserLoginSession.verificationFailed();
     }
     return false;
   }
@@ -973,6 +1069,9 @@ class AuthService {
     this.unsubEnterpriseContextInvalidated = null;
     this.unsubWindowState?.();
     this.unsubWindowState = null;
+    this.lastResolvedLoginUrl = null;
+    // The browser login session and its completion watch outlive a re-init:
+    // init() calls destroy(), and the login page in the browser stays valid.
   }
 
   /** Sync secondary windows without registering another OAuth callback consumer. */

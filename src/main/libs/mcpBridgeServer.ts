@@ -9,6 +9,7 @@
 import crypto from 'crypto';
 import http from 'http';
 
+import { ASK_USER_QUESTION_TIMEOUT_MS } from '../../shared/cowork/constants';
 import type {
   MediaConfirmationCommand, MediaConfirmationResponse, MediaConfirmationState, VideoConfirmationDetails,
 } from '../../shared/media/confirmation';
@@ -16,6 +17,9 @@ import { MediaConfirmationReason } from '../../shared/media/confirmation';
 import { listenOnLoopback } from './loopbackListen';
 import { MediaConfirmationRequests, type RecoverableMediaConfirmation } from './mediaConfirmationRequests';
 import { serializeForLog } from './sanitizeForLog';
+
+/** Whitespace keepalive while an AskUser request waits; well under undici's 5-minute body timeout. */
+const ASK_USER_KEEPALIVE_MS = 30_000;
 
 const log = (level: string, msg: string) => {
   const formatted = `[McpBridge:HTTP][${level}] ${msg}`;
@@ -91,6 +95,18 @@ export type BrowserToolResponse = {
   isError?: boolean;
 };
 
+/** A request from the web-search skill's bridge server to the hidden search page. */
+export type WebSearchPageRequest = Record<string, unknown> & { op?: unknown };
+
+export type WebSearchPageResponse = {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+  code?: string;
+};
+
+export type WebSearchPageHandler = (request: WebSearchPageRequest) => Promise<WebSearchPageResponse>;
+
 /** Document editor tools (the Office editors) share the browser tools' request and result shapes. */
 export type EditorToolRequest = BrowserToolRequest;
 export type EditorToolResponse = BrowserToolResponse;
@@ -136,6 +152,7 @@ export class McpBridgeServer {
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
+  private onWebSearchPageCallback: WebSearchPageHandler | null = null;
   /** Editor tool handlers by route, served at `/<route>/tool`. */
   private readonly editorTools = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
@@ -159,6 +176,10 @@ export class McpBridgeServer {
 
   get browserCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/browser/tool` : null;
+  }
+
+  get webSearchCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/web-search/page` : null;
   }
 
   get decisionCallbackUrl(): string | null {
@@ -204,6 +225,10 @@ export class McpBridgeServer {
 
   onBrowserTool(callback: (request: BrowserToolRequest) => Promise<BrowserToolResponse>): void {
     this.onBrowserToolCallback = callback;
+  }
+
+  onWebSearchPage(callback: WebSearchPageHandler): void {
+    this.onWebSearchPageCallback = callback;
   }
 
   /** Serve a document editor's tools at `/<route>/tool`; `editorName` appears in errors the agent reads. */
@@ -357,6 +382,11 @@ export class McpBridgeServer {
       return;
     }
 
+    if (req.url?.startsWith('/web-search/page')) {
+      await this.handleWebSearchPage(req, res);
+      return;
+    }
+
     if (req.url?.startsWith('/decision/tool')) {
       await this.handleDecisionTool(req, res);
       return;
@@ -380,7 +410,8 @@ export class McpBridgeServer {
   }
 
   private async handleAskUser(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const ASKUSER_TIMEOUT_MS = 120_000;
+    const ASKUSER_TIMEOUT_MS = ASK_USER_QUESTION_TIMEOUT_MS;
+    let keepalive: ReturnType<typeof setInterval> | undefined;
 
     try {
       const body = await this.readBody(req);
@@ -399,6 +430,13 @@ export class McpBridgeServer {
       const requestId = crypto.randomUUID();
       log('INFO', `AskUser waiting for user response, requestId=${requestId}`);
 
+      // The wait can outlast the caller's fetch header/body timeouts (5 min in
+      // undici), so send the headers now and keep the body alive with
+      // whitespace, which JSON.parse ignores, until the answer arrives.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.flushHeaders();
+      keepalive = setInterval(() => res.write(' '), ASK_USER_KEEPALIVE_MS);
+
       // Create a Promise that resolves when the user responds or timeout
       const userResponse = await new Promise<AskUserResponse>((resolve) => {
         const timer = setTimeout(() => {
@@ -409,6 +447,17 @@ export class McpBridgeServer {
         }, ASKUSER_TIMEOUT_MS);
 
         this.pendingAskUser.set(requestId, { requestId, resolve, timer });
+
+        // The asker gave up (its MCP call timed out, the run was stopped):
+        // close the dialog now instead of leaving it up until the timeout.
+        res.once('close', () => {
+          if (!this.pendingAskUser.has(requestId)) return;
+          log('INFO', `AskUser caller disconnected, requestId=${requestId}`);
+          clearTimeout(timer);
+          this.pendingAskUser.delete(requestId);
+          this.onAskUserDismissCallback?.(requestId);
+          resolve({ behavior: 'deny' });
+        });
 
         // Notify LobsterAI to show the modal
         if (this.onAskUserCallback) {
@@ -426,13 +475,14 @@ export class McpBridgeServer {
       });
 
       log('INFO', `AskUser resolved, requestId=${requestId} behavior=${userResponse.behavior}`);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(userResponse));
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       log('ERROR', `AskUser request error: ${errMsg}`);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ behavior: 'deny' }));
+    } finally {
+      if (keepalive) clearInterval(keepalive);
     }
   }
 
@@ -538,6 +588,30 @@ export class McpBridgeServer {
           isError: true,
         }));
       }
+    }
+  }
+
+  private async handleWebSearchPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const reply = (status: number, payload: WebSearchPageResponse) => {
+      if (res.writableEnded) return;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+    try {
+      const request = JSON.parse(await this.readBody(req)) as WebSearchPageRequest | null;
+      if (!request || typeof request !== 'object' || typeof request.op !== 'string') {
+        reply(400, { success: false, error: 'Missing web search page operation.' });
+        return;
+      }
+      if (!this.onWebSearchPageCallback) {
+        reply(503, { success: false, error: 'LobsterAI in-app browser is not ready.' });
+        return;
+      }
+      reply(200, await this.onWebSearchPageCallback(request));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log('ERROR', `Web search page request failed: ${message}`);
+      reply(500, { success: false, error: `LobsterAI web search error: ${message}` });
     }
   }
 

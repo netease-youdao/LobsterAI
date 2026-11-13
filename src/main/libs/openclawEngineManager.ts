@@ -22,6 +22,7 @@ import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/star
 import { t } from '../i18n';
 import { AwakeClock } from './awakeClock';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
+import { refreshFakeIpNetworkState } from './fakeIpNetwork';
 import {
   formatGatewayLogDateKey,
   type GatewayLogEntry,
@@ -53,6 +54,7 @@ import {
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { tryAcquireOpenClawLockCoordinator } from './openclawLockCoordinator';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
+import { configureMacGatewayNpmEnv } from './openclawNpmEnv';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { describeStartupMigrationCheckpoint, readStartupMigrationCheckpointStamp } from './openclawStartupCheckpoint';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
@@ -62,6 +64,7 @@ import { migrateLegacyStateBeforeStartup, stopStartupStateMigrations } from './o
 import { prewarmOpenClawStateDatabases } from './openclawStateDbPrewarm';
 import { ensureOpenClawWorkerShims, getMissingOpenClawWorkerTargets } from './openclawWorkerShims';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
+import { getWebSearchBridgeFilePath, WEB_SEARCH_BRIDGE_FILE_ENV } from './webSearchBridgeFile';
 
 const gwDiagTs = (): string => {
   const d = new Date();
@@ -421,6 +424,27 @@ export function buildOpenClawCompileCacheEnv(compileCacheDir: string): NodeJS.Pr
     // launcher from respawning through Electron Helper as if it were Node.
     OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: '1',
   };
+}
+
+/**
+ * Runtimes built with scripts/openclaw-dist-package-scope.cjs carry a small
+ * dist/package.json. OpenClaw's agent runtime takes the nearest package.json as
+ * its package directory (docs, README, version), which for code loaded from
+ * dist/ would then be dist/ itself. Pin it to the runtime root, where the
+ * same lookup ends without that file.
+ */
+export function buildOpenClawPackageDirEnv(runtimeRoot: string): NodeJS.ProcessEnv {
+  if (!fs.existsSync(path.join(runtimeRoot, 'dist', 'package.json'))) {
+    return {};
+  }
+  let packageDir = runtimeRoot;
+  try {
+    // Modules report their real location, so match it through a linked runtime.
+    packageDir = fs.realpathSync(runtimeRoot);
+  } catch {
+    // Keep the unresolved root; the gateway reports a missing runtime itself.
+  }
+  return { OPENCLAW_PACKAGE_DIR: packageDir };
 }
 
 export class OpenClawEngineManager extends EventEmitter {
@@ -1189,6 +1213,8 @@ export class OpenClawEngineManager extends EventEmitter {
       ...process.env,
       SKILLS_ROOT: skillsRoot,
       LOBSTERAI_SKILLS_ROOT: skillsRoot,
+      // A bridge server auto-started by the web-search skill's own scripts inherits this.
+      [WEB_SEARCH_BRIDGE_FILE_ENV]: getWebSearchBridgeFilePath(app.getPath('userData')),
       OPENCLAW_HOME: this.baseDir,
       OPENCLAW_STATE_DIR: this.stateDir,
       OPENCLAW_CONFIG_PATH: this.configPath,
@@ -1215,12 +1241,14 @@ export class OpenClawEngineManager extends EventEmitter {
       // Enable V8 compile cache for both CJS and ESM modules.
       // This env var works for import() (ESM), unlike enableCompileCache() which is CJS-only.
       ...buildOpenClawCompileCacheEnv(compileCacheDir),
+      ...buildOpenClawPackageDirEnv(runtime.root),
       LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath.replace(/\\/g, '/'),
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
       // Inject secret values for ${VAR} placeholders in openclaw.json.
       // This keeps plaintext credentials out of the config file on disk.
       ...spawnSecretEnvVars,
     };
+    configureMacGatewayNpmEnv(env, this.baseDir);
 
     // Ensure the gateway process uses the host's local timezone for logging.
     // macOS does not set TZ in the environment by default (it uses NSTimeZone/ICU),
@@ -1255,6 +1283,10 @@ export class OpenClawEngineManager extends EventEmitter {
       env.PATH = [nodeShimDir, curPath].filter(Boolean).join(path.delimiter);
       env.LOBSTERAI_NPM_BIN_DIR = npmBinDir || '';
     }
+
+    // Keeps later config syncs current when the proxy mode changed since launch;
+    // not awaited so a slow DNS never delays the gateway.
+    void refreshFakeIpNetworkState();
 
     if (isSystemProxyEnabled()) {
       const { proxyUrl, targetUrl } = await resolveSystemProxyUrlForTargets();

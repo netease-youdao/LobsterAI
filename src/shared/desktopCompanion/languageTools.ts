@@ -11,6 +11,8 @@ export const LanguageToolCode = {
   Unauthorized: 40100, Unavailable: 42500, InvalidInput: 42501, TooLong: 42502,
   DailyLimit: 42503, RateLimit: 42504, Duplicate: 42505, Upstream: 42506,
 } as const;
+export const LanguageToolErrorReason = { AnonymousTranslationDailyLimit: 'anonymous_translation_daily_limit' } as const;
+export type LanguageToolErrorReason = typeof LanguageToolErrorReason[keyof typeof LanguageToolErrorReason];
 export const LANGUAGE_TRANSLATION_MAX_CHARS = 5_000;
 export const LANGUAGE_TOOL_DEVICE_HEADER = 'X-Lobster-Device-Id';
 export const LANGUAGE_TTS_MAX_CHARS = 100_000;
@@ -27,10 +29,12 @@ export const LanguageToolsIpc = {
 export interface LanguageToolResume {
   /** The follow-up question that was waiting for the sign-in, sent once the translation is back. */
   question?: string;
+  targetLanguage?: TranslationTarget;
 }
 
 export interface LanguageToolInput {
   tool: LanguageTool; text?: string; id?: string;
+  targetLanguage?: TranslationTarget;
   /** How tall the card may grow beside the selection before it scrolls. */
   cardMaxHeight?: number;
   /** The card opens pinned, as it does when it comes back after a sign-in. */
@@ -43,16 +47,20 @@ export interface LanguageToolRequest {
 export interface LanguageToolQuota {
   usageDate: string; usedRequests: number; limitRequests: number; remainingRequests: number;
   usedCharacters: number; limitCharacters: number | null; remainingCharacters: number | null; resetsAt: string;
+  /** Absent on servers predating the translation login policy. */
+  unlimitedRequests?: boolean;
+  unlimitedAfterLogin?: boolean;
 }
 export interface LanguageToolQuotas {
   tools: Partial<Record<LanguageTool, LanguageToolQuota>>; translationMaxCharacters: number; ttsMaxCharacters: number;
 }
 export interface LanguageToolResult { success: boolean; code?: number; data?: LanguageToolQuotas }
+export interface LanguageToolFailure { reason?: LanguageToolErrorReason; quota?: LanguageToolQuotas }
 export type LanguageToolEvent = { requestId: string } & (
   | { type: typeof LanguageToolEventType.Delta; text: string; language: string }
   | { type: typeof LanguageToolEventType.Audio; index: number; total: number; mimeType: string; audioBase64: string }
   | { type: typeof LanguageToolEventType.Done; quota: LanguageToolQuotas }
-  | { type: typeof LanguageToolEventType.Error; code: number }
+  | ({ type: typeof LanguageToolEventType.Error; code: number } & LanguageToolFailure)
 );
 export interface LanguageToolsBridge {
   openLanguageTool(input: LanguageToolInput): Promise<void>;

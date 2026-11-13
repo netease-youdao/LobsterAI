@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import { BrowserWindow, desktopCapturer, nativeImage, type Rectangle, screen, systemPreferences } from 'electron';
 import fs from 'fs/promises';
 import path from 'path';
@@ -5,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { DesktopCompanionSurface } from '../../shared/desktopCompanion/constants';
 import { CompanionScreenshotIpc } from '../../shared/desktopCompanion/screenshot';
-import { CompanionScreenshotController } from './companionScreenshot';
+import {
+  CompanionScreenPermissionError,
+  CompanionScreenshotController,
+  hasCompanionScreenPermission,
+  requestCompanionScreenAccess,
+} from './companionScreenshot';
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (event: any, value?: unknown) => any>(),
@@ -56,6 +62,7 @@ vi.mock('electron', async () => {
   };
 });
 vi.mock('fs/promises', () => ({ default: { mkdir: vi.fn(), writeFile: vi.fn() } }));
+vi.mock('child_process', () => ({ execFile: vi.fn() }));
 vi.mock('../i18n', () => ({ t: (key: string) => key }));
 
 let controller: CompanionScreenshotController;
@@ -193,6 +200,21 @@ describe('desktop screenshot capture', () => {
     expect(fs.writeFile).not.toHaveBeenCalled();
   });
 
+  test('a screen list refused for lack of Screen Recording is reported as a permission problem', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('denied');
+      vi.mocked(desktopCapturer.getSources).mockRejectedValue(new Error('Failed to get sources.'));
+      const result = controller.capture([orb]);
+      const failure = expect(result).rejects.toBeInstanceOf(CompanionScreenPermissionError);
+      await vi.advanceTimersByTimeAsync(200);
+      await failure;
+      expect(orb.isVisible()).toBe(true);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   test('a renderer that never loads times out and restores the orb', async () => {
     const { result, overlay } = await start();
     const failure = expect(result).rejects.toThrow('Screenshot overlay timed out');
@@ -209,5 +231,38 @@ describe('desktop screenshot capture', () => {
     expect(overlay.destroyed).toBe(true);
     expect(orb.isVisible()).toBe(false);
     expect(mocks.handlers.size).toBe(0);
+  });
+});
+
+describe('Screen Recording permission', () => {
+  test('macOS needs the grant; other platforms always capture', () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('denied');
+      expect(hasCompanionScreenPermission()).toBe(false);
+      vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('granted');
+      expect(hasCompanionScreenPermission()).toBe(true);
+      platform.mockReturnValue('win32');
+      vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('denied');
+      expect(hasCompanionScreenPermission()).toBe(true);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  test('requesting access runs the CoreGraphics request in a script on macOS only', () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      requestCompanionScreenAccess();
+      expect(execFile).toHaveBeenCalledWith('/usr/bin/osascript',
+        ['-l', 'JavaScript', '-e', expect.stringContaining('CGRequestScreenCaptureAccess')], expect.anything(), expect.any(Function));
+      expect(desktopCapturer.getSources).not.toHaveBeenCalled();
+      vi.mocked(execFile).mockClear();
+      platform.mockReturnValue('win32');
+      requestCompanionScreenAccess();
+      expect(execFile).not.toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
   });
 });

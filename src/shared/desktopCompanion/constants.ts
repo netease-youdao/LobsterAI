@@ -1,8 +1,11 @@
 import type { CompanionAnalyticsEvent } from './analytics';
 import type { CompanionAppCategory } from './appCategories';
+import type { CompanionContextMenuBridge, CompanionContextMenuState } from './contextMenu';
 import type { CompanionFileKind } from './fileKinds';
 import type { CompanionHintTopic } from './hintPolicy';
 import type { LanguageToolResume, LanguageToolsBridge, SpeechStatus } from './languageTools';
+import type { CompanionLauncherAction } from './launcher';
+import type { CompanionPermissionGuideBridge } from './permissionGuide';
 import type { CompanionResultsBridge, CompanionResultState } from './results';
 import type { CompanionScreenshotBridge } from './screenshot';
 import type { CompanionSelectionAction } from './selectionActions';
@@ -28,7 +31,11 @@ export const DesktopCompanionIpc = {
   Drag: 'desktop-companion:drag',
   Changed: 'desktop-companion:changed',
   OrbFileDrag: 'desktop-companion:orb-file-drag',
+  /** The pointer came to rest on the orb, or left it. */
+  OrbHover: 'desktop-companion:orb-hover',
   StageCommand: 'desktop-companion:stage-command',
+  /** The launcher's window lets clicks through its transparent margin, which reaches over the orb. */
+  StagePassThrough: 'desktop-companion:stage-pass-through',
   ResizeSurface: 'desktop-companion:resize-surface',
   Selection: 'desktop-companion:selection',
   SelectionCommand: 'desktop-companion:selection-command',
@@ -65,6 +72,10 @@ export const DesktopCompanionSurface = {
   LanguageTools: 'language-tools',
   Screenshot: 'screenshot',
   Result: 'result',
+  /** Floats beside System Settings while the user grants a permission there. */
+  PermissionGuide: 'permission-guide',
+  /** The orb's right-click menu on macOS. */
+  Menu: 'menu',
 } as const;
 export type DesktopCompanionSurface = typeof DesktopCompanionSurface[keyof typeof DesktopCompanionSurface];
 
@@ -103,7 +114,7 @@ export const CompanionCapability = {
 } as const;
 export type CompanionCapability = typeof CompanionCapability[keyof typeof CompanionCapability];
 
-export const CompanionPermission = { Accessibility: 'accessibility' } as const;
+export const CompanionPermission = { Accessibility: 'accessibility', ScreenRecording: 'screen-recording' } as const;
 export type CompanionPermission = typeof CompanionPermission[keyof typeof CompanionPermission];
 
 export const DEFAULT_COMPANION_SKIN = 'lobster';
@@ -133,7 +144,7 @@ export interface DesktopCompanionDraft {
   selectionContext?: CompanionSelectionTaskContext;
 }
 
-export const DesktopCompanionStageKind = { None: 'none', Hint: 'hint', Drop: 'drop', Task: 'task' } as const;
+export const DesktopCompanionStageKind = { None: 'none', Hint: 'hint', Drop: 'drop', Task: 'task', Launcher: 'launcher' } as const;
 export type DesktopCompanionStageKind = typeof DesktopCompanionStageKind[keyof typeof DesktopCompanionStageKind];
 
 export const DesktopCompanionStageSide = { Left: 'left', Right: 'right' } as const;
@@ -161,7 +172,8 @@ export type DesktopCompanionStage =
     files: DesktopCompanionDropFile[];
     kinds: CompanionFileKind[];
   }
-  | { kind: typeof DesktopCompanionStageKind.Task; id: string; sessionId: string };
+  | { kind: typeof DesktopCompanionStageKind.Task; id: string; sessionId: string }
+  | { kind: typeof DesktopCompanionStageKind.Launcher; id: string };
 
 export interface DesktopCompanionCapabilities {
   selection: CompanionCapability;
@@ -191,6 +203,8 @@ export interface DesktopCompanionState {
   stageSide: DesktopCompanionStageSide;
   /** Where the quick panel's card sits in its window, and so which corner points back at the orb. */
   panelPlacement: DesktopCompanionPanelPlacement;
+  /** The orb's menu while it is open in its own window (macOS). */
+  contextMenu: CompanionContextMenuState | null;
   fileDragActive: boolean;
   foreground: DesktopCompanionForeground | null;
   capabilities: DesktopCompanionCapabilities;
@@ -213,6 +227,7 @@ export const DesktopCompanionStageCommandType = {
   DropCancel: 'drop-cancel',
   TaskOpen: 'task-open',
   TaskDismiss: 'task-dismiss',
+  LauncherRun: 'launcher-run',
 } as const;
 
 export type DesktopCompanionStageCommand =
@@ -225,7 +240,8 @@ export type DesktopCompanionStageCommand =
   | { type: typeof DesktopCompanionStageCommandType.DropStarted; sessionId: string }
   | { type: typeof DesktopCompanionStageCommandType.DropCancel }
   | { type: typeof DesktopCompanionStageCommandType.TaskOpen }
-  | { type: typeof DesktopCompanionStageCommandType.TaskDismiss };
+  | { type: typeof DesktopCompanionStageCommandType.TaskDismiss }
+  | { type: typeof DesktopCompanionStageCommandType.LauncherRun; action: CompanionLauncherAction };
 
 export const DesktopCompanionSelectionMode = { Toolbar: 'toolbar', Answer: 'answer' } as const;
 export type DesktopCompanionSelectionMode = typeof DesktopCompanionSelectionMode[keyof typeof DesktopCompanionSelectionMode];
@@ -316,11 +332,13 @@ export interface DesktopCompanionLoginStart {
   tool: NonNullable<CompanionAnalyticsEvent['tool']>;
   /** Connects the prompt's shown, click and success events. */
   journeyId?: string;
+  reason?: NonNullable<CompanionAnalyticsEvent['reason']>;
   /** What a language tools card picks up again once the sign-in succeeds. */
   resume?: LanguageToolResume;
 }
 
-export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge {
+export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionScreenshotBridge, CompanionResultsBridge,
+  CompanionPermissionGuideBridge, CompanionContextMenuBridge {
   reportAnalytics(event: CompanionAnalyticsEvent): Promise<void>;
   /** Keeps the card open through the browser sign-in so it can continue afterwards. */
   startLogin(request: DesktopCompanionLoginStart): Promise<void>;
@@ -341,6 +359,9 @@ export interface DesktopCompanionBridge extends LanguageToolsBridge, CompanionSc
   /** Start carries where the press landed; the drag keeps that point under the pointer. */
   drag(phase: DesktopCompanionDragPhase, grab?: DesktopCompanionDragGrab): void;
   orbFileDrag(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[]): void;
+  /** Hovering the orb opens its launcher after a short rest. */
+  orbHover(hovering: boolean): void;
+  setStagePassThrough(passThrough: boolean): void;
   taskStarted(sessionId: string): Promise<void>;
   taskUpdated(): void;
   setPanelPassThrough(passThrough: boolean): void;
@@ -400,6 +421,8 @@ export const DesktopCompanionSize = {
   PanelCompactHeight: 280,
   Task: { width: 420, height: 112 },
   Hint: { width: 320, height: 168 },
+  // The hover launcher: a 232px action card over an input-shaped button, plus the shadow margin.
+  Launcher: { width: 276, height: 260 },
   // A 420px card with generous drop targets, plus its transparent shadow margin.
   Drop: { width: 464, height: 188 },
   // A 48px toolbar plus the margin; the window always reserves ToolbarMenu space below or above it.
@@ -422,5 +445,10 @@ export const DesktopCompanionTiming = {
   DropExpandDelayMs: 180,
   DropProximityPollMs: 60,
   DropLingerMs: 450,
+  // The orb sits at the screen edge, beside scrollbars: a pointer passing over it must not open the launcher.
+  LauncherOpenDelayMs: 250,
+  // Long enough to cross from the orb to the card, or to overshoot it and come back.
+  LauncherCloseDelayMs: 300,
+  LauncherPollMs: 100,
   SnoozeHourMs: 60 * 60_000,
 } as const;

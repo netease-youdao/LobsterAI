@@ -18,20 +18,26 @@ import {
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
-import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
+import { ComputerUseMcpServerName } from '../../shared/computerUse/constants';
+import { ASK_USER_QUESTION_TOOL_NAME, COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
+import { OpenClawQuestion } from '../../shared/cowork/openclawQuestion';
 import { DECISION_MODEL_PLUGIN_ID } from '../../shared/decisionModel/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { OFFICE_EDITORS } from '../../shared/office/editors';
 import {
+  OPENCLAW_AUTOMATIONS_TOOL_NAME,
+  OPENCLAW_MCP_TOOL_NAME_SEPARATOR,
   OPENCLAW_MODEL_COMPAT_PLUGIN_ID,
   OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS,
   OpenClawSkillReviewMode,
+  OpenClawToolSearchControlTool,
 } from '../../shared/openclawEngine/constants';
 import { OpenClawTranscriptSafetyLimit } from '../../shared/openclawTranscript/constants';
 import type {
+  ModelCapabilityOverrides,
   ModelRuntimeProfile as ModelRuntimeProfileType,
 } from '../../shared/providers';
 import {
@@ -63,6 +69,9 @@ import { DiscordDmPolicy } from '../im/types';
 import type { OfficeMcpStdioLaunch } from '../office/core/officeMcpServer';
 import { OpenClawSessionKeepAlive } from '../openclawSessionPolicy/constants';
 import { buildOpenClawSessionConfig } from '../openclawSessionPolicy/store';
+import { MANAGED_MEDIA_GENERATION_POLICY_PROMPT } from './agentEngine/mediaGenerationTurnInstruction';
+import { OPENCLAW_BOOTSTRAP_MAX_CHARS } from './agentEngine/workspaceDeliveredInstructions';
+import { seedAgentPersonaFiles } from './agentPersonaFiles';
 import {
   getAllServerModelMetadata,
   listProviderSourceEntries,
@@ -94,6 +103,7 @@ import { OpenClawEmbeddingPluginId, resolveOpenClawEmbeddingProvider } from './o
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { escapeOpenClawEnvTemplate, escapeOpenClawEnvTemplateRecord } from './openclawEnvTemplate';
 import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
+import { MANAGED_LOCAL_TIME_POLICY_PROMPT } from './openclawLocalTimeContextPrompt';
 import {
   withManagedOpenClawModelPolicy,
   withoutOpenClawWriteMetadata,
@@ -110,6 +120,7 @@ const gwDiagTs = (): string => {
   const abs = Math.abs(tz);
   return `[GW-RESTART-DIAG] ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
 };
+import { isFakeIpNetworkActive } from './fakeIpNetwork';
 import { findBundledExtensionsDir, findThirdPartyExtensionsDir, hasBundledOpenClawExtension, hasRuntimeBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
 import { rebaseRuntimeExtensionLoadPaths } from './openclawPluginRepairPaths';
 import { buildQQAccountConfig, OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
@@ -364,7 +375,59 @@ const MANAGED_TOOL_DENY = [
   'computer',
   'nodes',
   'mobile_ui',
+  // OpenClaw Control UI surfaces (board widgets, portals, operator terminals)
+  // and its GitHub identity panel. LobsterAI renders none of them, so these
+  // tools only cost prompt space and point the model at screens that do not
+  // exist here.
+  'dashboard',
+  'portal',
+  'terminal',
+  'github_identity_status',
+  // OpenClaw's native question tool duplicates the AskUserQuestion plugin,
+  // which the managed delete and choice policy is written around. Desktop
+  // sessions keep one question tool; IM sessions, which cannot answer either,
+  // ask in plain text.
+  OpenClawQuestion.ToolName,
 ] as const;
+// progress_card feeds OpenClaw's session progress card, which LobsterAI does not
+// render (the desktop card was removed). Its description tells the model the
+// user watches that card instead of the transcript, and most calls took a model
+// request of their own (62 of 84 locally), so it stays off.
+const MANAGED_TOOL_UPDATE_PLAN = false;
+// Tool schemas were ~2/3 of every request (~106k characters for 68 tools).
+// Directory mode keeps core file/shell tools, lists the other OpenClaw and
+// plugin tools in one line each, and leaves MCP tools behind tool_search.
+//
+// Cached input costs 1/50 of uncached input: pinning a tool adds ~0.002
+// credits per 1k schema tokens to a warm request, while discovering a deferred
+// one costs one or two extra model requests (0.15-0.5 credits). A/B runs showed
+// every deferred high-frequency scenario costing more than baseline, so
+// `direct` (needs openclaw-tool-search-direct-tools.patch) pins:
+// - AskUserQuestion: the delete policy skips confirmation when it is missing
+//   from the toolset;
+// - the product's frequent scenarios: browser (also returns screenshots),
+//   web_fetch, memory, scheduled tasks (automations), the Word/Excel/PowerPoint
+//   editors and computer use, the MCP servers by prefix.
+// Only the long tail (sessions, media generation, skill workshop, secrets,
+// user MCP servers) stays deferred. `minDeferredChars` turns Tool Search off
+// when that tail shrinks below ~5k tokens, where saving it on a cold start no
+// longer pays for the extra round trips.
+const MANAGED_TOOL_SEARCH_DIRECT_TOOLS = [
+  ASK_USER_QUESTION_TOOL_NAME,
+  'browser',
+  'web_fetch',
+  'memory_search',
+  'memory_get',
+  OPENCLAW_AUTOMATIONS_TOOL_NAME,
+  ...[...OFFICE_EDITORS.map(editor => editor.agent.serverName), ComputerUseMcpServerName.BuiltIn]
+    .map(serverName => `${serverName}${OPENCLAW_MCP_TOOL_NAME_SEPARATOR}*`),
+] as const;
+const MANAGED_TOOL_SEARCH = {
+  enabled: true,
+  mode: 'directory',
+  direct: MANAGED_TOOL_SEARCH_DIRECT_TOOLS,
+  minDeferredChars: 20_000,
+} as const;
 // OpenClaw 2026.8.1 owns detector selection and thresholds. Only the public
 // enable flag remains configurable; emitting the retired tuning keys makes
 // the complete config invalid and prevents gateway hot reloads.
@@ -409,6 +472,19 @@ const providerApiKeyEnvVar = (providerName: string): string => {
   return `LOBSTER_APIKEY_${envName}`;
 };
 
+// Pairs with MANAGED_TOOL_SEARCH. Several sections below say "use X if it is
+// available"; without this, a deferred tool reads as missing.
+const MANAGED_DEFERRED_TOOLS_PROMPT = [
+  '## Deferred Tools',
+  '',
+  'Frequently used tools (files, shell, browser, web fetch, memory, scheduled tasks, Word/Excel/PowerPoint editors,',
+  'computer use) are loaded directly. Every other tool is still available: the tool directory lists OpenClaw and',
+  'plugin tools (media generation, sessions), and other MCP tools (saved logins, user-installed servers) are found by search.',
+  `- Find a tool with \`${OpenClawToolSearchControlTool.Search}\` (English keywords or an MCP server name), load its schema with \`${OpenClawToolSearchControlTool.Describe}\` when needed, then run it with \`${OpenClawToolSearchControlTool.Call}\`.`,
+  `- When these instructions say to use a tool if it is available, a tool reachable through \`${OpenClawToolSearchControlTool.Search}\` counts as available.`,
+  `- Before telling the user a capability is missing, or replacing a named tool with a script workaround, check \`${OpenClawToolSearchControlTool.Search}\`.`,
+].join('\n');
+
 const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
   '## Web Search',
   '',
@@ -426,6 +502,7 @@ const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
 ].join('\n');
 
 const BUNDLED_BROWSER_PLUGIN_ID = 'browser';
+const BUNDLED_XAI_PLUGIN_ID = 'xai';
 
 const MANAGED_BROWSER_POLICY_PROMPT = [
   '## Browser Policy',
@@ -1199,6 +1276,8 @@ export const buildProviderSelection = (options: {
   supportsImage?: boolean;
   supportsVideo?: boolean;
   supportsThinking?: boolean;
+  /** Choices made in the model editor; they beat the provider registry. */
+  capabilityOverrides?: ModelCapabilityOverrides;
   modelName?: string;
   contextWindow?: number;
   maxTokens?: number;
@@ -1268,6 +1347,7 @@ export const buildProviderSelection = (options: {
     providerName,
     options.modelId,
     options.supportsImage,
+    options.capabilityOverrides?.image,
   );
   const resolvedSupportsVideo = ProviderRegistry.resolveModelSupportsVideo(
     providerName,
@@ -1278,6 +1358,7 @@ export const buildProviderSelection = (options: {
     providerName,
     options.modelId,
     options.supportsThinking,
+    options.capabilityOverrides?.thinking,
   );
   const modelInput: string[] = runtimeProfileDefinition
     ? [...runtimeProfileDefinition.input]
@@ -1301,7 +1382,9 @@ export const buildProviderSelection = (options: {
   const descriptorReasoning = descriptor.resolveModelReasoning
     ? descriptor.resolveModelReasoning(options.modelId, !!options.codingPlanEnabled)
     : descriptor.modelDefaults?.reasoning;
+  // Turning thinking off in the model editor also beats the descriptor.
   const reasoning = runtimeProfileDefinition?.reasoning
+    ?? (options.capabilityOverrides?.thinking === false ? false : undefined)
     ?? (resolvedSupportsThinking ? true : descriptorReasoning);
   const contextWindow = runtimeProfileDefinition?.contextWindow
     ?? ProviderRegistry.resolveModelContextWindow(
@@ -2191,14 +2274,18 @@ export class OpenClawConfigSync {
       ...(fetch.maxRedirects ? { maxRedirects: fetch.maxRedirects } : {}),
       ...(fetch.maxChars ? { maxChars: fetch.maxChars } : {}),
       ...(fetch.userAgent ? { userAgent: fetch.userAgent } : {}),
-      ...(fetch.allowRfc2544BenchmarkRange === true
+      // Fake-IP proxies resolve every site into this range; without it the
+      // SSRF guard blocks all of web_fetch. Real private ranges stay blocked.
+      ...(fetch.allowRfc2544BenchmarkRange === true || isFakeIpNetworkActive()
         ? { ssrfPolicy: { allowRfc2544BenchmarkRange: true } }
         : {}),
     };
 
     return {
       deny: [...MANAGED_TOOL_DENY],
+      updatePlan: MANAGED_TOOL_UPDATE_PLAN,
       loopDetection: MANAGED_TOOL_LOOP_DETECTION,
+      toolSearch: { ...MANAGED_TOOL_SEARCH, direct: [...MANAGED_TOOL_SEARCH.direct] },
       web: {
         search: {
           enabled: false,
@@ -2334,6 +2421,7 @@ export class OpenClawConfigSync {
         supportsImage: apiResolution.providerMetadata?.supportsImage,
         supportsVideo: apiResolution.providerMetadata?.supportsVideo,
         supportsThinking: apiResolution.providerMetadata?.supportsThinking,
+        capabilityOverrides: apiResolution.providerMetadata?.capabilityOverrides,
         modelName: apiResolution.providerMetadata?.modelName,
         contextWindow: apiResolution.providerMetadata?.contextWindow,
         maxTokens: apiResolution.providerMetadata?.maxTokens,
@@ -2369,6 +2457,7 @@ export class OpenClawConfigSync {
             supportsImage: m.supportsImage,
             supportsVideo: m.supportsVideo,
             supportsThinking: m.supportsThinking,
+            capabilityOverrides: m.capabilityOverrides,
             modelName: m.name,
             contextWindow: m.contextWindow,
             maxTokens: m.maxTokens,
@@ -2477,9 +2566,17 @@ export class OpenClawConfigSync {
             });
             collectCompatibilityOwnerProfile(candidateModelProfiles, serverSel);
             const serverModel = serverSel.providerConfig.models[0];
+            // Selectable managed models keep the server's default budget even when a
+            // compatibility profile declares a larger native model capacity.
+            if (sm.contextWindowOptions?.length && isPositiveModelLimit(sm.contextWindow)) {
+              serverModel.contextWindow = sm.contextWindow;
+              serverModel.maxTokens = clampModelMaxTokens(serverModel.maxTokens, sm.contextWindow);
+            }
             Object.assign(serverModel, buildPresetContextWindows({
               contextWindow: serverModel.contextWindow,
               presetContextWindows: sm.presetContextWindows,
+              contextWindowOptions: sm.contextWindowOptions,
+              presetContextWindowOptions: sm.presetContextWindowOptions,
             }));
             collectThinkingProfile(
               candidateThinkingProfiles,
@@ -2564,7 +2661,11 @@ export class OpenClawConfigSync {
     // model compat hooks (e.g. only grok-4.3 accepts reasoningEffort) plus the
     // OAuth refresh hook for credentials in the auth-profiles store. Declare
     // it only when the runtime actually bundles it (older runtimes pruned it).
-    const hasXaiPlugin = hasRuntimeBundledOpenClawExtension('xai');
+    const hasXaiPlugin = hasRuntimeBundledOpenClawExtension(BUNDLED_XAI_PLUGIN_ID);
+    // An enabled xai plugin is loaded on every gateway start and pulls in over
+    // a hundred modules nothing else needs, so it stays off until an xAI
+    // provider is configured. It serves no other provider.
+    const xaiPluginEnabled = hasXaiPlugin && Object.hasOwn(allProvidersMap, OpenClawProviderId.Xai);
     // The selected embedding provider exists only while its bundled plugin is
     // allowed; without it OpenClaw silently falls back to keyword search.
     const memoryEmbeddingProvider = coworkConfig.embeddingEnabled
@@ -2719,6 +2820,7 @@ export class OpenClawConfigSync {
             mode: sandboxMode,
           },
           workspace: path.resolve(mainWorkspacePath),
+          bootstrapMaxChars: OPENCLAW_BOOTSTRAP_MAX_CHARS,
           mediaMaxMb: 30,
           compaction: {
             maxActiveTranscriptBytes: OpenClawTranscriptSafetyLimit.SoftConfigValue,
@@ -2867,7 +2969,9 @@ export class OpenClawConfigSync {
           // Qwen/DashScope URLs. Declare it only when the plugin actually
           // exists, otherwise it becomes a stale entry on every startup.
           ...(hasQwenProvider && qwenPortalAuthPluginId ? { [qwenPortalAuthPluginId]: { enabled: true } } : {}),
-          ...(hasXaiPlugin ? { xai: { enabled: true } } : {}),
+          // Written as disabled rather than left out: a preserved entry from an
+          // earlier sync would otherwise keep it enabled.
+          ...(hasXaiPlugin ? { [BUNDLED_XAI_PLUGIN_ID]: { enabled: xaiPluginEnabled } } : {}),
           ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId
             ? { [memoryEmbeddingPluginId]: { enabled: true } }
             : {}),
@@ -2887,7 +2991,7 @@ export class OpenClawConfigSync {
         const existingAllow = Array.isArray((existingPlugins as Record<string, unknown>).allow)
           ? ((existingPlugins as Record<string, unknown>).allow as unknown[])
               .filter((id): id is string => typeof id === 'string' && id.length > 0)
-              .filter(id => id !== OPENCLAW_MODEL_COMPAT_PLUGIN_ID)
+              .filter(id => id !== OPENCLAW_MODEL_COMPAT_PLUGIN_ID && id !== BUNDLED_XAI_PLUGIN_ID)
           : [];
         const trustedPluginAllow = Array.from(new Set([
           ...existingAllow,
@@ -2897,7 +3001,7 @@ export class OpenClawConfigSync {
           // (manifest-owner-policy "not-in-allowlist"), so runtime-bundled
           // plugins we rely on must be listed here explicitly or they never
           // load — entries.enabled alone is not enough.
-          ...(hasXaiPlugin ? ['xai'] : []),
+          ...(xaiPluginEnabled ? [BUNDLED_XAI_PLUGIN_ID] : []),
           ...(hasMemoryEmbeddingPlugin && memoryEmbeddingPluginId ? [memoryEmbeddingPluginId] : []),
           ...(hasModelRoutingPlugin ? ['lobster-model-routing'] : []),
           ...(hasModelCompatConfig
@@ -4070,6 +4174,7 @@ export class OpenClawConfigSync {
       // Skills are now loaded by OpenClaw natively via skills.load.extraDirs
       // in openclaw.json, so we no longer embed the skills routing prompt here.
 
+      sections.push(MANAGED_DEFERRED_TOOLS_PROMPT);
       sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
       sections.push(MANAGED_BROWSER_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
@@ -4077,8 +4182,12 @@ export class OpenClawConfigSync {
       for (const editor of OFFICE_EDITORS) {
         if (editor.agent.prompt) sections.push(editor.agent.prompt);
       }
+      // Static policies that used to ride uncached in each session's first
+      // message or each turn; here they sit in the cached prefix.
+      sections.push(MANAGED_MEDIA_GENERATION_POLICY_PROMPT);
       sections.push(MANAGED_MATH_FORMAT_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
+      sections.push(MANAGED_LOCAL_TIME_POLICY_PROMPT);
       sections.push(MANAGED_HEARTBEAT_POLICY_PROMPT);
       sections.push(buildManagedSkillCreationPrompt(resolveSkillCreationPath()));
 
@@ -4281,6 +4390,9 @@ export class OpenClawConfigSync {
    * Sync workspace files (SOUL.md, IDENTITY.md, AGENTS.md) for each non-main agent.
    * The main agent's workspace is synced by `syncAgentsMd`. Non-main agents
    * get their own workspace directories under the openclaw state directory.
+   *
+   * SOUL.md and IDENTITY.md are only seeded when missing: the agent may edit
+   * them at runtime, and explicit saves write them directly.
    */
   private syncPerAgentWorkspaces(mainWorkspaceDir: string, coworkConfig: CoworkConfig): void {
     const agents = this.getAgents?.() ?? [];
@@ -4309,21 +4421,16 @@ export class OpenClawConfigSync {
           console.log(`[OpenClawConfigSync] Repaired legacy HEARTBEAT.md for agent ${agent.id}`);
         }
 
-        // Sync SOUL.md — agent's system prompt
-        const soulPath = path.join(agentWorkspace, 'SOUL.md');
-        const soulContent = (agent.systemPrompt || '').trim();
-        this.syncFileIfChanged(soulPath, soulContent ? `${soulContent}\n` : '');
+        const seededPersonaFiles = seedAgentPersonaFiles(agentWorkspace, agent);
+        if (seededPersonaFiles.length > 0) {
+          console.log(
+            `[OpenClawConfigSync] Seeded ${seededPersonaFiles.join(', ')} for agent ${agent.id}`,
+          );
+        }
 
-        // Sync IDENTITY.md — agent's identity description
-        const identityPath = path.join(agentWorkspace, 'IDENTITY.md');
-        const identityContent = (agent.identity || '').trim();
-        this.syncFileIfChanged(identityPath, identityContent ? `${identityContent}\n` : '');
-
-        // Sync AGENTS.md for this agent (reuse same logic as main agent)
-        this.syncAgentsMd(agentWorkspace, {
-          ...coworkConfig,
-          systemPrompt: agent.systemPrompt || '',
-        });
+        // Same managed section as the main agent. The persona is delivered by
+        // SOUL.md, so repeating it here would inject it twice.
+        this.syncAgentsMd(agentWorkspace, coworkConfig);
 
         // Ensure memory directory exists
         const memoryDir = path.join(agentWorkspace, 'memory');
@@ -4339,24 +4446,6 @@ export class OpenClawConfigSync {
           `[OpenClawConfigSync] Failed to sync workspace for agent ${agent.id}:`,
           error instanceof Error ? error.message : String(error),
         );
-      }
-    }
-  }
-
-  /** Write a file only if its content has changed. */
-  private syncFileIfChanged(filePath: string, content: string): void {
-    try {
-      const existing = fs.readFileSync(filePath, 'utf8');
-      if (existing === content) return;
-    } catch {
-      // File doesn't exist yet
-    }
-    if (content) {
-      this.atomicWriteFile(filePath, content);
-    } else {
-      // Empty content — create empty file if it doesn't exist
-      if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, '', 'utf8');
       }
     }
   }

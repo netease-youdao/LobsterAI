@@ -22,6 +22,7 @@ import { GoogleSearch } from './search/google';
 import { navigate, screenshot, getContent, getTextContent } from './playwright/operations';
 import { Config, mergeConfig } from './config';
 import { SearchResponse } from './search/types';
+import { InAppBrowserBridge, IN_APP_CONNECTION_ID } from './inApp/bridge';
 
 type SearchEngine = 'google' | 'bing';
 type SearchEnginePreference = SearchEngine | 'auto';
@@ -94,6 +95,7 @@ export class BridgeServer {
   private sharedPageQueue: Promise<unknown> = Promise.resolve();
   private httpServer: Server | null = null;
   private config: Config;
+  private inAppBridge = new InAppBrowserBridge();
 
   constructor(config?: Partial<Config>) {
     this.config = mergeConfig(config);
@@ -222,6 +224,28 @@ export class BridgeServer {
     }
   }
 
+  /**
+   * Decide which browser serves this request. While LobsterAI runs with its
+   * in-app browser mode on, searches go to its hidden page and no Chrome
+   * window is opened; a Chrome left over from before the switch is closed.
+   */
+  private async useInAppBrowser(connectionId?: unknown): Promise<boolean> {
+    if (await this.inAppBridge.isActive()) {
+      if (this.browserInstance) {
+        console.log('[Bridge Server] In-app browser is active, closing the standalone browser');
+        await this.waitForPendingBrowserLaunch();
+        await this.resetBrowserState();
+      }
+      return true;
+    }
+
+    if (connectionId === IN_APP_CONNECTION_ID) {
+      // Worded so clients drop the cached id and reconnect to the standalone browser.
+      throw new Error(`Connection not found: ${IN_APP_CONNECTION_ID}`);
+    }
+    return false;
+  }
+
   private async resetBrowserState(): Promise<void> {
     await this.playwrightManager.disconnectAll();
 
@@ -329,6 +353,19 @@ export class BridgeServer {
   // Launch browser
   private async handleBrowserLaunch(req: Request, res: Response): Promise<void> {
     try {
+      if (await this.useInAppBrowser()) {
+        res.json({
+          success: true,
+          data: {
+            message: 'Using the LobsterAI in-app browser',
+            backend: 'in-app',
+            pid: null,
+            cdpPort: null
+          }
+        });
+        return;
+      }
+
       const { instance, reused } = await this.ensureBrowserReady();
 
       if (reused) {
@@ -364,6 +401,18 @@ export class BridgeServer {
     try {
       const { cdpPort } = req.body;
       let port = cdpPort as number | undefined;
+
+      if (!port && await this.useInAppBrowser()) {
+        res.json({
+          success: true,
+          data: {
+            connectionId: IN_APP_CONNECTION_ID,
+            backend: 'in-app',
+            cdpPort: null
+          }
+        });
+        return;
+      }
 
       // If client does not specify a port, ensure managed browser is healthy first.
       if (!port) {
@@ -447,6 +496,7 @@ export class BridgeServer {
         processAlive,
         cdpReachable,
         connections: this.playwrightManager.getConnectionCount(),
+        backend: await this.inAppBridge.isActive() ? 'in-app' : 'standalone',
         pid: this.browserInstance?.pid,
         cdpPort: this.browserInstance?.cdpPort,
         adopted: this.browserInstance?.adopted
@@ -483,8 +533,9 @@ export class BridgeServer {
       }
 
       const preferredEngine = this.normalizeEnginePreference(engine);
+      const inApp = await this.useInAppBrowser(connectionId);
       const results = await this.enqueueSharedPageOperation(
-        () => this.searchWithFallback(connectionId, query, maxResults, preferredEngine)
+        () => this.searchWithFallback(connectionId, query, maxResults, preferredEngine, inApp)
       );
 
       res.json({
@@ -523,14 +574,19 @@ export class BridgeServer {
     connectionId: string,
     query: string,
     maxResults: number | undefined,
-    preferredEngine: SearchEnginePreference
+    preferredEngine: SearchEnginePreference,
+    inApp: boolean = false
   ): Promise<SearchResponse> {
     const engineOrder = this.resolveSearchEngineOrder(preferredEngine);
     const errors: string[] = [];
 
     for (const engine of engineOrder) {
       try {
-        console.log(`[Search] Trying engine: ${engine}`);
+        console.log(`[Search] Trying engine: ${engine}${inApp ? ' (in-app browser)' : ''}`);
+        if (inApp) {
+          return await this.inAppBridge.request<SearchResponse>('search', { engine, query, maxResults });
+        }
+
         if (engine === 'google') {
           return await this.googleSearch.search(connectionId, query, { maxResults });
         }
@@ -561,9 +617,14 @@ export class BridgeServer {
 
       validateNavigationUrl(url);
 
-      const content = await this.enqueueSharedPageOperation(
-        () => this.bingSearch.getResultContent(connectionId, url)
-      );
+      const inApp = await this.useInAppBrowser(connectionId);
+      const content = await this.enqueueSharedPageOperation(async () => {
+        if (!inApp) {
+          return this.bingSearch.getResultContent(connectionId, url);
+        }
+        await this.inAppBridge.request('navigate', { url });
+        return (await this.inAppBridge.request<{ text: string }>('text')).text;
+      });
 
       res.json({
         success: true,
@@ -592,6 +653,14 @@ export class BridgeServer {
 
       validateNavigationUrl(url);
 
+      if (await this.useInAppBrowser(connectionId)) {
+        const data = await this.enqueueSharedPageOperation(
+          () => this.inAppBridge.request<{ url: string }>('navigate', { url })
+        );
+        res.json({ success: true, data });
+        return;
+      }
+
       const page = await this.playwrightManager.getPage(connectionId);
       await navigate(page, { url, waitUntil, timeout });
 
@@ -616,6 +685,14 @@ export class BridgeServer {
         res.status(400).json({
           success: false,
           error: 'connectionId is required'
+        });
+        return;
+      }
+
+      if (await this.useInAppBrowser(connectionId)) {
+        res.status(501).json({
+          success: false,
+          error: 'Screenshots are not available while searches run in the LobsterAI in-app browser; use the browser tool instead'
         });
         return;
       }
@@ -652,6 +729,14 @@ export class BridgeServer {
         return;
       }
 
+      if (await this.useInAppBrowser(connectionId)) {
+        const data = await this.enqueueSharedPageOperation(
+          () => this.inAppBridge.request<{ content: string }>('html')
+        );
+        res.json({ success: true, data });
+        return;
+      }
+
       const page = await this.playwrightManager.getPage(connectionId);
       const content = await getContent(page);
 
@@ -677,6 +762,14 @@ export class BridgeServer {
           success: false,
           error: 'connectionId is required'
         });
+        return;
+      }
+
+      if (await this.useInAppBrowser(connectionId)) {
+        const data = await this.enqueueSharedPageOperation(
+          () => this.inAppBridge.request<{ text: string }>('text')
+        );
+        res.json({ success: true, data });
         return;
       }
 

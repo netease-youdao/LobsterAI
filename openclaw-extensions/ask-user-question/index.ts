@@ -10,8 +10,9 @@ import { isAskUserQuestionCandidateSessionKey } from './sessionKey';
  * with predefined options (single/multi select). The tool pauses execution
  * and waits for the user's response via an HTTP callback to LobsterAI.
  *
- * This enables delete-confirmation modals on the LobsterAI desktop app
- * without relying on OpenClaw's exec.approval mechanism.
+ * It backs delete confirmations and choice questions on the LobsterAI desktop
+ * app without relying on OpenClaw's exec.approval mechanism. LobsterAI denies
+ * OpenClaw's native ask_user, so this is the only question tool.
  */
 
 type PluginConfig = {
@@ -48,7 +49,11 @@ type AskUserResponse = {
   skippedQuestionIds?: string[];
 };
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+// Mirrors ASK_USER_QUESTION_TIMEOUT_MS (src/shared/cowork/constants.ts), plus
+// a grace period so LobsterAI's own timeout answers first. LobsterAI sends the
+// response headers at once and whitespace keepalives, so fetch's 5-minute
+// header/body timeouts do not cut a long wait short.
+const DEFAULT_TIMEOUT_MS = 15 * 60_000 + 30_000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -93,9 +98,15 @@ const AskUserQuestionSchema = Type.Object({
 async function askUser(
   config: PluginConfig,
   input: AskUserCallbackInput,
+  runSignal?: AbortSignal,
 ): Promise<AskUserResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  // A stopped run aborts the request, and LobsterAI closes the dialog when the
+  // connection drops instead of leaving it up until its own timeout.
+  const abortWithRun = () => controller.abort();
+  if (runSignal?.aborted) controller.abort();
+  else runSignal?.addEventListener('abort', abortWithRun, { once: true });
 
   try {
     const response = await fetch(config.callbackUrl, {
@@ -150,6 +161,7 @@ async function askUser(
     throw error;
   } finally {
     clearTimeout(timer);
+    runSignal?.removeEventListener('abort', abortWithRun);
   }
 }
 
@@ -184,13 +196,13 @@ const plugin = {
         name: 'AskUserQuestion',
         label: 'Ask User Question',
         description: [
-        'Ask the user a question with predefined options and wait for their response.',
-        'Use this tool BEFORE executing any delete operation (rm, trash, rmdir, unlink, git clean).',
-        'The user will see a confirmation dialog with the options you provide.',
-        'Do NOT use this tool for non-delete commands.',
+        'Ask the user one or more questions with predefined options and wait for their answers.',
+        'Use it BEFORE executing any delete operation (rm, trash, rmdir, unlink, git clean), and when the user must choose between options (a framework, a file, a configuration, a scope).',
+        'The user sees a question panel with the options you provide and may skip a question; a skipped question carries no answer or approval.',
+        'Do not use it to confirm ordinary, non-destructive commands.',
       ].join(' '),
       parameters: AskUserQuestionSchema,
-      async execute(_id: string, params: unknown) {
+      async execute(_id: string, params: unknown, signal?: AbortSignal) {
         const input = params as AskUserInput;
         if (!input?.questions?.length) {
           return {
@@ -200,7 +212,7 @@ const plugin = {
         }
 
         try {
-          const response = await askUser(config, { ...input, sessionKey });
+          const response = await askUser(config, { ...input, sessionKey }, signal);
 
           if (response.behavior === 'deny') {
             return {

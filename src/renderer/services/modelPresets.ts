@@ -18,6 +18,8 @@ export function modelPresetToModel(preset: AvailableModelPreset, resolved?: Mode
     providerKey: ProviderName.LobsteraiServer,
     isServerModel: true,
     costMultiplier: preset.costMultiplier,
+    contextWindow: preset.contextWindow ?? undefined,
+    contextWindowOptions: preset.contextWindowOptions ?? undefined,
     accessible: resolved?.accessible ?? preset.accessible,
     supportsImage: resolved?.supportsImage ?? preset.supportsImage,
     supportsThinking: resolved ? resolved.supportsThinking : preset.supportsThinking === true,

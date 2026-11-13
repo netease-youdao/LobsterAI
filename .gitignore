@@ -35,7 +35,9 @@ SKILLs/**/.server.log
 SKILLs/**/.server.pid
 SKILLs/**/.venv/
 
-package-lock.json
+# Track the root dependency lock; generated skill lockfiles remain local.
+**/package-lock.json
+!/package-lock.json
 
 nul
 .work.env

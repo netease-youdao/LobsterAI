@@ -23,6 +23,7 @@ import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFai
 import {
   buildOpenClawCompileCacheEnv,
   buildOpenClawGatewayExecArgv,
+  buildOpenClawPackageDirEnv,
   extractOpenClawConfigIssueLines,
   extractOpenClawPluginVerificationFailure,
   extractOpenClawStartupMigrationRefusal,
@@ -45,6 +46,40 @@ describe('buildOpenClawCompileCacheEnv', () => {
       NODE_COMPILE_CACHE: '/tmp/openclaw-cache',
       OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: '1',
     });
+  });
+});
+
+describe('buildOpenClawPackageDirEnv', () => {
+  let runtimeRoot: string;
+
+  beforeEach(() => {
+    runtimeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-openclaw-package-dir-')));
+    fs.mkdirSync(path.join(runtimeRoot, 'dist'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(runtimeRoot, { recursive: true, force: true });
+  });
+
+  test('leaves the package directory to OpenClaw when dist has no package scope', () => {
+    expect(buildOpenClawPackageDirEnv(runtimeRoot)).toEqual({});
+  });
+
+  test('pins the package directory to the runtime root when dist has its own package scope', () => {
+    fs.writeFileSync(path.join(runtimeRoot, 'dist', 'package.json'), '{"type":"module"}\n');
+
+    expect(buildOpenClawPackageDirEnv(runtimeRoot)).toEqual({ OPENCLAW_PACKAGE_DIR: runtimeRoot });
+  });
+
+  test('pins the real runtime root when the runtime is reached through a link', () => {
+    fs.writeFileSync(path.join(runtimeRoot, 'dist', 'package.json'), '{"type":"module"}\n');
+    const linkRoot = `${runtimeRoot}-link`;
+    fs.symlinkSync(runtimeRoot, linkRoot, 'junction');
+    try {
+      expect(buildOpenClawPackageDirEnv(linkRoot)).toEqual({ OPENCLAW_PACKAGE_DIR: runtimeRoot });
+    } finally {
+      fs.rmSync(linkRoot, { recursive: true, force: true });
+    }
   });
 });
 

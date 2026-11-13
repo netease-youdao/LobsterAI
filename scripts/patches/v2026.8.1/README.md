@@ -1,5 +1,48 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Stable timestamps for assistant-first history bootstraps
+
+`zzzz-openclaw-bootstrap-prefix-cache.patch` fixes a prompt-cache miss when
+replaying the same assistant-first history. The turn-order repair prepends a
+synthetic user message, `(session bootstrap)`. Its old `Date.now()` timestamp
+was stamped into the model-visible text by `normalizeMessagesForLlmBoundary`,
+so reopening unchanged history in a later minute changed the request prefix.
+This affects both Google and strict OpenAI-compatible replay paths.
+
+The bootstrap now inherits the first retained assistant message's persisted
+timestamp. The repair stays idempotent, and real user messages retain their
+own timestamps. Changing the retained history can still change the prefix;
+this patch removes only the variation caused by the time of replay.
+
+Regression coverage exercises:
+
+- The real OpenAI completions serializer with identical history reconstructed
+  at two different wall-clock times, including a real user message.
+- SQLite byte truncation of a long turn, followed by reopening the same
+  assistant-first tail at different times.
+- Failed byte-triggered preflight compaction, both a failure result and an
+  exception, followed by bounded-history fallback and a retry under backoff.
+
+Apply the complete patch set, then run in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+node scripts/run-vitest.mjs run src/auto-reply/reply/agent-runner-memory.test.ts -t "model-context byte bound"
+```
+
+Windows acceptance also exercised the real Electron client through Playwright/CDP
+against a recording localhost provider. The common request prefix stayed
+byte-identical across minute boundaries and a full client/gateway restart, while
+real user timestamps remained intact. A separate long-history scenario verified
+that failed byte-triggered summarization still completed the user turn without
+installing a compaction boundary. This checks request bytes, not provider billing.
+
+The patch sorts after the bounded-history and session-prefix patches whose
+test coverage it extends. The patch applier verifies both the production fix
+and the regression tests. Rebuild the bundled runtime to ship the fix. Remove
+this patch when the pinned upstream derives bootstrap time from retained
+history rather than the clock.
+
 ## Sign-out without a config clobber restart
 
 `openclaw-config-apply-size-drop-allowance.patch` lets the full-config owner
@@ -881,6 +924,12 @@ Adaptations for v2026.8.1:
   the final history sync then kept only the last message. Other clients ignore
   the unknown stream.
 
+Status: LobsterAI now writes `tools.updatePlan: false`, so `progress_card` is not
+registered and this check does not run. The desktop card is gone, most calls
+spent a model request of their own, and the tool description told the model the
+user watches the card instead of the transcript. The patch stays inert; remove it
+with the next upgrade unless `progress_card` comes back.
+
 Verify with:
 
 ```sh
@@ -996,6 +1045,76 @@ latency into two real process-enumeration commands, restore normal timing, and
 confirm recovery on the next browser command without restarting the gateway.
 Remove when upstream preserves a verifiable cleanup handle across discovery
 failures and provides equivalent recovery coverage.
+
+## Native Chrome MCP process snapshots on Windows
+
+`openclaw-chrome-mcp-windows-native-snapshot.patch` stops the browser tool from
+depending on PowerShell to prove which processes a Chrome MCP session owns.
+Upstream lists every process with `powershell.exe Get-CimInstance Win32_Process`
+under a 2 s timeout. The in-app browser (the default display mode, an
+`existing-session` profile) runs that list twice during every attach and at
+least three times while closing a session. Loading CimCmdlets and enumerating
+about 420 processes took 1.65-2.3 s per call on an ordinary Windows 11 machine
+(up to 3.1 s while other work ran), against about 0.33 s for a bare PowerShell
+start, so most attaches failed with `Chrome MCP process inspection failed`. Each
+failure also left the session retained as `uncertain` by
+`openclaw-chrome-mcp-process-recovery.patch`. Every later browser command
+re-ran the same list before attaching and failed the same way, so the browser
+stayed unavailable until the gateway restarted.
+
+`chrome-mcp-windows-processes.ts` reads the table through koffi instead:
+`CreateToolhelp32Snapshot` gives pid and parent pid, and
+`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, `GetProcessTimes` and
+`QueryFullProcessImageNameW` give each row the identity
+`win32:<creation FILETIME ticks>|<image path>`. The same machine lists all
+processes in 12-19 ms. koffi is the package Windows runtimes already keep for
+`openclaw-windows-private-directory-native.patch`, and the bundled browser
+chunk resolves it through `createRequire` the way it loads `playwright-core`.
+
+Rows that cannot be opened are dropped, as the PowerShell list already dropped
+rows without an `ExecutablePath`. So are rows whose exit time is set. A Chrome
+MCP subtree belongs to the gateway's user, so it is always readable. A child is
+detached from its reported parent pid when that pid now belongs to a process
+created after the child. That keeps a recycled pid from pulling an unrelated
+tree into `taskkill /t`.
+
+The identity source never changes once native rows have been issued. A
+PowerShell row has a different identity string, so mixing the two would make a
+live owned process look exited (skipping its cleanup) or a tracked root look
+replaced. If koffi cannot load, or the first native read fails, the gateway
+uses PowerShell for its whole lifetime. A native failure after that throws the
+existing `ChromeMcpProcessSnapshotError`. The PowerShell fallback timeout rises
+from 2 s to 10 s, so two attach-time lists still fit the 30 s handshake budget.
+The `ps` path on macOS keeps 2 s.
+
+Verify in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run extensions/browser/src/browser/chrome-mcp-windows-processes.test.ts extensions/browser/src/browser/chrome-mcp.test.ts extensions/browser/src/browser/server-context.tab-ownership.test.ts extensions/browser/src/browser/server-context.list-profiles.test.ts
+```
+
+On Windows the suite reads this process, a spawned child and the child's exit
+through the real kernel32. The Windows e2e drives a real attach through a `.cmd`
+launcher (like LobsterAI's), a stdio MCP server and its long-lived grandchild:
+
+```sh
+node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts --silent=false extensions/browser/src/browser/chrome-mcp-windows-processes.e2e.test.ts
+```
+
+It runs five attach, list and close rounds with 2.5 s injected into every
+PowerShell list, and requires no PowerShell, one `taskkill` per root and the
+whole tree gone after each close. Measured: attach 0.40-0.52 s, close 1.0-1.8 s.
+It also forces the PowerShell fallback with the same latency. All five lists
+there took 4.7-5.2 s, every one over the former 2 s limit, and the browser still
+attached and cleaned up. Set back to 2 s, that case fails with the reported
+`Command timed out after 2000 milliseconds`. `OPENCLAW_E2E_SKIP_BUILD=1` skips
+the e2e build step when `dist` is current.
+
+Rebuild the runtime, then in the desktop app with the
+in-app browser use the browser tool once and close the session. The gateway log
+should have no `Chrome MCP process inspection failed`, the attach should start
+no `powershell.exe`, and the bridge subprocess should be gone after close.
+Remove when upstream enumerates Windows process trees without PowerShell.
 
 ## Native plugin loading on Windows
 
@@ -1205,6 +1324,63 @@ Verify `src/agents/tools/web-fetch.proxy.integration.test.ts`, the neighboring
 web-fetch tests, and `src/infra/net/fetch-guard.test.ts`; then rebuild and test a
 real HTTPS tunnel with the generated desktop config. Remove when upstream
 supports an equivalent proxy transport with validated, pinned destination IPs.
+
+## Tool Search pins hot tools and skips small catalogs
+
+`openclaw-tool-search-direct-tools.patch` adds two `tools.toolSearch` keys.
+
+- `direct`: tool names that stay in the model's tool array while Tool Search
+  defers the rest. Entries are exact names or a trailing `*` prefix such as
+  `lobster-word__*` (one MCP server). Upstream keeps only core file/shell tools
+  direct and has no configuration hook. A pin may name an MCP tool, but only
+  when that name is unique in the run, so a lookalike from another server
+  cannot take its place. Implicitly required names (`message` as the sole reply
+  path) stay OpenClaw-only. Code Mode ignores the list.
+- `minDeferredChars`: skip compaction for a run when the schemas it would hide
+  total fewer characters. Measuring stops once the threshold is reached, and
+  without a threshold nothing extra is serialized.
+
+Why: cached input is billed at 1/50 of uncached input, so shrinking a warm
+prefix saves little, while every deferred tool costs one or two extra model
+requests (search, describe) the first time it is used. A desktop A/B on
+deepseek-flash measured Excel/Word 4 → 6 requests and browser 9.5 → 11.5 when
+those tools were deferred, which made them 35–79% more expensive. LobsterAI
+therefore pins the tools a session is likely to use (by local usage share:
+browser, `web_fetch`, memory, the Word and Excel editors), the interaction and
+safety tools (`AskUserQuestion` — the delete policy skips confirmation when it
+is missing — `ask_user`, `progress_card`), and defers only the long tail. A
+plugin tool's `catalogMode: "direct-only"` is not enough: plugin tool
+descriptors are cached without that field.
+
+Verify `src/agents/tool-surface-plan.test.ts` and `src/config/schema.test.ts`,
+then rebuild the runtime and check a desktop session's `systemPromptReport`.
+A runtime built without this patch rejects the unknown keys, so rebuild before
+running the desktop app. Remove when upstream offers operator-pinned direct
+tools and a deferral threshold.
+
+## Tool Search calls keep native images and drop the catalog echo
+
+`openclaw-tool-call-result-projection.patch` reshapes the model-visible result
+of the structured `tool_call` control:
+
+- Upstream returns `{ tool, result }` with the full catalog entry, so every call
+  repeats the tool's description and input hint (1.1k–5.2k characters per call
+  measured). The model now sees `{ tool: { id, name }, result }`.
+- Upstream serializes the whole result with `jsonResult`, so an image block
+  became base64 text truncated at 20,000 characters: a deferred browser
+  screenshot cost ~13k uncached tokens and the model still had to call
+  `view_image`. Images now stay native blocks appended after the JSON text, as
+  a direct call returns them; the text keeps a short placeholder per image.
+
+The untrusted-content wrapper for network and MCP text, failure `details`
+(which keep the full entry), and Code Mode's `openclaw.tools.call` shape are
+unchanged.
+
+Verify `src/agents/tool-search.test.ts` and
+`src/agents/tool-search.mcp-error.test.ts`. On Windows,
+`code-mode.bridge.host-denial.test.ts` and
+`attempt.code-mode-reconciliation.test.ts` fail with or without this patch.
+Remove when upstream projects `tool_call` results the same way.
 
 ## ChatGPT OAuth token requests honor the gateway proxy (upstream backport)
 
@@ -1583,3 +1759,58 @@ written. On the next start the gateway log should show `reused clean-close
 integrity proof` (debug) instead of `slow OpenClaw agent database open`, and the
 startup trace should show a much shorter `startup.maintenance`. Remove this patch
 when the pinned upstream reaches v2026.10.10, which ships its own seal.
+
+## Explicit user context windows
+
+`openclaw-user-context-window-selection.patch` allows a declared, explicitly
+selected LobsterAI window to exceed the model's server-controlled default budget.
+The existing scalar `contextWindow` still owns the direct model's default. Managed
+mode IDs `yd-fast` / `yd-ultra` and their legacy `model-preset:balanced` /
+`model-preset:ultimate` equivalents use their current declared profile budget.
+For example, a direct model can default to 400,000 tokens while a mode defaults
+to 500,000 and offers a 1,000,000-token session choice.
+
+The `user-context:` option namespace is a LobsterAI integration contract. A
+selection must exactly match a catalog option on `lobsterai-server`, and its
+resolved budget must be an integer from 400,000 through 1,000,000 tokens. Unknown
+or removed user options fall back to the current declared default. Mode selections
+use their current server profile without becoming a manual window preference.
+Other providers retain their existing behavior. Configured options must only be
+advertised after the model and all of its fallback routes are verified to support
+the corresponding context length.
+
+The same resolver is used by embedded runtime setup, preflight/memory-flush
+budgeting, fork admission, and session-row projection. This avoids a 1M UI selection still
+compacting at 400K, and prevents older 400K telemetry from masking an active 1M
+choice. Output limits and upstream request protocols are unchanged. Clearing the
+selection returns to the current server default; the patch does not persist a
+resolved default as a user preference. Managed session rows use the current
+budget even if older locked/runtime telemetry recorded 1M or a previous default.
+Other providers keep their existing context-token provenance rules.
+
+LobsterAI currently keeps `contextWindowDefault: model-default` and sends the
+mode ID (for example `yd-fast`) for a mode with no manual window preference.
+Resetting a manual mode window must restore that mode ID. If its explicit option
+is withdrawn, the gateway falls back to `model-default` until LobsterAI patches
+the session back to the current mode ID; a 400K direct default and 500K mode
+default therefore remain distinguishable during that interval.
+
+An explicit fork may carry its parent's user selection and copy history up to
+that budget. An automatically parented non-fork session does not inherit a
+`user-context:` choice; it follows its own default unless its create request
+explicitly selected a window. Legacy window options retain their inheritance.
+
+Verify in the pinned source after applying patches:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/model-user-context-window.test.ts src/gateway/session-utils.user-context-window.test.ts src/gateway/server.sessions.user-context-window.test.ts src/agents/embedded-agent-runner/run/setup.test.ts src/auto-reply/reply/memory-flush.test.ts src/agents/model-preset-context-window.test.ts
+```
+
+The new regression cases fail against the previous 400K runtime policy and cover
+400K -> explicit 1M -> default 400K, preset selections, default changes, missing
+options, unrelated providers, session projection, and unchanged output caps. Mode
+regressions additionally cover a fixed 400K direct scalar with a 400K -> 500K
+mode default, resetting explicit 1M to that 500K default, and fork admission.
+Rebuild the bundled runtime before desktop acceptance. Remove this patch when
+the pinned runtime can distinguish the managed default budget from a validated
+explicit session budget across these paths.

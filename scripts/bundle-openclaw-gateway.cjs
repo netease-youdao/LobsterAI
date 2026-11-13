@@ -17,6 +17,11 @@ const fs = require('fs');
 const path = require('path');
 
 const { ensureOpenClawBundleAssets } = require('./openclaw-bundle-assets.cjs');
+const {
+  OpenClawDistPackageScopeSkipReason,
+  OpenClawDistPackageScopeStatus,
+  ensureOpenClawDistPackageScope,
+} = require('./openclaw-dist-package-scope.cjs');
 const { assertOpenClawBundleUsesNativePrivateDirectory } = require('./openclaw-native-private-directory.cjs');
 const { ensureOpenClawWorkerShims } = require('./openclaw-worker-shims.cjs');
 
@@ -65,6 +70,16 @@ function ensureBundleSupportFiles() {
     console.warn(
       `[bundle-openclaw-gateway] Skipped ${result.protectedExisting.length} worker shim(s) because existing files are not LobsterAI shims.`,
     );
+  }
+
+  const scope = ensureOpenClawDistPackageScope(runtimeDir);
+  if (scope.reason === OpenClawDistPackageScopeSkipReason.ProtectedExisting) {
+    console.warn(
+      '[bundle-openclaw-gateway] Left dist/package.json alone because it is not a LobsterAI file.',
+    );
+  } else if (scope.status !== OpenClawDistPackageScopeStatus.Unchanged
+    && scope.status !== OpenClawDistPackageScopeStatus.Skipped) {
+    console.log(`[bundle-openclaw-gateway] dist/package.json ${scope.status}.`);
   }
 }
 

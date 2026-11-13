@@ -140,7 +140,19 @@ rewrite the intro`;
 
 test('restores user body without generated time footer and leaves source history unchanged', () => {
   const footer = buildOpenClawLocalTimeContextPrompt(new Date('2026-10-27T01:00:00Z'));
-  for (const tail of [footer, footer.split('\n').slice(1, -1).join('\n')]) {
+  // Older transcripts carry the v1 footer, with and without its markers.
+  const v1Body = [
+    '## Local Time Context',
+    '- Treat this section as the authoritative current local time for this machine.',
+    '- Current local datetime: 2026-10-27 09:00:00 (timezone: Asia/Shanghai, UTC+08:00)',
+    '- Current local ISO datetime (no timezone suffix): 2026-10-27T09:00:00',
+    '- Current unix timestamp (ms): 1793062800000',
+    '- For relative time requests (e.g. "1 minute later", "tomorrow 9am"), compute from this local time unless the user specifies another timezone.',
+    '- When calling `cron.add` with `schedule.kind: "at"`, send a future ISO 8601 timestamp with an explicit timezone offset.',
+    '- Never send an `at` timestamp that is equal to or earlier than the current local time.',
+  ].join('\n');
+  const v1Marked = `<!-- lobsterai:local-time-context:v1 -->\n${v1Body}\n<!-- /lobsterai:local-time-context:v1 -->`;
+  for (const tail of [footer, v1Marked, v1Body]) {
     const history = [{
       role: 'user', content: `[Current user request]\nremind me tomorrow\n\n${tail}`, timestamp: 100,
     }];

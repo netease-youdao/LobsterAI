@@ -1,5 +1,6 @@
 export const AuthIpcChannel = {
   Callback: 'auth:callback',
+  CancelLogin: 'auth:cancelLogin',
   ClaimCreditsFinalReward: 'auth:claimCreditsFinalReward',
   Exchange: 'auth:exchange',
   GetAccessToken: 'auth:getAccessToken',
@@ -22,10 +23,25 @@ export const AuthIpcChannel = {
 
 export type AuthIpcChannel = typeof AuthIpcChannel[keyof typeof AuthIpcChannel];
 
+export const AuthLoginFailureReason = {
+  Cancelled: 'cancelled',
+  /** The OS rejected the request to open the default browser. */
+  OpenFailed: 'open_failed',
+  /** The OS request to open the browser did not return in time. */
+  OpenTimedOut: 'open_timed_out',
+} as const;
+
+export type AuthLoginFailureReason = typeof AuthLoginFailureReason[keyof typeof AuthLoginFailureReason];
+
 export interface AuthLoginResult {
   success: boolean;
+  /**
+   * The login page URL. On failure it is still set when one could be built,
+   * so the user can open it in a browser by hand.
+   */
   redirectUrl?: string;
   error?: string;
+  reason?: AuthLoginFailureReason;
 }
 
 export const AuthSessionStatus = {

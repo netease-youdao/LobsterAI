@@ -2,6 +2,13 @@ import { OfficeFileError } from '../../../../shared/office/core/officeFile';
 import { SLIDES_EDITOR } from '../../../../shared/office/editors';
 import { SlidesAgentTool } from '../../../../shared/office/slides/slidesAgent';
 import { agentFailure, agentReply, agentSaveOutcome, createOfficeAgentHandler } from '../core/officeAgentRunner';
+import {
+  type EditedShapes,
+  editedSlideList,
+  pickEditedShapes,
+  type SlidesEditResult,
+  type SlidesSummary,
+} from './slidesAgentOperations';
 import { SlidesEditError } from './slidesDeck';
 import { acquireSlidesEditor, type SlidesEditorSession } from './slidesEditorSession';
 
@@ -47,10 +54,22 @@ export const handleSlidesAgentRequest = createOfficeAgentHandler<SlidesEditorSes
       throw error;
     }
     await session.document.flush();
+    // Echo the changed shapes' text so the agent can confirm the edit without
+    // another ppt_read round trip.
+    const edited = editedShapeText(session, result.changed);
     return agentReply({
       ...result,
+      ...(edited.shapes.length ? { shapes: edited.shapes } : {}),
+      ...(edited.truncated ? { shapesTruncated: true } : {}),
       revision: session.document.currentRevision,
       ...agentSaveOutcome(session.document, LOCKING_APPS),
     });
   },
 });
+
+/** Text of the shapes an edit changed, read back from the live presentation. */
+function editedShapeText(session: SlidesEditorSession, changed: SlidesEditResult['changed']): EditedShapes {
+  const slides = editedSlideList(changed);
+  if (!slides) return { shapes: [] };
+  return pickEditedShapes(session.agentRead({ slides }) as Partial<SlidesSummary>, changed);
+}

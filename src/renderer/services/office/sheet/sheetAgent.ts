@@ -5,7 +5,7 @@ import { OfficeFileError } from '../../../../shared/office/core/officeFile';
 import { SHEET_EDITOR } from '../../../../shared/office/editors';
 import { SheetAgentTool } from '../../../../shared/office/sheet/sheetAgent';
 import { agentFailure, agentReply, agentSaveOutcome, createOfficeAgentHandler } from '../core/officeAgentRunner';
-import { applySheetEdits, formulaErrors, readSheet, SheetAgentError } from './sheetAgentOperations';
+import { applySheetEdits, editedCellValues, formulaErrors, readSheet, SheetAgentError } from './sheetAgentOperations';
 import { acquireSheetEditor, type SheetEditorSession } from './sheetEditorSession';
 import { StructureRefusal } from './sheetStructureSupport';
 
@@ -91,6 +91,9 @@ export const handleSheetAgentRequest = createOfficeAgentHandler<SheetEditorSessi
     }
     await session.waitForCalculation();
     const errors = formulaErrors(workbook, result.changed);
+    // Echo the written cells after recalculation so the agent can confirm the
+    // edit without another excel_read round trip.
+    const written = editedCellValues(workbook, result.contentChanged);
     if (result.focus) session.reveal(result.focus.sheet, result.focus.range);
     await session.document.flush();
     const saved = session.document.getSnapshot();
@@ -98,6 +101,8 @@ export const handleSheetAgentRequest = createOfficeAgentHandler<SheetEditorSessi
       revision: session.document.currentRevision,
       applied: result.applied,
       changed: result.changed,
+      ...(Object.keys(written.cells).length ? { cells: written.cells } : {}),
+      ...(written.truncated ? { cellsTruncated: true } : {}),
       ...agentSaveOutcome(session.document, LOCKING_APPS),
       ...(saved.issue ? { saveProblem: `The edits are in the editor but cannot be written to the file (${saved.issue}). Undo them or adjust the change.` } : {}),
       ...(Object.keys(errors).length ? { formulaErrors: errors } : {}),

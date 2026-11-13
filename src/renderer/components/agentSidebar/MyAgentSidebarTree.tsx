@@ -22,7 +22,11 @@ import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
-import { selectCurrentSessionId } from '../../store/selectors/coworkSelectors';
+import {
+  selectCompletedUnreadSessionIds,
+  selectCurrentSessionId,
+  selectPendingPermissionSessionIds,
+} from '../../store/selectors/coworkSelectors';
 import { setDraftCollaborationMode } from '../../store/slices/coworkSlice';
 import { CoworkCollaborationMode } from '../../types/cowork';
 import { getAgentDisplayName, isDefaultAgentId } from '../../utils/agentDisplay';
@@ -36,7 +40,7 @@ import {
   CoworkUiEvent,
 } from '../cowork/constants';
 import UserGroupIcon from '../icons/UserGroupIcon';
-import AgentSidebarActivityView from './AgentSidebarActivityView';
+import AgentSidebarFilteredView from './AgentSidebarFilteredView';
 import AgentTaskRow from './AgentTaskRow';
 import AgentTreeNode from './AgentTreeNode';
 import {
@@ -45,20 +49,22 @@ import {
   createSessionBatchKey,
 } from './batchSelection';
 import MyAgentSidebarHeader from './MyAgentSidebarHeader';
-import type {
-  AgentSidebarActivityItem,
-  AgentSidebarActivityView as AgentSidebarActivityViewModel,
+import {
+  type AgentSidebarActivityItem,
+  isSidebarTaskFilterActive,
+  type SidebarTaskFilter,
 } from './taskFilter';
-import { buildAgentSidebarActivityView } from './taskFilter';
 import type { AgentSidebarAgentNode, AgentSidebarTaskNode } from './types';
-import { useAgentSidebarState } from './useAgentSidebarState';
+import { toAgentSidebarTaskNode, useAgentSidebarState } from './useAgentSidebarState';
+import { useSidebarTaskFilterResults } from './useSidebarTaskFilterResults';
 
 interface MyAgentSidebarTreeProps {
   isBatchMode: boolean;
   batchAgentId: string | null;
   deletedSessionIds: string[];
   selectedKeys: Set<string>;
-  isTaskFilterActive: boolean;
+  taskFilter: SidebarTaskFilter;
+  onClearTaskFilter: () => void;
   onShowCowork: () => void;
   onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onTaskSelected?: (params: {
@@ -83,11 +89,6 @@ interface MyAgentSidebarTreeProps {
   onEnterBatchMode: (sessionId: string, agentId: string) => void;
   onBatchSelectableItemsChange: (items: AgentSidebarBatchItem[]) => void;
 }
-
-const EMPTY_TASK_ACTIVITY_VIEW: AgentSidebarActivityViewModel = {
-  priority: [],
-  recent: [],
-};
 
 const logTaskNavigationIssue = (
   level: 'warn' | 'error',
@@ -147,7 +148,8 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   batchAgentId,
   deletedSessionIds,
   selectedKeys,
-  isTaskFilterActive,
+  taskFilter,
+  onClearTaskFilter,
   onShowCowork,
   onTaskFilterSummaryChange,
   onTaskSelected,
@@ -174,7 +176,6 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   );
   const {
     agentNodes,
-    activityAgentNodes,
     hasUnreadCompletedTasks,
     patchTaskPreview,
     removeTaskPreview,
@@ -187,15 +188,38 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     expandTasks,
     collapseTasks,
     toggleAgentExpanded,
-  } = useAgentSidebarState({ includeActivityTasks: isTaskFilterActive });
-  const activityView = useMemo(
-    () => (
-      isTaskFilterActive
-        ? buildAgentSidebarActivityView(activityAgentNodes)
-        : EMPTY_TASK_ACTIVITY_VIEW
-    ),
-    [activityAgentNodes, isTaskFilterActive],
-  );
+  } = useAgentSidebarState();
+  const isTaskFilterActive = isSidebarTaskFilterActive(taskFilter);
+  const filterResults = useSidebarTaskFilterResults(taskFilter);
+  const completedUnreadSessionIds = useSelector(selectCompletedUnreadSessionIds);
+  const pendingPermissionSessionIds = useSelector(selectPendingPermissionSessionIds);
+  const filteredItems = useMemo<AgentSidebarActivityItem[]>(() => {
+    if (!isTaskFilterActive) return [];
+    const agentById = new Map(agentNodes.map(agent => [agent.id, agent]));
+    const deletedIds = new Set(deletedSessionIds);
+    const completedUnreadSet = new Set(completedUnreadSessionIds);
+    const pendingPermissionSet = new Set(pendingPermissionSessionIds);
+    return filterResults.sessions.flatMap((session) => {
+      if (deletedIds.has(session.id)) return [];
+      const task = toAgentSidebarTaskNode(
+        session,
+        currentSessionId,
+        completedUnreadSet,
+        pendingPermissionSet,
+      );
+      // Tasks of disabled or removed agents have no row in the sidebar either.
+      const agent = agentById.get(task.agentId);
+      return agent ? [{ agent, task }] : [];
+    });
+  }, [
+    agentNodes,
+    completedUnreadSessionIds,
+    currentSessionId,
+    deletedSessionIds,
+    filterResults.sessions,
+    isTaskFilterActive,
+    pendingPermissionSessionIds,
+  ]);
 
   useEffect(() => {
     onTaskFilterSummaryChange(hasUnreadCompletedTasks);
@@ -609,7 +633,14 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   return (
     <div className="pb-3">
       {isTaskFilterActive ? (
-        <AgentSidebarActivityView activity={activityView} renderTask={renderActivityTask} />
+        <AgentSidebarFilteredView
+          filter={taskFilter}
+          items={filteredItems}
+          isLoading={filterResults.isLoading}
+          hasError={filterResults.hasError}
+          onClear={onClearTaskFilter}
+          renderTask={renderActivityTask}
+        />
       ) : (
         <div role="tree" aria-label={i18nService.t('myAgents')}>
           {hasPinnedAgents && (

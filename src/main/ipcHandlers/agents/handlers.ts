@@ -5,12 +5,15 @@ import {
   AgentIpcChannel,
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
+  AgentSource,
 } from '../../../shared/agent/constants';
-import { usageFailureCode, type UsageParams } from '../../../shared/analytics/usage';
+import { parseAgentModelSelection } from '../../../shared/agent/modelSelection';
+import { usageFailureCode, UsageOutcome, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
-import type { CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
+import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
 import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
+import { pickChangedAgentPersona, writeAgentPersonaFiles } from '../../libs/agentPersonaFiles';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
 
 type SyncOpenClawConfig = (options: {
@@ -31,6 +34,7 @@ export interface AgentHandlerDeps {
   refreshImSessionWorkingDirectoriesForAgent: (agentId: string) => number;
   resolveAgentWorkspacePath: (agentId: string) => string;
   resolveDefaultAgentModelRef: () => string;
+  deleteAgentWithRuntime: (agentId: string, commitLocalDeletion: () => boolean) => Promise<boolean>;
   syncOpenClawConfig: SyncOpenClawConfig;
 }
 
@@ -71,6 +75,22 @@ async function cleanupLegacyIdentityBlockForAgent(
   return result;
 }
 
+/**
+ * Config sync only seeds missing persona files, so a new agent writes its own:
+ * a workspace left behind by a deleted agent with the same ID must not supply
+ * the new agent's persona.
+ */
+function writeNewAgentPersonaFiles(
+  agent: Agent,
+  resolveAgentWorkspacePath: AgentHandlerDeps['resolveAgentWorkspacePath'],
+): void {
+  try {
+    writeAgentPersonaFiles(resolveAgentWorkspacePath(agent.id), pickChangedAgentPersona(null, agent));
+  } catch (error) {
+    console.warn(`[Agents] Failed to write persona files for new agent ${agent.id}:`, error);
+  }
+}
+
 /** Lets other windows (e.g. the desktop companion's composer) reload agents after a change. */
 function notifyAgentsChanged(sender: WebContents): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -86,6 +106,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     getCoworkEngineRouter,
     getIMGatewayManager,
     refreshImSessionWorkingDirectoriesForAgent,
+    resolveAgentWorkspacePath,
     resolveDefaultAgentModelRef,
     syncOpenClawConfig,
   } = deps;
@@ -119,6 +140,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     async (event, request: CreateAgentRequest) => {
       try {
         const agent = getAgentManager().createAgent(request, resolveDefaultAgentModelRef());
+        writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);
         syncOpenClawConfig({ reason: 'agent-created' }).catch(err => {
           console.error('[OpenClaw] config sync after agent-created failed:', err);
         });
@@ -198,13 +220,14 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
   ipcMain.handle(AgentIpcChannel.Delete, async (event, id: string) => {
     try {
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
-      const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
+      if (!agentExists) return { success: true, deleted: false, deletedSessionIds: [] };
+      const deletedSessionIds = getCoworkStore().listSessionIdsByAgent(id);
       const router = getCoworkEngineRouter();
       for (const sessionId of deletedSessionIds) {
         router.stopSession(sessionId);
       }
 
-      const result = getAgentManager().deleteAgent(id);
+      const result = await deps.deleteAgentWithRuntime(id, () => getAgentManager().deleteAgent(id));
 
       try {
         const imStore = getIMGatewayManager()?.getIMStore();
@@ -249,6 +272,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       notifyAgentsChanged(event.sender);
       return { success: true, deleted: result, deletedSessionIds: result ? deletedSessionIds : [] };
     } catch (error) {
+      console.error('[Agents] Failed to delete agent:', id, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete agent',
@@ -288,7 +312,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     }
   });
 
-  ipcMain.handle(AgentIpcChannel.AddPreset, async (event, presetId: string) => {
+  ipcMain.handle(AgentIpcChannel.AddPreset, async (event, presetId: string, rawModelSelection?: unknown) => {
     const startedAt = Date.now();
     let failureStage: PresetPreparationStage = PresetPreparationStage.Catalog;
     let prepareMode: PresetPreparationMode = PresetPreparationMode.Install;
@@ -298,29 +322,41 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
           ...(failureCode ? { failureStage, failureCode } : {}) });
       } catch { /* Reporting must not affect expert preparation. */ }
     };
+    const fail = (error: unknown, failureCode: string = usageFailureCode(error)) => {
+      console.error('[Agents] Failed to prepare preset agent:', {
+        presetId, failureStage, prepareMode, durationMs: Date.now() - startedAt,
+      }, error);
+      report(UsageOutcome.Failed, failureCode);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message
+          : typeof error === 'string' ? error : 'Failed to add preset agent',
+      };
+    };
     try {
-      const existing = getAgentManager().listAgents().find(agent => agent.source === 'preset' && agent.presetId === presetId);
+      const existing = getAgentManager().listAgents().find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
       prepareMode = existing ? existing.enabled ? PresetPreparationMode.Reuse : PresetPreparationMode.Reenable : PresetPreparationMode.Install;
-      const agent = await getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
-      if (!agent) { report('failed', 'preset_not_found'); return { success: false, error: 'Preset agent not found' }; }
+      const modelSelection = parseAgentModelSelection(rawModelSelection);
+      const agent = await getAgentManager().addPresetAgent(
+        presetId,
+        modelSelection ? modelSelection.model : resolveDefaultAgentModelRef(),
+        modelSelection?.thinkingLevel,
+      );
+      if (!agent) return fail(new Error(`Preset agent not found: ${presetId}`), 'preset_not_found');
+      // A reused or re-enabled instance keeps the persona its workspace already has.
+      if (prepareMode === PresetPreparationMode.Install) writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);
       // The composer must not become ready before OpenClaw knows this agent.
       // If sync fails, a retry reuses the saved instance instead of duplicating it.
       failureStage = PresetPreparationStage.ConfigSync;
       const syncResult = await syncOpenClawConfig({ reason: 'agent-preset-added' });
       if (!syncResult.success) {
-        report('failed', usageFailureCode(syncResult.error));
-        console.error('[OpenClaw] config sync after agent-preset-added failed:', syncResult.error);
-        return { success: false, error: syncResult.error || 'Failed to sync preset agent' };
+        return fail(new Error(syncResult.error || 'Failed to sync preset agent'));
       }
       notifyAgentsChanged(event.sender);
-      report('succeeded');
+      report(UsageOutcome.Succeeded);
       return { success: true, agent };
     } catch (error) {
-      report('failed', usageFailureCode(error));
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to add preset agent',
-      };
+      return fail(error);
     }
   });
 }

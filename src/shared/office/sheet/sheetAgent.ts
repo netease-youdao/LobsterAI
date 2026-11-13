@@ -85,6 +85,7 @@ export const SHEET_AGENT_TOOL_DEFINITIONS = [
       'add_sheet {name, position?}; rename_sheet {sheet, name}; delete_sheet {sheet}; move_sheet {sheet, position} with position 1 for the first tab;',
       'hide_sheet {sheet}; show_sheet {sheet}; freeze {sheet?, rows?, columns?} keeps that many top rows / left columns in view (0 unfreezes); set_tab_color {sheet, color: #RRGGBB or null}.',
       'Edits run in order, so addresses in later edits refer to the workbook after the earlier edits.',
+      'The reply lists the written cells with their recalculated values, read back from the open workbook as excel_read reports them, and whether the file saved. excel_read reads that same open workbook, so the reply is already the check: when the user asks you to verify the values, report from it instead of calling excel_read again.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -143,4 +144,6 @@ export const SHEET_AGENT_PROMPT = [
   `- When the user wants to change an existing \`.xlsx\` and \`${SheetAgentTool.Read}\` / \`${SheetAgentTool.Edit}\` are available, use them instead of rewriting the file with scripts: edits appear live in LobsterAI's editor, keep charts, styles and other content, recalculate formulas, and can be undone as one step.`,
   '- They also insert and delete rows and columns, add, rename, move, hide and delete sheets, and freeze panes; formulas, charts, names, conditional formats, data validation, links, notes and tables follow the moved cells like in Excel.',
   '- Use file-based tools only for what those tools cannot do (building charts or pivot tables), when the workbook is reported as read-only or an edit is refused, or to create a new workbook.',
+  `- After a successful \`${SheetAgentTool.Edit}\`, answer from its reply (the written cells, recalculated) and your earlier read, also when the user asks you to verify or check the values: the reply comes from the same open workbook a read would return, so another read verifies nothing and costs a full extra model request.`,
+  '- The editor tools open the file and report whether it saved; do not check the file with shell commands before or after editing.',
 ].join('\n');

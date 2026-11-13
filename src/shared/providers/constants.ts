@@ -468,7 +468,7 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: false, supportsThinking: true, contextWindow: 1_000_000 },
+      { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
       { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, supportsThinking: true, contextWindow: 1_000_000 },
     ],
     legacyModels: [
@@ -841,11 +841,19 @@ class ProviderRegistryImpl {
     return this.modelMaxTokensIndex.get(modelId);
   }
 
+  /**
+   * A user override wins outright. Otherwise the provider preset beats the
+   * configured value, which may be a stale snapshot of an older preset.
+   */
   resolveModelSupportsImage(
     providerName: string,
     modelId: string,
     configuredSupportsImage?: boolean,
+    overrideSupportsImage?: boolean,
   ): boolean {
+    if (typeof overrideSupportsImage === 'boolean') {
+      return overrideSupportsImage;
+    }
     const providerModelSupportsImage = this.getProviderModelSupportsImage(providerName, modelId);
     if (providerModelSupportsImage !== undefined) {
       return providerModelSupportsImage;
@@ -864,7 +872,11 @@ class ProviderRegistryImpl {
     providerName: string,
     modelId: string,
     configuredSupportsThinking?: boolean,
+    overrideSupportsThinking?: boolean,
   ): boolean {
+    if (typeof overrideSupportsThinking === 'boolean') {
+      return overrideSupportsThinking;
+    }
     const providerModelSupportsThinking = this.getProviderModelSupportsThinking(providerName, modelId);
     if (providerModelSupportsThinking !== undefined) {
       return providerModelSupportsThinking;

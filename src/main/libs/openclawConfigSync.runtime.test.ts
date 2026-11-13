@@ -116,6 +116,13 @@ const mockRuntimeState = vi.hoisted(() => ({
   },
 }));
 
+const fakeIpNetworkMock = vi.hoisted(() => ({ active: false }));
+
+// The real check reads this machine's network interfaces.
+vi.mock('./fakeIpNetwork', () => ({
+  isFakeIpNetworkActive: () => fakeIpNetworkMock.active,
+}));
+
 vi.mock('./claudeSettings', () => ({
   getAllServerModelMetadata: () => mockRuntimeState.serverModels,
   listProviderSourceEntries: () => mockRuntimeState.providerSourceEntries,
@@ -2012,6 +2019,57 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(fs.existsSync(path.join(writerWorkspace, 'USER.md'))).toBe(false);
   });
 
+  test('keeps existing persona files and leaves the persona out of a non-main AGENTS.md', async () => {
+    const writerWorkspace = path.join(stateDir, 'workspace-writer');
+    fs.mkdirSync(writerWorkspace, { recursive: true });
+    fs.writeFileSync(path.join(writerWorkspace, 'SOUL.md'), 'soul edited by the agent\n', 'utf8');
+    fs.writeFileSync(path.join(writerWorkspace, 'IDENTITY.md'), '', 'utf8');
+
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: 'Default app style.',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getAgents: () => [
+        {
+          id: 'writer',
+          name: 'Writer',
+          description: '',
+          systemPrompt: 'stored soul',
+          identity: 'stored identity',
+          model: '',
+          workingDirectory: '',
+          icon: '',
+          skillIds: [],
+          subagentAllowAgentIds: [],
+          enabled: true,
+          pinned: false,
+          isDefault: false,
+          source: 'custom',
+          presetId: '',
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ],
+    });
+
+    expect(sync.sync('agent-updated').ok).toBe(true);
+
+    expect(fs.readFileSync(path.join(writerWorkspace, 'SOUL.md'), 'utf8')).toBe('soul edited by the agent\n');
+    expect(fs.readFileSync(path.join(writerWorkspace, 'IDENTITY.md'), 'utf8')).toBe('');
+    const agentsMd = fs.readFileSync(path.join(writerWorkspace, 'AGENTS.md'), 'utf8');
+    expect(agentsMd).not.toContain('stored soul');
+    expect(agentsMd).toContain('## System Prompt\n\nDefault app style.');
+  });
+
   test('merges all server models into existing lobsterai provider and updates image input', async () => {
     mockRuntimeState.proxyPort = 56646;
     mockRuntimeState.serverModels = [
@@ -3154,18 +3212,77 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(sync.sync('provider-added-again').changed).toBe(false);
   });
 
-  test('declares and allowlists the bundled xai plugin so its compat hooks load', async () => {
+  const xaiProvider = (authType?: 'oauth') => ({
+    providerName: ProviderName.Xai,
+    baseURL: 'https://api.x.ai/v1',
+    apiKey: authType ? '' : 'xai-key',
+    apiType: 'openai' as const,
+    ...(authType ? { authType } : {}),
+    codingPlanEnabled: false,
+    models: [{ id: 'grok-4.3', name: 'Grok 4.3' }],
+  });
+
+  test.each([
+    ['an API key', xaiProvider()],
+    ['OAuth', xaiProvider('oauth')],
+  ])('declares and allowlists the bundled xai plugin for an xAI provider using %s', async (_label, provider) => {
+    mockRuntimeState.enabledProviders = [provider];
     const sync = await createSync();
 
     const result = sync.sync('xai-plugin-declared');
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.models.providers[OpenClawProviderId.Xai]).toBeDefined();
     expect(config.plugins.entries.xai).toEqual({ enabled: true });
     // plugins.allow is a strict allowlist once non-empty — without this entry
     // the xai plugin never loads and grok models lose their reasoningEffort
     // compat (xAI rejects the parameter for every model except grok-4.3).
     expect(config.plugins.allow).toContain('xai');
+  });
+
+  test('keeps the bundled xai plugin off while no xAI provider is configured', async () => {
+    // What every sync wrote before the plugin became conditional.
+    fs.writeFileSync(configPath, JSON.stringify({
+      plugins: { entries: { xai: { enabled: true } }, allow: ['xai'] },
+    }));
+    const sync = await createSync();
+
+    expect(sync.sync('xai-plugin-off').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: false });
+    expect(config.plugins.allow).not.toContain('xai');
+    expect(sync.sync('xai-plugin-off-again').changed).toBe(false);
+  });
+
+  test('turns the bundled xai plugin on and off with the xAI provider', async () => {
+    const sync = await createSync();
+    expect(sync.sync('before-xai').ok).toBe(true);
+
+    mockRuntimeState.enabledProviders = [xaiProvider()];
+    expect(sync.sync('xai-added').ok).toBe(true);
+    let config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: true });
+    expect(config.plugins.allow).toContain('xai');
+
+    mockRuntimeState.enabledProviders = [];
+    expect(sync.sync('xai-removed').ok).toBe(true);
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: false });
+    expect(config.plugins.allow).not.toContain('xai');
+  });
+
+  test('leaves the xai plugin undeclared when the runtime does not bundle it', async () => {
+    mockRuntimeState.runtimeBundledExtensions = new Set();
+    mockRuntimeState.enabledProviders = [xaiProvider()];
+    const sync = await createSync();
+
+    expect(sync.sync('xai-plugin-missing').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toBeUndefined();
+    expect(config.plugins.allow).not.toContain('xai');
   });
 
   test('keeps memory-core selected and explicitly disables dreaming when dreaming is off', async () => {
@@ -3669,6 +3786,33 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(customSelection.providerId).toBe('custom_0');
     expect(customSelection.primaryModel).toBe('custom_0/qwen3.6-plus');
     expect(customSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
+  });
+
+  test('lets model editor overrides beat the provider preset when writing OpenClaw input', async () => {
+    const { ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+    const baseOptions = {
+      apiKey: 'sk-test',
+      baseURL: 'https://api.xiaomimimo.com/v1/chat/completions',
+      modelId: 'mimo-v2.5-pro',
+      apiType: 'openai' as const,
+      providerName: ProviderName.Xiaomi,
+      supportsImage: true,
+      supportsThinking: true,
+      modelName: 'MiMo V2.5 Pro',
+    };
+
+    // Without an override the text-only preset still wins over a stale snapshot.
+    const presetSelection = buildProviderSelection(baseOptions);
+    expect(presetSelection.providerConfig.models[0].input).toEqual(['text']);
+    expect(presetSelection.providerConfig.models[0].reasoning).toBe(true);
+
+    const overriddenSelection = buildProviderSelection({
+      ...baseOptions,
+      capabilityOverrides: { image: true, thinking: false },
+    });
+    expect(overriddenSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
+    expect(overriddenSelection.providerConfig.models[0].reasoning).toBe(false);
   });
 
   test('marks DeepSeek, Xiaomi, and known GLM models as reasoning-capable', async () => {
@@ -4448,6 +4592,59 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
   });
 
+  test('defers only the long tail behind Tool Search and pins interaction and frequent-scenario tools', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('tool-search');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.tools.toolSearch).toEqual({
+      enabled: true,
+      mode: 'directory',
+      direct: [
+        'AskUserQuestion',
+        'browser',
+        'web_fetch',
+        'memory_search',
+        'memory_get',
+        'automations',
+        // Office editor and computer-use MCP servers, by prefix.
+        'lobster-word__*',
+        'lobster-excel__*',
+        'lobster-ppt__*',
+        'computer-use__*',
+      ],
+      minDeferredChars: 20000,
+    });
+    // Room for the static policies moved out of uncached per-session messages.
+    expect(config.agents.defaults.bootstrapMaxChars).toBe(32000);
+    // Control UI surfaces LobsterAI never renders, and the native question tool
+    // that duplicates AskUserQuestion.
+    expect(config.tools.deny).toEqual(expect.arrayContaining([
+      'dashboard',
+      'portal',
+      'terminal',
+      'github_identity_status',
+      'ask_user',
+    ]));
+    // A user-enabled skill review still needs the workshop tool.
+    expect(config.tools.deny).not.toContain('skill_workshop');
+    // The progress card has no desktop surface.
+    expect(config.tools.updatePlan).toBe(false);
+
+    const agentsMd = fs.readFileSync(path.join(stateDir, 'workspace-main', 'AGENTS.md'), 'utf8');
+    expect(agentsMd).toContain('## Deferred Tools');
+    expect(agentsMd).toContain('a tool reachable through `tool_search` counts as available');
+    // The deferred-tools rule comes before the sections that say "if it is available".
+    expect(agentsMd.indexOf('## Deferred Tools')).toBeLessThan(agentsMd.indexOf('## Command Execution & User Interaction Policy'));
+    // Static policies now cached in AGENTS.md instead of each session's first message or turn.
+    expect(agentsMd).toContain('## Media Generation Policy');
+    expect(agentsMd).toContain('NOT user authorization to generate or spend credits');
+    expect(agentsMd).toContain('## Local Time');
+    expect(agentsMd).toContain('"Local time:" line');
+  });
+
   test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
     const { OpenClawConfigSync } = await import('./openclawConfigSync');
     const { OFFICE_EDITORS } = await import('../../shared/office/editors');
@@ -4496,6 +4693,21 @@ describe('OpenClawConfigSync runtime config output', () => {
     const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(withoutBridge.mcp.servers[serverNames[0]]).toBeUndefined();
     for (const server of available) expect(withoutBridge.mcp.servers[server]).toEqual(launch(server));
+  });
+
+  test('allows the fake-IP range for web fetch only on a fake-IP network', async () => {
+    const sync = await createSync();
+    try {
+      expect(sync.sync('web-fetch-direct-network').ok).toBe(true);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).tools.web.fetch.ssrfPolicy).toBeUndefined();
+
+      fakeIpNetworkMock.active = true;
+      expect(sync.sync('web-fetch-fake-ip-network').ok).toBe(true);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).tools.web.fetch.ssrfPolicy)
+        .toEqual({ allowRfc2544BenchmarkRange: true });
+    } finally {
+      fakeIpNetworkMock.active = false;
+    }
   });
 
   test.each([
