@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-rice-pressure-cooker-advisor",
+  "version": "1.0.1",
+  "description": "Pick rice and pressure cookers: liters by household, inner pot material and coating, IH or plate, safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-rice-pressure-cooker-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-rice-pressure-cooker"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-rice-pressure-cooker-advisor",
+  "displayName": {
+    "zh": "电饭煲与电压力锅选购顾问",
+    "en": "Rice Cooker and Electric Pressure Cooker Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电饭煲与电压力锅选购顾问",
+    "en": "11.11 Rice Cooker and Electric Pressure Cooker Advisor"
+  },
+  "displayDescription": {
+    "zh": "电饭煲电压力锅怎么挑：按人数定升数、看内胆材质与涂层寿命、选 IH 或底盘加热、核压力锅安全。",
+    "en": "Pick rice and pressure cookers: liters by household, inner pot material and coating, IH or plate, safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两口人电饭煲买 3 升还是 4 升",
+    "en": "Should two people buy a 3 or 4 liter rice cooker"
+  },
+  "plugin": "lynxce-rice-pressure-cooker-advisor",
+  "tags": [
+    {
+      "zh": "升数人数",
+      "en": "Liters by Household"
+    },
+    {
+      "zh": "内胆涂层",
+      "en": "Inner Pot Coating"
+    },
+    {
+      "zh": "压力锅安全",
+      "en": "Pressure Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两口人电饭煲买 3 升还是 4 升",
+      "en": "Should two people buy a 3 or 4 liter rice cooker"
+    },
+    {
+      "zh": "IH 电饭煲比底盘加热值多花几百吗",
+      "en": "Is IH worth a few hundred more than plate heating"
+    },
+    {
+      "zh": "电压力锅要看哪些安全保护",
+      "en": "Which safety protections should a pressure cooker have"
+    }
+  ],
+  "keywords": [
+    "升数人数",
+    "内胆涂层",
+    "压力锅安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

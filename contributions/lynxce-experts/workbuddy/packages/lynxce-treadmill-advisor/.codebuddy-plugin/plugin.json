@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-treadmill-advisor",
+  "version": "1.0.1",
+  "description": "Pick treadmills: belt size and continuous power, weight limit and floor space, noise, folding and home service.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-treadmill-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-treadmill"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-treadmill-advisor",
+  "displayName": {
+    "zh": "跑步机与走步机选购核算顾问",
+    "en": "Treadmill and Walking Pad Advisor"
+  },
+  "profession": {
+    "zh": "11.11 跑步机与走步机选购核算顾问",
+    "en": "11.11 Treadmill and Walking Pad Advisor"
+  },
+  "displayDescription": {
+    "zh": "跑步机怎么挑：看跑带宽长与持续功率、核承重与占地、算楼层噪音对策、问清折叠与上门售后。",
+    "en": "Pick treadmills: belt size and continuous power, weight limit and floor space, noise, folding and home service."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "跑 10 公里每小时要多宽多长的跑带",
+    "en": "What belt size do I need to run at 10 km per hour"
+  },
+  "plugin": "lynxce-treadmill-advisor",
+  "tags": [
+    {
+      "zh": "持续功率",
+      "en": "Continuous Power"
+    },
+    {
+      "zh": "跑带尺寸",
+      "en": "Belt Size"
+    },
+    {
+      "zh": "楼层噪音",
+      "en": "Floor Noise"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "跑 10 公里每小时要多宽多长的跑带",
+      "en": "What belt size do I need to run at 10 km per hour"
+    },
+    {
+      "zh": "峰值 4 匹和持续 2 匹哪个看得准",
+      "en": "Peak 4 HP or continuous 2 HP, which number matters"
+    },
+    {
+      "zh": "住楼房用跑步机怎么减少楼下噪音",
+      "en": "How to cut treadmill noise for neighbors downstairs"
+    }
+  ],
+  "keywords": [
+    "持续功率",
+    "跑带尺寸",
+    "楼层噪音",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

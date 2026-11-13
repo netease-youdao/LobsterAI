@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-power-strip-advisor",
+  "version": "1.0.0",
+  "description": "Pick power strips: total load, rated current, cord size, overload guard and CCC mark.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-power-strip-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-power-strip"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-power-strip-advisor",
+  "displayName": {
+    "zh": "排插插线板选购顾问",
+    "en": "Power Strip Advisor"
+  },
+  "profession": {
+    "zh": "11.11 排插插线板选购顾问",
+    "en": "11.11 Power Strip and Extension Socket Advisor"
+  },
+  "displayDescription": {
+    "zh": "排插怎么挑：按同时用电器功率算总负载、核额定电流与线芯截面、看过载保护与保护门、认准3C标志。",
+    "en": "Pick power strips: total load, rated current, cord size, overload guard and CCC mark."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "电脑加显示器用 10A 排插够不够",
+    "en": "Is a 10A strip enough for a PC and monitors"
+  },
+  "plugin": "lynxce-power-strip-advisor",
+  "tags": [
+    {
+      "zh": "负载核算",
+      "en": "Load Calculation"
+    },
+    {
+      "zh": "线芯电流",
+      "en": "Cord and Current"
+    },
+    {
+      "zh": "3C 认证",
+      "en": "CCC Mark"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "电脑加显示器用 10A 排插够不够",
+      "en": "Is a 10A strip enough for a PC and monitors"
+    },
+    {
+      "zh": "电暖器能不能插在排插上用",
+      "en": "Can a space heater run on a power strip"
+    },
+    {
+      "zh": "16A 排插能插普通墙插吗",
+      "en": "Does a 16A strip fit a regular wall socket"
+    }
+  ],
+  "keywords": [
+    "负载核算",
+    "线芯电流",
+    "3C 认证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

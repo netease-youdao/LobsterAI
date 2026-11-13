@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-artdecor-advisor",
+  "version": "1.0.4",
+  "description": "Size wall art right: hanging height, spacing, materials and safe mounting.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-artdecor-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-artdecor-list"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-artdecor-advisor",
+  "displayName": {
+    "zh": "装饰画与家居艺术品选购顾问",
+    "en": "Wall Art and Home Decor Advisor"
+  },
+  "profession": {
+    "zh": "装饰画与家居艺术品选购顾问",
+    "en": "Wall Art and Home Decor Advisor"
+  },
+  "displayDescription": {
+    "zh": "装饰画怎么选尺寸：应该挂多高、左右留多宽、材质怎么挑、不同墙体怎么固定才更安全。",
+    "en": "Size wall art right: hanging height, spacing, materials and safe mounting."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这面墙该挂多大的画",
+    "en": "What size art fits this wall"
+  },
+  "plugin": "lynxce-artdecor-advisor",
+  "tags": [
+    {
+      "zh": "装饰画",
+      "en": "Wall Art"
+    },
+    {
+      "zh": "尺寸规则",
+      "en": "Sizing"
+    },
+    {
+      "zh": "安装固定",
+      "en": "Mounting"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这面墙该挂多大的画",
+      "en": "What size art fits this wall"
+    },
+    {
+      "zh": "挂多高才合适",
+      "en": "How high should I hang it"
+    },
+    {
+      "zh": "石膏板墙怎么固定",
+      "en": "How do I mount on drywall"
+    }
+  ],
+  "keywords": [
+    "装饰画",
+    "尺寸规则",
+    "安装固定",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-off-season-advisor",
+  "version": "1.0.2",
+  "description": "Judge off-season buys like ACs, fans, swimwear, sunscreen: clearance discount, sizing or style risk, storage cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-off-season-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-off-season"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-off-season-advisor",
+  "displayName": {
+    "zh": "反季商品错峰购买顾问",
+    "en": "Off-Season Purchase Timing Advisor"
+  },
+  "profession": {
+    "zh": "11.11 反季商品错峰购买顾问",
+    "en": "11.11 Off-Season Purchase Timing Advisor"
+  },
+  "displayDescription": {
+    "zh": "反季买划不划算：空调风扇泳装防晒等清仓折扣判断、尺码款式过时风险、存放成本核算。",
+    "en": "Judge off-season buys like ACs, fans, swimwear, sunscreen: clearance discount, sizing or style risk, storage cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "冬天买夏天用的东西划算吗",
+    "en": "Is it worth buying summer items in winter"
+  },
+  "plugin": "lynxce-off-season-advisor",
+  "tags": [
+    {
+      "zh": "折扣率核算",
+      "en": "Discount Rate"
+    },
+    {
+      "zh": "过时风险",
+      "en": "Outdated Risk"
+    },
+    {
+      "zh": "存放成本",
+      "en": "Storage Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "冬天买夏天用的东西划算吗",
+      "en": "Is it worth buying summer items in winter"
+    },
+    {
+      "zh": "这个反季价格算便宜吗",
+      "en": "Is this off-season price actually a good deal"
+    },
+    {
+      "zh": "反季囤的东西会不会过时",
+      "en": "Will off-season stock-up items become outdated"
+    }
+  ],
+  "keywords": [
+    "折扣率核算",
+    "过时风险",
+    "存放成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

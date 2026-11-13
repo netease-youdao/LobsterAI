@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-lipstick-gift-advisor",
+  "version": "1.0.1",
+  "description": "Pick lipstick and gift boxes: shade swatch check, per-item box price, gift wrap and invoice, patch test tips.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-lipstick-gift-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-lipstick-gift"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-lipstick-gift-advisor",
+  "displayName": {
+    "zh": "口红色号与彩妆礼盒选购顾问",
+    "en": "Lipstick Shade and Makeup Gift Box Advisor"
+  },
+  "profession": {
+    "zh": "11.11 口红色号与彩妆礼盒选购顾问",
+    "en": "11.11 Lipstick Shade and Makeup Gift Box Advisor"
+  },
+  "displayDescription": {
+    "zh": "口红礼盒怎么挑：按色号对照试色与冷暖调、礼盒拆单价、核送礼包装与发票、提示过敏测试。",
+    "en": "Pick lipstick and gift boxes: shade swatch check, per-item box price, gift wrap and invoice, patch test tips."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "冷白皮唇色深适合哪类口红色号",
+    "en": "Which lipstick shades suit cool fair skin with dark lips"
+  },
+  "plugin": "lynxce-lipstick-gift-advisor",
+  "tags": [
+    {
+      "zh": "色号对照",
+      "en": "Shade Matching"
+    },
+    {
+      "zh": "礼盒拆单价",
+      "en": "Gift Box Breakdown"
+    },
+    {
+      "zh": "送礼包装发票",
+      "en": "Gift Wrap and Invoice"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "冷白皮唇色深适合哪类口红色号",
+      "en": "Which lipstick shades suit cool fair skin with dark lips"
+    },
+    {
+      "zh": "这个彩妆礼盒拆开算比单买便宜多少",
+      "en": "How much cheaper is this makeup gift box than buying items alone"
+    },
+    {
+      "zh": "送礼的口红礼盒要核对哪些包装与发票",
+      "en": "What wrapping and invoice details should I check for a gift box"
+    }
+  ],
+  "keywords": [
+    "色号对照",
+    "礼盒拆单价",
+    "送礼包装发票",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

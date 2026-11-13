@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-car-mount-advisor",
+  "version": "1.0.1",
+  "description": "Pick a car mount and charger: vent, suction or magnetic, fast charge protocol and wattage, 12V ports, safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-car-mount-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-car-mount"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-car-mount-advisor",
+  "displayName": {
+    "zh": "车载手机支架与车充选购顾问",
+    "en": "Car Phone Mount and Charger Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 车载手机支架与车充选购顾问",
+    "en": "11.11 Car Phone Mount and Charger Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "车载支架车充怎么选：出风口吸盘磁吸、快充协议与功率分配、点烟器口数、行车安全与到手价。",
+    "en": "Pick a car mount and charger: vent, suction or magnetic, fast charge protocol and wattage, 12V ports, safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "圆形出风口用什么手机支架",
+    "en": "Which phone mount works with round air vents"
+  },
+  "plugin": "lynxce-car-mount-advisor",
+  "tags": [
+    {
+      "zh": "固定方式",
+      "en": "Mount Type"
+    },
+    {
+      "zh": "快充匹配",
+      "en": "Fast Charge Match"
+    },
+    {
+      "zh": "行车安全",
+      "en": "Driving Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "圆形出风口用什么手机支架",
+      "en": "Which phone mount works with round air vents"
+    },
+    {
+      "zh": "双口车充同时充能有多少瓦",
+      "en": "How many watts does a dual port car charger give at once"
+    },
+    {
+      "zh": "支架装在哪里不影响开车",
+      "en": "Where should I place the mount so it does not affect driving"
+    }
+  ],
+  "keywords": [
+    "固定方式",
+    "快充匹配",
+    "行车安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

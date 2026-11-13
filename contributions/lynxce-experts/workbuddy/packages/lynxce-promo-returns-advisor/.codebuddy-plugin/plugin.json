@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-returns-advisor",
+  "version": "1.0.2",
+  "description": "Return promo buys cleanly: check deadlines, work out discount clawback, confirm shipping insurance terms, keep evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-returns-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-returns"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-returns-advisor",
+  "displayName": {
+    "zh": "大促退货退款与运费险理赔顾问",
+    "en": "Promo Returns and Shipping Insurance Claims Advisor"
+  },
+  "profession": {
+    "zh": "大促退货退款与运费险理赔顾问",
+    "en": "Promo Returns and Shipping Insurance Claims Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促买的东西怎么退：核对退货时限、算清优惠回收影响、确认运费险赔付条件、留好凭证不吃亏。",
+    "en": "Return promo buys cleanly: check deadlines, work out discount clawback, confirm shipping insurance terms, keep evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "大促买的这几件退哪件不亏",
+    "en": "Which promo items can I return without losing out"
+  },
+  "plugin": "lynxce-promo-returns-advisor",
+  "tags": [
+    {
+      "zh": "退货时限",
+      "en": "Return Deadlines"
+    },
+    {
+      "zh": "优惠回收",
+      "en": "Discount Clawback"
+    },
+    {
+      "zh": "运费险理赔",
+      "en": "Shipping Insurance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "大促买的这几件退哪件不亏",
+      "en": "Which promo items can I return without losing out"
+    },
+    {
+      "zh": "退一件满减会不会被收回",
+      "en": "Will returning one item cancel the discount"
+    },
+    {
+      "zh": "运费险在什么情况下能赔",
+      "en": "When does shipping insurance pay out"
+    }
+  ],
+  "keywords": [
+    "退货时限",
+    "优惠回收",
+    "运费险理赔",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

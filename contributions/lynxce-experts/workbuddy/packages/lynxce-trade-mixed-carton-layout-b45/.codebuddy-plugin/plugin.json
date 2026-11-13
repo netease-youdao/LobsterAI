@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-trade-mixed-carton-layout-b45",
+  "version": "1.0.1",
+  "description": "Create a ready-to-review plan and transparent calculations from supplied inputs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-trade-mixed-carton-layout-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trade-mixed-carton-layout-balance-b45",
+    "./skills/lynxce-trade-mixed-carton-layout-capacity-b45",
+    "./skills/lynxce-trade-mixed-carton-layout-document-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-trade-mixed-carton-layout-b45",
+  "displayName": {
+    "zh": "装箱顾问",
+    "en": "Mixed Carton Packing List Planner"
+  },
+  "profession": {
+    "zh": "混箱装箱单",
+    "en": "Mixed Carton Packing List Planner"
+  },
+  "displayDescription": {
+    "zh": "根据订单数量、箱容和混装要求编排逐箱清单，计算型号数量与净毛重汇总，并提供改箱后的装箱单。",
+    "en": "Create a ready-to-review plan and transparent calculations from supplied inputs."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "A款23件B款17件，按每箱10件且内装不超3公斤编排逐箱清单。",
+    "en": "Mixed Carton Packing List Planner"
+  },
+  "plugin": "lynxce-trade-mixed-carton-layout-b45",
+  "tags": [
+    {
+      "zh": "混箱装箱",
+      "en": "混箱装箱"
+    },
+    {
+      "zh": "逐箱清单",
+      "en": "逐箱清单"
+    },
+    {
+      "zh": "净毛重",
+      "en": "净毛重"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "A款23件B款17件，按每箱10件且内装不超3公斤编排逐箱清单。",
+      "en": "Mixed Carton Packing List Planner"
+    },
+    {
+      "zh": "把客户要求的每箱同色优先加入现有混箱方案，重排并汇总重量。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "请把逐箱清单转成供跟单复核的装箱单草稿，不补海关字段。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "混箱装箱",
+    "逐箱清单",
+    "净毛重"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-construction-advisor",
+  "version": "1.0.1",
+  "description": "Organizes supplied construction documents, briefing records and quality evidence; no safety decisions or work parameters.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-construction-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-construction-plan",
+    "./skills/lynxce-safety-briefing",
+    "./skills/lynxce-construction-records"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-construction-advisor",
+  "displayName": {
+    "zh": "工程施工顾问",
+    "en": "Construction Site Advisor"
+  },
+  "profession": {
+    "zh": "施工方案与现场安全顾问",
+    "en": "Method Statement & Site Safety Advisor"
+  },
+  "displayDescription": {
+    "zh": "仅依据用户提供的工程资料整理施工方案目录交底记录和质量证据列出版本缺口供专业人员复核不作安全判定",
+    "en": "Organizes supplied construction documents, briefing records and quality evidence; no safety decisions or work parameters."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "整理施工方案资料目录与版本差异",
+    "en": "Organize supplied documents and version differences"
+  },
+  "plugin": "lynxce-construction-advisor",
+  "tags": [
+    {
+      "zh": "施工方案",
+      "en": "Method Statement"
+    },
+    {
+      "zh": "安全交底",
+      "en": "Safety Briefing"
+    },
+    {
+      "zh": "质量控制",
+      "en": "QC Points"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "整理施工方案资料目录与版本差异",
+      "en": "Organize supplied documents and version differences"
+    },
+    {
+      "zh": "核对交底资料与签收编号差异",
+      "en": "Reconcile briefing records and sign-off identifiers"
+    },
+    {
+      "zh": "整理质量问题的反馈与复核材料索引",
+      "en": "Index quality issue feedback and review records"
+    }
+  ],
+  "keywords": [
+    "施工方案",
+    "安全交底",
+    "质量控制",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

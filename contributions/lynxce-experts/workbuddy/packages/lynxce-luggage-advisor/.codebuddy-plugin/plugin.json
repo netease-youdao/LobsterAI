@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-luggage-advisor",
+  "version": "1.0.4",
+  "description": "Rules before style: cabin size limits, shell materials, wheel quality and warranty terms.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-luggage-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-luggage-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-luggage-advisor",
+  "displayName": {
+    "zh": "箱包与旅行装备选购顾问",
+    "en": "Luggage and Travel Gear Advisor"
+  },
+  "profession": {
+    "zh": "箱包与旅行装备选购顾问",
+    "en": "Luggage and Travel Gear Advisor"
+  },
+  "displayDescription": {
+    "zh": "箱包先对规则再看款式：登机三边尺寸怎么核、硬箱软箱怎么选、轮子与拉杆怎么验好坏。",
+    "en": "Rules before style: cabin size limits, shell materials, wheel quality and warranty terms."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个箱子能带上飞机吗",
+    "en": "Will this bag fit as carry-on"
+  },
+  "plugin": "lynxce-luggage-advisor",
+  "tags": [
+    {
+      "zh": "行李箱",
+      "en": "Luggage"
+    },
+    {
+      "zh": "登机限额",
+      "en": "Cabin Limits"
+    },
+    {
+      "zh": "材质结构",
+      "en": "Build"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个箱子能带上飞机吗",
+      "en": "Will this bag fit as carry-on"
+    },
+    {
+      "zh": "硬箱和软箱怎么选",
+      "en": "Hard shell or soft shell"
+    },
+    {
+      "zh": "帮我比一下这两款",
+      "en": "Compare these two suitcases"
+    }
+  ],
+  "keywords": [
+    "行李箱",
+    "登机限额",
+    "材质结构",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

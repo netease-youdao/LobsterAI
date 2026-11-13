@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-landscape-video-advisor",
+  "version": "1.0.1",
+  "description": "Adapt short clips into a coherent landscape episode with a source map, chapters, pickups and framing notes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-landscape-video-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-landscape-adapt"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-landscape-video-advisor",
+  "displayName": {
+    "zh": "中视频改编顾问",
+    "en": "Mid-Length Video Advisor"
+  },
+  "profession": {
+    "zh": "横屏中视频内容改编顾问｜灵策智算",
+    "en": "Landscape Mid-Length Video Adaptation Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "把已有短片重组为主题明确的横屏内容，交付素材取舍、章节脚本、补拍清单与构图方案，逐段核对时长逻辑",
+    "en": "Adapt short clips into a coherent landscape episode with a source map, chapters, pickups and framing notes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把这些短片整理成四分钟横屏大纲并算清补拍时长",
+    "en": "Map these shorts into a four-minute landscape outline and calculate pickups"
+  },
+  "plugin": "lynxce-landscape-video-advisor",
+  "tags": [
+    {
+      "zh": "素材重组",
+      "en": "Source mapping"
+    },
+    {
+      "zh": "章节脚本",
+      "en": "Chapter script"
+    },
+    {
+      "zh": "补拍衔接",
+      "en": "Pickup planning"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这些短片整理成四分钟横屏大纲并算清补拍时长",
+      "en": "Map these shorts into a four-minute landscape outline and calculate pickups"
+    },
+    {
+      "zh": "检查现有章节逻辑断点，写可直接录制的过渡口播",
+      "en": "Find chapter gaps and write recordable bridge narration"
+    },
+    {
+      "zh": "为竖屏素材做横屏构图方案、标题与章节时间表",
+      "en": "Plan landscape framing, titles and chapter timestamps for vertical clips"
+    }
+  ],
+  "keywords": [
+    "素材重组",
+    "章节脚本",
+    "补拍衔接"
+  ],
+  "needEncrypt": true
+}

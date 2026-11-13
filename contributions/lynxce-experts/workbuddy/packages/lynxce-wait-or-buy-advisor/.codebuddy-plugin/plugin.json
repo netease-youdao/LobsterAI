@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-wait-or-buy-advisor",
+  "version": "1.0.1",
+  "description": "Buy now or wait for 12.12: urgency, daily cost of waiting, price protection window, decision rule without price guessing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-wait-or-buy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-wait-or-buy"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-wait-or-buy-advisor",
+  "displayName": {
+    "zh": "买还是等档期决策顾问",
+    "en": "Buy Now or Wait for Next Sale Advisor"
+  },
+  "profession": {
+    "zh": "11.11 买还是等档期决策顾问",
+    "en": "11.11 Buy Now or Wait for Next Sale Advisor"
+  },
+  "displayDescription": {
+    "zh": "现在买还是等下一波：急用程度判断、等待期替代成本、价保期能否兜底、不预测具体价格只给决策规则。",
+    "en": "Buy now or wait for 12.12: urgency, daily cost of waiting, price protection window, decision rule without price guessing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个现在买还是等 12.12",
+    "en": "Should I buy this now or wait for 12.12"
+  },
+  "plugin": "lynxce-wait-or-buy-advisor",
+  "tags": [
+    {
+      "zh": "急用判断",
+      "en": "Urgency Check"
+    },
+    {
+      "zh": "等待成本",
+      "en": "Waiting Cost"
+    },
+    {
+      "zh": "价保兜底",
+      "en": "Price Protection"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个现在买还是等 12.12",
+      "en": "Should I buy this now or wait for 12.12"
+    },
+    {
+      "zh": "等一个月到底划不划算",
+      "en": "Is waiting a month really worth it"
+    },
+    {
+      "zh": "买了之后降价能不能申请价保",
+      "en": "Can I claim price protection if it drops after I buy"
+    }
+  ],
+  "keywords": [
+    "急用判断",
+    "等待成本",
+    "价保兜底",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

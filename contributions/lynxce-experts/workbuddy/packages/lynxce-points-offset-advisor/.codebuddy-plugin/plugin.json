@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-points-offset-advisor",
+  "version": "1.0.2",
+  "description": "Decide on points or coins: deduction ratio and caps, expiry, coupon versus cash-off conversion, avoid extra buying.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-points-offset-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-points-offset"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-points-offset-advisor",
+  "displayName": {
+    "zh": "积分金币豆类抵扣顾问",
+    "en": "Points and Coin Deduction Advisor"
+  },
+  "profession": {
+    "zh": "11.11 积分金币豆类抵扣顾问",
+    "en": "11.11 Points and Coin Deduction Advisor"
+  },
+  "displayDescription": {
+    "zh": "积分金币豆类该不该用：抵扣比例与上限核算、积分有效期、换券与直接抵现等价换算、别为凑单多花钱。",
+    "en": "Decide on points or coins: deduction ratio and caps, expiry, coupon versus cash-off conversion, avoid extra buying."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我这些积分换券划算还是直接抵现",
+    "en": "Should I redeem points for a coupon or use cash-off"
+  },
+  "plugin": "lynxce-points-offset-advisor",
+  "tags": [
+    {
+      "zh": "抵扣换算",
+      "en": "Deduction Rate"
+    },
+    {
+      "zh": "换券对比",
+      "en": "Coupon vs Cash"
+    },
+    {
+      "zh": "临期处理",
+      "en": "Expiry Handling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这些积分换券划算还是直接抵现",
+      "en": "Should I redeem points for a coupon or use cash-off"
+    },
+    {
+      "zh": "积分快过期了能抵多少钱",
+      "en": "How much can my points cover before they expire"
+    },
+    {
+      "zh": "抵扣上限是多少能不能叠加用",
+      "en": "What is the deduction cap and can it stack with coupons"
+    }
+  ],
+  "keywords": [
+    "抵扣换算",
+    "换券对比",
+    "临期处理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

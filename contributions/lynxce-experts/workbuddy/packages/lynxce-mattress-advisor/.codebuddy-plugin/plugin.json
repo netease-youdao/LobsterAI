@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-mattress-advisor",
+  "version": "1.0.4",
+  "description": "Buy a mattress you keep: sizing and access, firmness by sleeping position, trial terms.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-mattress-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-mattress-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-mattress-advisor",
+  "displayName": {
+    "zh": "床垫与睡眠用品选购顾问",
+    "en": "Mattress and Sleep Product Advisor"
+  },
+  "profession": {
+    "zh": "床垫与睡眠用品选购顾问",
+    "en": "Mattress and Sleep Product Advisor"
+  },
+  "displayDescription": {
+    "zh": "床垫怎么挑才不后悔：尺寸进场先量、软硬按睡姿定、材质怎么比、试睡退换怎么问清楚。",
+    "en": "Buy a mattress you keep: sizing and access, firmness by sleeping position, trial terms."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我该选多软的床垫",
+    "en": "How firm should my mattress be"
+  },
+  "plugin": "lynxce-mattress-advisor",
+  "tags": [
+    {
+      "zh": "床垫选购",
+      "en": "Mattress"
+    },
+    {
+      "zh": "软硬取舍",
+      "en": "Firmness"
+    },
+    {
+      "zh": "试睡退换",
+      "en": "Trial Terms"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我该选多软的床垫",
+      "en": "How firm should my mattress be"
+    },
+    {
+      "zh": "这个尺寸进得了门吗",
+      "en": "Will this size fit through my door"
+    },
+    {
+      "zh": "试睡退换怎么问",
+      "en": "What should I ask about the trial period"
+    }
+  ],
+  "keywords": [
+    "床垫选购",
+    "软硬取舍",
+    "试睡退换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

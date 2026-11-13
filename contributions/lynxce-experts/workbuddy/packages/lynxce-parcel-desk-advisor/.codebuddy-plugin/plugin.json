@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-parcel-desk-advisor",
+  "version": "1.0.2",
+  "description": "Turn desk volume and shelf facts into intake rules, a numbered log, pickup notices, proxy checks and unclaimed-item steps.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-parcel-desk-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-parcel-desk"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-parcel-desk-advisor",
+  "displayName": {
+    "zh": "前台收发登记顾问",
+    "en": "Mail Desk Advisor"
+  },
+  "profession": {
+    "zh": "员工包裹与信件收发登记顾问｜灵策智算",
+    "en": "Front Desk Parcel and Mail Logging Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据到件量与前台条件定收件范围，交付编号登记台账、取件通知、代取核对、滞留计时和日终对账规则。",
+    "en": "Turn desk volume and shelf facts into intake rules, a numbered log, pickup notices, proxy checks and unclaimed-item steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据每日到件量和货架条件生成收发规则与登记台账",
+    "en": "Build intake rules and a parcel log from daily volume and shelf space"
+  },
+  "plugin": "lynxce-parcel-desk-advisor",
+  "tags": [
+    {
+      "zh": "包裹登记",
+      "en": "Parcel Log"
+    },
+    {
+      "zh": "取件核对",
+      "en": "Pickup Check"
+    },
+    {
+      "zh": "滞留处理",
+      "en": "Unclaimed Items"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据每日到件量和货架条件生成收发规则与登记台账",
+      "en": "Build intake rules and a parcel log from daily volume and shelf space"
+    },
+    {
+      "zh": "复核我们现有的收发登记表和代取规则有哪些漏洞",
+      "en": "Review our current mail log and proxy pickup rules for gaps"
+    },
+    {
+      "zh": "只知道快递经常堆积先给一版最小登记与通知方案",
+      "en": "Give a minimal log and notice plan when only the backlog is known"
+    }
+  ],
+  "keywords": [
+    "包裹登记",
+    "取件核对",
+    "滞留处理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

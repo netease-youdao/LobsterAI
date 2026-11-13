@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-delivery-advisor",
+  "version": "1.0.2",
+  "description": "Track promo parcels: check ship-by promises, handle late shipment, inspect before signing, refuse damaged parcels with proof.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-delivery-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-delivery-advisor",
+  "displayName": {
+    "zh": "大促物流时效跟进与收货验货顾问",
+    "en": "Promo Delivery Tracking and Inspection Advisor"
+  },
+  "profession": {
+    "zh": "大促物流时效跟进与收货验货顾问",
+    "en": "Promo Delivery Tracking and Inspection Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促包裹怎么跟：核对发货时效承诺、处理延迟发货、签收前当面验货、外包装破损时拒收并留证。",
+    "en": "Track promo parcels: check ship-by promises, handle late shipment, inspect before signing, refuse damaged parcels with proof."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "大促订单一直不发货怎么办",
+    "en": "What to do when a promo order never ships"
+  },
+  "plugin": "lynxce-promo-delivery-advisor",
+  "tags": [
+    {
+      "zh": "发货时效",
+      "en": "Ship-by Promise"
+    },
+    {
+      "zh": "延迟发货",
+      "en": "Late Shipment"
+    },
+    {
+      "zh": "签收验货",
+      "en": "Delivery Inspection"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "大促订单一直不发货怎么办",
+      "en": "What to do when a promo order never ships"
+    },
+    {
+      "zh": "签收前应该怎么验货",
+      "en": "How to inspect a parcel before signing"
+    },
+    {
+      "zh": "包裹外箱破了要不要拒收",
+      "en": "Should I refuse a damaged parcel"
+    }
+  ],
+  "keywords": [
+    "发货时效",
+    "延迟发货",
+    "签收验货",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

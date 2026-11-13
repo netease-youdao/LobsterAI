@@ -1,0 +1,151 @@
+{
+  "precision": 2,
+  "calculations": [
+    {
+      "id": "量规总分",
+      "operation": "sum",
+      "values": [
+        2,
+        3,
+        3,
+        2
+      ]
+    },
+    {
+      "id": "中档分",
+      "operation": "sum",
+      "values": [
+        2,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "前均值",
+      "operation": "mean",
+      "values": [
+        2,
+        2
+      ]
+    },
+    {
+      "id": "后均值",
+      "operation": "mean",
+      "values": [
+        1,
+        5
+      ]
+    },
+    {
+      "id": "平均绝对差",
+      "operation": "mean",
+      "values": [
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "id": "阈内比例",
+      "operation": "percent",
+      "values": [
+        2,
+        3
+      ]
+    },
+    {
+      "id": "议程分钟",
+      "operation": "sum",
+      "values": [
+        4,
+        4,
+        5,
+        2
+      ]
+    },
+    {
+      "id": "满分锚例",
+      "operation": "sum",
+      "values": [
+        2,
+        3,
+        3,
+        2
+      ]
+    },
+    {
+      "id": "低档分",
+      "operation": "sum",
+      "values": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "异解分",
+      "operation": "sum",
+      "values": [
+        2,
+        3,
+        0,
+        2
+      ]
+    },
+    {
+      "id": "甲一变化",
+      "operation": "difference",
+      "values": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "甲二变化",
+      "operation": "difference",
+      "values": [
+        5,
+        2
+      ]
+    },
+    {
+      "id": "双评差一",
+      "operation": "absoluteDifference",
+      "values": [
+        10,
+        9
+      ]
+    },
+    {
+      "id": "双评差二",
+      "operation": "absoluteDifference",
+      "values": [
+        4,
+        6
+      ]
+    },
+    {
+      "id": "双评差三",
+      "operation": "absoluteDifference",
+      "values": [
+        0,
+        0
+      ]
+    }
+  ],
+  "documentRequired": true,
+  "sections": [],
+  "requiredSections": [
+    "scope",
+    "rubric",
+    "anchor-high",
+    "anchor-middle",
+    "anchor-low",
+    "alternative",
+    "calibration",
+    "feedback",
+    "unknowns"
+  ]
+}

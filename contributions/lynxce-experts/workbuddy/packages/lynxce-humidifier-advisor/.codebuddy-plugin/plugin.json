@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-humidifier-advisor",
+  "version": "1.0.1",
+  "description": "Size a humidifier or dehumidifier: capacity by area, yearly filter cost, power cost, and rated noise level.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-humidifier-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-humidifier"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-humidifier-advisor",
+  "displayName": {
+    "zh": "加湿除湿设备核算顾问",
+    "en": "Humidifier and Dehumidifier Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 加湿除湿设备核算顾问",
+    "en": "11.11 Humidifier and Dehumidifier Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "加湿除湿机怎么选：按面积算加湿量除湿量、滤芯耗材年成本、电费估算、噪音分贝只看标称值。",
+    "en": "Size a humidifier or dehumidifier: capacity by area, yearly filter cost, power cost, and rated noise level."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "20 平方米卧室加湿器要多大",
+    "en": "What humidifier output fits a 20 square meter room"
+  },
+  "plugin": "lynxce-humidifier-advisor",
+  "tags": [
+    {
+      "zh": "加湿除湿量",
+      "en": "Capacity by Area"
+    },
+    {
+      "zh": "耗材年成本",
+      "en": "Yearly Filter Cost"
+    },
+    {
+      "zh": "电费噪音",
+      "en": "Power and Noise"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "20 平方米卧室加湿器要多大",
+      "en": "What humidifier output fits a 20 square meter room"
+    },
+    {
+      "zh": "加湿器滤芯一年要花多少钱",
+      "en": "How much do humidifier filters cost per year"
+    },
+    {
+      "zh": "回南天除湿机选多少升的",
+      "en": "What dehumidifier capacity do I need for humid season"
+    }
+  ],
+  "keywords": [
+    "加湿除湿量",
+    "耗材年成本",
+    "电费噪音",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-foreign-tax-credit-evidence-b49",
+  "version": "1.0.0",
+  "description": "Reconcile resident enterprise foreign income, qualifying tax, credit limits and carryforwards with evidence-based revisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-foreign-tax-credit-evidence-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-foreign-tax-qualification-b49",
+    "./skills/lynxce-foreign-limit-carry-b49",
+    "./skills/lynxce-foreign-credit-revision-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-foreign-tax-credit-evidence-b49",
+  "displayName": {
+    "zh": "抵免顾问",
+    "en": "Corporate Foreign Tax Credit Advisor"
+  },
+  "profession": {
+    "zh": "境外抵免顾问",
+    "en": "Corporate Foreign Tax Credit Advisor"
+  },
+  "displayDescription": {
+    "zh": "为居民企业财务核对境外所得、已缴税款和抵免年限，形成分国限额底稿、证据说明与保留退税冲突的修订稿。",
+    "en": "Reconcile resident enterprise foreign income, qualifying tax, credit limits and carryforwards with evidence-based revisions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按居民企业分国抵免资料，核限额和历年超限额结转。",
+    "en": "Corporate Foreign Tax Credit Advisor"
+  },
+  "plugin": "lynxce-foreign-tax-credit-evidence-b49",
+  "tags": [
+    {
+      "zh": "境外抵免",
+      "en": "境外抵免"
+    },
+    {
+      "zh": "分国限额",
+      "en": "分国限额"
+    },
+    {
+      "zh": "结转年限",
+      "en": "结转年限"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按居民企业分国抵免资料，核限额和历年超限额结转。",
+      "en": "Corporate Foreign Tax Credit Advisor"
+    },
+    {
+      "zh": "境外退税回单用途未明，完整修订当期抵免和旧年度余额。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "境外税单含罚款且币种不同，先拆真实已缴与可抵范围。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "境外抵免",
+    "分国限额",
+    "结转年限"
+  ]
+}

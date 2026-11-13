@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-packaging-advisor",
+  "version": "1.0.4",
+  "description": "Cut packaging cost: material by product, sizing and damage-rate tradeoffs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-packaging-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-packaging-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-packaging-advisor",
+  "displayName": {
+    "zh": "电商包材与仓储耗材采购顾问",
+    "en": "Ecommerce Packaging Advisor"
+  },
+  "profession": {
+    "zh": "电商包材与仓储耗材采购顾问",
+    "en": "Ecommerce Packaging Advisor"
+  },
+  "displayDescription": {
+    "zh": "包材怎么选更省钱：按商品定材质、箱型怎么收敛、破损赔付与材料成本之间怎么权衡取舍。",
+    "en": "Cut packaging cost: material by product, sizing and damage-rate tradeoffs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "我的商品该用什么包材",
+    "en": "Which packaging fits my product"
+  },
+  "plugin": "lynxce-packaging-advisor",
+  "tags": [
+    {
+      "zh": "电商包材",
+      "en": "Packaging"
+    },
+    {
+      "zh": "成本核算",
+      "en": "Unit Cost"
+    },
+    {
+      "zh": "破损控制",
+      "en": "Damage Rate"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的商品该用什么包材",
+      "en": "Which packaging fits my product"
+    },
+    {
+      "zh": "包材成本怎么算才准",
+      "en": "How do I calculate packaging cost"
+    },
+    {
+      "zh": "箱型能不能少几种",
+      "en": "Can I consolidate my box sizes"
+    }
+  ],
+  "keywords": [
+    "电商包材",
+    "成本核算",
+    "破损控制",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

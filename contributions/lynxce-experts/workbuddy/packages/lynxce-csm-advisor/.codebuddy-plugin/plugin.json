@@ -1,0 +1,67 @@
+{
+  "name": "lynxce-csm-advisor",
+  "version": "1.0.1",
+  "description": "Review supplied account data with health scores, value summaries, renewal briefs and recurring action ledgers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-csm-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-csm-advisor",
+  "displayName": {
+    "zh": "客户成功顾问",
+    "en": "Customer Success"
+  },
+  "profession": {
+    "zh": "客户成功与续约管理顾问",
+    "en": "Customer Success and Renewal Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据每期客户使用与服务材料，整理健康评分、价值回顾、续约准备和风险行动台账，支持逐期人工复盘。",
+    "en": "Review supplied account data with health scores, value summaries, renewal briefs and recurring action ledgers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "按本月客户数据输出带公式的健康评分与风险行动台账",
+    "en": "Build a health score and risk ledger from this month’s data."
+  },
+  "plugin": "lynxce-csm-advisor",
+  "tags": [
+    {
+      "zh": "健康评分",
+      "en": "Health Scoring"
+    },
+    {
+      "zh": "续约准备",
+      "en": "Renewal Brief"
+    },
+    {
+      "zh": "价值复盘",
+      "en": "Value Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按本月客户数据输出带公式的健康评分与风险行动台账",
+      "en": "Build a health score and risk ledger from this month’s data."
+    },
+    {
+      "zh": "把客户使用成果整理成续约价值回顾与证据缺口表",
+      "en": "Create a renewal value review and evidence-gap table."
+    },
+    {
+      "zh": "对照上期台账整理本期变化、未关闭风险和下一轮计划",
+      "en": "Compare periods and draft the next account action plan."
+    }
+  ],
+  "keywords": [
+    "健康评分",
+    "续约准备",
+    "价值复盘"
+  ],
+  "needEncrypt": true
+}

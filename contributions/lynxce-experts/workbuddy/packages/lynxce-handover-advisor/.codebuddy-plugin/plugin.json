@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-handover-advisor",
+  "version": "1.0.1",
+  "description": "Clean handovers: inventory, account and document transfer, open risks and sign-off.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-handover-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-work-handover"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-handover-advisor",
+  "displayName": {
+    "zh": "工作交接与岗位交接顾问",
+    "en": "Work Handover Advisor"
+  },
+  "profession": {
+    "zh": "工作交接与岗位交接顾问",
+    "en": "Work Handover Advisor"
+  },
+  "displayDescription": {
+    "zh": "转岗休假离职时工作怎么交接干净：事项怎么盘点、账号文档怎么移交、风险怎么说清、双方怎么签收。",
+    "en": "Clean handovers: inventory, account and document transfer, open risks and sign-off."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "我要休假三个月怎么交接",
+    "en": "I am on leave for three months, how to hand over"
+  },
+  "plugin": "lynxce-handover-advisor",
+  "tags": [
+    {
+      "zh": "工作交接",
+      "en": "Handover"
+    },
+    {
+      "zh": "岗位交接",
+      "en": "Role Transition"
+    },
+    {
+      "zh": "交接清单",
+      "en": "Checklist"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我要休假三个月怎么交接",
+      "en": "I am on leave for three months, how to hand over"
+    },
+    {
+      "zh": "帮我列一份交接清单",
+      "en": "Help me list a handover checklist"
+    },
+    {
+      "zh": "接手别人的工作要问什么",
+      "en": "What to ask when taking over work"
+    }
+  ],
+  "keywords": [
+    "工作交接",
+    "岗位交接",
+    "交接清单",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-asset-loss-deduction-b49",
+  "version": "1.0.0",
+  "description": "Prepare asset loss evidence, residual and compensation reconciliation, and retained dossiers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-asset-loss-deduction-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-asset-loss-type-evidence-b49",
+    "./skills/lynxce-loss-residual-compensation-b49",
+    "./skills/lynxce-loss-retained-dossier-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-asset-loss-deduction-b49",
+  "displayName": {
+    "zh": "损失顾问",
+    "en": "Asset Loss Deduction Evidence Advisor"
+  },
+  "profession": {
+    "zh": "资产损失顾问",
+    "en": "Asset Loss Deduction Evidence Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务与资产人员核对报废毁损、残值及赔偿，复算损失口径，交付扣除准备说明与备查补正稿。",
+    "en": "Prepare asset loss evidence, residual and compensation reconciliation, and retained dossiers."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按报废毁损、残值和赔偿资料，写完整资产损失准备说明。",
+    "en": "Asset Loss Deduction Evidence Advisor"
+  },
+  "plugin": "lynxce-asset-loss-deduction-b49",
+  "tags": [
+    {
+      "zh": "资产损失",
+      "en": "资产损失"
+    },
+    {
+      "zh": "报废毁损",
+      "en": "报废毁损"
+    },
+    {
+      "zh": "留存备查",
+      "en": "留存备查"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按报废毁损、残值和赔偿资料，写完整资产损失准备说明。",
+      "en": "Asset Loss Deduction Evidence Advisor"
+    },
+    {
+      "zh": "残值和保险理赔各有两份冲突金额，帮我列四种条件并重写全稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "账上已计损失但缺专业意见，帮我分清会计处理与所得税条件。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "资产损失",
+    "报废毁损",
+    "留存备查"
+  ]
+}

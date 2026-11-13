@@ -1,0 +1,60 @@
+{
+  "orderSource": "假设订单表",
+  "lines": [
+    {
+      "id": "A",
+      "quantity": 23,
+      "unitNetKg": "0.2",
+      "source": "假设订单A",
+      "model": "A",
+      "mixGroup": "允许组1"
+    },
+    {
+      "id": "B",
+      "quantity": 17,
+      "unitNetKg": "0.5",
+      "source": "假设订单B",
+      "model": "B",
+      "mixGroup": "允许组1"
+    }
+  ],
+  "rules": {
+    "maxPieces": 10,
+    "maxNetKg": "3",
+    "tareKg": "0.4",
+    "allowMix": true,
+    "dimensions": null
+  },
+  "fixedBoxes": [
+    {
+      "id": "SEALED1",
+      "contents": {
+        "A": 5,
+        "B": 3
+      },
+      "status": "sealed",
+      "source": "用户明确封箱回执",
+      "actualGrossKg": "3.0"
+    }
+  ],
+  "quantityScenarios": [],
+  "previousPlan": {
+    "source": "旧理论方案，不代表现场封箱",
+    "boxes": [
+      {
+        "id": "OLD1",
+        "contents": {
+          "A": 5,
+          "B": 3
+        }
+      },
+      {
+        "id": "OLD2",
+        "contents": {
+          "A": 18,
+          "B": 14
+        }
+      }
+    ]
+  }
+}

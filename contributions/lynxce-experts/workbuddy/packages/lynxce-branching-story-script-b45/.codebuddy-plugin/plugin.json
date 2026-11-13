@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-branching-story-script-b45",
+  "version": "1.0.0",
+  "description": "Writes playable branching stories with complete node text, meaningful choices, endings and verified path structure.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-branching-story-script-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-branching-story-script-b45-choice-map",
+    "./skills/lynxce-branching-story-script-b45-node-prose",
+    "./skills/lynxce-branching-story-script-b45-continuity"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-branching-story-script-b45",
+  "displayName": {
+    "zh": "叙事设计师",
+    "en": "Branching Interactive Story Script Designer"
+  },
+  "profession": {
+    "zh": "互动故事编剧",
+    "en": "Branching Interactive Story Script Designer"
+  },
+  "displayDescription": {
+    "zh": "围绕玩家选择编写互动故事，交付完整节点、分支按钮与多种结局，并检查路径可达性和合流后的语境。",
+    "en": "Writes playable branching stories with complete node text, meaningful choices, endings and verified path structure."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "写一个八节点、三个结局的灯塔互动故事，直接给全部正文和按钮。",
+    "en": "Branching Interactive Story Script Designer"
+  },
+  "plugin": "lynxce-branching-story-script-b45",
+  "tags": [
+    {
+      "zh": "互动故事",
+      "en": "互动故事"
+    },
+    {
+      "zh": "分支脚本",
+      "en": "分支脚本"
+    },
+    {
+      "zh": "多结局",
+      "en": "多结局"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "写一个八节点、三个结局的灯塔互动故事，直接给全部正文和按钮。",
+      "en": "Branching Interactive Story Script Designer"
+    },
+    {
+      "zh": "我的分支越来越多，请保留关键选择并合并不必要节点。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "这两个结局需要不同前因，帮我改写合流节点避免剧情穿帮。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "互动故事",
+    "分支脚本",
+    "多结局"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-pilot-platform-application-b52",
+  "version": "1.0.0",
+  "description": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pilot-platform-application-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pilot-capacity-chain-b52",
+    "./skills/lynxce-pilot-external-service-ledger-b52",
+    "./skills/lynxce-pilot-dossier-revision-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pilot-platform-application-b52",
+  "displayName": {
+    "zh": "中试顾问",
+    "en": "Pilot Platform Application Advisor"
+  },
+  "profession": {
+    "zh": "中试平台申报顾问",
+    "en": "Pilot Platform Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "为制造业中试平台经办梳理试制验证能力，核对场地设备和外部服务，交付证据台账、说明与完整补正稿。",
+    "en": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按已建平台路线整理中试能力和外部服务证据。",
+    "en": "Pilot Platform Application Advisor"
+  },
+  "plugin": "lynxce-pilot-platform-application-b52",
+  "tags": [
+    {
+      "zh": "中试平台",
+      "en": "中试平台"
+    },
+    {
+      "zh": "外部服务",
+      "en": "外部服务"
+    },
+    {
+      "zh": "申报准备",
+      "en": "申报准备"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按已建平台路线整理中试能力和外部服务证据。",
+      "en": "Pilot Platform Application Advisor"
+    },
+    {
+      "zh": "同一客户两份合同怎么去重，给我可核对台账。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "框架合同与履约摘要矛盾，请交完整双分支补正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "中试平台",
+    "外部服务",
+    "申报准备"
+  ]
+}

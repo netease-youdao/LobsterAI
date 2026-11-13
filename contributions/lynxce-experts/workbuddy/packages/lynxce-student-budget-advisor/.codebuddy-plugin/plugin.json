@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-student-budget-advisor",
+  "version": "1.0.2",
+  "description": "Plan student promo spending: budget cap from allowance, three-tier list, dorm appliance safety and student discounts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-student-budget-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-student-budget"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-student-budget-advisor",
+  "displayName": {
+    "zh": "学生党预算与必买清单顾问",
+    "en": "Student Budget and Must-Buy List Advisor"
+  },
+  "profession": {
+    "zh": "11.11 学生党预算与必买清单顾问",
+    "en": "11.11 Student Budget and Must-Buy List Advisor"
+  },
+  "displayDescription": {
+    "zh": "学生党大促怎么花：按生活费定预算上限、分必买可买不买三档、核宿舍电器安全、找学生优惠。",
+    "en": "Plan student promo spending: budget cap from allowance, three-tier list, dorm appliance safety and student discounts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "生活费两千，大促该花多少",
+    "en": "My allowance is 2000, how much should I spend"
+  },
+  "plugin": "lynxce-student-budget-advisor",
+  "tags": [
+    {
+      "zh": "生活费预算",
+      "en": "Allowance Budget"
+    },
+    {
+      "zh": "三档清单",
+      "en": "Three-Tier List"
+    },
+    {
+      "zh": "宿舍安全",
+      "en": "Dorm Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "生活费两千，大促该花多少",
+      "en": "My allowance is 2000, how much should I spend"
+    },
+    {
+      "zh": "帮我把想买的分成必买可买不买",
+      "en": "Sort my wish list into must, maybe and skip"
+    },
+    {
+      "zh": "这个电器宿舍能用吗",
+      "en": "Is this appliance allowed in my dorm"
+    }
+  ],
+  "keywords": [
+    "生活费预算",
+    "三档清单",
+    "宿舍安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

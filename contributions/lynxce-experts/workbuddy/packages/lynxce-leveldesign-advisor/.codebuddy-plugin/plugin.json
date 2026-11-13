@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-leveldesign-advisor",
+  "version": "1.0.1",
+  "description": "Turn level drafts and telemetry into teach-test beats, sawtooth difficulty curves, checkpoint retry costs and drop-off diagnosis.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-leveldesign-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-level-design"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-leveldesign-advisor",
+  "displayName": {
+    "zh": "关卡难度设计顾问",
+    "en": "Level Design"
+  },
+  "profession": {
+    "zh": "游戏关卡与难度曲线顾问",
+    "en": "Game Level Pacing and Difficulty Curve Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据关卡稿与埋点数据，排出教学考核节拍和锯齿难度曲线，核算重试成本，定位流失关卡并给出复测方案。",
+    "en": "Turn level drafts and telemetry into teach-test beats, sawtooth difficulty curves, checkpoint retry costs and drop-off diagnosis."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "03-GameSpatial",
+  "defaultInitPrompt": {
+    "zh": "根据关卡清单生成教学考核节拍与难度曲线表",
+    "en": "Build teach-test beats and a difficulty curve from my level list"
+  },
+  "plugin": "lynxce-leveldesign-advisor",
+  "tags": [
+    {
+      "zh": "节拍设计",
+      "en": "Teach and Test"
+    },
+    {
+      "zh": "难度曲线",
+      "en": "Difficulty Curve"
+    },
+    {
+      "zh": "流失定位",
+      "en": "Drop-off Diagnosis"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据关卡清单生成教学考核节拍与难度曲线表",
+      "en": "Build teach-test beats and a difficulty curve from my level list"
+    },
+    {
+      "zh": "复核这一关的检查点位置和重试成本是否合理",
+      "en": "Review checkpoint placement and retry cost for this level"
+    },
+    {
+      "zh": "只有各关通关率时先标出可疑流失关卡",
+      "en": "With only clear rates, flag suspicious drop-off levels first"
+    }
+  ],
+  "keywords": [
+    "节拍设计",
+    "难度曲线",
+    "流失定位",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

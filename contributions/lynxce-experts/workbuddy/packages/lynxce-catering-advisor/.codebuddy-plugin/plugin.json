@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-catering-advisor",
+  "version": "1.0.4",
+  "description": "Order team meals well: per-head budget, supplier checks, dietary needs and delivery.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-catering-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-catering-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-catering-advisor",
+  "displayName": {
+    "zh": "团餐与企业用餐采购顾问",
+    "en": "Corporate Catering Procurement Advisor"
+  },
+  "profession": {
+    "zh": "团餐与企业用餐采购顾问",
+    "en": "Corporate Catering Procurement Advisor"
+  },
+  "displayDescription": {
+    "zh": "团餐怎么订才不出错：人数与忌口先统计、供应商资质怎么核、人均预算与配送怎么安排。",
+    "en": "Order team meals well: per-head budget, supplier checks, dietary needs and delivery."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "人均这个预算能订什么",
+    "en": "What can we get at this per-head budget"
+  },
+  "plugin": "lynxce-catering-advisor",
+  "tags": [
+    {
+      "zh": "团餐采购",
+      "en": "Catering"
+    },
+    {
+      "zh": "资质核验",
+      "en": "Compliance"
+    },
+    {
+      "zh": "人均预算",
+      "en": "Per-head Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "人均这个预算能订什么",
+      "en": "What can we get at this per-head budget"
+    },
+    {
+      "zh": "帮我比一下这几家",
+      "en": "Compare these catering quotes"
+    },
+    {
+      "zh": "忌口该怎么安排",
+      "en": "How should we handle dietary needs"
+    }
+  ],
+  "keywords": [
+    "团餐采购",
+    "资质核验",
+    "人均预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-project-charter-advisor",
+  "version": "1.0.1",
+  "description": "Draft a project brief, scope boundaries, resource estimates, acceptance charter and review questions from supplied evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-project-charter-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-project-charter"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-project-charter-advisor",
+  "displayName": {
+    "zh": "立项材料顾问",
+    "en": "Project Charter Advisor"
+  },
+  "profession": {
+    "zh": "立项材料与项目章程撰写顾问｜灵策智算",
+    "en": "Project Proposal and Charter Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据立项材料制作问题基线、范围边界、资源测算与验收章程，附决策摘要、依赖风险和评审问题核对表。",
+    "en": "Draft a project brief, scope boundaries, resource estimates, acceptance charter and review questions from supplied evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "把这个项目想法整理成决策摘要与完整项目章程草稿",
+    "en": "Turn this project idea into a decision brief and charter draft."
+  },
+  "plugin": "lynxce-project-charter-advisor",
+  "tags": [
+    {
+      "zh": "立项章程",
+      "en": "Project Charter"
+    },
+    {
+      "zh": "资源测算",
+      "en": "Resource Estimate"
+    },
+    {
+      "zh": "验收设计",
+      "en": "Acceptance Design"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这个项目想法整理成决策摘要与完整项目章程草稿",
+      "en": "Turn this project idea into a decision brief and charter draft."
+    },
+    {
+      "zh": "按人力与周期核对资源预算、依赖和里程碑冲突",
+      "en": "Check resources, budget, dependencies and milestone conflicts."
+    },
+    {
+      "zh": "为这份立项材料补齐可测量验收标准和评审问答",
+      "en": "Add measurable acceptance criteria and a review Q&A sheet."
+    }
+  ],
+  "keywords": [
+    "立项章程",
+    "资源测算",
+    "验收设计"
+  ],
+  "needEncrypt": true
+}

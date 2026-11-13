@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-interpretation-cover-stock-advisor",
+  "version": "1.0.0",
+  "description": "Plan headset covers by sessions and sealed usable stock.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-interpretation-cover-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-interpretation-cover-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-interpretation-cover-stock-advisor",
+  "displayName": {
+    "zh": "同传耳机耗材师",
+    "en": "Interpretation Headset Supply Advisor"
+  },
+  "profession": {
+    "zh": "会议同传耳机卫生耗材周转顾问",
+    "en": "Interpretation Headset Supply Advisor"
+  },
+  "displayDescription": {
+    "zh": "按会议同传耳机周转核一次性耳罩耗材，区分未用退回与拆封报损，按规格整包补给，输出场次领用表。",
+    "en": "Plan headset covers by sessions and sealed usable stock."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按记录核算会议同传耳机卫生耗材周转",
+    "en": "Calculate from recorded inputs"
+  },
+  "plugin": "lynxce-office-interpretation-cover-stock-advisor",
+  "tags": [
+    {
+      "zh": "需求核算",
+      "en": "Demand Calculation"
+    },
+    {
+      "zh": "规格复核",
+      "en": "Specification Review"
+    },
+    {
+      "zh": "异常台账",
+      "en": "Exception Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按记录核算会议同传耳机卫生耗材周转",
+      "en": "Calculate from recorded inputs"
+    },
+    {
+      "zh": "核库存与延期在途对补货的影响",
+      "en": "Check stock and delayed arrivals"
+    },
+    {
+      "zh": "输出可复核算式及异常处理台账",
+      "en": "Build calculations and an exception ledger"
+    }
+  ],
+  "keywords": [
+    "需求核算",
+    "规格复核",
+    "异常台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-dbdesign-advisor",
+  "version": "1.0.1",
+  "description": "Review supplied schemas and query plans into constraint findings, index candidates and staged migration drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dbdesign-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-db-schema"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dbdesign-advisor",
+  "displayName": {
+    "zh": "数据库设计顾问",
+    "en": "Database Design"
+  },
+  "profession": {
+    "zh": "数据库表结构与索引优化顾问",
+    "en": "Schema and Index Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据表结构与查询计划梳理约束问题，提供索引候选、迁移阶段和验证底稿，便于评审成本与恢复边界。",
+    "en": "Review supplied schemas and query plans into constraint findings, index candidates and staged migration drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据建表语句和业务关系生成约束评审表",
+    "en": "Review constraints from schema statements and business relations"
+  },
+  "plugin": "lynxce-dbdesign-advisor",
+  "tags": [
+    {
+      "zh": "约束评审",
+      "en": "Constraint Review"
+    },
+    {
+      "zh": "索引候选",
+      "en": "Index Candidates"
+    },
+    {
+      "zh": "迁移验证",
+      "en": "Migration Validation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据建表语句和业务关系生成约束评审表",
+      "en": "Review constraints from schema statements and business relations"
+    },
+    {
+      "zh": "根据查询与执行计划生成索引候选比较表",
+      "en": "Compare index candidates using supplied queries and plans"
+    },
+    {
+      "zh": "为字段变更生成迁移阶段与恢复验证底稿",
+      "en": "Draft staged migration and recovery checks for a field change"
+    }
+  ],
+  "keywords": [
+    "约束评审",
+    "索引候选",
+    "迁移验证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

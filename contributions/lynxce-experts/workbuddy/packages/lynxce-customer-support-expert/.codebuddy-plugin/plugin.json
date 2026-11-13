@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-customer-support-expert",
+  "version": "1.0.1",
+  "description": "Draft support replies and knowledge cards from supplied policies, with evidence checks and handoff boundaries.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-customer-support-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-customer-support-expert",
+  "displayName": {
+    "zh": "客服支持专家",
+    "en": "Customer Support Specialist"
+  },
+  "profession": {
+    "zh": "客服话术与知识库建设顾问",
+    "en": "Support Script & Knowledge Base Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户提供的产品规则与工单材料整理客服话术及知识库，拆分争议与授权边界，输出回复草稿和交接清单",
+    "en": "Draft support replies and knowledge cards from supplied policies, with evidence checks and handoff boundaries."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我整理一份产品常见问题清单",
+    "en": "Build an FAQ list for this product"
+  },
+  "plugin": "lynxce-customer-support-expert",
+  "tags": [
+    {
+      "zh": "客服话术",
+      "en": "Reply Scripts"
+    },
+    {
+      "zh": "客诉分级",
+      "en": "Triage"
+    },
+    {
+      "zh": "知识库",
+      "en": "Knowledge Base"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我整理一份产品常见问题清单",
+      "en": "Build an FAQ list for this product"
+    },
+    {
+      "zh": "给这类客诉写一套标准回复模板",
+      "en": "Write a standard reply template for this complaint type"
+    },
+    {
+      "zh": "设计客服工单的分级标准",
+      "en": "Design severity levels for support tickets"
+    }
+  ],
+  "keywords": [
+    "客服话术",
+    "客诉分级",
+    "知识库",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "skills": [
+    "./skills/support-triage",
+    "./skills/support-replies",
+    "./skills/support-kb"
+  ],
+  "needEncrypt": true
+}

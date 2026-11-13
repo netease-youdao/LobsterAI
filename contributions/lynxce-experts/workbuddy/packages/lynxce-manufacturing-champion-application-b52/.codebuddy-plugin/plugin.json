@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-manufacturing-champion-application-b52",
+  "version": "1.0.0",
+  "description": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-manufacturing-champion-application-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-champion-product-boundary-b52",
+    "./skills/lynxce-champion-three-year-ledger-b52",
+    "./skills/lynxce-champion-dossier-revision-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-manufacturing-champion-application-b52",
+  "displayName": {
+    "zh": "冠军顾问",
+    "en": "Manufacturing Champion Application Advisor"
+  },
+  "profession": {
+    "zh": "单项冠军申报顾问",
+    "en": "Manufacturing Champion Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "为制造企业申报经办核对产品口径、市场地位和经营研发证据，交付排名底稿、材料说明与完整补正稿。",
+    "en": "Prepare evidence-linked recognition dossiers, reconcile disputed figures and draft complete correction versions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按我的产品资料整理单项冠军材料，不编市场排名。",
+    "en": "Manufacturing Champion Application Advisor"
+  },
+  "plugin": "lynxce-manufacturing-champion-application-b52",
+  "tags": [
+    {
+      "zh": "单项冠军",
+      "en": "单项冠军"
+    },
+    {
+      "zh": "市场份额",
+      "en": "市场份额"
+    },
+    {
+      "zh": "申报材料",
+      "en": "申报材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按我的产品资料整理单项冠军材料，不编市场排名。",
+      "en": "Manufacturing Champion Application Advisor"
+    },
+    {
+      "zh": "两份市场报告分母不同，请列出双分支底稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "把三年收入研发和产品证据写成完整补正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "单项冠军",
+    "市场份额",
+    "申报材料"
+  ]
+}

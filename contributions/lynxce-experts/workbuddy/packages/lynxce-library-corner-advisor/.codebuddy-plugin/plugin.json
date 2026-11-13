@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-library-corner-advisor",
+  "version": "1.0.2",
+  "description": "Set up numbering, shelving and lending rules, due and reminder dates, quarterly stocktake reconciliation and book selection.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-library-corner-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-library-corner"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-library-corner-advisor",
+  "displayName": {
+    "zh": "图书角借阅管理顾问",
+    "en": "Library Corner Advisor"
+  },
+  "profession": {
+    "zh": "公司图书角与资料借阅管理顾问｜灵策智算",
+    "en": "Company Library Corner and Lending Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据藏书量与读者规模制定编号上架和借阅规则，计算应还与提醒日期，完成季度盘点对账和采购征集公示。",
+    "en": "Set up numbering, shelving and lending rules, due and reminder dates, quarterly stocktake reconciliation and book selection."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据我们的藏书和人数生成编号规则书目台账和借阅规则",
+    "en": "Build numbering, a catalogue and lending rules for our books and readers"
+  },
+  "plugin": "lynxce-library-corner-advisor",
+  "tags": [
+    {
+      "zh": "书目编号",
+      "en": "Catalogue Numbering"
+    },
+    {
+      "zh": "借阅期限",
+      "en": "Lending Terms"
+    },
+    {
+      "zh": "盘点选书",
+      "en": "Stocktake and Selection"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的藏书和人数生成编号规则书目台账和借阅规则",
+      "en": "Build numbering, a catalogue and lending rules for our books and readers"
+    },
+    {
+      "zh": "复核我们的借阅登记和盘点表找出逾期与差异",
+      "en": "Review our lending log and stocktake for overdue items and gaps"
+    },
+    {
+      "zh": "还没清点藏书时先给分类编号规则和台账模板",
+      "en": "Give category numbering rules and ledger templates before stocktaking"
+    }
+  ],
+  "keywords": [
+    "书目编号",
+    "借阅期限",
+    "盘点选书",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

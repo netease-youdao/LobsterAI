@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-lab-protocol-version-drift-b44-advisor",
+  "version": "1.0.0",
+  "description": "Review supplied lab records with three evidence-based workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-lab-protocol-version-drift-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-lab-protocol-version-drift-b44",
+    "./skills/lynxce-lab-source-index-coverage-b44",
+    "./skills/lynxce-lab-correction-impact-index-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-lab-protocol-version-drift-b44-advisor",
+  "displayName": {
+    "zh": "实验版本资料顾问",
+    "en": "Lab Record Protocol Version Drift Advisor"
+  },
+  "profession": {
+    "zh": "科研实验记录整理资料核对顾问",
+    "en": "Lab Record Protocol Version Drift Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户资料核对实验记录版本偏差表，区分事实缺项与冲突，输出专项证据对照及人工复核记录。",
+    "en": "Review supplied lab records with three evidence-based workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "collaboration",
+  "defaultInitPrompt": {
+    "zh": "请用现有资料生成实验记录版本偏差表，未知项保留待补。",
+    "en": "Review the supplied records and mark missing evidence."
+  },
+  "plugin": "lynxce-lab-protocol-version-drift-b44-advisor",
+  "tags": [
+    {
+      "zh": "科研实验记录整理",
+      "en": "Domain records"
+    },
+    {
+      "zh": "证据核对",
+      "en": "Evidence review"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请用现有资料生成实验记录版本偏差表，未知项保留待补。",
+      "en": "Review the supplied records and mark missing evidence."
+    },
+    {
+      "zh": "请单独运行实验原始资料索引覆盖，保留原值与算式。",
+      "en": "Run the first internal task with evidence and arithmetic."
+    },
+    {
+      "zh": "请核对实验更正受影响索引中的矛盾和边界条件。",
+      "en": "Review conflicts and boundaries in the second internal task."
+    }
+  ],
+  "keywords": [
+    "科研实验记录整理",
+    "证据核对",
+    "异常复核"
+  ]
+}

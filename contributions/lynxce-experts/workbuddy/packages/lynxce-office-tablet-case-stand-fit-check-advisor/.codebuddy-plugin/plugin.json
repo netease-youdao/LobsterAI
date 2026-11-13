@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-tablet-case-stand-fit-check-advisor",
+  "version": "1.0.0",
+  "description": "Check tablet case openings and stand fit by model.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-tablet-case-stand-fit-check-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-tablet-case-stand-fit-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-tablet-case-stand-fit-check-advisor",
+  "displayName": {
+    "zh": "平板壳支架适配助理",
+    "en": "Tablet Case Fit Assistant"
+  },
+  "profession": {
+    "zh": "办公室平板保护壳支架逐机适配核对助理",
+    "en": "Office Tablet Case and Stand Fit Assistant"
+  },
+  "displayDescription": {
+    "zh": "办公平板保护壳怎么配：按型号代次核开孔尺寸与支架形态，分列笔槽键盘适配，交付逐机清单与补购台账。",
+    "en": "Check tablet case openings and stand fit by model."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "相同英寸不同代次平板壳如何核适配",
+    "en": "Check case fit across same size tablet generations"
+  },
+  "plugin": "lynxce-office-tablet-case-stand-fit-check-advisor",
+  "tags": [
+    {
+      "zh": "型号开孔",
+      "en": "Model Openings"
+    },
+    {
+      "zh": "支架姿态",
+      "en": "Stand Positions"
+    },
+    {
+      "zh": "附件适配",
+      "en": "Accessory Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "相同英寸不同代次平板壳如何核适配",
+      "en": "Check case fit across same size tablet generations"
+    },
+    {
+      "zh": "笔槽能放笔但不能充电如何登记",
+      "en": "Record a pen slot that does not support charging"
+    },
+    {
+      "zh": "做逐机适配与保护壳补购台账",
+      "en": "Make a tablet fit and case replenishment ledger"
+    }
+  ],
+  "keywords": [
+    "型号开孔",
+    "支架姿态",
+    "附件适配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

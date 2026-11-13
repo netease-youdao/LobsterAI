@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-power-drill-advisor",
+  "version": "1.0.0",
+  "description": "Pick power drills: tool type, torque, chuck, battery platform, Wh and kit cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-power-drill-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-power-drill"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-power-drill-advisor",
+  "displayName": {
+    "zh": "电钻工具套装选购顾问",
+    "en": "Power Drill and Cordless Tool Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电钻与电动工具套装选购顾问",
+    "en": "11.11 Power Drill and Cordless Tool Kit Advisor"
+  },
+  "displayDescription": {
+    "zh": "电钻怎么挑：按墙面与活儿定手电钻冲击钻或电锤、核扭矩与夹头、看电池平台与瓦时、算套装到手价。",
+    "en": "Pick power drills: tool type, torque, chuck, battery platform, Wh and kit cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "混凝土墙打孔要买冲击钻还是电锤",
+    "en": "Hammer drill or rotary hammer for concrete walls"
+  },
+  "plugin": "lynxce-power-drill-advisor",
+  "tags": [
+    {
+      "zh": "墙面工况",
+      "en": "Wall and Job"
+    },
+    {
+      "zh": "扭矩夹头",
+      "en": "Torque and Chuck"
+    },
+    {
+      "zh": "电池平台",
+      "en": "Battery Platform"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "混凝土墙打孔要买冲击钻还是电锤",
+      "en": "Hammer drill or rotary hammer for concrete walls"
+    },
+    {
+      "zh": "20V max 电钻实际是多少伏",
+      "en": "What voltage a 20V max drill really runs at"
+    },
+    {
+      "zh": "买裸机还是买带电池的套装",
+      "en": "Bare tool or kit with batteries"
+    }
+  ],
+  "keywords": [
+    "墙面工况",
+    "扭矩夹头",
+    "电池平台",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

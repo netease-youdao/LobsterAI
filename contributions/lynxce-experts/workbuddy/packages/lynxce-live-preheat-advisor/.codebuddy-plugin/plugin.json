@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-live-preheat-advisor",
+  "version": "1.0.1",
+  "description": "Build a countdown promo calendar from the stream date with teaser scripts, reminder cadence, pre-live checks and turnout review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-live-preheat-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-live-preheat"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-live-preheat-advisor",
+  "displayName": {
+    "zh": "直播预热顾问",
+    "en": "Live Promotion Advisor"
+  },
+  "profession": {
+    "zh": "直播预告与开播预热顾问｜灵策智算",
+    "en": "Live Stream Pre-announcement Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据开播时间与直播价值倒排预热日历，提供预告脚本、渠道提醒节奏、开播前检查单与分渠道到场率复盘表。",
+    "en": "Build a countdown promo calendar from the stream date with teaser scripts, reminder cadence, pre-live checks and turnout review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据开播时间帮我倒排一份预热日历和预告脚本",
+    "en": "Build a countdown promo calendar and teaser scripts"
+  },
+  "plugin": "lynxce-live-preheat-advisor",
+  "tags": [
+    {
+      "zh": "预热日历",
+      "en": "Promo Calendar"
+    },
+    {
+      "zh": "预告脚本",
+      "en": "Teaser Script"
+    },
+    {
+      "zh": "到场复盘",
+      "en": "Turnout Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据开播时间帮我倒排一份预热日历和预告脚本",
+      "en": "Build a countdown promo calendar and teaser scripts"
+    },
+    {
+      "zh": "复核我的直播预告日期星期和提醒节奏",
+      "en": "Check my stream teaser dates and reminder cadence"
+    },
+    {
+      "zh": "还没定开播日期先给我一份相对日程",
+      "en": "Draft a relative promo schedule before the date is set"
+    }
+  ],
+  "keywords": [
+    "预热日历",
+    "预告脚本",
+    "到场复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

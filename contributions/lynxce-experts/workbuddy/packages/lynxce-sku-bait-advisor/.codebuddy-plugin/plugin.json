@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-sku-bait-advisor",
+  "version": "1.0.2",
+  "description": "Verify listing bait prices: which SKU it matches, spec differences, unit price conversion, presale vs stock mixing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sku-bait-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sku-bait"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sku-bait-advisor",
+  "displayName": {
+    "zh": "引流价与规格陷阱识别顾问",
+    "en": "Bait Price and SKU Trap Advisor"
+  },
+  "profession": {
+    "zh": "11.11 引流价与规格陷阱识别顾问",
+    "en": "11.11 Bait Price and SKU Trap Advisor"
+  },
+  "displayDescription": {
+    "zh": "列表页低价到底是哪个规格：容量配件版本差异核对、单位价换算、预售与现货混挂识别、下单前三步核对。",
+    "en": "Verify listing bait prices: which SKU it matches, spec differences, unit price conversion, presale vs stock mixing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "列表页这个低价对应哪个规格",
+    "en": "Which spec does this listed price actually match"
+  },
+  "plugin": "lynxce-sku-bait-advisor",
+  "tags": [
+    {
+      "zh": "规格核对",
+      "en": "Spec Check"
+    },
+    {
+      "zh": "单位价对比",
+      "en": "Unit Price"
+    },
+    {
+      "zh": "预售现货识别",
+      "en": "Presale vs Stock"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "列表页这个低价对应哪个规格",
+      "en": "Which spec does this listed price actually match"
+    },
+    {
+      "zh": "这是现货还是预售",
+      "en": "Is this item in stock or presale"
+    },
+    {
+      "zh": "大包装和小包装哪个更划算",
+      "en": "Which pack size is the better deal"
+    }
+  ],
+  "keywords": [
+    "规格核对",
+    "单位价对比",
+    "预售现货识别",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-doc-routing-advisor",
+  "version": "1.0.1",
+  "description": "Turn incoming letters and team duties into numbering rules, registers, routing deadlines, reminder dates and a monthly open-items list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-doc-routing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-doc-inbound"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-doc-routing-advisor",
+  "displayName": {
+    "zh": "收发文管理顾问",
+    "en": "Document Routing Advisor"
+  },
+  "profession": {
+    "zh": "收发文登记与文件流转顾问｜灵策智算",
+    "en": "Incoming and Outgoing Document Routing Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据来文材料与部门分工，交付编号规则、收发文登记表、分办时限与提醒排程，以及月度未办结清单。",
+    "en": "Turn incoming letters and team duties into numbering rules, registers, routing deadlines, reminder dates and a monthly open-items list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我们的来文情况设计收文编号登记表和分办时限规则",
+    "en": "Design numbering registers and routing deadline rules for our incoming letters"
+  },
+  "plugin": "lynxce-doc-routing-advisor",
+  "tags": [
+    {
+      "zh": "收文登记",
+      "en": "Intake Register"
+    },
+    {
+      "zh": "办理时限",
+      "en": "Deadline Tracking"
+    },
+    {
+      "zh": "未办结清单",
+      "en": "Open Items List"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的来文情况设计收文编号登记表和分办时限规则",
+      "en": "Design numbering registers and routing deadline rules for our incoming letters"
+    },
+    {
+      "zh": "帮我复核这份收发文登记表的跳号时限和办结状态",
+      "en": "Check this register for numbering gaps deadlines and closure status"
+    },
+    {
+      "zh": "只有几份来文扫描件先帮我登记并算出提醒日",
+      "en": "Register a few scanned letters and work out their reminder dates"
+    }
+  ],
+  "keywords": [
+    "收文登记",
+    "办理时限",
+    "未办结清单",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

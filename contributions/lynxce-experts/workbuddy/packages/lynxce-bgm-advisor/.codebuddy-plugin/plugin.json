@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-bgm-advisor",
+  "version": "1.0.1",
+  "description": "Turn video length, section script and voiceover into a music plan with beat-cut frames, voice-music levels and a licence log.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bgm-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bgm-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bgm-advisor",
+  "displayName": {
+    "zh": "短视频配乐顾问",
+    "en": "Video Music Advisor"
+  },
+  "profession": {
+    "zh": "短视频配乐与音效选用顾问｜灵策智算",
+    "en": "Short Video Music and Sound Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据成片时长、分段脚本与口播情况整理配乐方案，提供卡点帧位表、人声音乐电平处理和曲目授权台账。",
+    "en": "Turn video length, section script and voiceover into a music plan with beat-cut frames, voice-music levels and a licence log."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的分段脚本生成配乐方案和卡点帧位表",
+    "en": "Build a music plan and beat-cut frame sheet from my section script"
+  },
+  "plugin": "lynxce-bgm-advisor",
+  "tags": [
+    {
+      "zh": "配乐方案",
+      "en": "Music Plan"
+    },
+    {
+      "zh": "卡点帧位",
+      "en": "Beat-cut Frames"
+    },
+    {
+      "zh": "授权台账",
+      "en": "Licence Log"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的分段脚本生成配乐方案和卡点帧位表",
+      "en": "Build a music plan and beat-cut frame sheet from my section script"
+    },
+    {
+      "zh": "帮我复核这条成片的人声音乐电平和授权记录",
+      "en": "Review the voice-music levels and licence records of this cut"
+    },
+    {
+      "zh": "只知道视频类型和时长时先给选曲条件与待确认项",
+      "en": "With only video type and length give music criteria and open items"
+    }
+  ],
+  "keywords": [
+    "配乐方案",
+    "卡点帧位",
+    "授权台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-related-party-reporting-b49",
+  "version": "1.0.0",
+  "description": "Reconcile related parties, annual transactions and report versus documentation requirements.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-related-party-reporting-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-related-party-map-b49",
+    "./skills/lynxce-related-transaction-ledger-b49",
+    "./skills/lynxce-related-report-document-split-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-related-party-reporting-b49",
+  "displayName": {
+    "zh": "关联顾问",
+    "en": "Related Party Reporting Advisor"
+  },
+  "profession": {
+    "zh": "关联申报顾问",
+    "en": "Related Party Reporting Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务与税务人员梳理关联关系和年度交易，复算分类金额，交付申报准备说明、文档分流及补正稿。",
+    "en": "Reconcile related parties, annual transactions and report versus documentation requirements."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "按股权和全年交易，写关联申报准备说明并区分同期资料。",
+    "en": "Related Party Reporting Advisor"
+  },
+  "plugin": "lynxce-related-party-reporting-b49",
+  "tags": [
+    {
+      "zh": "关联申报",
+      "en": "关联申报"
+    },
+    {
+      "zh": "关联交易",
+      "en": "关联交易"
+    },
+    {
+      "zh": "同期资料",
+      "en": "同期资料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按股权和全年交易，写关联申报准备说明并区分同期资料。",
+      "en": "Related Party Reporting Advisor"
+    },
+    {
+      "zh": "持股25%与20%、销售6000与8000冲突，保留两源重出全稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "货物交易恰好两亿元，帮我区分文档金额门槛和年度申报义务。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "关联申报",
+    "关联交易",
+    "同期资料"
+  ]
+}

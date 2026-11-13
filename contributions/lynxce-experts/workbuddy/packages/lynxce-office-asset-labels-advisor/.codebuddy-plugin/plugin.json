@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-asset-labels-advisor",
+  "version": "1.0.0",
+  "description": "Calculate asset labels and ribbons, verify identifiers and scans, and track inventory differences.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-asset-labels-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-asset-labels"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-asset-labels-advisor",
+  "displayName": {
+    "zh": "资产盘点标签核算顾问",
+    "en": "Asset Inventory Labels Advisor"
+  },
+  "profession": {
+    "zh": "部门固定资产盘点标签与碳带核算顾问",
+    "en": "Department Asset Label and Ribbon Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "部门资产盘点按补标数量、标签尺寸与打印方式核算标签和碳带，校验编号及扫码可读性，输出领用与差异表。",
+    "en": "Calculate asset labels and ribbons, verify identifiers and scans, and track inventory differences."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "首贴重贴和试印要买几卷标签",
+    "en": "Calculate label rolls for new labels and reprints"
+  },
+  "plugin": "lynxce-office-asset-labels-advisor",
+  "tags": [
+    {
+      "zh": "补标数量",
+      "en": "Relabeling Quantity"
+    },
+    {
+      "zh": "碳带适配",
+      "en": "Ribbon Compatibility"
+    },
+    {
+      "zh": "扫码差异表",
+      "en": "Scan Discrepancy Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "首贴重贴和试印要买几卷标签",
+      "en": "Calculate label rolls for new labels and reprints"
+    },
+    {
+      "zh": "标签高度和间距怎么算碳带用米",
+      "en": "Calculate ribbon length from label height and gap"
+    },
+    {
+      "zh": "生成盘点标签发放和扫码差异表",
+      "en": "Build label issue and scan discrepancy tables"
+    }
+  ],
+  "keywords": [
+    "补标数量",
+    "碳带适配",
+    "扫码差异表",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

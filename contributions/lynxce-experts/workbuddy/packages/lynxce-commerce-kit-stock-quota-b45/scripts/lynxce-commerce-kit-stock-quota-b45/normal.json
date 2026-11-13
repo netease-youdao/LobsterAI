@@ -1,0 +1,44 @@
+{
+  "inputStatus": "假设试跑输入",
+  "snapshot": "本轮快照，具体时点待补",
+  "skus": [
+    {
+      "id": "A",
+      "usage": {
+        "杯": 2,
+        "盖": 1
+      },
+      "cap": 30
+    },
+    {
+      "id": "B",
+      "usage": {
+        "杯": 1,
+        "盖": 2
+      },
+      "cap": null
+    }
+  ],
+  "branches": [
+    {
+      "id": "库存表基线",
+      "source": "用户给定已扣历史订单且无其他扣减",
+      "components": [
+        {
+          "id": "杯",
+          "inventory": 100,
+          "extraDeduction": 0,
+          "reserve": 10,
+          "source": "用户给定杯100，已扣且无其他扣减"
+        },
+        {
+          "id": "盖",
+          "inventory": 80,
+          "extraDeduction": 0,
+          "reserve": 10,
+          "source": "用户给定盖80，已扣且无其他扣减"
+        }
+      ]
+    }
+  ]
+}

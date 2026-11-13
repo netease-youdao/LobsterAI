@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-av-cable-fit-advisor",
+  "version": "1.0.0",
+  "description": "Map AV signal paths, verify directional adapters, measure routes and produce a purchase and test matrix.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-av-cable-fit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-av-cable-fit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-av-cable-fit-advisor",
+  "displayName": {
+    "zh": "会议线缆适配采购顾问",
+    "en": "Meeting AV Cable Purchase Advisor"
+  },
+  "profession": {
+    "zh": "会议音视频线缆与适配器采购核算顾问",
+    "en": "Meeting AV Cable and Adapter Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "会议音视频采购按源端与接收端接口核对方向和信号能力，测量走线路径与备件数量，输出兼容矩阵及验收表。",
+    "en": "Map AV signal paths, verify directional adapters, measure routes and produce a purchase and test matrix."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "会议电脑到大屏需要哪种转接方向",
+    "en": "Which adapter direction connects the laptop to the display"
+  },
+  "plugin": "lynxce-office-av-cable-fit-advisor",
+  "tags": [
+    {
+      "zh": "接口方向",
+      "en": "Interface Direction"
+    },
+    {
+      "zh": "走线长度",
+      "en": "Cable Route Length"
+    },
+    {
+      "zh": "链路验收表",
+      "en": "Signal Chain Acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "会议电脑到大屏需要哪种转接方向",
+      "en": "Which adapter direction connects the laptop to the display"
+    },
+    {
+      "zh": "按实际走线路径算线长和备用数量",
+      "en": "Calculate cable length and spares from actual routes"
+    },
+    {
+      "zh": "生成会议音视频兼容矩阵和采购表",
+      "en": "Build a meeting AV compatibility and purchase matrix"
+    }
+  ],
+  "keywords": [
+    "接口方向",
+    "走线长度",
+    "链路验收表",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

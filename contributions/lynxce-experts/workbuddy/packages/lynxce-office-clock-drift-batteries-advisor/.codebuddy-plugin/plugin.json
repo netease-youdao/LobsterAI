@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-clock-drift-batteries-advisor",
+  "version": "1.0.0",
+  "description": "Log clock drift and replenish compatible batteries.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-clock-drift-batteries-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-clock-drift-batteries"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-clock-drift-batteries-advisor",
+  "displayName": {
+    "zh": "时钟同步电池顾问",
+    "en": "Clock Battery Advisor"
+  },
+  "profession": {
+    "zh": "办公室时钟偏差记录与电池补货顾问",
+    "en": "Clock Battery Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公室时钟按统一参考时间记录偏差与漂移，核对机芯电池规格及联网条件，扣除合格库存，输出同步补货表。",
+    "en": "Log clock drift and replenish compatible batteries."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对办公室时钟偏差记录与电池补货的适配条件",
+    "en": "Check compatibility and required inputs"
+  },
+  "plugin": "lynxce-office-clock-drift-batteries-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "净购核算",
+      "en": "Net Purchase Calculation"
+    },
+    {
+      "zh": "异常复查",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对办公室时钟偏差记录与电池补货的适配条件",
+      "en": "Check compatibility and required inputs"
+    },
+    {
+      "zh": "按实测记录与库存计算补货数量",
+      "en": "Calculate purchases from measurements and stock"
+    },
+    {
+      "zh": "生成采购与异常复查记录表",
+      "en": "Build purchase and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "净购核算",
+    "异常复查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

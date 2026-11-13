@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-tablecloth-advisor",
+  "version": "1.0.0",
+  "description": "Pick tablecloths: drop size, material, oil resistance, heat rating and shrinkage.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tablecloth-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tablecloth"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tablecloth-advisor",
+  "displayName": {
+    "zh": "桌布餐垫选购顾问",
+    "en": "Tablecloth and Placemat Advisor"
+  },
+  "profession": {
+    "zh": "11.11 桌布与餐垫选购顾问",
+    "en": "11.11 Tablecloth and Placemat Advisor"
+  },
+  "displayDescription": {
+    "zh": "桌布餐垫怎么挑：按桌面加垂边算尺寸、比材质防水防油、核耐热温度、看缩水与清洗方式。",
+    "en": "Pick tablecloths: drop size, material, oil resistance, heat rating and shrinkage."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "140×80 的餐桌买多大的桌布",
+    "en": "What tablecloth size fits a 140 by 80 table"
+  },
+  "plugin": "lynxce-tablecloth-advisor",
+  "tags": [
+    {
+      "zh": "垂边尺寸",
+      "en": "Drop Length"
+    },
+    {
+      "zh": "防水耐热",
+      "en": "Water and Heat"
+    },
+    {
+      "zh": "缩水清洗",
+      "en": "Shrinkage and Care"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "140×80 的餐桌买多大的桌布",
+      "en": "What tablecloth size fits a 140 by 80 table"
+    },
+    {
+      "zh": "PVC 桌布能直接放热锅吗",
+      "en": "Can a hot pot go directly on a PVC tablecloth"
+    },
+    {
+      "zh": "棉麻桌布洗了会缩多少",
+      "en": "How much a cotton linen tablecloth shrinks"
+    }
+  ],
+  "keywords": [
+    "垂边尺寸",
+    "防水耐热",
+    "缩水清洗",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

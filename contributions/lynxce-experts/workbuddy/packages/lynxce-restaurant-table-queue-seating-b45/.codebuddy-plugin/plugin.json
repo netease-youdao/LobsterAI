@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-restaurant-table-queue-seating-b45",
+  "version": "1.0.0",
+  "description": "Match waiting parties with table release windows and draft queue, no-show and shared-table consent scripts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-restaurant-table-queue-seating-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-restaurant-table-queue-seating-inside-1-b45",
+    "./skills/lynxce-restaurant-table-queue-seating-inside-2-b45",
+    "./skills/lynxce-restaurant-table-queue-seating-inside-3-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-restaurant-table-queue-seating-b45",
+  "displayName": {
+    "zh": "桌位调度师",
+    "en": "Restaurant Queue and Table Seating Planner"
+  },
+  "profession": {
+    "zh": "餐厅等位调度师",
+    "en": "Restaurant Queue and Table Seating Planner"
+  },
+  "displayDescription": {
+    "zh": "根据等位客组与桌位释放时间安排叫号顺序，计算等待与空座，交付桌号分配和过号、拼桌征询话术。",
+    "en": "Match waiting parties with table release windows and draft queue, no-show and shared-table consent scripts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三桌四组客人怎么安排，给出叫号顺序与等待时间。",
+    "en": "Restaurant Queue and Table Seating Planner"
+  },
+  "plugin": "lynxce-restaurant-table-queue-seating-b45",
+  "tags": [
+    {
+      "zh": "餐厅等位",
+      "en": "餐厅等位"
+    },
+    {
+      "zh": "桌位安排",
+      "en": "桌位安排"
+    },
+    {
+      "zh": "叫号顺序",
+      "en": "叫号顺序"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三桌四组客人怎么安排，给出叫号顺序与等待时间。",
+      "en": "Restaurant Queue and Table Seating Planner"
+    },
+    {
+      "zh": "四人桌先空出来，两人客组能否先坐，按规则给方案。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "客人过号又回来了，帮我生成能直接说的解释。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "餐厅等位",
+    "桌位安排",
+    "叫号顺序"
+  ]
+}

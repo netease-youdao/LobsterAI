@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-office-frame-hook-surface-fit-advisor",
+  "version": "1.0.0",
+  "description": "Check frame hook loads and wall surface compatibility.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-office-frame-hook-surface-fit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-office-frame-hook-surface-fit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-office-frame-hook-surface-fit-advisor",
+  "displayName": {
+    "zh": "挂画墙面适配顾问",
+    "en": "Office Frame Hook Advisor"
+  },
+  "profession": {
+    "zh": "办公室挂画挂钩承重条件与墙面适配顾问",
+    "en": "Office Frame Hook Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公室挂画按整框重量核厂家挂钩条件，区分墙面涂层与固定形式，试贴后核算合格库存，输出采购复查表。",
+    "en": "Check frame hook loads and wall surface compatibility."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对办公室挂画挂钩承重条件与墙面适配的输入条件",
+    "en": "Check inputs and compatibility"
+  },
+  "plugin": "lynxce-office-office-frame-hook-surface-fit-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "台账核算",
+      "en": "Ledger Reconciliation"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对办公室挂画挂钩承重条件与墙面适配的输入条件",
+      "en": "Check inputs and compatibility"
+    },
+    {
+      "zh": "依据确认数据计算净购与余量",
+      "en": "Calculate net purchases and remaining stock"
+    },
+    {
+      "zh": "生成专项台账与异常复核表",
+      "en": "Build records and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "台账核算",
+    "异常复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

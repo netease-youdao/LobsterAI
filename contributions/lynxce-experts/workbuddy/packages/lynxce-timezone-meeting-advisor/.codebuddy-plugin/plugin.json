@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-timezone-meeting-advisor",
+  "version": "1.0.2",
+  "description": "Turn member cities and work hours into overlap windows, rotation scores, meeting triage, async handover notes and daylight saving checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-timezone-meeting-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-timezone-meeting"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-timezone-meeting-advisor",
+  "displayName": {
+    "zh": "跨时区协作顾问",
+    "en": "Cross-timezone Collaboration Advisor"
+  },
+  "profession": {
+    "zh": "跨时区协作与会议时间安排顾问｜灵策智算",
+    "en": "Cross-timezone Collaboration and Scheduling Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据各地城市与工作时间，交付时区基准表、重叠窗口、轮换记分台账、会议分类和异步交接模板并核对夏令时。",
+    "en": "Turn member cities and work hours into overlap windows, rotation scores, meeting triage, async handover notes and daylight saving checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据三地成员城市和工作时间算重叠窗口并给出轮换排会方案",
+    "en": "Compute overlap windows for three sites and propose a rotating meeting plan"
+  },
+  "plugin": "lynxce-timezone-meeting-advisor",
+  "tags": [
+    {
+      "zh": "重叠窗口",
+      "en": "Overlap Windows"
+    },
+    {
+      "zh": "轮换记分",
+      "en": "Fair Rotation"
+    },
+    {
+      "zh": "夏令时核对",
+      "en": "DST Checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据三地成员城市和工作时间算重叠窗口并给出轮换排会方案",
+      "en": "Compute overlap windows for three sites and propose a rotating meeting plan"
+    },
+    {
+      "zh": "复核这封会议邀请里各地本地时间和星期是否换算正确",
+      "en": "Check local times and weekdays in this meeting invite"
+    },
+    {
+      "zh": "只知道成员所在国家时先给时区表模板和待确认项",
+      "en": "With only member countries give a timezone table template and open items"
+    }
+  ],
+  "keywords": [
+    "重叠窗口",
+    "轮换记分",
+    "夏令时核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

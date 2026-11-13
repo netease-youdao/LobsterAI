@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-office-safety-advisor",
+  "version": "1.0.1",
+  "description": "Turn floor, headcount and facility notes into hazard checklists, evacuation roles, drill scripts and timed after-action reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-safety-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-safety-drill"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-safety-advisor",
+  "displayName": {
+    "zh": "办公安全应急演练顾问",
+    "en": "Office Safety Advisor"
+  },
+  "profession": {
+    "zh": "办公场所安全与应急演练顾问｜灵策智算",
+    "en": "Office Safety and Emergency Drill Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据楼层人数与设施现状整理隐患检查和整改单，制定疏散路线、角色分工与演练脚本，附计时清点复盘表。",
+    "en": "Turn floor, headcount and facility notes into hazard checklists, evacuation roles, drill scripts and timed after-action reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据楼层人数和设施情况生成检查表与首次演练方案",
+    "en": "Build a hazard checklist and first drill plan from floors and headcount"
+  },
+  "plugin": "lynxce-office-safety-advisor",
+  "tags": [
+    {
+      "zh": "隐患检查",
+      "en": "Hazard Check"
+    },
+    {
+      "zh": "疏散演练",
+      "en": "Evacuation Drill"
+    },
+    {
+      "zh": "整改闭环",
+      "en": "Fix Tracking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据楼层人数和设施情况生成检查表与首次演练方案",
+      "en": "Build a hazard checklist and first drill plan from floors and headcount"
+    },
+    {
+      "zh": "帮我复核这份演练脚本和计时记录找出缺口",
+      "en": "Review this drill script and timing record for gaps"
+    },
+    {
+      "zh": "只知道人数和楼层先给一版疏散分工草稿",
+      "en": "With only headcount and floors draft evacuation roles first"
+    }
+  ],
+  "keywords": [
+    "隐患检查",
+    "疏散演练",
+    "整改闭环",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

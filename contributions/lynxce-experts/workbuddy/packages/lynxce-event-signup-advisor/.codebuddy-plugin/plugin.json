@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-event-signup-advisor",
+  "version": "1.0.1",
+  "description": "Turn event type, venue capacity and past attendance into sign-up fields, seat and waitlist rules, check-in sheets and attendance review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-event-signup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-event-signup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-event-signup-advisor",
+  "displayName": {
+    "zh": "活动报名统计顾问",
+    "en": "Event Sign-up Advisor"
+  },
+  "profession": {
+    "zh": "内部活动报名与签到统计顾问｜灵策智算",
+    "en": "Internal Event Sign-up and Attendance Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据活动类型、场地容量和往期到场数据，交付报名表字段、名额与候补规则、签到核对表和分部门到场复盘。",
+    "en": "Turn event type, venue capacity and past attendance into sign-up fields, seat and waitlist rules, check-in sheets and attendance review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据场地容量和往期到场数据生成报名名额与候补方案",
+    "en": "Plan sign-up seats and a waitlist from capacity and past attendance"
+  },
+  "plugin": "lynxce-event-signup-advisor",
+  "tags": [
+    {
+      "zh": "名额测算",
+      "en": "Seat Planning"
+    },
+    {
+      "zh": "签到核对",
+      "en": "Check-in Matching"
+    },
+    {
+      "zh": "到场复盘",
+      "en": "Attendance Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据场地容量和往期到场数据生成报名名额与候补方案",
+      "en": "Plan sign-up seats and a waitlist from capacity and past attendance"
+    },
+    {
+      "zh": "帮我复核这份报名表和到场率统计的口径",
+      "en": "Review this sign-up form and the attendance rate definitions"
+    },
+    {
+      "zh": "只知道活动类型和日期时先给报名表和待确认清单",
+      "en": "With only the event type and date draft the form and open items"
+    }
+  ],
+  "keywords": [
+    "名额测算",
+    "签到核对",
+    "到场复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

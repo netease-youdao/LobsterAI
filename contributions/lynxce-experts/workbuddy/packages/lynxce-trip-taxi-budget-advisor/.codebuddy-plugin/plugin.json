@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-trip-taxi-budget-advisor",
+  "version": "1.0.0",
+  "description": "Trip taxis: city tiers, route estimates, limits, coupons, budget and expense detail.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-trip-taxi-budget-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trip-taxi-budget"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-trip-taxi-budget-advisor",
+  "displayName": {
+    "zh": "出差打车差标助理",
+    "en": "Trip Taxi Policy Assistant"
+  },
+  "profession": {
+    "zh": "出差市内交通差标核算助理",
+    "en": "Business Trip Local Transport Budget Assistant"
+  },
+  "displayDescription": {
+    "zh": "出差打车怎么不超标：按城市差标定交通额度、逐段估车费与公交对比、用打车券，产出预算与报销明细。",
+    "en": "Trip taxis: city tiers, route estimates, limits, coupons, budget and expense detail."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "出差 3 天打车会不会超差标",
+    "en": "Will 3 days of trip taxis exceed the policy"
+  },
+  "plugin": "lynxce-trip-taxi-budget-advisor",
+  "tags": [
+    {
+      "zh": "城市差标",
+      "en": "City Policy Tier"
+    },
+    {
+      "zh": "行程预算",
+      "en": "Route Budget"
+    },
+    {
+      "zh": "报销明细",
+      "en": "Expense Detail"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "出差 3 天打车会不会超差标",
+      "en": "Will 3 days of trip taxis exceed the policy"
+    },
+    {
+      "zh": "打车券抵扣的钱能不能报销",
+      "en": "Whether coupon discounts can be claimed"
+    },
+    {
+      "zh": "帮我做差旅交通预算和报销表",
+      "en": "Make a trip transport budget and expense sheet"
+    }
+  ],
+  "keywords": [
+    "城市差标",
+    "行程预算",
+    "报销明细",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

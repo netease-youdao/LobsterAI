@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-declutter-advisor",
+  "version": "1.0.1",
+  "description": "Turn room sizes, item counts and household habits into a sorting order, keep counts, zoning, container sizing and upkeep rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-declutter-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-declutter-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-declutter-advisor",
+  "displayName": {
+    "zh": "收纳整理顾问",
+    "en": "Home Organizing"
+  },
+  "profession": {
+    "zh": "家居收纳与空间规划顾问",
+    "en": "Home Organizing & Space Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据空间尺寸、物品数量和家人使用习惯，交付类别整理顺序、去留统计、频率分区、容器尺寸核算和维持规则。",
+    "en": "Turn room sizes, item counts and household habits into a sorting order, keep counts, zoning, container sizing and upkeep rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据衣柜尺寸和衣物数量生成整理顺序与分区方案",
+    "en": "Build a sorting order and zoning plan from closet size and item counts"
+  },
+  "plugin": "lynxce-declutter-advisor",
+  "tags": [
+    {
+      "zh": "整理顺序",
+      "en": "Sorting Order"
+    },
+    {
+      "zh": "分区收纳",
+      "en": "Zoning"
+    },
+    {
+      "zh": "容器核算",
+      "en": "Container Sizing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据衣柜尺寸和衣物数量生成整理顺序与分区方案",
+      "en": "Build a sorting order and zoning plan from closet size and item counts"
+    },
+    {
+      "zh": "帮我复核这份收纳方案和准备买的收纳盒尺寸",
+      "en": "Review this storage plan and the box sizes I plan to buy"
+    },
+    {
+      "zh": "还没量尺寸时先给整理顺序和测量清单",
+      "en": "Before measuring give the sorting order and a measuring list"
+    }
+  ],
+  "keywords": [
+    "整理顺序",
+    "分区收纳",
+    "容器核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-photo-frame-advisor",
+  "version": "1.0.0",
+  "description": "Plan gallery walls: print and mat size, layout spacing, hook load and mounting.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-photo-frame-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-photo-frame"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-photo-frame-advisor",
+  "displayName": {
+    "zh": "相框照片墙选购顾问",
+    "en": "Photo Frame and Gallery Wall Advisor"
+  },
+  "profession": {
+    "zh": "11.11 相框与照片墙选购顾问",
+    "en": "11.11 Photo Frame and Gallery Wall Advisor"
+  },
+  "displayDescription": {
+    "zh": "相框照片墙怎么挑：按照片尺寸配卡纸与框、算墙面排版间距、核挂钩承重、选打孔方式。",
+    "en": "Plan gallery walls: print and mat size, layout spacing, hook load and mounting."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "沙发上方照片墙挂多高合适",
+    "en": "How high to hang a gallery wall above a sofa"
+  },
+  "plugin": "lynxce-photo-frame-advisor",
+  "tags": [
+    {
+      "zh": "照片尺寸",
+      "en": "Print Sizes"
+    },
+    {
+      "zh": "排版间距",
+      "en": "Layout Spacing"
+    },
+    {
+      "zh": "挂件承重",
+      "en": "Hook Load"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "沙发上方照片墙挂多高合适",
+      "en": "How high to hang a gallery wall above a sofa"
+    },
+    {
+      "zh": "10 寸照片配多大的相框和卡纸",
+      "en": "Which frame and mat suit a 10 inch print"
+    },
+    {
+      "zh": "租房不打孔怎么挂玻璃相框",
+      "en": "How to hang glass frames in a rental without drilling"
+    }
+  ],
+  "keywords": [
+    "照片尺寸",
+    "排版间距",
+    "挂件承重",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

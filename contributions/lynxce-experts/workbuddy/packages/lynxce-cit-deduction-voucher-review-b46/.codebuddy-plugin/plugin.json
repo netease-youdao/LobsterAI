@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-cit-deduction-voucher-review-b46",
+  "version": "1.0.0",
+  "description": "Match actual expenses to deduction vouchers and produce correction letters, year routing notes and evidence registers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cit-deduction-voucher-review-b46.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cit-deduction-voucher-review-voucher-kind-match",
+    "./skills/lynxce-cit-deduction-voucher-review-voucher-exception-file",
+    "./skills/lynxce-cit-deduction-voucher-review-voucher-year-routing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cit-deduction-voucher-review-b46",
+  "displayName": {
+    "zh": "凭证顾问",
+    "en": "CIT Deduction Voucher Review Advisor"
+  },
+  "profession": {
+    "zh": "税前扣除顾问",
+    "en": "CIT Deduction Voucher Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助企业财务逐笔核对支出与扣除凭证，梳理补开换开和跨年处理，交付补证函、凭证台账与可追溯说明稿。",
+    "en": "Match actual expenses to deduction vouchers and produce correction letters, year routing notes and evidence registers."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "这三笔费用缺票或跨年取票，帮我逐笔形成补证台账与说明稿。",
+    "en": "CIT Deduction Voucher Review Advisor"
+  },
+  "plugin": "lynxce-cit-deduction-voucher-review-b46",
+  "tags": [
+    {
+      "zh": "扣除凭证",
+      "en": "扣除凭证"
+    },
+    {
+      "zh": "补开换开",
+      "en": "补开换开"
+    },
+    {
+      "zh": "跨年补证",
+      "en": "跨年补证"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这三笔费用缺票或跨年取票，帮我逐笔形成补证台账与说明稿。",
+      "en": "CIT Deduction Voucher Review Advisor"
+    },
+    {
+      "zh": "供应商已注销，按真实资料核对第十四条必备证据并写补正说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "刚收到税务告知，请保留原年状态，重做本笔补证路线和待核问题。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "扣除凭证",
+    "补开换开",
+    "跨年补证"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-meeting-tech-advisor",
+  "version": "1.0.1",
+  "description": "Turn meeting format, headcount and room gear into pre-meeting checklists, echo triage, seat-by-seat mic tests and an issue log.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-meeting-tech-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-meeting-tech-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-meeting-tech-advisor",
+  "displayName": {
+    "zh": "会议设备调试顾问",
+    "en": "Meeting AV Check Advisor"
+  },
+  "profession": {
+    "zh": "线上会议与会场设备调试顾问｜灵策智算",
+    "en": "Online Meeting and Room AV Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据会议形式、人数和会场设备清单，交付会前调试清单、回声排查顺序、逐座位拾音测试和问题记录表。",
+    "en": "Turn meeting format, headcount and room gear into pre-meeting checklists, echo triage, seat-by-seat mic tests and an issue log."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据会议人数和会场设备生成会前调试清单与开场规则",
+    "en": "Build a pre-meeting checklist and opening rules from headcount and room gear"
+  },
+  "plugin": "lynxce-meeting-tech-advisor",
+  "tags": [
+    {
+      "zh": "会前清单",
+      "en": "Pre-meeting Checklist"
+    },
+    {
+      "zh": "回声排查",
+      "en": "Echo Triage"
+    },
+    {
+      "zh": "混合会议",
+      "en": "Hybrid Meetings"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据会议人数和会场设备生成会前调试清单与开场规则",
+      "en": "Build a pre-meeting checklist and opening rules from headcount and room gear"
+    },
+    {
+      "zh": "帮我复核这份会议室调试清单有没有漏项",
+      "en": "Review this meeting room checklist for missing items"
+    },
+    {
+      "zh": "只知道会上有回声时先给排查顺序和要问的问题",
+      "en": "With only an echo complaint give the triage order and key questions"
+    }
+  ],
+  "keywords": [
+    "会前清单",
+    "回声排查",
+    "混合会议",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

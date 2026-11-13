@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-hometheater-advisor",
+  "version": "1.0.4",
+  "description": "Projector or TV depends on light: brightness, screens, audio and budget split.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hometheater-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hometheater-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hometheater-advisor",
+  "displayName": {
+    "zh": "家庭影音与投影设备选购顾问",
+    "en": "Home Theater and Projector Advisor"
+  },
+  "profession": {
+    "zh": "家庭影音与投影设备选购顾问",
+    "en": "Home Theater and Projector Advisor"
+  },
+  "displayDescription": {
+    "zh": "投影还是电视先看遮光：亮度参数怎么读、幕布怎么配、音响怎么选、预算按什么比例分。",
+    "en": "Projector or TV depends on light: brightness, screens, audio and budget split."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "客厅买投影还是电视",
+    "en": "Projector or TV for my living room"
+  },
+  "plugin": "lynxce-hometheater-advisor",
+  "tags": [
+    {
+      "zh": "家庭影院",
+      "en": "Home Theater"
+    },
+    {
+      "zh": "投影选型",
+      "en": "Projector"
+    },
+    {
+      "zh": "预算分配",
+      "en": "Budget Split"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "客厅买投影还是电视",
+      "en": "Projector or TV for my living room"
+    },
+    {
+      "zh": "这个房间配多大幕布",
+      "en": "What screen size fits this room"
+    },
+    {
+      "zh": "五千块怎么配一套",
+      "en": "How should I spend this budget"
+    }
+  ],
+  "keywords": [
+    "家庭影院",
+    "投影选型",
+    "预算分配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

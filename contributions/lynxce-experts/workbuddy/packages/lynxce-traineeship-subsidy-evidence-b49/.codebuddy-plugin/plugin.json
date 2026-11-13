@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-traineeship-subsidy-evidence-b49",
+  "version": "1.0.0",
+  "description": "Reconcile trainee eligibility, monthly attendance, payments and subsidy evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-traineeship-subsidy-evidence-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trainee-policy-person-check-b49",
+    "./skills/lynxce-trainee-personmonth-pay-b49",
+    "./skills/lynxce-trainee-subsidy-draft-b49"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-traineeship-subsidy-evidence-b49",
+  "displayName": {
+    "zh": "见习顾问",
+    "en": "Traineeship Subsidy Evidence Advisor"
+  },
+  "profession": {
+    "zh": "见习补贴顾问",
+    "en": "Traineeship Subsidy Evidence Advisor"
+  },
+  "displayDescription": {
+    "zh": "为见习单位人事与财务核对人员条件、考勤和生活费，复算可核人月，形成补贴申请说明及补正稿。",
+    "en": "Reconcile trainee eligibility, monthly attendance, payments and subsidy evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按本轮通知和两位见习人员记录，写补贴申请并核人月。",
+    "en": "Traineeship Subsidy Evidence Advisor"
+  },
+  "plugin": "lynxce-traineeship-subsidy-evidence-b49",
+  "tags": [
+    {
+      "zh": "就业见习",
+      "en": "就业见习"
+    },
+    {
+      "zh": "人月核对",
+      "en": "人月核对"
+    },
+    {
+      "zh": "补贴材料",
+      "en": "补贴材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按本轮通知和两位见习人员记录，写补贴申请并核人月。",
+      "en": "Traineeship Subsidy Evidence Advisor"
+    },
+    {
+      "zh": "离岗表与考勤冲突，帮我保留两源重出完整补正说明。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "生活费银行日期和汇总不一致，请分清已支出与可计补贴。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "就业见习",
+    "人月核对",
+    "补贴材料"
+  ]
+}

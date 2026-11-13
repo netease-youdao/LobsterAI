@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-perfume-advisor",
+  "version": "1.0.1",
+  "description": "Buy perfume wisely: price per ml, samples vs decants vs full size vs gift sets, decant risks, scent testing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-perfume-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-perfume"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-perfume-advisor",
+  "displayName": {
+    "zh": "香水小样与正装单价顾问",
+    "en": "Perfume Sample and Full Size Price Advisor"
+  },
+  "profession": {
+    "zh": "11.11 香水小样与正装单价顾问",
+    "en": "11.11 Perfume Sample and Full Size Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "香水怎么买：按毫升单价换算、小样分装正装礼盒对比、分装来源风险与退换、试香流程。",
+    "en": "Buy perfume wisely: price per ml, samples vs decants vs full size vs gift sets, decant risks, scent testing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "正装和礼盒按毫升算哪个划算",
+    "en": "Is the full bottle or gift set cheaper per ml"
+  },
+  "plugin": "lynxce-perfume-advisor",
+  "tags": [
+    {
+      "zh": "毫升单价",
+      "en": "Price per ml"
+    },
+    {
+      "zh": "分装风险",
+      "en": "Decant Risks"
+    },
+    {
+      "zh": "试香流程",
+      "en": "Scent Testing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "正装和礼盒按毫升算哪个划算",
+      "en": "Is the full bottle or gift set cheaper per ml"
+    },
+    {
+      "zh": "第三方分装靠不靠谱",
+      "en": "Are third-party decants reliable"
+    },
+    {
+      "zh": "没试过的香水怎么试再买",
+      "en": "How should I test a perfume before buying"
+    }
+  ],
+  "keywords": [
+    "毫升单价",
+    "分装风险",
+    "试香流程",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-fishing-advisor",
+  "version": "1.0.4",
+  "description": "Match tackle to your style and water: rod and reel pairing, a beginner list and local rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fishing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fishing-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fishing-advisor",
+  "displayName": {
+    "zh": "钓鱼装备选购与出钓规划顾问",
+    "en": "Fishing Gear and Trip Advisor"
+  },
+  "profession": {
+    "zh": "钓鱼装备选购与出钓规划顾问",
+    "en": "Fishing Gear and Trip Advisor"
+  },
+  "displayDescription": {
+    "zh": "按钓法和水域配钓具：竿轮线钩怎么配、新手先买哪几样、套装值不值、禁渔规定出发前先核对。",
+    "en": "Match tackle to your style and water: rod and reel pairing, a beginner list and local rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新手入门该买哪几样",
+    "en": "What should a beginner buy first"
+  },
+  "plugin": "lynxce-fishing-advisor",
+  "tags": [
+    {
+      "zh": "钓鱼装备",
+      "en": "Fishing Gear"
+    },
+    {
+      "zh": "线组搭配",
+      "en": "Tackle"
+    },
+    {
+      "zh": "出钓预算",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新手入门该买哪几样",
+      "en": "What should a beginner buy first"
+    },
+    {
+      "zh": "这根竿配什么轮和线",
+      "en": "Which reel and line suit this rod"
+    },
+    {
+      "zh": "帮我列一份出钓预算",
+      "en": "Draft my fishing budget"
+    }
+  ],
+  "keywords": [
+    "钓鱼装备",
+    "线组搭配",
+    "出钓预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

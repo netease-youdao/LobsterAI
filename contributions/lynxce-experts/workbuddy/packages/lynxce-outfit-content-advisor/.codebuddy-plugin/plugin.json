@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-outfit-content-advisor",
+  "version": "1.0.1",
+  "description": "Turn your style, budget and shooting capacity into a positioning card, monthly calendar, shoot plan, reuse split and data log.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-outfit-content-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-outfit-content"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-outfit-content-advisor",
+  "displayName": {
+    "zh": "穿搭内容顾问",
+    "en": "Outfit Content Advisor"
+  },
+  "profession": {
+    "zh": "穿搭类账号内容规划与拍摄顾问｜灵策智算",
+    "en": "Outfit Account Planning and Shooting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据风格预算与拍摄频率，交付定位卡、按容量排的月度选题日历、单次拍摄计划、素材拆分与数据回填表。",
+    "en": "Turn your style, budget and shooting capacity into a positioning card, monthly calendar, shoot plan, reuse split and data log."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的风格预算和拍摄频率生成定位卡与下月选题日历",
+    "en": "Build a positioning card and next month's calendar from my style budget and capacity"
+  },
+  "plugin": "lynxce-outfit-content-advisor",
+  "tags": [
+    {
+      "zh": "穿搭定位",
+      "en": "Style Positioning"
+    },
+    {
+      "zh": "选题日历",
+      "en": "Content Calendar"
+    },
+    {
+      "zh": "一拍多用",
+      "en": "Shoot Reuse"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的风格预算和拍摄频率生成定位卡与下月选题日历",
+      "en": "Build a positioning card and next month's calendar from my style budget and capacity"
+    },
+    {
+      "zh": "帮我复核这份穿搭拍摄计划和标题里的价格与效果表述",
+      "en": "Review this outfit shoot plan and the price and effect claims in titles"
+    },
+    {
+      "zh": "只知道想做通勤穿搭先给最小可执行的一周计划",
+      "en": "Give a minimal one-week plan when I only know I want commute outfits"
+    }
+  ],
+  "keywords": [
+    "穿搭定位",
+    "选题日历",
+    "一拍多用",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

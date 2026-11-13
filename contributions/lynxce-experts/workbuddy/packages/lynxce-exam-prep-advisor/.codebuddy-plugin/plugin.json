@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-exam-prep-advisor",
+  "version": "1.0.2",
+  "description": "Turn exam date, daily hours and mock-test losses into priority diagnosis, phased weekly plans, daily blocks and error-log reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-exam-prep-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-exam-prep-advisor",
+  "displayName": {
+    "zh": "备考规划与学习方法顾问",
+    "en": "Exam Prep & Study Method Advisor"
+  },
+  "profession": {
+    "zh": "考试备考规划与学习方法顾问",
+    "en": "Exam Preparation Planning and Study Method Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据考试日期每日可用时间和模考失分，交付失分优先级诊断、阶段周计划、日时间块和错题复做表。",
+    "en": "Turn exam date, daily hours and mock-test losses into priority diagnosis, phased weekly plans, daily blocks and error-log reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "还有十二周考试每天两小时，帮我排阶段周计划",
+    "en": "Twelve weeks left with two hours a day so build my phased weekly plan"
+  },
+  "plugin": "lynxce-exam-prep-advisor",
+  "tags": [
+    {
+      "zh": "备考计划",
+      "en": "Study Plan"
+    },
+    {
+      "zh": "错题复盘",
+      "en": "Error Log"
+    },
+    {
+      "zh": "时间分配",
+      "en": "Time Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "还有十二周考试每天两小时，帮我排阶段周计划",
+      "en": "Twelve weeks left with two hours a day so build my phased weekly plan"
+    },
+    {
+      "zh": "帮我复核这份周计划的时间分配和完成率调整",
+      "en": "Check the time split and completion adjustments in my weekly plan"
+    },
+    {
+      "zh": "还没有模考成绩时先给第一周诊断安排",
+      "en": "With no mock scores yet give me a first-week diagnostic plan"
+    }
+  ],
+  "keywords": [
+    "备考计划",
+    "错题复盘",
+    "时间分配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

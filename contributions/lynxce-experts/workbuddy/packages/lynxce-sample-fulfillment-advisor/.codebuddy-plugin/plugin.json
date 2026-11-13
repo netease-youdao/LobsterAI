@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-sample-fulfillment-advisor",
+  "version": "1.0.2",
+  "description": "Turn creator lists, sample costs and agreed terms into a sampling ledger with screening, written terms, follow-up dates and fee checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sample-fulfillment-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sample-fulfillment"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sample-fulfillment-advisor",
+  "displayName": {
+    "zh": "达人寄样履约顾问",
+    "en": "Sampling Fulfillment Advisor"
+  },
+  "profession": {
+    "zh": "达人寄样与商单履约跟进顾问｜灵策智算",
+    "en": "Creator Sampling and Deliverable Follow-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据达人名单、样品成本与合作约定整理寄样履约台账，提供筛选门槛、寄前条款清单、跟进节点和商单对账表。",
+    "en": "Turn creator lists, sample costs and agreed terms into a sampling ledger with screening, written terms, follow-up dates and fee checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "根据我的寄样名单和合作约定生成履约台账与跟进节点",
+    "en": "Build a sampling ledger and follow-up dates from my list and terms"
+  },
+  "plugin": "lynxce-sample-fulfillment-advisor",
+  "tags": [
+    {
+      "zh": "寄样台账",
+      "en": "Sampling Ledger"
+    },
+    {
+      "zh": "履约跟进",
+      "en": "Follow-up"
+    },
+    {
+      "zh": "商单对账",
+      "en": "Fee Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的寄样名单和合作约定生成履约台账与跟进节点",
+      "en": "Build a sampling ledger and follow-up dates from my list and terms"
+    },
+    {
+      "zh": "帮我复核这批寄样的发布率和商单费用对账",
+      "en": "Review this batch's posting rate and paid-deal fee reconciliation"
+    },
+    {
+      "zh": "只有达人名单时先给筛选表和寄样前条款清单",
+      "en": "With only a creator list give a screening sheet and pre-ship terms"
+    }
+  ],
+  "keywords": [
+    "寄样台账",
+    "履约跟进",
+    "商单对账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

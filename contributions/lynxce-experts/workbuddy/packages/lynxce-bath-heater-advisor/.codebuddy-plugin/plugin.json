@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-bath-heater-advisor",
+  "version": "1.0.1",
+  "description": "Choose a bathroom heater: power by area, fan versus lamp heating, ceiling cutout and clearance, circuit load, running cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bath-heater-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bath-heater"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bath-heater-advisor",
+  "displayName": {
+    "zh": "浴霸与卫生间取暖顾问",
+    "en": "Bathroom Heater Selection Advisor"
+  },
+  "profession": {
+    "zh": "11.11 浴霸与卫生间取暖顾问",
+    "en": "11.11 Bathroom Heater Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "浴霸怎么选：按面积定取暖功率、风暖灯暖区别、吊顶开孔与净空尺寸、电路负荷与电费估算。",
+    "en": "Choose a bathroom heater: power by area, fan versus lamp heating, ceiling cutout and clearance, circuit load, running cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "6 平米卫生间浴霸选多大功率",
+    "en": "What heater power suits a 6 square meter bathroom"
+  },
+  "plugin": "lynxce-bath-heater-advisor",
+  "tags": [
+    {
+      "zh": "功率测算",
+      "en": "Power Sizing"
+    },
+    {
+      "zh": "吊顶开孔",
+      "en": "Ceiling Cutout"
+    },
+    {
+      "zh": "电费估算",
+      "en": "Running Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "6 平米卫生间浴霸选多大功率",
+      "en": "What heater power suits a 6 square meter bathroom"
+    },
+    {
+      "zh": "风暖和灯暖哪个更适合有宝宝的家庭",
+      "en": "Fan heater or lamp heater for a home with a baby"
+    },
+    {
+      "zh": "浴霸每个月大概多少电费",
+      "en": "How much will the bathroom heater cost per month"
+    }
+  ],
+  "keywords": [
+    "功率测算",
+    "吊顶开孔",
+    "电费估算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

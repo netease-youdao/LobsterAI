@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-room-heater-advisor",
+  "version": "1.0.1",
+  "description": "Pick room heaters: wattage by room area, oil, fan, baseboard or carbon type, monthly power cost, safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-room-heater-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-room-heater"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-room-heater-advisor",
+  "displayName": {
+    "zh": "取暖器选型与电费顾问",
+    "en": "Room Heater and Electricity Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 卧室客厅取暖器选型与电费核算顾问",
+    "en": "11.11 Room Heater and Electricity Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "卧室客厅取暖器怎么挑：按面积定功率、选油汀暖风机踢脚线碳纤维、估算月电费、核安全防护。",
+    "en": "Pick room heaters: wattage by room area, oil, fan, baseboard or carbon type, monthly power cost, safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "15 平米卧室该买多大功率的取暖器",
+    "en": "What wattage heater suits a 15 square meter bedroom"
+  },
+  "plugin": "lynxce-room-heater-advisor",
+  "tags": [
+    {
+      "zh": "面积功率",
+      "en": "Wattage by Area"
+    },
+    {
+      "zh": "月电费",
+      "en": "Monthly Power Cost"
+    },
+    {
+      "zh": "安全防护",
+      "en": "Safety Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "15 平米卧室该买多大功率的取暖器",
+      "en": "What wattage heater suits a 15 square meter bedroom"
+    },
+    {
+      "zh": "油汀和暖风机一个月电费差多少",
+      "en": "How much do oil heaters and fan heaters differ in monthly cost"
+    },
+    {
+      "zh": "客厅取暖选踢脚线还是碳纤维",
+      "en": "Baseboard or carbon fiber heater for the living room"
+    }
+  ],
+  "keywords": [
+    "面积功率",
+    "月电费",
+    "安全防护",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

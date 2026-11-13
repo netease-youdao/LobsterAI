@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-commerce-kit-stock-quota-b45",
+  "version": "1.0.0",
+  "description": "Create a ready-to-review plan and transparent calculations from supplied inputs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-commerce-kit-stock-quota-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-commerce-kit-stock-quota-matrix-b45",
+    "./skills/lynxce-commerce-kit-stock-quota-allocation-b45",
+    "./skills/lynxce-commerce-kit-stock-quota-rollback-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-commerce-kit-stock-quota-b45",
+  "displayName": {
+    "zh": "组货顾问",
+    "en": "Bundle SKU Stock Quota Planner"
+  },
+  "profession": {
+    "zh": "组合装库存顾问",
+    "en": "Bundle SKU Stock Quota Planner"
+  },
+  "displayDescription": {
+    "zh": "根据组合装结构与共享组件库存计算各款可售配额，交付组件占用、库存余额及缺货调整方案，支持运营分配。",
+    "en": "Create a ready-to-review plan and transparent calculations from supplied inputs."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "A套装占2个杯1个盖，B套装占1个杯2个盖，请按库存算各卖多少套。",
+    "en": "Bundle SKU Stock Quota Planner"
+  },
+  "plugin": "lynxce-commerce-kit-stock-quota-b45",
+  "tags": [
+    {
+      "zh": "组合装库存",
+      "en": "组合装库存"
+    },
+    {
+      "zh": "可售配额",
+      "en": "可售配额"
+    },
+    {
+      "zh": "组件分配",
+      "en": "组件分配"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "A套装占2个杯1个盖，B套装占1个杯2个盖，请按库存算各卖多少套。",
+      "en": "Bundle SKU Stock Quota Planner"
+    },
+    {
+      "zh": "优先保留单品销售20件后，重新分配两个组合装的上架额度。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "盖子实盘少了12个，请给保守可售方案与运营调整通知草稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "组合装库存",
+    "可售配额",
+    "组件分配"
+  ]
+}

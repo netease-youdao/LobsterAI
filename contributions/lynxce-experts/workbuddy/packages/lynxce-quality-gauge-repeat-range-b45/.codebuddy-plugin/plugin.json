@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-quality-gauge-repeat-range-b45",
+  "version": "1.0.1",
+  "description": "Create a ready-to-review plan and transparent calculations from supplied inputs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-quality-gauge-repeat-range-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-quality-gauge-repeat-range-group-b45",
+    "./skills/lynxce-quality-gauge-repeat-range-range-b45",
+    "./skills/lynxce-quality-gauge-repeat-range-retest-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-quality-gauge-repeat-range-b45",
+  "displayName": {
+    "zh": "量具分析师",
+    "en": "Gauge Repeated Measurement Range Analyst"
+  },
+  "profession": {
+    "zh": "重复测量分析",
+    "en": "Gauge Repeated Measurement Range Analyst"
+  },
+  "displayDescription": {
+    "zh": "整理同人同量具的重复测量读数，计算样件极差与公差尺度比，交付测量波动报告及同条件复测设计。",
+    "en": "Create a ready-to-review plan and transparent calculations from supplied inputs."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三个样件各测三次，帮我算均值极差并生成测量波动报告。",
+    "en": "Gauge Repeated Measurement Range Analyst"
+  },
+  "plugin": "lynxce-quality-gauge-repeat-range-b45",
+  "tags": [
+    {
+      "zh": "重复测量",
+      "en": "重复测量"
+    },
+    {
+      "zh": "量具波动",
+      "en": "量具波动"
+    },
+    {
+      "zh": "极差分析",
+      "en": "极差分析"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三个样件各测三次，帮我算均值极差并生成测量波动报告。",
+      "en": "Gauge Repeated Measurement Range Analyst"
+    },
+    {
+      "zh": "同一量具换人测量后数值不同，请设计可比较的复测记录，不直接判谁错。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "只有分辨率0.01毫米的记录，请说明零极差能说明什么并给下一轮方案。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "重复测量",
+    "量具波动",
+    "极差分析"
+  ]
+}

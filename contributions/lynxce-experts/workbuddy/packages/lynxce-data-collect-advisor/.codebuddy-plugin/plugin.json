@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-data-collect-advisor",
+  "version": "1.0.1",
+  "description": "Prepare data definitions, collection trackers, variance checks and traceable consolidation drafts from supplied files.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-data-collect-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-data-collect"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-data-collect-advisor",
+  "displayName": {
+    "zh": "数据填报汇总顾问",
+    "en": "Data Collection Advisor"
+  },
+  "profession": {
+    "zh": "多部门数据填报与汇总核对顾问｜灵策智算",
+    "en": "Multi-Team Data Collection and Validation Advisor"
+  },
+  "displayDescription": {
+    "zh": "将各部门填报材料整理为统一口径说明、收取进度表与差异核对清单，保留版本依据并形成可复查汇总草稿。",
+    "en": "Prepare data definitions, collection trackers, variance checks and traceable consolidation drafts from supplied files."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "按这些门店字段制作填报说明、样表与验收规则",
+    "en": "Create filling instructions, a sample sheet and validation rules."
+  },
+  "plugin": "lynxce-data-collect-advisor",
+  "tags": [
+    {
+      "zh": "填报口径",
+      "en": "Data Definitions"
+    },
+    {
+      "zh": "差异核对",
+      "en": "Variance Checks"
+    },
+    {
+      "zh": "汇总追溯",
+      "en": "Traceable Totals"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按这些门店字段制作填报说明、样表与验收规则",
+      "en": "Create filling instructions, a sample sheet and validation rules."
+    },
+    {
+      "zh": "对照本期填报表生成重复版本、单位与合计差异清单",
+      "en": "List version, unit and total mismatches in these submissions."
+    },
+    {
+      "zh": "把已确认数据汇总并附未确认项目和来源追溯表",
+      "en": "Consolidate confirmed data with pending items and source records."
+    }
+  ],
+  "keywords": [
+    "填报口径",
+    "差异核对",
+    "汇总追溯"
+  ],
+  "needEncrypt": true
+}

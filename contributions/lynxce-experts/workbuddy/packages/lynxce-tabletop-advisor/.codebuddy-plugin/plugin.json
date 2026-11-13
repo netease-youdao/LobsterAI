@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-tabletop-advisor",
+  "version": "1.0.1",
+  "description": "Plan original tabletop scenarios, clue chains, character tasks and GM run sheets from supplied materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tabletop-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tabletop-script",
+    "./skills/lynxce-tabletop-roles",
+    "./skills/lynxce-tabletop-gm"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tabletop-advisor",
+  "displayName": {
+    "zh": "灵策桌游策划顾问",
+    "en": "Tabletop Design"
+  },
+  "profession": {
+    "zh": "剧本杀与桌游内容策划顾问",
+    "en": "Tabletop Scenario Design Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户设定梳理原创桌游真相与线索分轮设计人物任务和主持节奏交付可核对的流程草稿与静态试读方案",
+    "en": "Plan original tabletop scenarios, clue chains, character tasks and GM run sheets from supplied materials."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "03-GameSpatial",
+  "defaultInitPrompt": {
+    "zh": "帮我设计一个六人本的案件结构",
+    "en": "Design a case structure for six players"
+  },
+  "plugin": "lynxce-tabletop-advisor",
+  "tags": [
+    {
+      "zh": "案件结构",
+      "en": "Case Design"
+    },
+    {
+      "zh": "线索链",
+      "en": "Clue Chain"
+    },
+    {
+      "zh": "主持流程",
+      "en": "GM Flow"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我设计一个六人本的案件结构",
+      "en": "Design a case structure for six players"
+    },
+    {
+      "zh": "玩家推不出凶手,哪里出了问题",
+      "en": "Players cannot deduce the culprit — what is broken"
+    },
+    {
+      "zh": "主持人流程单该怎么写",
+      "en": "How should I write the game master run sheet"
+    }
+  ],
+  "keywords": [
+    "案件结构",
+    "线索链",
+    "主持流程",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

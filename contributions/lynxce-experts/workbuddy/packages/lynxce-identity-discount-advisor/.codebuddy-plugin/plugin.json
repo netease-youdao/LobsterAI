@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-identity-discount-advisor",
+  "version": "1.0.2",
+  "description": "Check identity discounts for students, teachers, new grads, seniors: verification privacy, coupon stacking, purchase limits, real savings.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-identity-discount-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-identity-discount"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-identity-discount-advisor",
+  "displayName": {
+    "zh": "身份认证专享优惠核对顾问",
+    "en": "Identity Discount Verification Advisor"
+  },
+  "profession": {
+    "zh": "11.11 身份认证专享优惠核对顾问",
+    "en": "11.11 Identity Discount Verification Advisor"
+  },
+  "displayDescription": {
+    "zh": "学生教师新职人长辈身份优惠怎么核：认证材料隐私、叠加大促券、限购转卖限制、是否真更低。",
+    "en": "Check identity discounts for students, teachers, new grads, seniors: verification privacy, coupon stacking, purchase limits, real savings."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "学生教师优惠要交哪些材料",
+    "en": "What materials are needed for student or teacher discounts"
+  },
+  "plugin": "lynxce-identity-discount-advisor",
+  "tags": [
+    {
+      "zh": "材料隐私",
+      "en": "Material Privacy"
+    },
+    {
+      "zh": "叠加核对",
+      "en": "Stacking Check"
+    },
+    {
+      "zh": "限购转卖",
+      "en": "Purchase Limits"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "学生教师优惠要交哪些材料",
+      "en": "What materials are needed for student or teacher discounts"
+    },
+    {
+      "zh": "身份优惠价能不能叠大促券",
+      "en": "Can the identity discount stack with promotion coupons"
+    },
+    {
+      "zh": "这个身份价到底比大促价低多少",
+      "en": "How much lower is the identity price than the promotion price"
+    }
+  ],
+  "keywords": [
+    "材料隐私",
+    "叠加核对",
+    "限购转卖",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

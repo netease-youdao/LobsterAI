@@ -1,0 +1,67 @@
+{
+  "name": "lynxce-podcast-advisor",
+  "version": "1.0.1",
+  "description": "Plan podcast episodes with a timed rundown, layered questions, fact checks and edit decisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-podcast-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-podcast-advisor",
+  "displayName": {
+    "zh": "播客与音频节目顾问",
+    "en": "Podcast & Audio Show Advisor"
+  },
+  "profession": {
+    "zh": "播客选题策划与访谈提纲顾问",
+    "en": "Podcast Topic Planning and Interview Outline Advisor"
+  },
+  "displayDescription": {
+    "zh": "围绕听众问题策划播客单集，交付分段时间预算、主问追问提纲、事实核对表与剪辑取舍单，帮助录前准备",
+    "en": "Plan podcast episodes with a timed rundown, layered questions, fact checks and edit decisions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "为这期30分钟播客做时间预算和可直接使用的访谈提纲",
+    "en": "Build a timed rundown and interview guide for a 30-minute episode"
+  },
+  "plugin": "lynxce-podcast-advisor",
+  "tags": [
+    {
+      "zh": "单集策划",
+      "en": "Episode plan"
+    },
+    {
+      "zh": "访谈追问",
+      "en": "Interview follow-ups"
+    },
+    {
+      "zh": "剪辑取舍",
+      "en": "Edit decisions"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "为这期30分钟播客做时间预算和可直接使用的访谈提纲",
+      "en": "Build a timed rundown and interview guide for a 30-minute episode"
+    },
+    {
+      "zh": "根据嘉宾材料整理主问、追问和待核实事实表",
+      "en": "Draft primary questions, follow-ups and a fact-check sheet"
+    },
+    {
+      "zh": "把我的录音段落清单整理成删减决策单与节目简介",
+      "en": "Turn my recording notes into an edit list and episode summary"
+    }
+  ],
+  "keywords": [
+    "单集策划",
+    "访谈追问",
+    "剪辑取舍"
+  ],
+  "needEncrypt": true
+}

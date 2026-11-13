@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-pcbuild-advisor",
+  "version": "1.0.4",
+  "description": "Check three things before ordering: compatibility, power and cooling, and budget split by use case.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pcbuild-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pc-build",
+    "./skills/lynxce-pc-budget-power",
+    "./skills/lynxce-pc-upgrade-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pcbuild-advisor",
+  "displayName": {
+    "zh": "电脑装机与配置兼容核对顾问",
+    "en": "PC Build & Compatibility Advisor"
+  },
+  "profession": {
+    "zh": "电脑装机与配置兼容核对顾问",
+    "en": "PC Build & Compatibility Advisor"
+  },
+  "displayDescription": {
+    "zh": "配置单下单前核三件事：兼容性、供电与散热、按用途分配预算，避免装不上白折腾一场。",
+    "en": "Check three things before ordering: compatibility, power and cooling, and budget split by use case."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "帮我核对这份配置单",
+    "en": "Review this build list for me"
+  },
+  "plugin": "lynxce-pcbuild-advisor",
+  "tags": [
+    {
+      "zh": "装机配置",
+      "en": "PC Build"
+    },
+    {
+      "zh": "兼容核对",
+      "en": "Compatibility"
+    },
+    {
+      "zh": "预算分配",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我核对这份配置单",
+      "en": "Review this build list for me"
+    },
+    {
+      "zh": "这个预算怎么配比较均衡",
+      "en": "How do I balance this budget"
+    },
+    {
+      "zh": "电源需要多大功率",
+      "en": "What power supply wattage do I need"
+    }
+  ],
+  "keywords": [
+    "装机配置",
+    "兼容核对",
+    "预算分配",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-cg3d-advisor",
+  "version": "1.0.1",
+  "description": "Turn asset lists and target platforms into poly budgets, topology and UV rules, texel and memory math, LOD tiers and acceptance checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cg3d-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cg-asset-spec"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cg3d-advisor",
+  "displayName": {
+    "zh": "三维资产流程顾问",
+    "en": "3D Production"
+  },
+  "profession": {
+    "zh": "三维建模与渲染流程顾问",
+    "en": "3D Modeling and Rendering Pipeline Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据资产清单与目标平台，制定面数预算、拓扑和UV规范、纹素密度与显存核算、细节层级分档及验收清单。",
+    "en": "Turn asset lists and target platforms into poly budgets, topology and UV rules, texel and memory math, LOD tiers and acceptance checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "01-ProductDesign",
+  "defaultInitPrompt": {
+    "zh": "根据资产清单和目标平台生成三维资产规范与LOD分档表",
+    "en": "Build a 3D asset spec and LOD table from my asset list and platform"
+  },
+  "plugin": "lynxce-cg3d-advisor",
+  "tags": [
+    {
+      "zh": "资产规范",
+      "en": "Asset Spec"
+    },
+    {
+      "zh": "纹素与LOD",
+      "en": "Texel and LOD"
+    },
+    {
+      "zh": "交付验收",
+      "en": "Delivery QA"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据资产清单和目标平台生成三维资产规范与LOD分档表",
+      "en": "Build a 3D asset spec and LOD table from my asset list and platform"
+    },
+    {
+      "zh": "按验收清单复核这批模型并排查导入发黑原因",
+      "en": "Review these models against the checklist and triage dark rendering"
+    },
+    {
+      "zh": "只知道资产类型时先给面数预算与命名规则初稿",
+      "en": "With only asset types known, draft poly budgets and naming rules"
+    }
+  ],
+  "keywords": [
+    "资产规范",
+    "纹素与LOD",
+    "交付验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

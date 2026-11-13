@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-screencast-advisor",
+  "version": "1.0.1",
+  "description": "Turn software notes into a screencast script, demo data, recording checklist and verified-step outline.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-screencast-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-screencast-tutorial"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-screencast-advisor",
+  "displayName": {
+    "zh": "录屏教程制作顾问",
+    "en": "Screencast Tutorial Advisor"
+  },
+  "profession": {
+    "zh": "录屏教程视频制作顾问｜灵策智算",
+    "en": "Screen Recording Tutorial Production Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "把软件操作资料转成可录制教程，交付步骤脚本、演示数据、录前检查与章节表，明确结果核对和失败分支",
+    "en": "Turn software notes into a screencast script, demo data, recording checklist and verified-step outline."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "把这份操作说明写成带预期结果和失败分支的录屏脚本",
+    "en": "Turn these instructions into a screencast script with expected results and failure paths"
+  },
+  "plugin": "lynxce-screencast-advisor",
+  "tags": [
+    {
+      "zh": "步骤脚本",
+      "en": "Step script"
+    },
+    {
+      "zh": "演示数据",
+      "en": "Demo data"
+    },
+    {
+      "zh": "失败分支",
+      "en": "Failure paths"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这份操作说明写成带预期结果和失败分支的录屏脚本",
+      "en": "Turn these instructions into a screencast script with expected results and failure paths"
+    },
+    {
+      "zh": "为我的教程制作可复算的虚构演示数据与核对表",
+      "en": "Create fictional demo data and a recalculation sheet for my tutorial"
+    },
+    {
+      "zh": "按目标时长整理教程章节、旁白和补录清单",
+      "en": "Organize chapters, narration and pickup shots for my target duration"
+    }
+  ],
+  "keywords": [
+    "步骤脚本",
+    "演示数据",
+    "失败分支"
+  ],
+  "needEncrypt": true
+}

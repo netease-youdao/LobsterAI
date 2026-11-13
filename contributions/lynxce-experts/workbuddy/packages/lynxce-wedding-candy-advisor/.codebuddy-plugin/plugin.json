@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-wedding-candy-advisor",
+  "version": "1.0.0",
+  "description": "Plan wedding candy: box count, pieces per box, labels, shelf life and total budget.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-wedding-candy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-wedding-candy"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-wedding-candy-advisor",
+  "displayName": {
+    "zh": "喜糖采购核算顾问",
+    "en": "Wedding Candy Budget Advisor"
+  },
+  "profession": {
+    "zh": "11.11 喜糖与糖果采购核算顾问",
+    "en": "11.11 Wedding Candy and Party Sweets Budget Advisor"
+  },
+  "displayDescription": {
+    "zh": "喜糖怎么买：按桌数户数与同事人数算份数、定每盒颗数克重、核标签与保质期、拆盒糖包装算总预算。",
+    "en": "Plan wedding candy: box count, pieces per box, labels, shelf life and total budget."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "婚宴 20 桌要准备多少份喜糖",
+    "en": "How many candy boxes for a 20 table banquet"
+  },
+  "plugin": "lynxce-wedding-candy-advisor",
+  "tags": [
+    {
+      "zh": "份数核算",
+      "en": "Box Count"
+    },
+    {
+      "zh": "每盒糖量",
+      "en": "Pieces per Box"
+    },
+    {
+      "zh": "总预算",
+      "en": "Total Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "婚宴 20 桌要准备多少份喜糖",
+      "en": "How many candy boxes for a 20 table banquet"
+    },
+    {
+      "zh": "散装糖要买几斤才够装盒",
+      "en": "How many pounds of loose candy to fill the boxes"
+    },
+    {
+      "zh": "一份喜糖成本怎么算",
+      "en": "How to work out the cost of one candy box"
+    }
+  ],
+  "keywords": [
+    "份数核算",
+    "每盒糖量",
+    "总预算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

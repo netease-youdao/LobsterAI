@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-avroom-advisor",
+  "version": "1.0.4",
+  "description": "Equip a meeting room: display size, camera, microphone coverage, acceptance.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-avroom-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-avroom-spec"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-avroom-advisor",
+  "displayName": {
+    "zh": "会议室视听设备选购顾问",
+    "en": "Meeting Room AV Equipment Advisor"
+  },
+  "profession": {
+    "zh": "会议室视听设备选购顾问",
+    "en": "Meeting Room AV Equipment Advisor"
+  },
+  "displayDescription": {
+    "zh": "会议室怎么配设备：屏幕多大、摄像头怎么选、拾音怎么覆盖、验收的时候要实测哪几项才算过。",
+    "en": "Equip a meeting room: display size, camera, microphone coverage, acceptance."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "这个会议室配什么设备",
+    "en": "What gear fits this meeting room"
+  },
+  "plugin": "lynxce-avroom-advisor",
+  "tags": [
+    {
+      "zh": "会议室",
+      "en": "Meeting Room"
+    },
+    {
+      "zh": "视听设备",
+      "en": "AV Gear"
+    },
+    {
+      "zh": "验收标准",
+      "en": "Acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个会议室配什么设备",
+      "en": "What gear fits this meeting room"
+    },
+    {
+      "zh": "远端老说听不清怎么办",
+      "en": "Remote attendees cannot hear us clearly"
+    },
+    {
+      "zh": "帮我列一份配置预算",
+      "en": "Draft an AV budget for this room"
+    }
+  ],
+  "keywords": [
+    "会议室",
+    "视听设备",
+    "验收标准",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-social-insurance-base-advisor",
+  "version": "1.0.0",
+  "description": "Contribution base sheet with floor and cap, cost split and a hire and leaver change ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-social-insurance-base-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-social-insurance-base"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-social-insurance-base-advisor",
+  "displayName": {
+    "zh": "社保公积金基数助理",
+    "en": "Social Insurance and Housing Fund Base Assistant"
+  },
+  "profession": {
+    "zh": "社保公积金缴费基数核算与增减员助理",
+    "en": "Contribution Base and Headcount Change Assistant"
+  },
+  "displayDescription": {
+    "zh": "社保公积金基数不算错：按上年月均工资定基数、封顶保底、拆分单位个人，产出基数核算表与增减员台账。",
+    "en": "Contribution base sheet with floor and cap, cost split and a hire and leaver change ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新年度要调基数了，帮我逐人核算社保公积金基数",
+    "en": "Recalculate each employee contribution base for the new year"
+  },
+  "plugin": "lynxce-social-insurance-base-advisor",
+  "tags": [
+    {
+      "zh": "缴费基数",
+      "en": "Contribution Base"
+    },
+    {
+      "zh": "封顶保底",
+      "en": "Floor and Cap"
+    },
+    {
+      "zh": "增减员台账",
+      "en": "Headcount Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新年度要调基数了，帮我逐人核算社保公积金基数",
+      "en": "Recalculate each employee contribution base for the new year"
+    },
+    {
+      "zh": "这个月有人入职有人离职，社保怎么增减员",
+      "en": "Some joined and some left this month, how do I add and remove them"
+    },
+    {
+      "zh": "帮我把单位和个人各缴多少拆清楚",
+      "en": "Split the employer and employee contribution amounts for me"
+    }
+  ],
+  "keywords": [
+    "缴费基数",
+    "封顶保底",
+    "增减员台账",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

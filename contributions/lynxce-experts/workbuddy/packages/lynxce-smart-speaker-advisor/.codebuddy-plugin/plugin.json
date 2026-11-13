@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-smart-speaker-advisor",
+  "version": "1.0.1",
+  "description": "Pick smart speakers: ecosystem fit, screen or not, wattage and drivers, mic hardware switch, linked device list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-smart-speaker-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-smart-speaker"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-smart-speaker-advisor",
+  "displayName": {
+    "zh": "智能音箱与带屏音箱选购顾问",
+    "en": "Smart Speaker and Smart Display Advisor"
+  },
+  "profession": {
+    "zh": "11.11 智能音箱与带屏音箱选购顾问",
+    "en": "11.11 Smart Speaker and Smart Display Advisor"
+  },
+  "displayDescription": {
+    "zh": "智能音箱怎么挑：先对家里设备生态、定有屏无屏、看扬声器功率与单元、核麦克风物理开关、列联动清单。",
+    "en": "Pick smart speakers: ecosystem fit, screen or not, wattage and drivers, mic hardware switch, linked device list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里灯和空调不是一个生态音箱怎么选",
+    "en": "Lights and AC on different ecosystems, which speaker"
+  },
+  "plugin": "lynxce-smart-speaker-advisor",
+  "tags": [
+    {
+      "zh": "生态匹配",
+      "en": "Ecosystem Fit"
+    },
+    {
+      "zh": "有屏无屏",
+      "en": "Screen or Not"
+    },
+    {
+      "zh": "麦克风开关",
+      "en": "Mic Switch"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里灯和空调不是一个生态音箱怎么选",
+      "en": "Lights and AC on different ecosystems, which speaker"
+    },
+    {
+      "zh": "客厅听歌带屏音箱和无屏音箱选哪个",
+      "en": "Screen or no screen speaker for living room music"
+    },
+    {
+      "zh": "软件静音和麦克风物理开关有什么区别",
+      "en": "Software mute versus a physical microphone switch"
+    }
+  ],
+  "keywords": [
+    "生态匹配",
+    "有屏无屏",
+    "麦克风开关",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-trip-hotel-cap-advisor",
+  "version": "1.0.0",
+  "description": "Lodging cap budget, hotel comparison, over cap check and a reimbursement detail sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-trip-hotel-cap-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-trip-hotel-cap"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-trip-hotel-cap-advisor",
+  "displayName": {
+    "zh": "差旅住宿核算助理",
+    "en": "Trip Lodging Cap Assistant"
+  },
+  "profession": {
+    "zh": "出差住宿差标与酒店比价办公采购顾问",
+    "en": "Business Trip Lodging Cap and Hotel Rate Advisor"
+  },
+  "displayDescription": {
+    "zh": "出差住宿怎么控标：按城市差标与晚数算住宿预算，判超标与审批，出酒店比价表与住宿报销明细表。",
+    "en": "Lodging cap budget, hotel comparison, over cap check and a reimbursement detail sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "周一入住周五离店住宿预算怎么算",
+    "en": "How to budget a Monday to Friday hotel stay"
+  },
+  "plugin": "lynxce-trip-hotel-cap-advisor",
+  "tags": [
+    {
+      "zh": "差标核算",
+      "en": "Lodging Cap"
+    },
+    {
+      "zh": "酒店比价",
+      "en": "Hotel Comparison"
+    },
+    {
+      "zh": "报销明细",
+      "en": "Expense Detail"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "周一入住周五离店住宿预算怎么算",
+      "en": "How to budget a Monday to Friday hotel stay"
+    },
+    {
+      "zh": "含早和不含早的酒店怎么比",
+      "en": "How to compare hotels with and without breakfast"
+    },
+    {
+      "zh": "住宿超标 5% 要怎么写说明",
+      "en": "How to explain a 5 percent lodging overage"
+    }
+  ],
+  "keywords": [
+    "差标核算",
+    "酒店比价",
+    "报销明细",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

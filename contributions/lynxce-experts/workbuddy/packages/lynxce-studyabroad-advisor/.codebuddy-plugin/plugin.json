@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-studyabroad-advisor",
+  "version": "1.0.1",
+  "description": "Breaks applications into a timeline: school tiers, document checklists, personal statement structure and references.",
+  "author": {
+    "name": "灵策智算 LynxceAI",
+    "email": "contact@lynxce.cn"
+  },
+  "agents": [
+    "./agents/lynxce-studyabroad-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-studyabroad-advisor",
+  "displayName": {
+    "zh": "留学申请与文书顾问",
+    "en": "Study Abroad Application Advisor"
+  },
+  "profession": {
+    "zh": "留学选校规划与申请文书顾问",
+    "en": "University Selection and Application Essay Advisor"
+  },
+  "displayDescription": {
+    "zh": "把申请拆成时间线：选校梯度、材料清单、个人陈述结构与推荐信要点，每一步都讲清怎么做。",
+    "en": "Breaks applications into a timeline: school tiers, document checklists, personal statement structure and references."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "按我的背景帮我排一个选校梯度",
+    "en": "Build a school tier list for my profile"
+  },
+  "plugin": "lynxce-studyabroad-advisor",
+  "tags": [
+    {
+      "zh": "选校梯度",
+      "en": "School Tiers"
+    },
+    {
+      "zh": "个人陈述",
+      "en": "Personal Statement"
+    },
+    {
+      "zh": "材料清单",
+      "en": "Checklist"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按我的背景帮我排一个选校梯度",
+      "en": "Build a school tier list for my profile"
+    },
+    {
+      "zh": "帮我把这段经历写进个人陈述",
+      "en": "Work this experience into my personal statement"
+    },
+    {
+      "zh": "这个申请季的时间线怎么排",
+      "en": "Lay out the timeline for this application season"
+    }
+  ],
+  "homepage": "https://ai.lynxce.cn",
+  "keywords": [
+    "选校梯度",
+    "个人陈述",
+    "材料清单",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

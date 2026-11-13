@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-food-video-advisor",
+  "version": "1.0.1",
+  "description": "Turn dish, space and gear into a food shoot plan with styling and light notes, steam timing, shot and frame rate list and edit pacing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-food-video-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-food-shooting"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-food-video-advisor",
+  "displayName": {
+    "zh": "美食视频拍摄顾问",
+    "en": "Food Video Advisor"
+  },
+  "profession": {
+    "zh": "美食短视频拍摄与布光顾问｜灵策智算",
+    "en": "Food Short Video Shooting and Lighting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据菜品场地与设备条件出拍摄方案，交付造型布光清单、热气拍摄时间窗、分镜帧率表和剪辑节奏表。",
+    "en": "Turn dish, space and gear into a food shoot plan with styling and light notes, steam timing, shot and frame rate list and edit pacing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据这道菜和我的设备生成布光方案与分镜帧率表",
+    "en": "Build a lighting plan and shot list with frame rates for this dish"
+  },
+  "plugin": "lynxce-food-video-advisor",
+  "tags": [
+    {
+      "zh": "食物布光",
+      "en": "Food Lighting"
+    },
+    {
+      "zh": "分镜帧率",
+      "en": "Shot List"
+    },
+    {
+      "zh": "剪辑节奏",
+      "en": "Edit Pacing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这道菜和我的设备生成布光方案与分镜帧率表",
+      "en": "Build a lighting plan and shot list with frame rates for this dish"
+    },
+    {
+      "zh": "复核我已有的美食视频分镜和剪辑时长哪里需要改",
+      "en": "Review my existing food video shot list and edit timing"
+    },
+    {
+      "zh": "只知道菜拍出来发灰先给一版最小排查与补光方案",
+      "en": "Give a minimal fix list when the food only looks dull"
+    }
+  ],
+  "keywords": [
+    "食物布光",
+    "分镜帧率",
+    "剪辑节奏",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

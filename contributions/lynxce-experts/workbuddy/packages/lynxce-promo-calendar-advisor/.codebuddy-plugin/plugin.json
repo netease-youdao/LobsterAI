@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-calendar-advisor",
+  "version": "1.0.2",
+  "description": "Plan the promotion timeline: presale, opening rush, balance and encore windows, item staging, reminders and checkout prep.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-calendar-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-calendar"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-calendar-advisor",
+  "displayName": {
+    "zh": "大促时间节点与下单日程顾问",
+    "en": "Promotion Timeline and Order Schedule Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促时间节点与下单日程顾问",
+    "en": "11.11 Promotion Timeline and Order Schedule Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促各节点怎么排：预售开门红尾款返场时间表、商品分节点购买、提醒设置与付款前预设。",
+    "en": "Plan the promotion timeline: presale, opening rush, balance and encore windows, item staging, reminders and checkout prep."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我排一下今年大促每个节点该买什么",
+    "en": "Plan what to buy at each promotion stage"
+  },
+  "plugin": "lynxce-promo-calendar-advisor",
+  "tags": [
+    {
+      "zh": "节点时间表",
+      "en": "Timeline"
+    },
+    {
+      "zh": "分节点下单",
+      "en": "Item Staging"
+    },
+    {
+      "zh": "提醒设置",
+      "en": "Reminders"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我排一下今年大促每个节点该买什么",
+      "en": "Plan what to buy at each promotion stage"
+    },
+    {
+      "zh": "尾款什么时候付不会错过",
+      "en": "When should I pay the balance to avoid missing it"
+    },
+    {
+      "zh": "开抢前要提前准备哪些东西",
+      "en": "What should I prepare before the sale starts"
+    }
+  ],
+  "keywords": [
+    "节点时间表",
+    "分节点下单",
+    "提醒设置",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

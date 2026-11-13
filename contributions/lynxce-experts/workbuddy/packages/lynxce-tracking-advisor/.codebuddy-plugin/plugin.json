@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-tracking-advisor",
+  "version": "1.0.1",
+  "description": "Turn business funnels into event dictionaries, deduplication rules, reconciliation tables and acceptance drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tracking-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tracking-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tracking-advisor",
+  "displayName": {
+    "zh": "埋点治理顾问",
+    "en": "Tracking Governance"
+  },
+  "profession": {
+    "zh": "埋点方案设计与数据治理顾问",
+    "en": "Event Tracking and Data Governance Advisor"
+  },
+  "displayDescription": {
+    "zh": "围绕业务漏斗整理事件字典与属性规范，提供去重口径、差异对账和上线验收底稿，便于复核数据质量。",
+    "en": "Turn business funnels into event dictionaries, deduplication rules, reconciliation tables and acceptance drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "根据下单流程生成事件字典与属性验收表",
+    "en": "Build an event dictionary and property acceptance table for checkout"
+  },
+  "plugin": "lynxce-tracking-advisor",
+  "tags": [
+    {
+      "zh": "事件字典",
+      "en": "Event Dictionary"
+    },
+    {
+      "zh": "口径对账",
+      "en": "Reconciliation"
+    },
+    {
+      "zh": "验收底稿",
+      "en": "Acceptance Draft"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据下单流程生成事件字典与属性验收表",
+      "en": "Build an event dictionary and property acceptance table for checkout"
+    },
+    {
+      "zh": "根据两份计数生成去重与时区差异对账表",
+      "en": "Reconcile two counts by deduplication and time zone"
+    },
+    {
+      "zh": "根据旧埋点方案生成版本迁移与停用清单",
+      "en": "Draft a tracking version migration and retirement checklist"
+    }
+  ],
+  "keywords": [
+    "事件字典",
+    "口径对账",
+    "验收底稿",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

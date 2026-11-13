@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-beauty-demo-shoot-advisor",
+  "version": "1.0.2",
+  "description": "Turn product type and shooting conditions into lighting, camera setups, timed shot lists and line-by-line script risk checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-beauty-demo-shoot-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-beauty-demo-shoot"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-beauty-demo-shoot-advisor",
+  "displayName": {
+    "zh": "美妆演示拍摄顾问",
+    "en": "Beauty Demo Shooting Advisor"
+  },
+  "profession": {
+    "zh": "美妆护肤演示视频拍摄顾问｜灵策智算",
+    "en": "Beauty and Skincare Demo Shooting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据产品品类和拍摄条件制定布光机位与分镜时长，逐句标记口播字幕风险，交付可执行的护肤演示拍摄底稿。",
+    "en": "Turn product type and shooting conditions into lighting, camera setups, timed shot lists and line-by-line script risk checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据产品和平台时长生成布光机位与演示分镜表",
+    "en": "Build a lighting setup and timed demo shot list for this product"
+  },
+  "plugin": "lynxce-beauty-demo-shoot-advisor",
+  "tags": [
+    {
+      "zh": "布光机位",
+      "en": "Lighting Setup"
+    },
+    {
+      "zh": "演示分镜",
+      "en": "Demo Shot List"
+    },
+    {
+      "zh": "话术核对",
+      "en": "Script Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据产品和平台时长生成布光机位与演示分镜表",
+      "en": "Build a lighting setup and timed demo shot list for this product"
+    },
+    {
+      "zh": "逐句核对这段美妆口播和字幕里的风险用语",
+      "en": "Check this beauty voiceover and captions line by line for risky claims"
+    },
+    {
+      "zh": "只知道品类时先给通用演示分镜和待补问题",
+      "en": "Draft a generic demo shot list and open questions from category only"
+    }
+  ],
+  "keywords": [
+    "布光机位",
+    "演示分镜",
+    "话术核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

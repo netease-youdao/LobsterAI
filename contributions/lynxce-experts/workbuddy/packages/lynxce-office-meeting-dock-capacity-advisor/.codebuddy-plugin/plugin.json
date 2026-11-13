@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-meeting-dock-capacity-advisor",
+  "version": "1.0.0",
+  "description": "Map concurrent dock ports, protocols and power limits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-meeting-dock-capacity-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-meeting-dock-capacity"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-meeting-dock-capacity-advisor",
+  "displayName": {
+    "zh": "会议端口核算师",
+    "en": "Meeting Dock Capacity Advisor"
+  },
+  "profession": {
+    "zh": "会议桌转接坞并发端口核算顾问",
+    "en": "Meeting Dock Capacity Advisor"
+  },
+  "displayDescription": {
+    "zh": "按会议设备并发需求核转接坞端口，逐项确认协议供电与共享带宽，排除兼容缺口，输出采购验收清单。",
+    "en": "Map concurrent dock ports, protocols and power limits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按记录核算会议桌转接坞并发端口核算",
+    "en": "Calculate from recorded inputs"
+  },
+  "plugin": "lynxce-office-meeting-dock-capacity-advisor",
+  "tags": [
+    {
+      "zh": "需求核算",
+      "en": "Demand Calculation"
+    },
+    {
+      "zh": "规格复核",
+      "en": "Specification Review"
+    },
+    {
+      "zh": "异常台账",
+      "en": "Exception Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按记录核算会议桌转接坞并发端口核算",
+      "en": "Calculate from recorded inputs"
+    },
+    {
+      "zh": "核库存与延期在途对补货的影响",
+      "en": "Check stock and delayed arrivals"
+    },
+    {
+      "zh": "输出可复核算式及异常处理台账",
+      "en": "Build calculations and an exception ledger"
+    }
+  ],
+  "keywords": [
+    "需求核算",
+    "规格复核",
+    "异常台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

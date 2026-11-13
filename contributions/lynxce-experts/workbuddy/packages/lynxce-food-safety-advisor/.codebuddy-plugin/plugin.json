@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-food-safety-advisor",
+  "version": "1.0.1",
+  "description": "Turn menus, processes and kitchen equipment into a control-point table, temperature and sample logs, daily checks and incident sheets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-food-safety-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-food-safety-advisor",
+  "displayName": {
+    "zh": "后厨食品安全自查顾问",
+    "en": "Food Safety & Hygiene Advisor"
+  },
+  "profession": {
+    "zh": "餐饮食品安全与卫生自查顾问",
+    "en": "Restaurant Food Safety and Hygiene Self-Inspection Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据菜单流程与后厨设备整理关键控制点表和温度留样记录，生成每日自查表，附异常隔离与上报处置单。",
+    "en": "Turn menus, processes and kitchen equipment into a control-point table, temperature and sample logs, daily checks and incident sheets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据我的菜单和后厨设备生成关键控制点表与每日自查表",
+    "en": "Build a control-point table and daily check sheet from my menu and kitchen"
+  },
+  "plugin": "lynxce-food-safety-advisor",
+  "tags": [
+    {
+      "zh": "关键控制点",
+      "en": "Control Points"
+    },
+    {
+      "zh": "温度留样记录",
+      "en": "Temp and Sample Logs"
+    },
+    {
+      "zh": "每日自查",
+      "en": "Daily Self-Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的菜单和后厨设备生成关键控制点表与每日自查表",
+      "en": "Build a control-point table and daily check sheet from my menu and kitchen"
+    },
+    {
+      "zh": "帮我复核这份温度记录和留样记录有哪些缺口",
+      "en": "Review these temperature and sample logs for gaps"
+    },
+    {
+      "zh": "只知道店型和主要菜品先给一版自查表草稿",
+      "en": "With only shop type and main dishes draft a self-check sheet first"
+    }
+  ],
+  "keywords": [
+    "关键控制点",
+    "温度留样记录",
+    "每日自查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

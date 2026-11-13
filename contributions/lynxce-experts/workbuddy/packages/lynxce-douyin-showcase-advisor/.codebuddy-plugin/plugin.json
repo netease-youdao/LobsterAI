@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-douyin-showcase-advisor",
+  "version": "1.0.1",
+  "description": "Score showcase products, compute commission net of returns, rewrite product cards and run biweekly keep-or-remove reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-douyin-showcase-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-douyin-showcase"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-douyin-showcase-advisor",
+  "displayName": {
+    "zh": "抖音橱窗选品顾问",
+    "en": "Douyin Showcase Advisor"
+  },
+  "profession": {
+    "zh": "抖音橱窗选品与商品卡优化顾问｜灵策智算",
+    "en": "Douyin Showcase Selection and Product Card Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据橱窗商品与成交退货数据打分选品，核算扣退后佣金，改写商品卡标题主图，附两周复盘与下架规则。",
+    "en": "Score showcase products, compute commission net of returns, rewrite product cards and run biweekly keep-or-remove reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据候选商品数据生成选品打分与扣退佣金表",
+    "en": "Score candidates and compute commission net of returns"
+  },
+  "plugin": "lynxce-douyin-showcase-advisor",
+  "tags": [
+    {
+      "zh": "橱窗选品",
+      "en": "Showcase Selection"
+    },
+    {
+      "zh": "扣退佣金",
+      "en": "Net Commission"
+    },
+    {
+      "zh": "商品卡",
+      "en": "Product Card"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据候选商品数据生成选品打分与扣退佣金表",
+      "en": "Score candidates and compute commission net of returns"
+    },
+    {
+      "zh": "复核我现有商品卡标题和主图是否合规可用",
+      "en": "Review my current product card titles and main images"
+    },
+    {
+      "zh": "只有商品名单时先给否决清单和待补数据",
+      "en": "Give veto checks and missing data from a product list only"
+    }
+  ],
+  "keywords": [
+    "橱窗选品",
+    "扣退佣金",
+    "商品卡",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

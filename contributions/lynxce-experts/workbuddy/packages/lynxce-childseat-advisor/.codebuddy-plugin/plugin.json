@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-childseat-advisor",
+  "version": "1.0.4",
+  "description": "Size by height and weight: interfaces, certification and install checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-childseat-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-childseat-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-childseat-advisor",
+  "displayName": {
+    "zh": "儿童安全座椅与出行装备顾问",
+    "en": "Child Car Seat and Travel Gear Advisor"
+  },
+  "profession": {
+    "zh": "儿童安全座椅与出行装备顾问",
+    "en": "Child Car Seat and Travel Gear Advisor"
+  },
+  "displayDescription": {
+    "zh": "安全座椅按身高体重选：车上接口怎么配、认证怎么看、装好之后怎么逐项核对是否牢靠。",
+    "en": "Size by height and weight: interfaces, certification and install checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家车能装哪种安全座椅",
+    "en": "Which seat fits my car"
+  },
+  "plugin": "lynxce-childseat-advisor",
+  "tags": [
+    {
+      "zh": "安全座椅",
+      "en": "Car Seat"
+    },
+    {
+      "zh": "接口适配",
+      "en": "Fit Check"
+    },
+    {
+      "zh": "安装核对",
+      "en": "Installation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家车能装哪种安全座椅",
+      "en": "Which seat fits my car"
+    },
+    {
+      "zh": "这个月龄该用哪一组",
+      "en": "Which group suits my child now"
+    },
+    {
+      "zh": "装好了怎么检查牢不牢",
+      "en": "How do I check the installation"
+    }
+  ],
+  "keywords": [
+    "安全座椅",
+    "接口适配",
+    "安装核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

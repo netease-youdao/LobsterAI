@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-contractor-onsite-advisor",
+  "version": "1.0.1",
+  "description": "Build contractor entry approvals, least-privilege access ledgers with expiry dates, exit checklists and quarterly reconciliations.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-contractor-onsite-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-contractor-onsite"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-contractor-onsite-advisor",
+  "displayName": {
+    "zh": "驻场人员管理顾问",
+    "en": "Onsite Contractor Advisor"
+  },
+  "profession": {
+    "zh": "外包与驻场人员入场管理顾问｜灵策智算",
+    "en": "Outsourced and Onsite Staff Access Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据驻场名单与所需系统生成入场审批和权限台账，按最小权限计算到期日，附离场回收清单与季度核查表。",
+    "en": "Build contractor entry approvals, least-privilege access ledgers with expiry dates, exit checklists and quarterly reconciliations."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据驻场名单和所需系统生成入场审批与权限台账",
+    "en": "Build entry approvals and an access ledger from the onsite roster"
+  },
+  "plugin": "lynxce-contractor-onsite-advisor",
+  "tags": [
+    {
+      "zh": "驻场管理",
+      "en": "Onsite Staff"
+    },
+    {
+      "zh": "权限台账",
+      "en": "Access Ledger"
+    },
+    {
+      "zh": "离场回收",
+      "en": "Exit Recovery"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据驻场名单和所需系统生成入场审批与权限台账",
+      "en": "Build entry approvals and an access ledger from the onsite roster"
+    },
+    {
+      "zh": "复核我的权限台账和离场清单有哪些漏项",
+      "en": "Review my access ledger and exit checklist for gaps"
+    },
+    {
+      "zh": "只有人员名单时先给入场与离场清单初稿",
+      "en": "Draft entry and exit checklists from a staff list only"
+    }
+  ],
+  "keywords": [
+    "驻场管理",
+    "权限台账",
+    "离场回收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

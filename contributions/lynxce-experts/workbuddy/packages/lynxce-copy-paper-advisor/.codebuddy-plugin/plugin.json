@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-copy-paper-advisor",
+  "version": "1.0.0",
+  "description": "Plan office paper: monthly sheets from print counts, grammage, cost per sheet, reorder point.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-copy-paper-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-copy-paper"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-copy-paper-advisor",
+  "displayName": {
+    "zh": "办公用纸核算助理",
+    "en": "Office Paper Usage Assistant"
+  },
+  "profession": {
+    "zh": "办公复印纸与打印纸月耗核算助理",
+    "en": "Office Copy Paper Usage and Restock Assistant"
+  },
+  "displayDescription": {
+    "zh": "办公用纸怎么算：按打印计数与双面比例估月耗、按用途选克重、算单张成本，定库存补货点，附预算表。",
+    "en": "Plan office paper: monthly sheets from print counts, grammage, cost per sheet, reorder point."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "打印页数怎么换算成要买几箱纸",
+    "en": "Turn print pages into boxes of paper"
+  },
+  "plugin": "lynxce-copy-paper-advisor",
+  "tags": [
+    {
+      "zh": "月耗张数",
+      "en": "Monthly Sheets"
+    },
+    {
+      "zh": "克重选择",
+      "en": "Paper Weight Choice"
+    },
+    {
+      "zh": "单张成本",
+      "en": "Cost per Sheet"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "打印页数怎么换算成要买几箱纸",
+      "en": "Turn print pages into boxes of paper"
+    },
+    {
+      "zh": "办公用 70 克还是 80 克纸",
+      "en": "Seventy or eighty gram office paper"
+    },
+    {
+      "zh": "复印纸库存和补货点怎么定",
+      "en": "How to set paper stock and reorder point"
+    }
+  ],
+  "keywords": [
+    "月耗张数",
+    "克重选择",
+    "单张成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

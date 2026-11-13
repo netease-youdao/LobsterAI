@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-common-area-event-reset-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare evidence based review drafts using user supplied records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-common-area-event-reset-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-common-area-event-reset-b44",
+    "./skills/lynxce-common-area-baseline-position-b44",
+    "./skills/lynxce-common-area-reset-witness-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-common-area-event-reset-b44-advisor",
+  "displayName": {
+    "zh": "公区活动复位顾问",
+    "en": "Common Area Post Event Reset Advisor"
+  },
+  "profession": {
+    "zh": "公区活动复位顾问",
+    "en": "Common Area Post Event Reset Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助物业活动经办核对公区设施基线与结束状态，识别复位缺口和遗留物，交付逐设施复位表及开放待核单。",
+    "en": "Prepare evidence based review drafts using user supplied records."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我提供原始记录，请生成公区活动结束设施复位表",
+    "en": "Prepare the main task table from my records"
+  },
+  "plugin": "lynxce-common-area-event-reset-b44-advisor",
+  "tags": [
+    {
+      "zh": "物业公区",
+      "en": "Industry"
+    },
+    {
+      "zh": "公区活动结束设施复位表",
+      "en": "Task"
+    },
+    {
+      "zh": "证据复核",
+      "en": "Evidence Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我提供原始记录，请生成公区活动结束设施复位表",
+      "en": "Prepare the main task table from my records"
+    },
+    {
+      "zh": "记录缺失或互相矛盾，请列最少补证与暂缓项",
+      "en": "List missing evidence and blocked decisions"
+    },
+    {
+      "zh": "收到补充记录，请按原对象更新专项附件",
+      "en": "Update affected objects and the two task attachments"
+    }
+  ],
+  "keywords": [
+    "物业公区",
+    "公区活动结束设施复位表",
+    "证据复核"
+  ]
+}

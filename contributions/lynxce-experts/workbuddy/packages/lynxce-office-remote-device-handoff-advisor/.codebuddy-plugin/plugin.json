@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-remote-device-handoff-advisor",
+  "version": "1.0.0",
+  "description": "Plan remote device shipping, serial number checks and receipt exception closure.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-remote-device-handoff-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-remote-device-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-remote-device-handoff-advisor",
+  "displayName": {
+    "zh": "远程设备交接助理",
+    "en": "Remote Employee Device Shipping and Receipt Advisor"
+  },
+  "profession": {
+    "zh": "远程员工设备寄送签收顾问",
+    "en": "Remote Employee Device Shipping and Receipt Advisor"
+  },
+  "displayDescription": {
+    "zh": "按远程员工设备序列号与配件清单安排寄送签收，核算交付成本并追踪缺件破损，交付资产交接闭环表。",
+    "en": "Plan remote device shipping, serial number checks and receipt exception closure."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "给6名远程员工寄电脑如何交接",
+    "en": "Plan laptop handoffs for six remote employees"
+  },
+  "plugin": "lynxce-office-remote-device-handoff-advisor",
+  "tags": [
+    {
+      "zh": "资产交接",
+      "en": "Asset Handoff"
+    },
+    {
+      "zh": "签收验收",
+      "en": "Receipt Checks"
+    },
+    {
+      "zh": "补寄跟踪",
+      "en": "Reship Tracking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "给6名远程员工寄电脑如何交接",
+      "en": "Plan laptop handoffs for six remote employees"
+    },
+    {
+      "zh": "电脑签收了但少适配器怎么办",
+      "en": "Track a missing adapter after laptop delivery"
+    },
+    {
+      "zh": "换机补寄如何更新资产和成本",
+      "en": "Update assets and costs for replacement shipments"
+    }
+  ],
+  "keywords": [
+    "资产交接",
+    "签收验收",
+    "补寄跟踪",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

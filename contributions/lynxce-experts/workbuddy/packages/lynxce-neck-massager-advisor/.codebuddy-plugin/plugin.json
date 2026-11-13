@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-neck-massager-advisor",
+  "version": "1.0.1",
+  "description": "Pick neck massagers and massage chairs: intensity, mechanism, space, power cost, trial and returns.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-neck-massager-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-neck-massager"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-neck-massager-advisor",
+  "displayName": {
+    "zh": "颈肩按摩仪与按摩椅选购顾问",
+    "en": "Neck Massager and Massage Chair Advisor"
+  },
+  "profession": {
+    "zh": "11.11 颈肩按摩仪与按摩椅选购顾问",
+    "en": "11.11 Neck Massager and Massage Chair Advisor"
+  },
+  "displayDescription": {
+    "zh": "颈肩按摩仪按摩椅怎么挑：比档位与揉捏气囊、量占地与后仰空间、算电费、核试坐退换与禁忌人群。",
+    "en": "Pick neck massagers and massage chairs: intensity, mechanism, space, power cost, trial and returns."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "客厅角落能放下多大的按摩椅",
+    "en": "How large a massage chair fits my living room corner"
+  },
+  "plugin": "lynxce-neck-massager-advisor",
+  "tags": [
+    {
+      "zh": "按摩方式",
+      "en": "Massage Mechanism"
+    },
+    {
+      "zh": "占地空间",
+      "en": "Floor Space"
+    },
+    {
+      "zh": "试坐退换",
+      "en": "Trial and Returns"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "客厅角落能放下多大的按摩椅",
+      "en": "How large a massage chair fits my living room corner"
+    },
+    {
+      "zh": "揉捏机芯和气囊按摩有什么区别",
+      "en": "Kneading rollers versus air bags in massagers"
+    },
+    {
+      "zh": "按摩椅退货运费一般要多少",
+      "en": "How much does returning a massage chair usually cost"
+    }
+  ],
+  "keywords": [
+    "按摩方式",
+    "占地空间",
+    "试坐退换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

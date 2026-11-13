@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-homegym-advisor",
+  "version": "1.0.4",
+  "description": "Measure first: equipment priority, noise control and a budget that gets used.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-homegym-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-homegym-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-homegym-advisor",
+  "displayName": {
+    "zh": "家用健身器材选购顾问",
+    "en": "Home Fitness Equipment Advisor"
+  },
+  "profession": {
+    "zh": "家用健身器材选购顾问",
+    "en": "Home Fitness Equipment Advisor"
+  },
+  "displayDescription": {
+    "zh": "家里练先量空间：器材按什么顺序买、噪音怎么解决、预算怎么分才不会买完就吃灰放着。",
+    "en": "Measure first: equipment priority, noise control and a budget that gets used."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里练先买什么",
+    "en": "What should I buy first for home workouts"
+  },
+  "plugin": "lynxce-homegym-advisor",
+  "tags": [
+    {
+      "zh": "家用健身",
+      "en": "Home Gym"
+    },
+    {
+      "zh": "器材优先级",
+      "en": "Priority"
+    },
+    {
+      "zh": "噪音处理",
+      "en": "Noise"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里练先买什么",
+      "en": "What should I buy first for home workouts"
+    },
+    {
+      "zh": "楼房练跳会不会吵",
+      "en": "Will jumping disturb my neighbours"
+    },
+    {
+      "zh": "两千块怎么配器材",
+      "en": "How do I spend this budget on gear"
+    }
+  ],
+  "keywords": [
+    "家用健身",
+    "器材优先级",
+    "噪音处理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

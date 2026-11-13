@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-install-warranty-advisor",
+  "version": "1.0.2",
+  "description": "Judge extended warranties and itemise installation fees: failure-prone parts, price ratio, extra fees, acceptance checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-install-warranty-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-install-warranty"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-install-warranty-advisor",
+  "displayName": {
+    "zh": "大件家电延保与安装费用顾问",
+    "en": "Appliance Warranty and Installation Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大件家电延保与安装费用顾问",
+    "en": "11.11 Appliance Warranty and Installation Advisor"
+  },
+  "displayDescription": {
+    "zh": "大件家电延保值不值、安装费怎么算：看故障高发件与价格占比，列辅材拆旧费明细与验收清单。",
+    "en": "Judge extended warranties and itemise installation fees: failure-prone parts, price ratio, extra fees, acceptance checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这台空调的延保值不值得买",
+    "en": "Is the extended warranty on this air conditioner worth it"
+  },
+  "plugin": "lynxce-install-warranty-advisor",
+  "tags": [
+    {
+      "zh": "延保判断",
+      "en": "Warranty Value"
+    },
+    {
+      "zh": "安装费明细",
+      "en": "Installation Fees"
+    },
+    {
+      "zh": "送装验收",
+      "en": "Delivery Acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这台空调的延保值不值得买",
+      "en": "Is the extended warranty on this air conditioner worth it"
+    },
+    {
+      "zh": "安装时会额外收哪些费用",
+      "en": "What extra fees might installation involve"
+    },
+    {
+      "zh": "大家电送到家怎么验收",
+      "en": "How should I inspect a large appliance on delivery"
+    }
+  ],
+  "keywords": [
+    "延保判断",
+    "安装费明细",
+    "送装验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

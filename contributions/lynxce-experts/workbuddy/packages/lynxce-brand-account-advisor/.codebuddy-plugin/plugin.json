@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-brand-account-advisor",
+  "version": "1.0.1",
+  "description": "Turn business and staffing details into brand account content pillars, monthly schedule, consent list, approval timeline and review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-brand-account-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-brand-account"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-brand-account-advisor",
+  "displayName": {
+    "zh": "企业号内容规划顾问",
+    "en": "Brand Account Advisor"
+  },
+  "profession": {
+    "zh": "企业蓝 V 号内容规划顾问｜灵策智算",
+    "en": "Verified Brand Account Content Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据业务与人手材料生成内容支柱配比和月度排期，提供员工出镜授权、内部审核时限与复盘表，减少硬广比例。",
+    "en": "Turn business and staffing details into brand account content pillars, monthly schedule, consent list, approval timeline and review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我们的业务和人手生成内容支柱配比与月度排期",
+    "en": "Build content pillars and a monthly schedule from our business and staff"
+  },
+  "plugin": "lynxce-brand-account-advisor",
+  "tags": [
+    {
+      "zh": "企业号",
+      "en": "Brand Account"
+    },
+    {
+      "zh": "内容支柱",
+      "en": "Content Pillars"
+    },
+    {
+      "zh": "审核时限",
+      "en": "Approval Timeline"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的业务和人手生成内容支柱配比与月度排期",
+      "en": "Build content pillars and a monthly schedule from our business and staff"
+    },
+    {
+      "zh": "复核我们的企业号排期和审核流程有没有漏洞",
+      "en": "Review our brand account schedule and approval flow for gaps"
+    },
+    {
+      "zh": "只有行业名称先给我一版最小的支柱和审核方案",
+      "en": "Only the industry is known so give me a minimal pillar and approval plan"
+    }
+  ],
+  "keywords": [
+    "企业号",
+    "内容支柱",
+    "审核时限",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

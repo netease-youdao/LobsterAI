@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-photo-backdrop-fold-storage-advisor",
+  "version": "1.0.0",
+  "description": "Check backdrop size, folded storage and purchase gaps.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-photo-backdrop-fold-storage-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-photo-backdrop-fold-storage"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-photo-backdrop-fold-storage-advisor",
+  "displayName": {
+    "zh": "背景布尺寸收纳助理",
+    "en": "Photo Backdrop Storage Advisor"
+  },
+  "profession": {
+    "zh": "摄影背景布尺寸与折叠收纳顾问",
+    "en": "Photo Backdrop Storage Advisor"
+  },
+  "displayDescription": {
+    "zh": "按摄影取景范围核对背景布宽高与固定余量，计算折叠收纳尺寸及采购缺口，交付试拍验收和库位台账。",
+    "en": "Check backdrop size, folded storage and purchase gaps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "取景2.4米需要多宽背景布",
+    "en": "Size a backdrop for a 2.4 meter frame"
+  },
+  "plugin": "lynxce-office-photo-backdrop-fold-storage-advisor",
+  "tags": [
+    {
+      "zh": "尺寸余量",
+      "en": "Size Allowance"
+    },
+    {
+      "zh": "折叠收纳",
+      "en": "Fold Storage"
+    },
+    {
+      "zh": "试拍验收",
+      "en": "Test Shots"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "取景2.4米需要多宽背景布",
+      "en": "Size a backdrop for a 2.4 meter frame"
+    },
+    {
+      "zh": "3米背景布折后能否放入柜子",
+      "en": "Check folded storage for a three meter backdrop"
+    },
+    {
+      "zh": "现有布尺寸不足怎么列采购缺口",
+      "en": "Calculate a gap when existing cloth is too narrow"
+    }
+  ],
+  "keywords": [
+    "尺寸余量",
+    "折叠收纳",
+    "试拍验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

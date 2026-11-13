@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-wechat-official-expert",
+  "version": "1.0.2",
+  "description": "Score topics into a monthly calendar, draft long-form outlines, articles, headlines and digests, and review per-post data.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-wechat-official-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-wechat-official-expert",
+  "displayName": {
+    "zh": "公众号长文主笔",
+    "en": "WeChat Official Account Editor"
+  },
+  "profession": {
+    "zh": "公众号选题与长文主笔",
+    "en": "WeChat Topic Planner & Feature Writer"
+  },
+  "displayDescription": {
+    "zh": "根据账号定位与素材做选题评分和月度日历，撰写长文大纲正文与标题摘要组，并用后台数据复盘单篇表现。",
+    "en": "Score topics into a monthly calendar, draft long-form outlines, articles, headlines and digests, and review per-post data."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据账号定位和素材生成选题评分和下月内容日历",
+    "en": "Score topics and build next month's calendar from positioning"
+  },
+  "plugin": "lynxce-wechat-official-expert",
+  "tags": [
+    {
+      "zh": "选题日历",
+      "en": "Topic Calendar"
+    },
+    {
+      "zh": "长文写作",
+      "en": "Long-form Draft"
+    },
+    {
+      "zh": "数据复盘",
+      "en": "Post Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据账号定位和素材生成选题评分和下月内容日历",
+      "en": "Score topics and build next month's calendar from positioning"
+    },
+    {
+      "zh": "复核这篇长文的事实来源标题和结构",
+      "en": "Review this article for sources headlines and structure"
+    },
+    {
+      "zh": "只有一个题目时先给大纲和素材需求清单",
+      "en": "With only a topic give an outline and source checklist"
+    }
+  ],
+  "keywords": [
+    "选题日历",
+    "长文写作",
+    "数据复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true,
+  "skills": []
+}

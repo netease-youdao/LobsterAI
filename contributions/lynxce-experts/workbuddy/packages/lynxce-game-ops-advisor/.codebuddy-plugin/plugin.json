@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-game-ops-advisor",
+  "version": "1.0.1",
+  "description": "Plan live-ops calendars, reward budgets, cohort metric checks and player-facing announcement drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-game-ops-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-game-calendar",
+    "./skills/lynxce-game-cohort",
+    "./skills/lynxce-game-notice"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-game-ops-advisor",
+  "displayName": {
+    "zh": "游戏运营与活动策划顾问",
+    "en": "Game Operations & Event Advisor"
+  },
+  "profession": {
+    "zh": "游戏版本运营与活动策划顾问",
+    "en": "Game Live-Ops and Event Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据版本与活动材料安排运营节奏拆解参与指标和奖励预算核对公告口径交付排期草稿及异常复盘清单",
+    "en": "Plan live-ops calendars, reward budgets, cohort metric checks and player-facing announcement drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "03-GameSpatial",
+  "defaultInitPrompt": {
+    "zh": "帮我排一个月的活动日历",
+    "en": "Plan a one-month event calendar"
+  },
+  "plugin": "lynxce-game-ops-advisor",
+  "tags": [
+    {
+      "zh": "活动排期",
+      "en": "Event Calendar"
+    },
+    {
+      "zh": "留存节点",
+      "en": "Retention"
+    },
+    {
+      "zh": "公告口径",
+      "en": "Patch Notes"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我排一个月的活动日历",
+      "en": "Plan a one-month event calendar"
+    },
+    {
+      "zh": "新版本公告该怎么写才不挨骂",
+      "en": "Write patch notes that will not backfire"
+    },
+    {
+      "zh": "次留掉了五个点,先查什么",
+      "en": "Day-1 retention dropped five points — what to check first"
+    }
+  ],
+  "keywords": [
+    "活动排期",
+    "留存节点",
+    "公告口径",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

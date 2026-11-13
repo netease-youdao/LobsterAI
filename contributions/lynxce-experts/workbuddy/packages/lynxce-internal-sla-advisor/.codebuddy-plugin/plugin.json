@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-internal-sla-advisor",
+  "version": "1.0.1",
+  "description": "Design internal service intake, priority rules, working-time clocks, escalation drafts and reproducible monthly reports.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-internal-sla-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-internal-sla"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-internal-sla-advisor",
+  "displayName": {
+    "zh": "内部服务时限顾问",
+    "en": "Internal Service SLA Advisor"
+  },
+  "profession": {
+    "zh": "内部服务请求受理与响应时限规范顾问｜灵策智算",
+    "en": "Internal Service Request and SLA Advisor"
+  },
+  "displayDescription": {
+    "zh": "为内部请求设计受理目录、影响分级和工作时段计时规则，生成响应核对表、升级草稿与可复算服务月报。",
+    "en": "Design internal service intake, priority rules, working-time clocks, escalation drafts and reproducible monthly reports."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "按部门容量和服务时段制作请求目录与分级时限草稿",
+    "en": "Create a service catalog and draft targets using team capacity and hours."
+  },
+  "plugin": "lynxce-internal-sla-advisor",
+  "tags": [
+    {
+      "zh": "服务受理",
+      "en": "Service Intake"
+    },
+    {
+      "zh": "时限计量",
+      "en": "SLA Measurement"
+    },
+    {
+      "zh": "服务月报",
+      "en": "Service Report"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按部门容量和服务时段制作请求目录与分级时限草稿",
+      "en": "Create a service catalog and draft targets using team capacity and hours."
+    },
+    {
+      "zh": "按这些请求时间核对首响、暂停计时和解决时限",
+      "en": "Check response, pause and resolution times for these requests."
+    },
+    {
+      "zh": "用本月请求台账生成按时率、积压和改进项月报",
+      "en": "Build a monthly report of timeliness, backlog and improvement actions."
+    }
+  ],
+  "keywords": [
+    "服务受理",
+    "时限计量",
+    "服务月报"
+  ],
+  "needEncrypt": true
+}

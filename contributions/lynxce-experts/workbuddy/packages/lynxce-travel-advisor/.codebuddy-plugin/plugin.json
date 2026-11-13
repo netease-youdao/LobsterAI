@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-travel-advisor",
+  "version": "1.0.1",
+  "description": "Plan business trips: approvals, booking rules, documents and cost control.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-travel-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-travel-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-travel-advisor",
+  "displayName": {
+    "zh": "差旅安排与出差管理顾问",
+    "en": "Business Travel Management Advisor"
+  },
+  "profession": {
+    "zh": "差旅安排与出差管理顾问",
+    "en": "Business Travel Management Advisor"
+  },
+  "displayDescription": {
+    "zh": "出差怎么安排才省心：审批要什么、订票住宿怎么定、单据怎么留存、费用怎么控住不超支。",
+    "en": "Plan business trips: approvals, booking rules, documents and cost control."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "出差前要准备什么",
+    "en": "What do I need before a business trip"
+  },
+  "plugin": "lynxce-travel-advisor",
+  "tags": [
+    {
+      "zh": "差旅安排",
+      "en": "Business Travel"
+    },
+    {
+      "zh": "行程规划",
+      "en": "Itinerary"
+    },
+    {
+      "zh": "费用控制",
+      "en": "Cost Control"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "出差前要准备什么",
+      "en": "What do I need before a business trip"
+    },
+    {
+      "zh": "帮我排一版出差行程",
+      "en": "Help me plan this trip itinerary"
+    },
+    {
+      "zh": "差旅费用怎么控制",
+      "en": "How do we control travel costs"
+    }
+  ],
+  "keywords": [
+    "差旅安排",
+    "行程规划",
+    "费用控制",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-property-wayfinding-copy-design-b45",
+  "version": "1.0.0",
+  "description": "Create visitor route descriptions, decision-point sign copy and walkthrough revisions from supplied building connections.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-property-wayfinding-copy-design-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-property-wayfinding-copy-design-inside-1-b45",
+    "./skills/lynxce-property-wayfinding-copy-design-inside-2-b45",
+    "./skills/lynxce-property-wayfinding-copy-design-inside-3-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-property-wayfinding-copy-design-b45",
+  "displayName": {
+    "zh": "导视顾问",
+    "en": "Building Wayfinding Copy Designer"
+  },
+  "profession": {
+    "zh": "楼栋导视文案",
+    "en": "Building Wayfinding Copy Designer"
+  },
+  "displayDescription": {
+    "zh": "根据楼栋连接与通行条件设计访客寻路文案，交付分岔标识、目的地短句和口述路线，并提供走查改稿。",
+    "en": "Create visitor route descriptions, decision-point sign copy and walkthrough revisions from supplied building connections."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "从北门到便民服务室有两个岔口，帮我写整条导视文案。",
+    "en": "Building Wayfinding Copy Designer"
+  },
+  "plugin": "lynxce-property-wayfinding-copy-design-b45",
+  "tags": [
+    {
+      "zh": "楼栋导视",
+      "en": "楼栋导视"
+    },
+    {
+      "zh": "寻路文案",
+      "en": "寻路文案"
+    },
+    {
+      "zh": "访客引导",
+      "en": "访客引导"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "从北门到便民服务室有两个岔口，帮我写整条导视文案。",
+      "en": "Building Wayfinding Copy Designer"
+    },
+    {
+      "zh": "楼栋里三个相近名称总被找错，请统一叫法并写标识。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "照这个连接表安排需要放提示牌的节点，算清数量。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "楼栋导视",
+    "寻路文案",
+    "访客引导"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-meeting-notebook-advisor",
+  "version": "1.0.0",
+  "description": "Standardize meeting notebooks: layout, paper, yearly usage, issue log and purchase list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-meeting-notebook-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-meeting-notebook"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-meeting-notebook-advisor",
+  "displayName": {
+    "zh": "会议本文具采购助理",
+    "en": "Meeting Notebook Procurement Assistant"
+  },
+  "profession": {
+    "zh": "会议笔记本与便签团队办公采购顾问",
+    "en": "Meeting Notebook and Sticky Note Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "会议本便签怎么统一采购：按康奈尔或子弹笔记定版式，按人均用量算年需求，出领用表与采购表。",
+    "en": "Standardize meeting notebooks: layout, paper, yearly usage, issue log and purchase list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "团队例会用康奈尔还是子弹笔记",
+    "en": "Cornell notes or bullet journal for team meetings"
+  },
+  "plugin": "lynxce-meeting-notebook-advisor",
+  "tags": [
+    {
+      "zh": "笔记版式",
+      "en": "Note Layout"
+    },
+    {
+      "zh": "年度用量",
+      "en": "Yearly Usage"
+    },
+    {
+      "zh": "领用台账",
+      "en": "Issue Log"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "团队例会用康奈尔还是子弹笔记",
+      "en": "Cornell notes or bullet journal for team meetings"
+    },
+    {
+      "zh": "12 个人一年要买多少本会议本",
+      "en": "How many notebooks a 12 person team needs a year"
+    },
+    {
+      "zh": "文具领用表怎么设计",
+      "en": "How to design a stationery issue log"
+    }
+  ],
+  "keywords": [
+    "笔记版式",
+    "年度用量",
+    "领用台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-employment-insurance-subsidy-b51",
+  "version": "1.0.0",
+  "description": "Organize traceable enterprise policy materials, reconcile records and prepare complete correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-employment-insurance-subsidy-b51.md"
+  ],
+  "skills": [
+    "./skills/lynxce-employment-insurance-subsidy-b51-1",
+    "./skills/lynxce-employment-insurance-subsidy-b51-2",
+    "./skills/lynxce-employment-insurance-subsidy-b51-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-employment-insurance-subsidy-b51",
+  "displayName": {
+    "zh": "就业顾问",
+    "en": "Employment Subsidy Materials Advisor"
+  },
+  "profession": {
+    "zh": "就业补贴顾问",
+    "en": "Employment Subsidy Materials Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业人事财务核对吸纳就业参保材料，拆分单位三险与个人缴费，交付人月底稿和完整申请补正说明。",
+    "en": "Organize traceable enterprise policy materials, reconcile records and prepare complete correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把招用人员合同和缴费摘要整理成补贴材料。",
+    "en": "Employment Subsidy Materials Advisor"
+  },
+  "plugin": "lynxce-employment-insurance-subsidy-b51",
+  "tags": [
+    {
+      "zh": "就业补贴",
+      "en": "就业补贴"
+    },
+    {
+      "zh": "单位三险",
+      "en": "单位三险"
+    },
+    {
+      "zh": "人月对账",
+      "en": "人月对账"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把招用人员合同和缴费摘要整理成补贴材料。",
+      "en": "Employment Subsidy Materials Advisor"
+    },
+    {
+      "zh": "单位与个人缴费混在一起，请拆出可核对底稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "某员工月份退费与原表冲突，请重出完整说明。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "就业补贴",
+    "单位三险",
+    "人月对账"
+  ]
+}

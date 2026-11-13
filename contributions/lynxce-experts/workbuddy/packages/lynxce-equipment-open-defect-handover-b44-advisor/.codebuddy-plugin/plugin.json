@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-equipment-open-defect-handover-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare evidence based review drafts using user supplied records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-equipment-open-defect-handover-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-equipment-open-defect-handover-b44",
+    "./skills/lynxce-equipment-defect-age-window-b44",
+    "./skills/lynxce-equipment-retest-close-evidence-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-equipment-open-defect-handover-b44-advisor",
+  "displayName": {
+    "zh": "设备未消缺交班顾问",
+    "en": "Equipment Open Defect Handover Advisor"
+  },
+  "profession": {
+    "zh": "设备未消缺交班顾问",
+    "en": "Equipment Open Defect Handover Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助设备班组核对点检遗留项与处置授权，区分承接、复测和消缺证据，交付未消缺交班表及续核清单。",
+    "en": "Prepare evidence based review drafts using user supplied records."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我提供原始记录，请生成设备未消缺交班承接表",
+    "en": "Prepare the main task table from my records"
+  },
+  "plugin": "lynxce-equipment-open-defect-handover-b44-advisor",
+  "tags": [
+    {
+      "zh": "制造设备",
+      "en": "Industry"
+    },
+    {
+      "zh": "设备未消缺交班承接表",
+      "en": "Task"
+    },
+    {
+      "zh": "证据复核",
+      "en": "Evidence Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我提供原始记录，请生成设备未消缺交班承接表",
+      "en": "Prepare the main task table from my records"
+    },
+    {
+      "zh": "记录缺失或互相矛盾，请列最少补证与暂缓项",
+      "en": "List missing evidence and blocked decisions"
+    },
+    {
+      "zh": "收到补充记录，请按原对象更新专项附件",
+      "en": "Update affected objects and the two task attachments"
+    }
+  ],
+  "keywords": [
+    "制造设备",
+    "设备未消缺交班承接表",
+    "证据复核"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-attendance-advisor",
+  "version": "1.0.1",
+  "description": "Build coverage-checked monthly rosters, leave balance ledgers and month-end three-way reconciliations from team and approval records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-attendance-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-attendance-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-attendance-advisor",
+  "displayName": {
+    "zh": "考勤排班假期顾问",
+    "en": "Shift and Attendance Advisor"
+  },
+  "profession": {
+    "zh": "考勤排班与假期管理顾问｜灵策智算",
+    "en": "Shift Roster and Leave Management Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据人数班次与审批记录核算覆盖缺口并排出月度班表，建立假期余额台账，附月底三方对账差异单。",
+    "en": "Build coverage-checked monthly rosters, leave balance ledgers and month-end three-way reconciliations from team and approval records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据人数班次和最低在岗要求生成下月排班表",
+    "en": "Build next month's roster from headcount shifts and minimum coverage"
+  },
+  "plugin": "lynxce-attendance-advisor",
+  "tags": [
+    {
+      "zh": "排班覆盖",
+      "en": "Shift Coverage"
+    },
+    {
+      "zh": "假期台账",
+      "en": "Leave Ledger"
+    },
+    {
+      "zh": "月度对账",
+      "en": "Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据人数班次和最低在岗要求生成下月排班表",
+      "en": "Build next month's roster from headcount shifts and minimum coverage"
+    },
+    {
+      "zh": "帮我核对这份假期台账和打卡记录的差异",
+      "en": "Check this leave ledger against punch records and approvals"
+    },
+    {
+      "zh": "只有人员名单先给一版排班规则和台账模板",
+      "en": "With only a staff list draft roster rules and a ledger template"
+    }
+  ],
+  "keywords": [
+    "排班覆盖",
+    "假期台账",
+    "月度对账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

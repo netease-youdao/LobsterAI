@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-technology-sme-evaluation-b51",
+  "version": "1.0.0",
+  "description": "Organize traceable enterprise policy materials, reconcile records and prepare complete correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-technology-sme-evaluation-b51.md"
+  ],
+  "skills": [
+    "./skills/lynxce-technology-sme-evaluation-b51-1",
+    "./skills/lynxce-technology-sme-evaluation-b51-2",
+    "./skills/lynxce-technology-sme-evaluation-b51-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-technology-sme-evaluation-b51",
+  "displayName": {
+    "zh": "科创顾问",
+    "en": "Technology SME Evaluation Advisor"
+  },
+  "profession": {
+    "zh": "科技型企业顾问",
+    "en": "Technology SME Evaluation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为科技企业申报经办梳理年度评价条件，复算人员研发指标，交付证据底稿、情况说明和完整补正稿。",
+    "en": "Organize traceable enterprise policy materials, reconcile records and prepare complete correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把我的年度资料整理成科技型中小企业评价说明。",
+    "en": "Technology SME Evaluation Advisor"
+  },
+  "plugin": "lynxce-technology-sme-evaluation-b51",
+  "tags": [
+    {
+      "zh": "科技型企业",
+      "en": "科技型企业"
+    },
+    {
+      "zh": "年度评价",
+      "en": "年度评价"
+    },
+    {
+      "zh": "指标复核",
+      "en": "指标复核"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把我的年度资料整理成科技型中小企业评价说明。",
+      "en": "Technology SME Evaluation Advisor"
+    },
+    {
+      "zh": "研发投入两条评分路线怎么选，请给可核对底稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "研发费用出现两个口径，请重算并出完整补正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "科技型企业",
+    "年度评价",
+    "指标复核"
+  ]
+}

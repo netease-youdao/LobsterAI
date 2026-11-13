@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-shipping-merge-advisor",
+  "version": "1.0.2",
+  "description": "Weigh free-shipping thresholds: add items or pay shipping, remote surcharges, split warehouses, pickup timing and returns.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-shipping-merge-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-shipping-merge"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-shipping-merge-advisor",
+  "displayName": {
+    "zh": "多包裹合并发货与包邮顾问",
+    "en": "Package Merge and Free Shipping Advisor"
+  },
+  "profession": {
+    "zh": "11.11 多包裹合并发货与包邮顾问",
+    "en": "11.11 Package Merge and Free Shipping Advisor"
+  },
+  "displayDescription": {
+    "zh": "包邮门槛怎么权衡：凑单还是付运费、偏远加价、分仓发货、取件与到货时间差影响退换。",
+    "en": "Weigh free-shipping thresholds: add items or pay shipping, remote surcharges, split warehouses, pickup timing and returns."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "凑单包邮还是直接付运费划算",
+    "en": "Should I add items for free shipping or just pay shipping"
+  },
+  "plugin": "lynxce-shipping-merge-advisor",
+  "tags": [
+    {
+      "zh": "凑单核算",
+      "en": "Threshold Math"
+    },
+    {
+      "zh": "分仓发货",
+      "en": "Split Warehouse"
+    },
+    {
+      "zh": "取件时限",
+      "en": "Pickup Window"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "凑单包邮还是直接付运费划算",
+      "en": "Should I add items for free shipping or just pay shipping"
+    },
+    {
+      "zh": "分仓发货是不是要付两份运费",
+      "en": "Do split-warehouse orders charge shipping twice"
+    },
+    {
+      "zh": "偏远地区运费怎么核实",
+      "en": "How do I check remote-area shipping surcharges"
+    }
+  ],
+  "keywords": [
+    "凑单核算",
+    "分仓发货",
+    "取件时限",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

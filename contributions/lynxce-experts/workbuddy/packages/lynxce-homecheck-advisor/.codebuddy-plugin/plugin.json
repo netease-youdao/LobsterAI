@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-homecheck-advisor",
+  "version": "1.0.1",
+  "description": "Turn floor plans, handover papers and site photos into room checklists, a defect log, fix deadlines and re-inspection sign-off.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-homecheck-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-home-inspection"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-homecheck-advisor",
+  "displayName": {
+    "zh": "验房收房顾问",
+    "en": "Home Inspection"
+  },
+  "profession": {
+    "zh": "验房收房与整改跟进顾问",
+    "en": "Home Acceptance and Rectification Follow-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据房型图、交付文件与现场照片整理验房记录，提供逐间核对清单、问题台账、整改期限推算和复验销项表。",
+    "en": "Turn floor plans, handover papers and site photos into room checklists, a defect log, fix deadlines and re-inspection sign-off."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据房型和交付材料生成逐间验房清单与问题台账",
+    "en": "Build a room checklist and defect log from my floor plan and papers"
+  },
+  "plugin": "lynxce-homecheck-advisor",
+  "tags": [
+    {
+      "zh": "逐间核对",
+      "en": "Room Checklist"
+    },
+    {
+      "zh": "问题台账",
+      "en": "Defect Log"
+    },
+    {
+      "zh": "复验销项",
+      "en": "Re-inspection"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据房型和交付材料生成逐间验房清单与问题台账",
+      "en": "Build a room checklist and defect log from my floor plan and papers"
+    },
+    {
+      "zh": "帮我复核这份交接问题单的写法和整改期限",
+      "en": "Review the wording and deadlines of this handover defect list"
+    },
+    {
+      "zh": "只知道明天收房时先给工具清单和必查项",
+      "en": "With only a handover date tomorrow give tools and must-check items"
+    }
+  ],
+  "keywords": [
+    "逐间核对",
+    "问题台账",
+    "复验销项",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

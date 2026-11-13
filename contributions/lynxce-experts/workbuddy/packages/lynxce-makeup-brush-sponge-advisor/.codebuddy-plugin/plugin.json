@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-makeup-brush-sponge-advisor",
+  "version": "1.0.0",
+  "description": "Pick makeup brushes and sponges: shapes, bristles, set unit price and replacement.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-makeup-brush-sponge-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-makeup-brush-sponge"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-makeup-brush-sponge-advisor",
+  "displayName": {
+    "zh": "化妆刷美妆蛋选购顾问",
+    "en": "Makeup Brush and Sponge Advisor"
+  },
+  "profession": {
+    "zh": "11.11 化妆刷与美妆蛋选购顾问",
+    "en": "11.11 Makeup Brush and Beauty Sponge Advisor"
+  },
+  "displayDescription": {
+    "zh": "化妆刷美妆蛋怎么挑：按妆容步骤配刷型、核刷毛材质与掉毛、算套装有效单价与清洗更换周期。",
+    "en": "Pick makeup brushes and sponges: shapes, bristles, set unit price and replacement."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "日常淡妆需要几支化妆刷",
+    "en": "How many brushes a daily light makeup needs"
+  },
+  "plugin": "lynxce-makeup-brush-sponge-advisor",
+  "tags": [
+    {
+      "zh": "刷型配套",
+      "en": "Brush Shapes"
+    },
+    {
+      "zh": "刷毛做工",
+      "en": "Bristles and Build"
+    },
+    {
+      "zh": "更换周期",
+      "en": "Replacement Cycle"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "日常淡妆需要几支化妆刷",
+      "en": "How many brushes a daily light makeup needs"
+    },
+    {
+      "zh": "14 支套装和单买哪个划算",
+      "en": "Whether a 14 piece set beats buying singles"
+    },
+    {
+      "zh": "美妆蛋多久洗一次多久换",
+      "en": "How often to wash and replace a beauty sponge"
+    }
+  ],
+  "keywords": [
+    "刷型配套",
+    "刷毛做工",
+    "更换周期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

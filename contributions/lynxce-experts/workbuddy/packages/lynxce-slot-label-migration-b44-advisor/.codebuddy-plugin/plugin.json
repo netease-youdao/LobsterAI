@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-slot-label-migration-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare evidence based review drafts using user supplied records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-slot-label-migration-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-slot-label-migration-b44",
+    "./skills/lynxce-slot-mapping-collision-b44",
+    "./skills/lynxce-slot-old-label-retirement-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-slot-label-migration-b44-advisor",
+  "displayName": {
+    "zh": "库位标签迁移顾问",
+    "en": "Warehouse Label Migration Advisor"
+  },
+  "profession": {
+    "zh": "库位标签迁移顾问",
+    "en": "Warehouse Label Migration Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助仓储人员核对库位迁移前后标签关系，识别拆分合并与旧标残留，交付标签映射表和切换复核清单。",
+    "en": "Prepare evidence based review drafts using user supplied records."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我提供原始记录，请生成库位迁移标签映射复核",
+    "en": "Prepare the main task table from my records"
+  },
+  "plugin": "lynxce-slot-label-migration-b44-advisor",
+  "tags": [
+    {
+      "zh": "仓储迁移",
+      "en": "Industry"
+    },
+    {
+      "zh": "库位迁移标签映射复核",
+      "en": "Task"
+    },
+    {
+      "zh": "证据复核",
+      "en": "Evidence Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我提供原始记录，请生成库位迁移标签映射复核",
+      "en": "Prepare the main task table from my records"
+    },
+    {
+      "zh": "记录缺失或互相矛盾，请列最少补证与暂缓项",
+      "en": "List missing evidence and blocked decisions"
+    },
+    {
+      "zh": "收到补充记录，请按原对象更新专项附件",
+      "en": "Update affected objects and the two task attachments"
+    }
+  ],
+  "keywords": [
+    "仓储迁移",
+    "库位迁移标签映射复核",
+    "证据复核"
+  ]
+}

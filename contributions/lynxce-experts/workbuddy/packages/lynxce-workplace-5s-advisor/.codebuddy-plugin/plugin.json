@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-workplace-5s-advisor",
+  "version": "1.0.1",
+  "description": "Turn office layouts and problem spots into sort lists, place standards, owner zones, weekly scorecards and follow-up logs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-workplace-5s-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-workplace-5s"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-workplace-5s-advisor",
+  "displayName": {
+    "zh": "办公5S管理顾问",
+    "en": "Workplace 5S Advisor"
+  },
+  "profession": {
+    "zh": "办公环境 5S 整理与检查顾问｜灵策智算",
+    "en": "Office 5S Organization and Audit Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据办公区布局与乱点清单，生成整理清单、定位标准、责任分区、每周检查评分表和整改复查记录。",
+    "en": "Turn office layouts and problem spots into sort lists, place standards, owner zones, weekly scorecards and follow-up logs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "根据我的办公区布局和乱点生成5S推进方案与责任分区",
+    "en": "Build a 5S plan and owner zones from my layout and problem spots"
+  },
+  "plugin": "lynxce-workplace-5s-advisor",
+  "tags": [
+    {
+      "zh": "整理整顿",
+      "en": "Sort and Set"
+    },
+    {
+      "zh": "责任分区",
+      "en": "Owner Zones"
+    },
+    {
+      "zh": "检查评分",
+      "en": "Audit Scoring"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的办公区布局和乱点生成5S推进方案与责任分区",
+      "en": "Build a 5S plan and owner zones from my layout and problem spots"
+    },
+    {
+      "zh": "帮我复核这份周检查表的评分和整改记录",
+      "en": "Review the scoring and follow-ups in my weekly checklist"
+    },
+    {
+      "zh": "只有几个区域名称先给我一张最小检查表",
+      "en": "Give me a minimal checklist from only area names"
+    }
+  ],
+  "keywords": [
+    "整理整顿",
+    "责任分区",
+    "检查评分",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

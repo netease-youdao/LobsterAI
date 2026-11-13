@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-nas-advisor",
+  "version": "1.0.4",
+  "description": "Store files safely: capacity sizing, redundancy and the 3-2-1 backup rule.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-nas-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-nas-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-nas-advisor",
+  "displayName": {
+    "zh": "家庭存储与数据备份顾问",
+    "en": "Home Storage and Backup Advisor"
+  },
+  "profession": {
+    "zh": "家庭存储与数据备份顾问",
+    "en": "Home Storage and Backup Advisor"
+  },
+  "displayDescription": {
+    "zh": "照片资料怎么存才不丢：容量怎么估、冗余怎么配、三二一备份原则怎么落到日常操作里。",
+    "en": "Store files safely: capacity sizing, redundancy and the 3-2-1 backup rule."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "家里照片资料怎么存才安全",
+    "en": "How do I store family photos safely"
+  },
+  "plugin": "lynxce-nas-advisor",
+  "tags": [
+    {
+      "zh": "家庭存储",
+      "en": "Home Storage"
+    },
+    {
+      "zh": "数据备份",
+      "en": "Backup"
+    },
+    {
+      "zh": "容量规划",
+      "en": "Capacity"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里照片资料怎么存才安全",
+      "en": "How do I store family photos safely"
+    },
+    {
+      "zh": "买几盘位的合适",
+      "en": "How many drive bays do I need"
+    },
+    {
+      "zh": "帮我算一年的存储成本",
+      "en": "Estimate my yearly storage cost"
+    }
+  ],
+  "keywords": [
+    "家庭存储",
+    "数据备份",
+    "容量规划",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

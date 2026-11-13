@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-restaurant-service-roleplay-coach-b45",
+  "version": "1.0.0",
+  "description": "Turn supplied service problems into branched roleplay scripts, observable scoring and focused second-round drills.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-restaurant-service-roleplay-coach-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-restaurant-service-roleplay-coach-inside-1-b45",
+    "./skills/lynxce-restaurant-service-roleplay-coach-inside-2-b45",
+    "./skills/lynxce-restaurant-service-roleplay-coach-inside-3-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-restaurant-service-roleplay-coach-b45",
+  "displayName": {
+    "zh": "服务教练",
+    "en": "Restaurant Service Roleplay Coach"
+  },
+  "profession": {
+    "zh": "餐饮服务演练",
+    "en": "Restaurant Service Roleplay Coach"
+  },
+  "displayDescription": {
+    "zh": "将迎宾、点单和催菜等服务难题写成双人演练，交付分支对话、观察评分及重练卡，方便班前培训使用。",
+    "en": "Turn supplied service problems into branched roleplay scripts, observable scoring and focused second-round drills."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "给新服务员做十分钟催菜情景演练，直接写双方台词。",
+    "en": "Restaurant Service Roleplay Coach"
+  },
+  "plugin": "lynxce-restaurant-service-roleplay-coach-b45",
+  "tags": [
+    {
+      "zh": "餐饮培训",
+      "en": "餐饮培训"
+    },
+    {
+      "zh": "服务演练",
+      "en": "服务演练"
+    },
+    {
+      "zh": "班前练习",
+      "en": "班前练习"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "给新服务员做十分钟催菜情景演练，直接写双方台词。",
+      "en": "Restaurant Service Roleplay Coach"
+    },
+    {
+      "zh": "客人说菜太慢但厨房没给时间，怎么训练回复？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "按这段服务对话找一个可观察问题并改成重练脚本。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "餐饮培训",
+    "服务演练",
+    "班前练习"
+  ]
+}

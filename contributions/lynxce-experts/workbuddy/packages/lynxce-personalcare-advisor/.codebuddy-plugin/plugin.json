@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-personalcare-advisor",
+  "version": "1.0.4",
+  "description": "Look past the sticker price: consumable costs, spec comparison, certifications and support.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-personalcare-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-personalcare-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-personalcare-advisor",
+  "displayName": {
+    "zh": "个护小家电选购与耗材核算顾问",
+    "en": "Personal Care Appliance Advisor"
+  },
+  "profession": {
+    "zh": "个护小家电选购与耗材核算顾问",
+    "en": "Personal Care Appliance Advisor"
+  },
+  "displayDescription": {
+    "zh": "个护家电别只看机价：耗材一年要多少钱、关键参数怎么比、认证与售后怎么逐项核对好。",
+    "en": "Look past the sticker price: consumable costs, spec comparison, certifications and support."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这台一年耗材要多少钱",
+    "en": "What do consumables cost per year"
+  },
+  "plugin": "lynxce-personalcare-advisor",
+  "tags": [
+    {
+      "zh": "个护家电",
+      "en": "Personal Care"
+    },
+    {
+      "zh": "耗材成本",
+      "en": "Consumables"
+    },
+    {
+      "zh": "安全认证",
+      "en": "Certification"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这台一年耗材要多少钱",
+      "en": "What do consumables cost per year"
+    },
+    {
+      "zh": "这两款怎么选",
+      "en": "How do I choose between these two"
+    },
+    {
+      "zh": "刷头多久换一次",
+      "en": "How often should I replace the head"
+    }
+  ],
+  "keywords": [
+    "个护家电",
+    "耗材成本",
+    "安全认证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

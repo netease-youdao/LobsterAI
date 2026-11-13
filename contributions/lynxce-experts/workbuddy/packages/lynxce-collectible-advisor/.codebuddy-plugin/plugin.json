@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-collectible-advisor",
+  "version": "1.0.4",
+  "description": "Set a cap first: authenticity checks, secondary-market prices and blind-box discipline.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-collectible-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-collectible-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-collectible-advisor",
+  "displayName": {
+    "zh": "潮玩手办与收藏品选购顾问",
+    "en": "Designer Toy and Collectibles Advisor"
+  },
+  "profession": {
+    "zh": "潮玩手办与收藏品选购顾问",
+    "en": "Designer Toy and Collectibles Advisor"
+  },
+  "displayDescription": {
+    "zh": "潮玩收藏先设预算上限：怎么辨真伪、品相怎么看、二级市场价怎么判断、盲盒怎么不上头。",
+    "en": "Set a cap first: authenticity checks, secondary-market prices and blind-box discipline."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个价格买合适吗",
+    "en": "Is this a reasonable price"
+  },
+  "plugin": "lynxce-collectible-advisor",
+  "tags": [
+    {
+      "zh": "潮玩收藏",
+      "en": "Collectibles"
+    },
+    {
+      "zh": "真伪核对",
+      "en": "Authenticity"
+    },
+    {
+      "zh": "预算上限",
+      "en": "Budget Cap"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个价格买合适吗",
+      "en": "Is this a reasonable price"
+    },
+    {
+      "zh": "帮我看看这件真不真",
+      "en": "Help me check if this is genuine"
+    },
+    {
+      "zh": "盲盒怎么控制预算",
+      "en": "How do I cap my blind-box spending"
+    }
+  ],
+  "keywords": [
+    "潮玩收藏",
+    "真伪核对",
+    "预算上限",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

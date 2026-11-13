@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-hardware-advisor",
+  "version": "1.0.4",
+  "description": "A practical home toolkit: the starter list, matching specs and jobs to leave to pros.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hardware-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hardware-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hardware-advisor",
+  "displayName": {
+    "zh": "五金工具与家用维修选购顾问",
+    "en": "Home Tools and Repair Advisor"
+  },
+  "profession": {
+    "zh": "五金工具与家用维修选购顾问",
+    "en": "Home Tools and Repair Advisor"
+  },
+  "displayDescription": {
+    "zh": "家用工具买哪几样够用：基础清单怎么配、规格怎么对得上、哪些活千万别自己动手去干。",
+    "en": "A practical home toolkit: the starter list, matching specs and jobs to leave to pros."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里该备哪几样工具",
+    "en": "Which tools should I keep at home"
+  },
+  "plugin": "lynxce-hardware-advisor",
+  "tags": [
+    {
+      "zh": "五金工具",
+      "en": "Tools"
+    },
+    {
+      "zh": "规格核对",
+      "en": "Spec Match"
+    },
+    {
+      "zh": "安全边界",
+      "en": "Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里该备哪几样工具",
+      "en": "Which tools should I keep at home"
+    },
+    {
+      "zh": "这个螺丝该配什么",
+      "en": "What fastener matches this screw"
+    },
+    {
+      "zh": "这活我能自己干吗",
+      "en": "Should I do this job myself"
+    }
+  ],
+  "keywords": [
+    "五金工具",
+    "规格核对",
+    "安全边界",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

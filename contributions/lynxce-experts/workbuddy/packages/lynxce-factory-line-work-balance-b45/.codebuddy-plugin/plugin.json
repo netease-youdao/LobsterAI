@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-factory-line-work-balance-b45",
+  "version": "1.0.0",
+  "description": "Create a ready-to-review plan and transparent calculations from supplied inputs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-factory-line-work-balance-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-factory-line-work-balance-precedence-b45",
+    "./skills/lynxce-factory-line-work-balance-balance-b45",
+    "./skills/lynxce-factory-line-work-balance-trial-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-factory-line-work-balance-b45",
+  "displayName": {
+    "zh": "工位平衡师",
+    "en": "Manual Assembly Work Balance Planner"
+  },
+  "profession": {
+    "zh": "工位平衡工程师",
+    "en": "Manual Assembly Work Balance Planner"
+  },
+  "displayDescription": {
+    "zh": "根据装配动作工时与前后依赖编排工位，计算各站负荷与节拍差距，交付动作分配方案和试运行观察表。",
+    "en": "Create a ready-to-review plan and transparent calculations from supplied inputs."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "动作20、30、25、15、10秒且有前后依赖，请给60秒目标下的工位分配。",
+    "en": "Manual Assembly Work Balance Planner"
+  },
+  "plugin": "lynxce-factory-line-work-balance-b45",
+  "tags": [
+    {
+      "zh": "工位平衡",
+      "en": "工位平衡"
+    },
+    {
+      "zh": "动作分配",
+      "en": "动作分配"
+    },
+    {
+      "zh": "节拍分析",
+      "en": "节拍分析"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "动作20、30、25、15、10秒且有前后依赖，请给60秒目标下的工位分配。",
+      "en": "Manual Assembly Work Balance Planner"
+    },
+    {
+      "zh": "现有三个工位忙闲不均，请比较不搬设备的动作重分配方案。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "试运行后第二工位增加8秒，更新负荷并说明哪些动作可调整。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "工位平衡",
+    "动作分配",
+    "节拍分析"
+  ]
+}

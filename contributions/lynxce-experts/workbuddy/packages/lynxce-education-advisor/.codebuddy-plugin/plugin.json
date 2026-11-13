@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-education-advisor",
+  "version": "1.0.1",
+  "description": "Design courses, diagnostic items and factual feedback from supplied materials for teacher review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-education-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-course-outline",
+    "./skills/lynxce-exam-builder",
+    "./skills/lynxce-parent-comm"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-education-advisor",
+  "displayName": {
+    "zh": "教务教研顾问",
+    "en": "Curriculum & Teaching Advisor"
+  },
+  "profession": {
+    "zh": "课程设计与教学质量顾问",
+    "en": "Curriculum Design & Teaching Quality Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据教材与学习记录反向设计课程编制诊断试题和评分解析整理事实反馈与家校沟通支持教师复核",
+    "en": "Design courses, diagnostic items and factual feedback from supplied materials for teacher review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "帮我设计一门 8 课时的新员工培训课",
+    "en": "Design an 8-session onboarding course"
+  },
+  "plugin": "lynxce-education-advisor",
+  "tags": [
+    {
+      "zh": "课程设计",
+      "en": "Course Design"
+    },
+    {
+      "zh": "命题讲解",
+      "en": "Exam Items"
+    },
+    {
+      "zh": "家校沟通",
+      "en": "Parent Comms"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我设计一门 8 课时的新员工培训课",
+      "en": "Design an 8-session onboarding course"
+    },
+    {
+      "zh": "按这个知识点出 10 道题并给解析",
+      "en": "Write 10 questions on this topic with solutions"
+    },
+    {
+      "zh": "孩子成绩下滑,怎么跟家长沟通",
+      "en": "How to talk to parents about declining grades"
+    }
+  ],
+  "keywords": [
+    "课程设计",
+    "命题讲解",
+    "家校沟通",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "needEncrypt": true
+}

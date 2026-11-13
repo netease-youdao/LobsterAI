@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-stationery-advisor",
+  "version": "1.0.1",
+  "description": "Stock school stationery: term usage, refill and notebook unit price, exam pen specs, book cover size.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-stationery-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-stationery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-stationery-advisor",
+  "displayName": {
+    "zh": "文具学习用品囤货顾问",
+    "en": "School Stationery Stock-up by Term Usage Advisor"
+  },
+  "profession": {
+    "zh": "11.11 文具学习用品囤货与学期用量核算顾问",
+    "en": "11.11 School Stationery Stock-up by Term Usage Advisor"
+  },
+  "displayDescription": {
+    "zh": "文具怎么囤：按学期用量估算数量、比笔芯本子单价、核考试用笔规格、量书皮书套尺寸。",
+    "en": "Stock school stationery: term usage, refill and notebook unit price, exam pen specs, book cover size."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "四年级一学期要囤多少中性笔芯",
+    "en": "How many gel pen refills for one term in grade four"
+  },
+  "plugin": "lynxce-stationery-advisor",
+  "tags": [
+    {
+      "zh": "学期用量",
+      "en": "Term Usage"
+    },
+    {
+      "zh": "笔芯单价",
+      "en": "Refill Unit Price"
+    },
+    {
+      "zh": "考试用笔",
+      "en": "Exam Pen Specs"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "四年级一学期要囤多少中性笔芯",
+      "en": "How many gel pen refills for one term in grade four"
+    },
+    {
+      "zh": "20 支装和 100 支装笔芯哪个划算",
+      "en": "Is a 20 pack or 100 pack of refills better value"
+    },
+    {
+      "zh": "课本多大该买什么尺寸的书套",
+      "en": "What book cover size fits our textbooks"
+    }
+  ],
+  "keywords": [
+    "学期用量",
+    "笔芯单价",
+    "考试用笔",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

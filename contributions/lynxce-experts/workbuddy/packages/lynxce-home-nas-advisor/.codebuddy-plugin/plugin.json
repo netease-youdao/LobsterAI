@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-home-nas-advisor",
+  "version": "1.0.1",
+  "description": "Pick home NAS and drives: usable capacity by bays and RAID, CMR drives, power and noise, backups, three-year cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-home-nas-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-home-nas"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-home-nas-advisor",
+  "displayName": {
+    "zh": "家庭NAS与硬盘选购顾问",
+    "en": "Home NAS and Hard Drive Advisor"
+  },
+  "profession": {
+    "zh": "11.11 家庭 NAS 与硬盘选购和容量核算顾问",
+    "en": "11.11 Home NAS and Hard Drive Advisor"
+  },
+  "displayDescription": {
+    "zh": "家庭 NAS 怎么挑：按盘位算 RAID 可用容量、选 CMR 盘、看功耗噪音、定备份、比三年成本。",
+    "en": "Pick home NAS and drives: usable capacity by bays and RAID, CMR drives, power and noise, backups, three-year cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两盘位和四盘位 NAS 算上硬盘哪个更划算",
+    "en": "Two-bay or four-bay NAS, which is better value with drives"
+  },
+  "plugin": "lynxce-home-nas-advisor",
+  "tags": [
+    {
+      "zh": "RAID 可用容量",
+      "en": "Usable Capacity"
+    },
+    {
+      "zh": "CMR 硬盘",
+      "en": "CMR Drives"
+    },
+    {
+      "zh": "三年总成本",
+      "en": "Three-year Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两盘位和四盘位 NAS 算上硬盘哪个更划算",
+      "en": "Two-bay or four-bay NAS, which is better value with drives"
+    },
+    {
+      "zh": "4TB 照片三年后要买多大的硬盘",
+      "en": "How much drive capacity do 4TB of photos need in three years"
+    },
+    {
+      "zh": "NAS 盘和桌面盘差价值不值得",
+      "en": "Is the price gap between NAS drives and desktop drives worth it"
+    }
+  ],
+  "keywords": [
+    "RAID 可用容量",
+    "CMR 硬盘",
+    "三年总成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

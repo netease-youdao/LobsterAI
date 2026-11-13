@@ -1,0 +1,33 @@
+{
+  "precision": 4,
+  "calculations": [
+    {
+      "id": "循环",
+      "operation": "ratio",
+      "values": [
+        11,
+        3
+      ]
+    },
+    {
+      "id": "有限",
+      "operation": "ratio",
+      "values": [
+        7,
+        2
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "calculationId": "有限",
+      "value": "3.5",
+      "relation": "="
+    },
+    {
+      "calculationId": "循环",
+      "value": "3.6667",
+      "relation": "≈"
+    }
+  ]
+}

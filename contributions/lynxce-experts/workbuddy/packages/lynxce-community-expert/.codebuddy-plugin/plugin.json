@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-community-expert",
+  "version": "1.0.1",
+  "description": "Design community calendars and review retention or repeat purchase using supplied records and consent scope.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-community-expert.md"
+  ],
+  "skills": [
+    "./skills/lynxce-community-ops",
+    "./skills/community-cohorts",
+    "./skills/community-reengage"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-community-expert",
+  "displayName": {
+    "zh": "私域运营专家",
+    "en": "Private Traffic Operator"
+  },
+  "profession": {
+    "zh": "社群运营与复购转化顾问",
+    "en": "Community Ops & Repeat Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据成员与活动材料设计社群内容及复购观察方案，核对留存转化分母与触达授权，交付日历和复盘清单",
+    "en": "Design community calendars and review retention or repeat purchase using supplied records and consent scope."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "帮我设计一个客户社群的运营方案",
+    "en": "Design an operating plan for my customer community"
+  },
+  "plugin": "lynxce-community-expert",
+  "tags": [
+    {
+      "zh": "社群运营",
+      "en": "Community"
+    },
+    {
+      "zh": "内容日历",
+      "en": "Content Calendar"
+    },
+    {
+      "zh": "复购转化",
+      "en": "Conversion"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我设计一个客户社群的运营方案",
+      "en": "Design an operating plan for my customer community"
+    },
+    {
+      "zh": "我的群没人说话了，怎么激活",
+      "en": "My group has gone silent, how do I revive it"
+    },
+    {
+      "zh": "排一份四周的社群内容日历",
+      "en": "Draft a four-week community content calendar"
+    }
+  ],
+  "keywords": [
+    "社群运营",
+    "内容日历",
+    "复购转化",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "monthly",
+    "payMode": 2,
+    "priceFen": 199,
+    "durationDays": 30
+  },
+  "needEncrypt": true
+}

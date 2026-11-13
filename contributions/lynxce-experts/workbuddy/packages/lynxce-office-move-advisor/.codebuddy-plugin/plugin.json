@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-office-move-advisor",
+  "version": "1.0.1",
+  "description": "Move offices smoothly: timeline, seating plan, IT cutover and move-day runbook.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-move-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-move"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-move-advisor",
+  "displayName": {
+    "zh": "办公室搬迁与工位规划顾问",
+    "en": "Office Relocation and Seating Advisor"
+  },
+  "profession": {
+    "zh": "办公室搬迁与工位规划顾问",
+    "en": "Office Relocation and Seating Advisor"
+  },
+  "displayDescription": {
+    "zh": "办公室搬迁怎么不乱：倒排八周时间线、工位怎么排、网络设备怎么切换、搬迁当天和周一怎么验收。",
+    "en": "Move offices smoothly: timeline, seating plan, IT cutover and move-day runbook."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "下个月搬办公室要准备什么",
+    "en": "We move offices next month, what to prepare"
+  },
+  "plugin": "lynxce-office-move-advisor",
+  "tags": [
+    {
+      "zh": "办公室搬迁",
+      "en": "Office Move"
+    },
+    {
+      "zh": "工位规划",
+      "en": "Seating Plan"
+    },
+    {
+      "zh": "行政后勤",
+      "en": "Facilities"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "下个月搬办公室要准备什么",
+      "en": "We move offices next month, what to prepare"
+    },
+    {
+      "zh": "帮我排一下工位",
+      "en": "Help me plan the seating"
+    },
+    {
+      "zh": "搬迁当天按什么顺序做",
+      "en": "What is the move-day sequence"
+    }
+  ],
+  "keywords": [
+    "办公室搬迁",
+    "工位规划",
+    "行政后勤",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

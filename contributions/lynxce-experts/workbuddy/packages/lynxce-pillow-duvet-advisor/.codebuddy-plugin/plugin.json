@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-pillow-duvet-advisor",
+  "version": "1.0.1",
+  "description": "Choose pillows and duvets: filling type and weight, pillow height by posture, duvet weight by room temperature, price per gram.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pillow-duvet-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pillow-duvet"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pillow-duvet-advisor",
+  "displayName": {
+    "zh": "枕头与被芯选购顾问",
+    "en": "Pillow and Duvet Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 枕头与被芯选购顾问",
+    "en": "11.11 Pillow and Duvet Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "枕头被芯怎么选：填充物种类与克重、枕高按睡姿和肩宽、被芯按室温定重量、按克单价比价。",
+    "en": "Choose pillows and duvets: filling type and weight, pillow height by posture, duvet weight by room temperature, price per gram."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "侧睡肩宽 13 厘米该选多高的枕头",
+    "en": "What pillow height suits a side sleeper"
+  },
+  "plugin": "lynxce-pillow-duvet-advisor",
+  "tags": [
+    {
+      "zh": "填充物克重",
+      "en": "Fill Weight"
+    },
+    {
+      "zh": "枕高测算",
+      "en": "Pillow Height"
+    },
+    {
+      "zh": "按克比价",
+      "en": "Price per Gram"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "侧睡肩宽 13 厘米该选多高的枕头",
+      "en": "What pillow height suits a side sleeper"
+    },
+    {
+      "zh": "卧室 14 度该买多重的羽绒被",
+      "en": "How heavy a duvet for a 14 degree bedroom"
+    },
+    {
+      "zh": "两款羽绒被按克算哪个更划算",
+      "en": "Which down duvet costs less per gram"
+    }
+  ],
+  "keywords": [
+    "填充物克重",
+    "枕高测算",
+    "按克比价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-dupe-compare-advisor",
+  "version": "1.0.1",
+  "description": "Weigh a budget alternative vs a brand item: key specs, warranty gap, cost per use, and categories not worth downgrading.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dupe-compare-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-dupe-compare"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dupe-compare-advisor",
+  "displayName": {
+    "zh": "平替与品牌款对比顾问",
+    "en": "Budget Alternative vs Brand Item Advisor"
+  },
+  "profession": {
+    "zh": "11.11 平替与品牌款对比顾问",
+    "en": "11.11 Budget Alternative vs Brand Item Advisor"
+  },
+  "displayDescription": {
+    "zh": "平替值不值得买：关键参数逐项对比、质保售后差距、单次使用成本、安全类品类为何不建议平替。",
+    "en": "Weigh a budget alternative vs a brand item: key specs, warranty gap, cost per use, and categories not worth downgrading."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个平替和品牌款差在哪",
+    "en": "How does this alternative differ from the brand item"
+  },
+  "plugin": "lynxce-dupe-compare-advisor",
+  "tags": [
+    {
+      "zh": "参数对比",
+      "en": "Spec Comparison"
+    },
+    {
+      "zh": "质保售后",
+      "en": "Warranty Gap"
+    },
+    {
+      "zh": "单次成本",
+      "en": "Cost per Use"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个平替和品牌款差在哪",
+      "en": "How does this alternative differ from the brand item"
+    },
+    {
+      "zh": "平替用几年算下来更划算吗",
+      "en": "Does the alternative cost less per use over the years"
+    },
+    {
+      "zh": "哪些东西不适合买平替",
+      "en": "Which products should I not buy a cheaper alternative for"
+    }
+  ],
+  "keywords": [
+    "参数对比",
+    "质保售后",
+    "单次成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

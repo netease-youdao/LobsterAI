@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-outdoor-jacket-advisor",
+  "version": "1.0.1",
+  "description": "Pick shell jackets: waterproof and breathability ratings, hard shell or 3-in-1 or soft shell, scenario fit, price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-outdoor-jacket-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-outdoor-jacket"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-outdoor-jacket-advisor",
+  "displayName": {
+    "zh": "冲锋衣与户外外套选购顾问",
+    "en": "Shell Jacket and Outdoor Coat Advisor"
+  },
+  "profession": {
+    "zh": "11.11 冲锋衣与户外外套选购顾问",
+    "en": "11.11 Shell Jacket and Outdoor Coat Advisor"
+  },
+  "displayDescription": {
+    "zh": "冲锋衣怎么挑：看防水指数与透湿量、选硬壳三合一或软壳、按使用场景匹配参数、比券后价。",
+    "en": "Pick shell jackets: waterproof and breathability ratings, hard shell or 3-in-1 or soft shell, scenario fit, price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "城市通勤买冲锋衣要多少防水指数",
+    "en": "What waterproof rating do I need for city commuting"
+  },
+  "plugin": "lynxce-outdoor-jacket-advisor",
+  "tags": [
+    {
+      "zh": "防水指数",
+      "en": "Waterproof Rating"
+    },
+    {
+      "zh": "透湿量",
+      "en": "Breathability"
+    },
+    {
+      "zh": "场景匹配",
+      "en": "Scenario Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "城市通勤买冲锋衣要多少防水指数",
+      "en": "What waterproof rating do I need for city commuting"
+    },
+    {
+      "zh": "三合一和单层硬壳怎么选",
+      "en": "Should I choose a 3-in-1 or a single hard shell"
+    },
+    {
+      "zh": "这两件冲锋衣参数和价格哪个更合适",
+      "en": "Which of these two shell jackets fits my needs and budget"
+    }
+  ],
+  "keywords": [
+    "防水指数",
+    "透湿量",
+    "场景匹配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

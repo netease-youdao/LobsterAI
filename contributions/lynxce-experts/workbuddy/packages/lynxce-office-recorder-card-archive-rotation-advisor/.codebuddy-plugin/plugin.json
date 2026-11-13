@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-recorder-card-archive-rotation-advisor",
+  "version": "1.0.0",
+  "description": "Calculate recorder card capacity and archive rotation.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-recorder-card-archive-rotation-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-recorder-card-archive-rotation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-recorder-card-archive-rotation-advisor",
+  "displayName": {
+    "zh": "录音卡归档轮转助理",
+    "en": "Recorder Card Archive Assistant"
+  },
+  "profession": {
+    "zh": "会议录音存储卡容量与归档轮转核算助理",
+    "en": "Meeting Recorder Card Capacity and Archive Assistant"
+  },
+  "displayDescription": {
+    "zh": "会议录音存储卡怎么轮转：按确认码率核容量与保留时长，区分导出校验和可复用，交付容量表与归档台账。",
+    "en": "Calculate recorder card capacity and archive rotation."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "256kbps录20小时需要多少GB",
+    "en": "Calculate GB for 20 hours at 256 kbps"
+  },
+  "plugin": "lynxce-office-recorder-card-archive-rotation-advisor",
+  "tags": [
+    {
+      "zh": "容量测算",
+      "en": "Capacity Calculation"
+    },
+    {
+      "zh": "归档校验",
+      "en": "Archive Verification"
+    },
+    {
+      "zh": "逐卡轮转",
+      "en": "Card Rotation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "256kbps录20小时需要多少GB",
+      "en": "Calculate GB for 20 hours at 256 kbps"
+    },
+    {
+      "zh": "导出后有文件校验失败如何安排轮转",
+      "en": "Plan rotation after an archive verification failure"
+    },
+    {
+      "zh": "做会议录音卡容量与归档表",
+      "en": "Make a recorder card capacity and archive ledger"
+    }
+  ],
+  "keywords": [
+    "容量测算",
+    "归档校验",
+    "逐卡轮转",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

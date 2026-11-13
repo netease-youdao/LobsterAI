@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-winter-warmth-advisor",
+  "version": "1.0.2",
+  "description": "Stock up winter warmth: quilts by fill and weight, fabric checks, 3C for heated items, quantity by household.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-winter-warmth-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-winter-warmth"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-winter-warmth-advisor",
+  "displayName": {
+    "zh": "换季保暖用品囤货顾问",
+    "en": "Seasonal Winter Warmth Stock-Up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 换季保暖用品囤货顾问",
+    "en": "11.11 Seasonal Winter Warmth Stock-Up Advisor"
+  },
+  "displayDescription": {
+    "zh": "换季保暖怎么囤：被子按填充与克重、内衣看面料成分、电热用品核3C、按人数房间算量与预算。",
+    "en": "Stock up winter warmth: quilts by fill and weight, fabric checks, 3C for heated items, quantity by household."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一家三口冬天保暖用品该囤多少",
+    "en": "How much winter warmth gear should a family of three stock"
+  },
+  "plugin": "lynxce-winter-warmth-advisor",
+  "tags": [
+    {
+      "zh": "按人算量",
+      "en": "Quantity by Household"
+    },
+    {
+      "zh": "面料克重",
+      "en": "Fabric and Fill Weight"
+    },
+    {
+      "zh": "电热安全",
+      "en": "Heating Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一家三口冬天保暖用品该囤多少",
+      "en": "How much winter warmth gear should a family of three stock"
+    },
+    {
+      "zh": "冬被要多重，内衣选什么面料",
+      "en": "How heavy should a winter quilt be and which fabric"
+    },
+    {
+      "zh": "电热毯和暖宝宝怎么用才安全",
+      "en": "How to use electric blankets and heat patches safely"
+    }
+  ],
+  "keywords": [
+    "按人算量",
+    "面料克重",
+    "电热安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

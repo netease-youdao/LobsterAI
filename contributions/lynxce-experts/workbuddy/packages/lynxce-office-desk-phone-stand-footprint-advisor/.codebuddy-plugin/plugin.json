@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-desk-phone-stand-footprint-advisor",
+  "version": "1.0.0",
+  "description": "Check stand angles, desk footprint and cable clearance.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-desk-phone-stand-footprint-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-desk-phone-stand-footprint"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-desk-phone-stand-footprint-advisor",
+  "displayName": {
+    "zh": "桌面支架匹配师",
+    "en": "Desk Phone Stand Angle and Footprint Advisor"
+  },
+  "profession": {
+    "zh": "桌面手机支架角度空间匹配顾问",
+    "en": "Desk Phone Stand Angle and Footprint Advisor"
+  },
+  "displayDescription": {
+    "zh": "按手机加壳尺寸与桌面可用空间核支架角度占位，复核横竖屏及充电线净空，输出适配领用与成本表。",
+    "en": "Check stand angles, desk footprint and cable clearance."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按已有记录核对桌面手机支架角度空间匹配",
+    "en": "Check the supplied records"
+  },
+  "plugin": "lynxce-office-desk-phone-stand-footprint-advisor",
+  "tags": [
+    {
+      "zh": "适配复核",
+      "en": "Fit Review"
+    },
+    {
+      "zh": "数量核算",
+      "en": "Quantity Calculation"
+    },
+    {
+      "zh": "异常台账",
+      "en": "Exception Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按已有记录核对桌面手机支架角度空间匹配",
+      "en": "Check the supplied records"
+    },
+    {
+      "zh": "列数量差异与待补依据",
+      "en": "List quantity gaps and missing evidence"
+    },
+    {
+      "zh": "输出可复核算式与异常台账",
+      "en": "Build calculations and an exception ledger"
+    }
+  ],
+  "keywords": [
+    "适配复核",
+    "数量核算",
+    "异常台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

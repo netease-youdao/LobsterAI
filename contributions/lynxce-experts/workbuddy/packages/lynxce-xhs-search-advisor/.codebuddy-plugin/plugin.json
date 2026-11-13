@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-xhs-search-advisor",
+  "version": "1.0.1",
+  "description": "Get notes found in search: keyword research, placement, tags and post-publish checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-xhs-search-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-xhs-keywords"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-xhs-search-advisor",
+  "displayName": {
+    "zh": "小红书搜索关键词布局顾问",
+    "en": "Xiaohongshu Search Keyword Advisor"
+  },
+  "profession": {
+    "zh": "小红书搜索关键词布局顾问",
+    "en": "Xiaohongshu Search Keyword Advisor"
+  },
+  "displayDescription": {
+    "zh": "小红书笔记怎么被更多人搜到：关键词怎么找、标题正文怎么布局、话题标签怎么选、发布后怎么核对。",
+    "en": "Get notes found in search: keyword research, placement, tags and post-publish checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "我的笔记为什么搜不到",
+    "en": "Why can my notes not be found in search"
+  },
+  "plugin": "lynxce-xhs-search-advisor",
+  "tags": [
+    {
+      "zh": "小红书搜索",
+      "en": "Search"
+    },
+    {
+      "zh": "关键词布局",
+      "en": "Keywords"
+    },
+    {
+      "zh": "笔记优化",
+      "en": "Note Optimization"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的笔记为什么搜不到",
+      "en": "Why can my notes not be found in search"
+    },
+    {
+      "zh": "帮我找这个领域的长尾词",
+      "en": "Find long-tail keywords for my niche"
+    },
+    {
+      "zh": "这篇笔记的标题怎么改",
+      "en": "How should I rewrite this note title"
+    }
+  ],
+  "keywords": [
+    "小红书搜索",
+    "关键词布局",
+    "笔记优化",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

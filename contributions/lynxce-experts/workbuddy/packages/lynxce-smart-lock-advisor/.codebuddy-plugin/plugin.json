@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-smart-lock-advisor",
+  "version": "1.0.1",
+  "description": "Choose a smart lock: door thickness and lock body fit, unlock methods, battery and emergency entry, certification, price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-smart-lock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-smart-lock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-smart-lock-advisor",
+  "displayName": {
+    "zh": "智能门锁选购顾问",
+    "en": "Smart Door Lock Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 智能门锁选购顾问",
+    "en": "11.11 Smart Door Lock Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "智能门锁怎么选：门厚与锁体规格匹配、开锁方式、电池续航与应急开锁、安全认证与安装价。",
+    "en": "Choose a smart lock: door thickness and lock body fit, unlock methods, battery and emergency entry, certification, price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家门能不能装这款智能锁",
+    "en": "Will this smart lock fit my door"
+  },
+  "plugin": "lynxce-smart-lock-advisor",
+  "tags": [
+    {
+      "zh": "锁体匹配",
+      "en": "Lock Body Fit"
+    },
+    {
+      "zh": "应急开锁",
+      "en": "Emergency Entry"
+    },
+    {
+      "zh": "安全认证",
+      "en": "Security Certification"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家门能不能装这款智能锁",
+      "en": "Will this smart lock fit my door"
+    },
+    {
+      "zh": "老人用指纹锁还是人脸锁好",
+      "en": "Fingerprint or face unlock for elderly parents"
+    },
+    {
+      "zh": "智能锁没电了怎么开门",
+      "en": "How do I get in if the smart lock battery dies"
+    }
+  ],
+  "keywords": [
+    "锁体匹配",
+    "应急开锁",
+    "安全认证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

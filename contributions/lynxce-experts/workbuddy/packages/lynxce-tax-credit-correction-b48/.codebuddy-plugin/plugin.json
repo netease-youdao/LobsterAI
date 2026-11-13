@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-tax-credit-correction-b48",
+  "version": "1.0.0",
+  "description": "Reconcile supplied official requirements and actual records, then prepare complete drafts and correction versions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tax-credit-correction-b48.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tax-credit-correction-b48-1",
+    "./skills/lynxce-tax-credit-correction-b48-2",
+    "./skills/lynxce-tax-credit-correction-b48-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tax-credit-correction-b48",
+  "displayName": {
+    "zh": "信用顾问",
+    "en": "Tax Credit Record Advisor"
+  },
+  "profession": {
+    "zh": "纳税信用顾问",
+    "en": "Tax Credit Record Advisor"
+  },
+  "displayDescription": {
+    "zh": "面向企业财税人员，核对信用评价、申报与缴款证据，区分复评和修复，交付分类说明、履行台账及补正稿",
+    "en": "Reconcile supplied official requirements and actual records, then prepare complete drafts and correction versions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "这项申报扣分与原接受回执冲突，帮我分清复评与修复并写说明。",
+    "en": "Tax Credit Record Advisor"
+  },
+  "plugin": "lynxce-tax-credit-correction-b48",
+  "tags": [
+    {
+      "zh": "纳税信用",
+      "en": "纳税信用"
+    },
+    {
+      "zh": "信用修复",
+      "en": "信用修复"
+    },
+    {
+      "zh": "评价复评",
+      "en": "评价复评"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这项申报扣分与原接受回执冲突，帮我分清复评与修复并写说明。",
+      "en": "Tax Credit Record Advisor"
+    },
+    {
+      "zh": "补税凭证可能属于别的所属期，请逐笔勾稽并出完整V2。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "已补办不等于已修复，按现行办法列真实证据和未决条件。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "纳税信用",
+    "信用修复",
+    "评价复评"
+  ]
+}

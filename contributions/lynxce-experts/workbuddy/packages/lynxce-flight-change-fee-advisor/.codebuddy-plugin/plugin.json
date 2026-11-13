@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-flight-change-fee-advisor",
+  "version": "1.0.0",
+  "description": "Change fee, refund fee and rebook cost comparison with a decision table and expense note.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-flight-change-fee-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-flight-change-fee"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-flight-change-fee-advisor",
+  "displayName": {
+    "zh": "机票退改核算助理",
+    "en": "Flight Change Fee Assistant"
+  },
+  "profession": {
+    "zh": "机票退改签费用核算差旅办公顾问",
+    "en": "Flight Change and Refund Cost Advisor for Business Trips"
+  },
+  "displayDescription": {
+    "zh": "机票改期还是退票：按起飞前时间档算改期费与退票费，比退票重购差额，出决策表与报销说明。",
+    "en": "Change fee, refund fee and rebook cost comparison with a decision table and expense note."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "会议推迟两天改签还是退票重买",
+    "en": "Change or refund and rebook when a meeting slips"
+  },
+  "plugin": "lynxce-flight-change-fee-advisor",
+  "tags": [
+    {
+      "zh": "时间分档",
+      "en": "Time Tiers"
+    },
+    {
+      "zh": "改退对比",
+      "en": "Change vs Refund"
+    },
+    {
+      "zh": "报销说明",
+      "en": "Expense Note"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "会议推迟两天改签还是退票重买",
+      "en": "Change or refund and rebook when a meeting slips"
+    },
+    {
+      "zh": "改期费和票面差价怎么一起算",
+      "en": "How to add change fee and fare difference"
+    },
+    {
+      "zh": "航班取消也要交退票费吗",
+      "en": "Do I pay a refund fee if the flight is cancelled"
+    }
+  ],
+  "keywords": [
+    "时间分档",
+    "改退对比",
+    "报销说明",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}
