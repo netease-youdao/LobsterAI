@@ -21,6 +21,8 @@
 
 ## 授权与凭据生命周期
 
+Windows、macOS 和开发构建共用分支内的默认注册配置：`client_id=fa384257dd9b8c3612`，MCP 地址为 `https://egw-test.mail.163.com/openapi-gateway/mail/mcp`。安装后不需要设置邮箱环境变量；测试环境的 hosts 由使用者配置，邮箱账号仍需自行登录并完成授权。正式注册就绪后统一替换 `src/shared/neteaseMail/constants.ts` 中的公开配置。分发包不包含用户账号、访问令牌或刷新令牌。
+
 Electron 主进程负责预注册客户端的 OAuth 授权码流程，使用 PKCE S256、随机 `state` 和固定 loopback 回调 `http://localhost:8989/oauth/callback`。回调只监听本机 IPv4/IPv6，校验路径、Host、state 和一次性消费，处理取消、拒绝、超时、端口占用以及退出清理。
 
 凭据由独立 Node 子进程通过 OpenClaw 公共 `provider-auth` API 保存到原生凭据库。Renderer 只能获取连接状态、权限和有效期；令牌不经 UI IPC 返回，也不写入 MCP 配置或日志。该方案复用运行时存储，不宣称已经接入系统钥匙串。SDK 不保留自定义 scope 字段，因此非秘密的授权权限和授权批次标识另存于 LobsterAI 管理的状态文件，重新授权和断开会使旧批次失效。

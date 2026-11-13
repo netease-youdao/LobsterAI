@@ -80,9 +80,19 @@ test('denied authorization does not exchange a token and token grants cannot bro
   expect(() => parseNeteaseMailToken({ ...token, expires_in: -1 }, 'id')).toThrow();
 });
 
-test('requires explicit client registration and ignores local endpoint overrides in packaged apps', () => {
-  expect(getNeteaseMailOAuthConfig(false, {})).toBeUndefined();
-  expect(getNeteaseMailOAuthConfig(true, {})).toBeUndefined();
+test('uses the registered defaults without environment setup on all desktop builds', () => {
+  for (const isPackaged of [false, true]) {
+    expect(getNeteaseMailOAuthConfig(isPackaged, {})).toEqual({
+      clientId: NeteaseMail.ClientId,
+      mcpUrl: NeteaseMail.Endpoint,
+      authorizeUrl: NeteaseMailAuth.AuthorizeUrl,
+      tokenUrl: NeteaseMailAuth.TokenUrl,
+      redirectUri: NeteaseMailAuth.RedirectUri,
+    });
+  }
+});
+
+test('ignores local endpoint overrides in packaged apps and rejects invalid development endpoints', () => {
   const env = { LOBSTER_NETEASE_MAIL_CLIENT_ID: 'client-test', LOBSTER_NETEASE_MAIL_MCP_URL: 'https://mail.example.com/mcp' };
   expect(getNeteaseMailOAuthConfig(false, env)).toMatchObject({ clientId: env.LOBSTER_NETEASE_MAIL_CLIENT_ID, mcpUrl: env.LOBSTER_NETEASE_MAIL_MCP_URL });
   expect(getNeteaseMailOAuthConfig(true, env)).toMatchObject({ mcpUrl: NeteaseMail.Endpoint });

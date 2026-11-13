@@ -38,11 +38,18 @@ test('a failed initialization is surfaced without forwarding worker diagnostics'
   await expect(pending).rejects.toMatchObject({ code: NeteaseMailFailure.StorageFailed });
 });
 
-test('unconfigured or uninstalled mail integration does not add a startup worker', async () => {
-  vi.stubEnv('LOBSTER_NETEASE_MAIL_CLIENT_ID', '');
-  await prepareNeteaseMailAuthStore(context, false);
-  vi.stubEnv('LOBSTER_NETEASE_MAIL_CLIENT_ID', 'test-client');
+test('uninstalled mail integration does not add a startup worker', async () => {
   vi.spyOn(fs, 'existsSync').mockReturnValue(false);
   await prepareNeteaseMailAuthStore(context, false);
   expect(spawn).not.toHaveBeenCalled();
+});
+
+test('packaged builds initialize mail credentials using the default registration', async () => {
+  vi.stubEnv('LOBSTER_NETEASE_MAIL_CLIENT_ID', '');
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  const pending = prepareNeteaseMailAuthStore(context, true);
+  expect(JSON.parse(input)).toEqual({ operation: NeteaseMailAuthStoreOperation.Initialize });
+  child.stdout.write('NETEASE_MAIL_STATUS:{"connected":false}\n');
+  child.emit('close', 0);
+  await expect(pending).resolves.toBeUndefined();
 });

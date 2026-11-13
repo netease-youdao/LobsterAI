@@ -1,6 +1,9 @@
 export const NeteaseMail = {
   RegistryId: 'netease-mail',
-  Endpoint: 'https://open.mail.163.com/api/mail/mcp',
+  // Current registration supplied by the mail service. Replace the public
+  // client ID and endpoint together when the production registration is ready.
+  ClientId: 'fa384257dd9b8c3612',
+  Endpoint: 'https://egw-test.mail.163.com/openapi-gateway/mail/mcp',
 } as const;
 
 export const NeteaseMailTool = {

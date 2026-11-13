@@ -8,9 +8,9 @@ export interface NeteaseMailOAuthConfig {
   redirectUri: string;
 }
 
-/** Client registration is supplied by the deployment environment. */
+/** Desktop builds share the registered defaults; local development may override them. */
 export function getNeteaseMailOAuthConfig(isPackaged: boolean, env = process.env): NeteaseMailOAuthConfig | undefined {
-  const clientId = env.LOBSTER_NETEASE_MAIL_CLIENT_ID?.trim();
+  const clientId = env.LOBSTER_NETEASE_MAIL_CLIENT_ID?.trim() || NeteaseMail.ClientId;
   if (!clientId) return undefined;
   const mcpUrl = (!isPackaged && env.LOBSTER_NETEASE_MAIL_MCP_URL?.trim()) || NeteaseMail.Endpoint;
   try {
