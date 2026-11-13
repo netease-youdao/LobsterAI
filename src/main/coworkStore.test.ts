@@ -35,6 +35,7 @@ import { ModelPresetId } from '../shared/modelPresets/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
 // ---------------------------------------------------------------------------
@@ -1315,7 +1316,10 @@ test('forkSession copies stable history and records fork metadata', () => {
   expect(fork.messages.map((message) => message.content)).toEqual(['start here', 'finished answer']);
   expect(fork.messages.every((message) => !['msg-user', 'msg-assistant'].includes(message.id))).toBe(true);
   expect(fork.messages[0].metadata).toEqual({ keep: true });
-  expect(fork.messages[1].metadata).toEqual({ keep: 'yes' });
+  expect(fork.messages[1].metadata).toEqual({
+    keep: 'yes',
+    toolUseId: deriveForkToolUseId(fork.id, 'tool-done'),
+  });
 
   const forkRows = db
     .prepare('SELECT content, sequence FROM cowork_messages WHERE session_id = ? ORDER BY sequence ASC')
@@ -1324,6 +1328,27 @@ test('forkSession copies stable history and records fork metadata', () => {
     { content: 'start here', sequence: 1 },
     { content: 'finished answer', sequence: 3 },
   ]);
+});
+
+test('forkSession keeps parallel tool results paired with their calls', () => {
+  const sid = 'sess-fork-parallel-tools';
+  insertSession(sid);
+  insertMessage('msg-user-parallel', sid, 'user', 'write three files', null, 1, 1000);
+  insertMessage('use-1', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_00_a' }), 2, 2000);
+  insertMessage('use-2', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_01_b' }), 3, 2001);
+  insertMessage('result-2', sid, 'tool_result', 'wrote 2', JSON.stringify({ toolResult: 'wrote 2', toolUseId: 'call_01_b' }), 4, 2002);
+  insertMessage('result-1', sid, 'tool_result', 'wrote 1', JSON.stringify({ toolResult: 'wrote 1', toolUseId: 'call_00_a' }), 5, 2003);
+  insertMessage('msg-done-parallel', sid, 'assistant', 'done', null, 6, 3000);
+
+  const fork = store.forkSession({ sourceSessionId: sid });
+  const toolUseIdByContent = new Map(fork.messages.map(message => [message.content, message.metadata?.toolUseId]));
+
+  expect(toolUseIdByContent.get('wrote 1')).toBe(deriveForkToolUseId(fork.id, 'call_00_a'));
+  expect(toolUseIdByContent.get('wrote 2')).toBe(deriveForkToolUseId(fork.id, 'call_01_b'));
+  const [firstUse, secondUse] = fork.messages.filter(message => message.type === 'tool_use');
+  expect(firstUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 1'));
+  expect(secondUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 2'));
+  expect(fork.messages.some(message => message.metadata?.toolUseId === 'call_00_a')).toBe(false);
 });
 
 test('forkSession keeps the selected plan message when its streaming flag is stale', () => {

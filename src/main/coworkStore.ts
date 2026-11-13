@@ -74,6 +74,7 @@ import {
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
 import { VISIBLE_COWORK_SESSION_SQL } from './libs/agentEngine/subagent/sessionVisibility';
+import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import { CoworkMessageEditStore } from './libs/coworkMessageEditStore';
 import { CoworkMessageVersionStore } from './libs/coworkMessageVersionStore';
 import { compactMessageMetadataMedia } from './libs/mediaMetadataCompaction';
@@ -1430,7 +1431,7 @@ export class CoworkStore {
           id,
           row.type,
           row.content,
-          this.sanitizeForkMessageMetadata(row.type, row.metadata, forkedMessageIds),
+          this.sanitizeForkMessageMetadata(row.type, row.metadata, forkedMessageIds, id),
           row.created_at,
           row.sequence,
         );
@@ -1612,6 +1613,7 @@ export class CoworkStore {
     messageType: string,
     metadataJson: string | null,
     forkedMessageIds: Map<string, string>,
+    forkSessionId: string,
   ): string | null {
     if (!metadataJson) return null;
     try {
@@ -1620,7 +1622,12 @@ export class CoworkStore {
       const wasStreamingAssistant = messageType === 'assistant' && sanitized.isStreaming === true;
       delete sanitized.isStreaming;
       if (wasStreamingAssistant) sanitized.isFinal = true;
-      delete sanitized.toolUseId;
+      // Results pair with their calls by this id, so it is remapped rather than dropped.
+      if (typeof sanitized.toolUseId === 'string' && sanitized.toolUseId.trim()) {
+        sanitized.toolUseId = deriveForkToolUseId(forkSessionId, sanitized.toolUseId);
+      } else {
+        delete sanitized.toolUseId;
+      }
       delete sanitized.mediaStatusDetails;
       delete sanitized.pendingApproval;
       delete sanitized.requestId;
