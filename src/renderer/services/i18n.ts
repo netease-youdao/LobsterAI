@@ -1845,6 +1845,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawRunning: 'AI 引擎已就绪',
     engineStartingTitle: 'AI 引擎启动中',
     engineStartingSlowHint: '正在准备运行环境或恢复网关，首次启动和升级后可能需要较长时间，请稍候',
+    engineStartingDestination: '启动完成后进入「{name}」',
     engineStartingTipLabel: '小提示',
     engineStartingTip1: '让 AI 生成 HTML、SVG 或 Mermaid 图表，右侧面板会实时预览效果',
     engineStartingTip2: '在「技能」中开启 Word、Excel、PPT 技能，AI 可以直接为你生成办公文档',
@@ -6724,6 +6725,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     engineStartingTitle: 'Starting AI engine',
     engineStartingSlowHint:
       'Preparing the runtime or recovering the gateway. First launch and upgrades may take longer.',
+    engineStartingDestination: 'Opens {name} when ready',
     engineStartingTipLabel: 'Tip',
     engineStartingTip1:
       'Ask AI for HTML, SVG, or Mermaid diagrams — the side panel previews them live',
