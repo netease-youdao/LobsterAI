@@ -654,6 +654,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { startUninstallAnalytics } from './libs/uninstallAnalytics';
 import { TaskUsageAnalytics } from './libs/usageAnalytics';
 import { type UsageTitleOutbox, UsageTitleSync } from './libs/usageTitleSync';
 import { getWebSearchBridgeFilePath, removeWebSearchBridgeFile, writeWebSearchBridgeFile } from './libs/webSearchBridgeFile';
@@ -16166,6 +16167,15 @@ if (!gotTheLock) {
 
     initializeKeyfromAttribution(store);
     refreshEndpointsTestMode(store);
+
+    startUninstallAnalytics({
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      executablePath: app.getPath('exe'),
+      userDataPath: app.getPath('userData'),
+      store,
+      captureContext: () => getMainLogReporter().captureContext(),
+    });
 
     // Background persistence services require the initialized store and restored endpoints.
     const usageTitleSync = new UsageTitleSync({
