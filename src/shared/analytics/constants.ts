@@ -27,6 +27,7 @@ export const LogReporterAction = {
   AboutAction: 'lobsterai_about_action',
   AccountMenuAction: 'lobsterai_account_menu_action',
   AppStarted: 'lobsterai_app_started',
+  AppUninstalled: 'lobsterai_app_uninstalled',
   AppearanceSettingChanged: 'lobsterai_appearance_setting_changed',
   ArtifactPreviewAction: 'lobsterai_artifact_preview_action',
   ActivityClaimClick: 'lobsterai_activity_claim_click',

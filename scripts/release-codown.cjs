@@ -9,6 +9,7 @@ const { CodownEnv, packagingEnv, readCodownConfig, withoutSvnCredentials } = req
 const { ReleaseTarget, ArtifactKind, isWindows, artifactPlan, artifactUrl, sourceFiles, manifestDirectory, stageManifest } = require('./codown-artifacts.cjs');
 const { preflightSvn } = require('./codown-svn.cjs');
 const { publishAndReport } = require('./codown-publish.cjs');
+const { verifyMacWebAuthnEntitlements } = require('./mac-webauthn-entitlements.cjs');
 
 const TARGET_BUILDS = {
   [ReleaseTarget.MacArm64]: { platform: 'darwin', script: 'dist:mac:arm64' },
@@ -57,6 +58,7 @@ function verifySignatures(outputDir, identity) {
     const apps = fs.readdirSync(outputDir).map(name => path.join(outputDir, name, 'LobsterAI.app')).filter(file => fs.existsSync(file));
     if (apps.length !== 1) throw new Error('Expected one packaged macOS app for signature verification.');
     run('codesign', ['--verify', '--deep', '--strict', apps[0]]);
+    verifyMacWebAuthnEntitlements(apps[0]);
     run('xcrun', ['stapler', 'validate', apps[0]]);
   }
 }

@@ -1460,8 +1460,10 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/auto-reply/reply/memory-flush.ts',
       snippets: [
-        'function resolveSelectedContextWindowTokens(',
-        'const selectedTokens = resolveSelectedContextWindowTokens(params);',
+        // openclaw-user-context-window-selection.patch replaces this resolver;
+        // validate the final source after both patches have been applied.
+        'function resolveConfiguredContextWindowProfile(',
+        'const profile = resolveConfiguredContextWindowProfile(params);',
       ],
     },
     {

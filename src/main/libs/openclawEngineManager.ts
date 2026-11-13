@@ -54,6 +54,7 @@ import {
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { tryAcquireOpenClawLockCoordinator } from './openclawLockCoordinator';
 import { migrateAllFtsOnlyMemoryIndexes } from './openclawMemoryIndexMigration';
+import { configureMacGatewayNpmEnv } from './openclawNpmEnv';
 import { migrateLegacySessionStorageWithDoctor } from './openclawSessionLegacyMigration';
 import { describeStartupMigrationCheckpoint, readStartupMigrationCheckpointStamp } from './openclawStartupCheckpoint';
 import { extractOpenClawBindingSchemaFailure, extractOpenClawCliFailure, hasLegacyOpenClawDiscovery, isOpenClawBindingSchemaFailure, runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
@@ -423,6 +424,27 @@ export function buildOpenClawCompileCacheEnv(compileCacheDir: string): NodeJS.Pr
     // launcher from respawning through Electron Helper as if it were Node.
     OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: '1',
   };
+}
+
+/**
+ * Runtimes built with scripts/openclaw-dist-package-scope.cjs carry a small
+ * dist/package.json. OpenClaw's agent runtime takes the nearest package.json as
+ * its package directory (docs, README, version), which for code loaded from
+ * dist/ would then be dist/ itself. Pin it to the runtime root, where the
+ * same lookup ends without that file.
+ */
+export function buildOpenClawPackageDirEnv(runtimeRoot: string): NodeJS.ProcessEnv {
+  if (!fs.existsSync(path.join(runtimeRoot, 'dist', 'package.json'))) {
+    return {};
+  }
+  let packageDir = runtimeRoot;
+  try {
+    // Modules report their real location, so match it through a linked runtime.
+    packageDir = fs.realpathSync(runtimeRoot);
+  } catch {
+    // Keep the unresolved root; the gateway reports a missing runtime itself.
+  }
+  return { OPENCLAW_PACKAGE_DIR: packageDir };
 }
 
 export class OpenClawEngineManager extends EventEmitter {
@@ -1219,12 +1241,14 @@ export class OpenClawEngineManager extends EventEmitter {
       // Enable V8 compile cache for both CJS and ESM modules.
       // This env var works for import() (ESM), unlike enableCompileCache() which is CJS-only.
       ...buildOpenClawCompileCacheEnv(compileCacheDir),
+      ...buildOpenClawPackageDirEnv(runtime.root),
       LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath.replace(/\\/g, '/'),
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
       // Inject secret values for ${VAR} placeholders in openclaw.json.
       // This keeps plaintext credentials out of the config file on disk.
       ...spawnSecretEnvVars,
     };
+    configureMacGatewayNpmEnv(env, this.baseDir);
 
     // Ensure the gateway process uses the host's local timezone for logging.
     // macOS does not set TZ in the environment by default (it uses NSTimeZone/ICU),
