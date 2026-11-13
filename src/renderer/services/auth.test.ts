@@ -267,6 +267,74 @@ describe('auth-scoped renderer requests', () => {
   });
 });
 
+describe('browser login cancellation and callback ordering', () => {
+  const setup = () => {
+    const apiFetch = vi.fn().mockResolvedValue({
+      ok: true, data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
+    });
+    const login = vi.fn().mockResolvedValue({ success: true, redirectUrl: 'https://example.com/login' });
+    const exchange = vi.fn().mockResolvedValue({ success: false });
+    const cancelLogin = vi.fn().mockResolvedValue({ success: true });
+    vi.stubGlobal('window', {
+      electron: { api: { fetch: apiFetch }, auth: { login, exchange, cancelLogin }, log: { fromRenderer: vi.fn() } },
+    });
+    return { apiFetch, login, exchange, cancelLogin };
+  };
+
+  test('cancel while resolving the URL prevents a delayed browser launch', async () => {
+    const mocks = setup();
+    let resolveLookup: (value: unknown) => void = () => {};
+    mocks.apiFetch.mockImplementationOnce(() => new Promise(resolve => { resolveLookup = resolve; }));
+    const pending = authService.login();
+    await vi.waitFor(() => expect(mocks.apiFetch).toHaveBeenCalled());
+    await authService.cancelLogin();
+    resolveLookup({ ok: true, data: { data: { value: 'https://example.com/login' } } });
+    await expect(pending).resolves.toMatchObject({ reason: AuthLoginFailureReason.Cancelled });
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('cancelled browser handoff and callback cannot reopen the wait or exchange credentials', async () => {
+    const mocks = setup();
+    let resolveOpen: (value: unknown) => void = () => {};
+    mocks.login.mockImplementationOnce(() => new Promise(resolve => { resolveOpen = resolve; }));
+    const pending = authService.login();
+    await vi.waitFor(() => expect(mocks.login).toHaveBeenCalled());
+    await authService.cancelLogin();
+    resolveOpen({ success: true, redirectUrl: 'https://example.com/login' });
+    await pending;
+    await expect(authService.handleCallback('cancelled-code')).resolves.toBe(false);
+    expect(mocks.exchange).not.toHaveBeenCalled();
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('cancel during exchange ignores a late successful reply', async () => {
+    const mocks = setup();
+    await authService.login();
+    let resolveExchange: (value: unknown) => void = () => {};
+    mocks.exchange.mockImplementationOnce(() => new Promise(resolve => { resolveExchange = resolve; }));
+    const pending = authService.handleCallback('pending-code');
+    expect(browserLoginSession.getSnapshot()?.status).toBe(BrowserLoginStatus.Verifying);
+    await authService.cancelLogin();
+    resolveExchange({ success: true, user: { yid: 'late-user', nickname: 'Late User', avatarUrl: null } });
+    await expect(pending).resolves.toBe(false);
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('a callback failure is not overwritten by a late browser launch reply', async () => {
+    const mocks = setup();
+    let resolveOpen: (value: unknown) => void = () => {};
+    mocks.login.mockImplementationOnce(() => new Promise(resolve => { resolveOpen = resolve; }));
+    const pending = authService.login();
+    await vi.waitFor(() => expect(mocks.login).toHaveBeenCalled());
+    await authService.handleCallback('rejected-code');
+    resolveOpen({ success: true, redirectUrl: 'https://example.com/login' });
+    await pending;
+    expect(browserLoginSession.getSnapshot()?.status).toBe(BrowserLoginStatus.Failed);
+  });
+});
+
 describe('login diagnostics', () => {
   test('persists renderer lifecycle logs without including the login URL', async () => {
     const fromRenderer = vi.fn();
@@ -285,7 +353,7 @@ describe('login diagnostics', () => {
             data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
           }),
         },
-        auth: { login },
+        auth: { login, cancelLogin: vi.fn().mockResolvedValue({ success: true }) },
         log: { fromRenderer },
       },
     });
@@ -334,8 +402,8 @@ describe('login diagnostics', () => {
       'AuthService',
       expect.stringMatching(/^login attempt \d+ could not open the system browser reason=unknown$/),
     );
-    // Nothing to offer without a link, so the login wait simply ends.
-    expect(browserLoginSession.getSnapshot()).toBeNull();
+    // Keep an actionable error instead of silently dismissing the login gate.
+    expect(browserLoginSession.getSnapshot()).toEqual({ status: BrowserLoginStatus.OpenFailed, url: null });
   });
 
   test('offers the login link when the browser could not be opened', async () => {
@@ -412,7 +480,7 @@ describe('login diagnostics', () => {
     vi.stubGlobal('window', {
       electron: {
         api: { fetch: vi.fn(() => new Promise(() => {})) },
-        auth: { login },
+        auth: { login, cancelLogin: vi.fn().mockResolvedValue({ success: true }) },
         log: { fromRenderer: vi.fn() },
       },
     });
@@ -439,7 +507,7 @@ describe('login diagnostics', () => {
     vi.stubGlobal('window', {
       electron: {
         api: { fetch },
-        auth: { login },
+        auth: { login, cancelLogin: vi.fn().mockResolvedValue({ success: true }) },
         log: { fromRenderer: vi.fn() },
       },
     });

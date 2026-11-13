@@ -19,7 +19,7 @@ import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
 import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
 import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
-import { browserLoginSession, BrowserLoginStatus } from '../services/browserLoginSession';
+import { BrowserLoginStatus } from '../services/browserLoginSession';
 import {
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
@@ -1067,7 +1067,9 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   const useSidebarPromoLogin = !isLoggedIn && !connectionState && loggedOutVariant === 'sidebarPromo';
   // The session also reflects logins started from other entry points.
   const loginSessionActive = !isLoggedIn && !connectionState && loginSession !== null;
-  const loginOpening = loginStarting || (loginSessionActive && loginSession.status === BrowserLoginStatus.Opening);
+  const loginOpening = loginStarting || (loginSessionActive && (
+    loginSession.status === BrowserLoginStatus.Opening || loginSession.status === BrowserLoginStatus.Verifying
+  ));
   const loginInProgress = loginOpening || (loginSessionActive && loginSession.status === BrowserLoginStatus.Waiting);
   const loginStatusCardVisible = loginSessionActive
     && (loginSession.status !== BrowserLoginStatus.Opening || loginSession.url !== null);
@@ -1140,7 +1142,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         <BrowserLoginStatusCard
           session={loginSession}
           onRetry={() => void handleLogin()}
-          onDismiss={browserLoginSession.clear}
+          onDismiss={() => { void authService.cancelLogin(); }}
         />
       )}
       {showMenu && !isLoggedIn && connectionState && (

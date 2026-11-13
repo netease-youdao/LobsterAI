@@ -13,8 +13,12 @@ export const BrowserLoginStatus = {
   Opening: 'opening',
   /** The browser has the login page; waiting for the login callback. */
   Waiting: 'waiting',
+  /** A callback arrived; the client is exchanging it for an account session. */
+  Verifying: 'verifying',
   /** The OS refused or stalled the browser launch. */
   OpenFailed: 'open_failed',
+  Failed: 'failed',
+  Expired: 'expired',
 } as const;
 
 export type BrowserLoginStatus = typeof BrowserLoginStatus[keyof typeof BrowserLoginStatus];
@@ -34,6 +38,7 @@ export const BROWSER_LOGIN_SESSION_TTL_MS = 4.5 * 60 * 1000;
 type Listener = () => void;
 
 let currentState: BrowserLoginSessionState | null = null;
+let cancelled = false;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<Listener>();
 
@@ -51,7 +56,7 @@ const settle = (status: BrowserLoginStatus, url: string | null): void => {
   clearExpiry();
   expiryTimer = setTimeout(() => {
     expiryTimer = null;
-    setState(null);
+    setState({ status: BrowserLoginStatus.Expired, url: null });
   }, BROWSER_LOGIN_SESSION_TTL_MS);
   setState({ status, url });
 };
@@ -68,10 +73,11 @@ export const browserLoginSession = {
     };
   },
 
-  /** A login attempt started. A retry keeps the previous URL on screen. */
+  /** A retry invalidates the previous link immediately. */
   start(): void {
+    cancelled = false;
     clearExpiry();
-    setState({ status: BrowserLoginStatus.Opening, url: currentState?.url ?? null });
+    setState({ status: BrowserLoginStatus.Opening, url: null });
   },
 
   /** The browser accepted the login page. */
@@ -79,17 +85,34 @@ export const browserLoginSession = {
     settle(BrowserLoginStatus.Waiting, url);
   },
 
-  /** The browser could not be opened. Without a URL there is nothing to offer. */
+  /** Keep the failure actionable even if no manual URL was available. */
   fail(url: string | null): void {
-    if (!url) {
-      browserLoginSession.clear();
-      return;
-    }
     settle(BrowserLoginStatus.OpenFailed, url);
   },
 
-  /** The login completed, was cancelled, or can no longer complete. */
+  verify(): void {
+    clearExpiry();
+    setState({ status: BrowserLoginStatus.Verifying, url: null });
+  },
+
+  verificationFailed(): void {
+    clearExpiry();
+    setState({ status: BrowserLoginStatus.Failed, url: null });
+  },
+
+  isCancelled(): boolean {
+    return cancelled || currentState?.status === BrowserLoginStatus.Expired;
+  },
+
+  cancel(): void {
+    cancelled = true;
+    clearExpiry();
+    if (currentState) setState(null);
+  },
+
+  /** Login completed, or the session was reset. Cancellation is explicit. */
   clear(): void {
+    cancelled = false;
     clearExpiry();
     if (currentState) setState(null);
   },

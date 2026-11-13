@@ -36,7 +36,14 @@ const BrowserLoginStatusCard: React.FC<BrowserLoginStatusCardProps> = ({
 }) => {
   const { copied, copy } = useCopyLoginLink('account_button');
   const failed = session.status === BrowserLoginStatus.OpenFailed;
-  const reopening = session.status === BrowserLoginStatus.Opening;
+  const expired = session.status === BrowserLoginStatus.Expired;
+  const rejected = session.status === BrowserLoginStatus.Failed;
+  const verifying = session.status === BrowserLoginStatus.Verifying;
+  const reopening = session.status === BrowserLoginStatus.Opening || verifying;
+  const title = expired ? 'firstRunExpiredTitle' : rejected ? 'firstRunFailedTitle'
+    : failed ? 'browserLoginOpenFailedTitle' : verifying ? 'firstRunVerifyingTitle' : 'browserLoginWaitingTitle';
+  const hint = expired ? 'firstRunExpiredHint' : rejected ? 'firstRunFailedHint'
+    : failed ? 'firstRunOpenFailedHint' : verifying ? 'firstRunVerifyingHint' : 'browserLoginWaitingHint';
   const url = session.url;
 
   return (
@@ -48,16 +55,16 @@ const BrowserLoginStatusCard: React.FC<BrowserLoginStatusCardProps> = ({
       <div className="flex items-start gap-2.5">
         {/* The account button already spins, so the card stays calm. */}
         <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center">
-          {failed
+          {failed || expired || rejected
             ? <ExclamationTriangleIcon className="h-4 w-4 text-warning" aria-hidden="true" />
             : <GlobeAltIcon className="h-4 w-4 text-secondary" aria-hidden="true" />}
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium leading-[18px] text-foreground">
-            {i18nService.t(failed ? 'browserLoginOpenFailedTitle' : 'browserLoginWaitingTitle')}
+            {i18nService.t(title)}
           </p>
           <p className="mt-0.5 text-xs leading-[17px] text-secondary">
-            {i18nService.t(failed ? 'browserLoginOpenFailedHint' : 'browserLoginWaitingHint')}
+            {i18nService.t(hint)}
           </p>
         </div>
         <button
@@ -93,7 +100,7 @@ const BrowserLoginStatusCard: React.FC<BrowserLoginStatusCardProps> = ({
         <div className="mt-2 flex items-center gap-2 pl-[1.625rem] text-xs">
           <button type="button" onClick={onRetry} disabled={reopening} className={TEXT_ACTION_CLASS_NAME}>
             {reopening && <Spinner className="h-3 w-3" />}
-            {i18nService.t('browserLoginReopen')}
+            {i18nService.t(expired || rejected ? 'firstRunLoginRetry' : 'browserLoginReopen')}
           </button>
           {url && (
             <>

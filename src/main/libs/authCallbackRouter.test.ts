@@ -20,6 +20,21 @@ function createTarget(): {
 }
 
 describe('AuthCallbackRouter', () => {
+  test('cancel discards buffered and late callbacks until the next login', () => {
+    const { target, sent } = createTarget();
+    let allowed = true;
+    const router = new AuthCallbackRouter({ getTarget: () => target, acceptsCallback: () => allowed });
+    router.handleAuthCode('buffered');
+    allowed = false;
+    router.clearPending();
+    expect(router.markListenerReadyAndConsumePending()).toBeNull();
+    router.handleDeepLink('lobsterai://auth/callback?code=late');
+    expect(sent).toEqual([]);
+    allowed = true;
+    router.handleAuthCode('new-attempt');
+    expect(sent).toEqual([{ channel: AuthIpcChannel.Callback, payload: { code: 'new-attempt' } }]);
+  });
+
   test('sends callback immediately when renderer listener is ready', () => {
     const { target, sent } = createTarget();
     const router = new AuthCallbackRouter({ getTarget: () => target });
