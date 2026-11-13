@@ -1,4 +1,4 @@
-import { BUNDLED_SKILL_DISPLAY_NAMES } from '../components/skills/bundledSkillNames';
+import { BUNDLED_SKILL_DISPLAY_NAMES, LEGACY_BUNDLED_SKILL_DISPLAY_NAMES } from '../components/skills/bundledSkillNames';
 import { LocalizedText, LocalSkillInfo, MarketplaceSkill, MarketTag, Skill } from '../types/skill';
 import { i18nService } from './i18n';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
@@ -471,7 +471,7 @@ class SkillService {
 
   /**
    * Resolve a human-friendly skill title. Order of preference:
-   * server `displayName` (local → marketplace → kit) → bundled name map →
+   * server `displayName` (local → marketplace → kit) → current/legacy bundled names →
    * prettified raw name (`canvas-design` → `Canvas Design`).
    */
   getLocalizedSkillName(skillId: string, skillName: string): string {
@@ -481,7 +481,7 @@ class SkillService {
       ?? this.installedKitSkillNames.get(skillId);
     if (serverName != null) return resolveLocalizedText(serverName);
 
-    const bundled = BUNDLED_SKILL_DISPLAY_NAMES[skillId];
+    const bundled = BUNDLED_SKILL_DISPLAY_NAMES[skillId] ?? LEGACY_BUNDLED_SKILL_DISPLAY_NAMES[skillId];
     if (bundled) return resolveLocalizedText(bundled);
 
     return prettifySkillName(skillName);
