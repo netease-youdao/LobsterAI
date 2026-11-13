@@ -50,8 +50,7 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
-import { isChatPresetSession } from '../../../shared/modelPresets/constants';
-import { agentService } from '../../services/agent';
+import { isChatPresetSession, modelPresetModelId } from '../../../shared/modelPresets/constants';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
@@ -71,6 +70,7 @@ import {
   LogReporterEntry,
   reportYdAnalyzer,
 } from '../../services/logReporter';
+import { modelPresetName } from '../../services/modelPresets';
 import { getOnboardingErrorCode, reportOnboardingAction } from '../../services/onboardingAnalytics';
 import { resolveLocalizedText, skillService } from '../../services/skill';
 import { getDraftAnalytics } from '../../services/usageAnalytics';
@@ -117,8 +117,10 @@ import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
 import { getAgentDisplayName, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
-import { toOpenClawModelRef } from '../../utils/openclawModelRef';
+import { getModelRefBillingSide, ModelBillingSide, toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getCompactFolderName } from '../../utils/path';
+import { AccountConnectionNotice } from '../AccountConnectionNotice';
+import { getModelConnectionState } from '../accountConnectionState';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
 import { ImageEditDraftCard } from '../artifacts/imageEditor/ImageEditDraftCard';
 import { useImageEditSubmission } from '../artifacts/imageEditor/useImageEditSubmission';
@@ -557,8 +559,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const agents = useSelector((state: RootState) => state.agent.agents);
     const coworkAgentEngine = useSelector((state: RootState) => state.cowork.config.agentEngine);
     const availableModels = useSelector((state: RootState) => state.model.availableModels);
+    const serverModelLoadStatus = useSelector((state: RootState) => state.model.serverModelLoadStatus);
     const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
-    const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+    const auth = useSelector((state: RootState) => state.auth);
+    const { isLoggedIn } = auth;
     const authQuota = useSelector((state: RootState) => state.auth.quota);
     const authOwnerAccountKey = useSelector((state: RootState) => state.auth.ownerAccountKey);
     const authAccountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
@@ -697,7 +701,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   });
   const {
     selectedModel: agentSelectedModel,
-    hasInvalidExplicitModel: agentModelIsInvalid,
+    hasInvalidExplicitModel: sessionModelIsInvalid,
   } = resolveAgentModelSelection({
     sessionModel: currentSession && currentSession.id === sessionId ? currentSession.modelOverride : '',
     sessionPresetId: currentSession && currentSession.id === sessionId ? currentSession.modelPresetId : null,
@@ -713,10 +717,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }), [availableModels, currentAgent?.model, currentAgentSelectedModel]);
   // A new session must not silently start on the other billing side of the agent's model.
   const homeModelCrossesBillingSide = !sessionId && homeStartModel.crossesBillingSide;
-  const selectedModelUnavailable = agentModelIsInvalid || homeModelCrossesBillingSide;
-  const unavailableModelRef = agentModelIsInvalid
+  const selectedModelUnavailable = sessionModelIsInvalid || homeModelCrossesBillingSide;
+  const unavailableModelRef = sessionModelIsInvalid
     ? currentSession?.modelOverride ?? ''
     : (homeModelCrossesBillingSide ? homeStartModel.unavailableModelRef ?? '' : '');
+  const invalidSessionPresetId = sessionModelIsInvalid && currentSession?.id === sessionId
+    ? currentSession?.modelPresetId : null;
+  const unavailableModelIsServer = !!invalidSessionPresetId
+    || getModelRefBillingSide(unavailableModelRef) === ModelBillingSide.Plan;
+  const unavailableModelConnectionState = selectedModelUnavailable && unavailableModelIsServer
+    ? getModelConnectionState(auth, serverModelLoadStatus, availableModels.some(model => model.isServerModel))
+    : null;
 
   const isCompact = size === 'compact';
   const isLarge = size === 'large' || isCompact;
@@ -3065,10 +3076,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         hideCustomProviderName={useLargeToolbarCompactLayout}
-        disabled={isPatchingModel || isPersistingAgentModel || modelSelectionRefreshPending}
+        disabled={isPatchingModel || isPersistingAgentModel}
         thinkingLevel={effectiveThinkingLevel ?? null}
         value={selectedModelUnavailable && unavailableModelRef
-          ? { id: '__invalid__', name: unavailableModelRef.split('/').pop() || unavailableModelRef } as Model
+          ? { id: invalidSessionPresetId ? modelPresetModelId(invalidSessionPresetId) : '__invalid__',
+            presetId: invalidSessionPresetId ?? undefined, isServerModel: unavailableModelIsServer,
+            providerKey: unavailableModelIsServer ? ProviderName.LobsteraiServer : undefined,
+            name: invalidSessionPresetId ? modelPresetName(invalidSessionPresetId)
+              : unavailableModelRef.split('/').pop() || unavailableModelRef }
           : effectiveSelectedModel}
         onChange={async (nextModel, meta: ModelSelectorChangeMeta) => {
           if (isPatchingModel || isPersistingAgentModel) return;
@@ -3083,7 +3098,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             ));
             if (notice) onModelSwitch?.(updatedSession.id, notice.id);
           };
-          const keepsBoundPreset = !!(sessionId && nextModel.presetId && currentSession && currentSession.id === sessionId
+          // Reuse only a valid binding. Reselecting a stale preset must resolve it again.
+          const keepsBoundPreset = !!(!sessionModelIsInvalid && sessionId && nextModel.presetId && currentSession && currentSession.id === sessionId
             && currentSession.modelPresetId === nextModel.presetId && currentSession.modelOverride);
           if (keepsBoundPreset) return;
           const selectedModel = !keepsBoundPreset && meta.group === ModelSelectorGroup.Server
@@ -3153,12 +3169,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               logPromptModelSelection('debug', `switched session ${sessionId} to ${patchedSession.modelOverride || modelRef}`);
               notifyModelSwitch(patchedSession);
               reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, sessionId);
-              if (currentAgent && agentModelIsInvalid) {
-                void agentService.updateAgent(currentAgent.id, {
-                  model: modelRef,
-                  thinkingLevel: nextThinkingLevel,
-                });
-              }
               void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
             } catch (error) {
               if (requestId === modelPatchRequestIdRef.current) {
@@ -3190,9 +3200,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           }
         }}
       />
-      {selectedModelUnavailable && (
+      {unavailableModelConnectionState ? (
+        availableModels.length > 0 && (
+          <AccountConnectionNotice state={unavailableModelConnectionState} className="max-w-60 text-[11px] leading-4" />
+        )
+      ) : selectedModelUnavailable && (
         <span className="max-w-60 text-[11px] leading-4 text-red-500">
-          {i18nService.t('agentModelInvalidHint')}
+          {invalidSessionPresetId
+            ? i18nService.t('sessionModelPresetInvalidHint').replace('{preset}', modelPresetName(invalidSessionPresetId))
+            : i18nService.t('agentModelInvalidHint')}
         </span>
       )}
     </div>
