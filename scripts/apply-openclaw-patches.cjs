@@ -1843,6 +1843,73 @@ v20260801StrongPatchValidators['zz-openclaw-dreaming-cleanup-only-when-enabled.p
   },
 ];
 
+v20260801StrongPatchValidators['openclaw-deleted-agent-session-scan.patch'] = [
+  {
+    file: 'src/state/agent-deletion-journal.ts',
+    snippets: [
+      'export function listAgentDeletionIds(',
+      'const ids = withExistingOpenClawStateDatabaseReadOnly(',
+    ],
+  },
+  {
+    file: 'src/config/sessions/targets.ts',
+    snippets: [
+      'const deletedAgentIds = listAgentDeletionIds({ env });',
+      'return !owner || !deletedAgentIds.has(normalizeAgentId(owner));',
+    ],
+  },
+  {
+    file: 'src/gateway/session-startup-migration.test.ts',
+    snippets: ['cold-starts with retained deleted agents and still repairs live session history'],
+  },
+  {
+    file: 'src/config/sessions/targets-discovery.test.ts',
+    snippets: [
+      'excludes retained deleted stores (cleanup completed: %s) until identity recreation',
+      'preserves live shared-store maintenance when %s is deleted',
+    ],
+  },
+  {
+    file: 'src/state/agent-deletion-journal.discovery.test.ts',
+    snippets: ['does not migrate an existing database without a deletion journal'],
+  },
+  {
+    file: 'src/plugins/host-hook-cleanup.session-store.test.ts',
+    snippets: ['cleans live plugin state without opening retained deleted agent databases'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-managed-media-deleted-agent-gc.patch'] = [
+  {
+    file: 'src/state/agent-deletion-journal.ts',
+    snippets: ['export function listAgentDeletionJournalEntriesReadOnly('],
+  },
+  {
+    file: 'src/gateway/managed-outgoing-gc-lifecycle.ts',
+    snippets: [
+      'const deletions = listAgentDeletionJournalEntriesReadOnly({ env });',
+      'const keyOwner = resolvePersistedSessionStoreOwnerForKey(cfg, params.sessionKey);',
+      'const pendingFences = deletions',
+    ],
+  },
+  {
+    file: 'src/gateway/managed-image-attachments.ts',
+    snippets: [
+      'isManagedMediaCleanupBlockedByAgentDeletion({',
+      'if (shouldDelete && !isDeletionBlocked()) {',
+      'if (!isDeletionBlocked()) {',
+    ],
+  },
+  {
+    file: 'src/gateway/managed-outgoing-gc-deleted-agents.test.ts',
+    snippets: [
+      'cold-starts with retained deleted history and still cleans live orphans',
+      'retains legacy global media owned by a retired fixed-store agent',
+      'rechecks deletion after asynchronous transient eligibility work',
+    ],
+  },
+];
+
 const strongPatchValidators = openclawVersion === 'v2026.8.1'
   ? v20260801StrongPatchValidators
   : legacyStrongPatchValidators;
