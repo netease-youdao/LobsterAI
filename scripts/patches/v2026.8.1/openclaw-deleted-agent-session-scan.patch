@@ -1,0 +1,496 @@
+diff --git a/src/config/sessions/targets-discovery.test.ts b/src/config/sessions/targets-discovery.test.ts
+--- a/src/config/sessions/targets-discovery.test.ts
++++ b/src/config/sessions/targets-discovery.test.ts
+@@ -3,7 +3,16 @@
+ import path from "node:path";
+ import { withTempHome } from "openclaw/plugin-sdk/test-env";
+ import { describe, expect, it, vi } from "vitest";
++import {
++  beginAgentDeletion,
++  claimCompletedAgentDeletion,
++} from "../../agents/agent-lifecycle-registry.js";
+ import * as sessionDirs from "../../agents/session-dirs.js";
++import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
++import {
++  closeOpenClawAgentDatabasesForTest,
++  resolveOpenClawAgentSqlitePath,
++} from "../../state/openclaw-agent-db.js";
+ import type { OpenClawConfig } from "../config.js";
+ import { resolveSessionStorePathCore } from "./paths.js";
+ import { replaceSessionEntry } from "./session-accessor.js";
+@@ -208,6 +217,119 @@
+ });
+ 
+ describe("resolveAllAgentSessionStoreTargetsSync", () => {
++  it.each([false, true])(
++    "excludes retained deleted stores (cleanup completed: %s) until identity recreation",
++    async (completed) => {
++      await withTempHome(async (home) => {
++        const stateDir = path.join(await fs.realpath(home), "deletion-state");
++        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
++        const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
++        for (const agentId of ["main", "deleted", "retired"]) {
++          await replaceSessionEntry(
++            { agentId, env, sessionKey: `agent:${agentId}:main` },
++            { sessionId: `${agentId}-session`, updatedAt: 1 },
++          );
++        }
++        closeOpenClawAgentDatabasesForTest();
++        const deletion = beginAgentDeletion(
++          {
++            agentId: "deleted",
++            agentDir: path.join(stateDir, "agents", "deleted", "agent"),
++            workspaceDir: path.join(stateDir, "workspace-deleted"),
++            sessionsDir: path.join(stateDir, "agents", "deleted", "sessions"),
++            deleteFiles: false,
++          },
++          { env },
++        );
++        if (completed) {
++          deletion.commit();
++          deletion.finish();
++        }
++        const deletedPath = resolveOpenClawAgentSqlitePath({ agentId: "deleted", env });
++        const retainedBytes = await fs.readFile(deletedPath);
++        const staleConfig: OpenClawConfig = {
++          agents: { ownership: "explicit", entries: { main: {}, deleted: {} } },
++        };
++        for (const config of [cfg, staleConfig]) {
++          expect(
++            resolveAllAgentSessionStoreTargetsSync(config, { env })
++              .map((target) => target.agentId)
++              .toSorted(),
++          ).toEqual(["main", "retired"]);
++        }
++        expect(resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env })).toContainEqual(
++          expect.objectContaining({ agentId: "deleted" }),
++        );
++        expect(await fs.readFile(deletedPath)).toEqual(retainedBytes);
++        expect(readAgentDeletionJournal("deleted", { env })).toMatchObject({
++          cleanupCompleted: completed,
++          deleteFiles: false,
++        });
++
++        deletion.finish();
++        expect(claimCompletedAgentDeletion("deleted", deletion.entry.operationId, { env })).toBe(
++          true,
++        );
++        expect(resolveAllAgentSessionStoreTargetsSync(cfg, { env })).toContainEqual(
++          expect.objectContaining({ agentId: "deleted" }),
++        );
++      });
++    },
++  );
++
++  it.each(["main", "a-deleted"])(
++    "preserves live shared-store maintenance when %s is deleted",
++    async (deletedAgentId) => {
++      await withTempHome(async (home) => {
++        const stateDir = path.join(await fs.realpath(home), "deletion-state");
++        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
++        const storePath = path.join(stateDir, "shared.sqlite");
++        for (const agentId of ["main", "a-deleted", "ops"]) {
++          await replaceSessionEntry(
++            {
++              agentId,
++              defaultAgentId: "main",
++              env,
++              storePath,
++              sessionKey: `agent:${agentId}:main`,
++            },
++            { sessionId: `${agentId}-session`, updatedAt: 1 },
++          );
++        }
++        closeOpenClawAgentDatabasesForTest();
++        const cfg: OpenClawConfig = {
++          session: { store: storePath },
++          agents: { ownership: "explicit", entries: { "a-deleted": {}, ops: {} } },
++        };
++        expect(resolveAllAgentSessionStoreTargetsSync(cfg, { env })).toEqual([
++          { agentId: "a-deleted", storePath },
++        ]);
++        const deletion = beginAgentDeletion(
++          {
++            agentId: deletedAgentId,
++            agentDir: path.join(stateDir, "agents", deletedAgentId, "agent"),
++            workspaceDir: path.join(stateDir, `workspace-${deletedAgentId}`),
++            sessionsDir: path.join(stateDir, "agents", deletedAgentId, "sessions"),
++            deleteFiles: false,
++          },
++          { env },
++        );
++        deletion.commit();
++        deletion.finish();
++        const retainedBytes = await fs.readFile(storePath);
++
++        expect(resolveAllAgentSessionStoreTargetsSync(cfg, { env })).toEqual(
++          deletedAgentId === "main" ? [] : [{ agentId: "ops", storePath }],
++        );
++        expect(resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env })).toContainEqual({
++          agentId: "a-deleted",
++          storePath,
++        });
++        expect(await fs.readFile(storePath)).toEqual(retainedBytes);
++      });
++    },
++  );
++
+   it("includes discovered on-disk agent stores alongside configured targets", async () => {
+     await withTempHome(async (home) => {
+       const stateDir = path.join(home, ".openclaw");
+diff --git a/src/config/sessions/targets.ts b/src/config/sessions/targets.ts
+--- a/src/config/sessions/targets.ts
++++ b/src/config/sessions/targets.ts
+@@ -5,6 +5,7 @@
+ import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+ import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
+ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
++import { listAgentDeletionIds } from "../../state/agent-deletion-journal.js";
+ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+ import {
+   createOpenClawAgentDatabasePathMatcher,
+@@ -238,11 +239,11 @@
+ function resolveSessionStoreDiscoveryState(
+   cfg: OpenClawConfig,
+   env: NodeJS.ProcessEnv,
++  configuredTargets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env }),
+ ): {
+   configuredTargets: SessionStoreTarget[];
+   agentsRoots: string[];
+ } {
+-  const configuredTargets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env });
+   const agentsRoots = new Set<string>();
+   for (const target of configuredTargets) {
+     const agentsDir = resolveAgentsDirFromSessionStorePath(target.storePath);
+@@ -291,13 +292,31 @@
+   return discovered ?? { agentId: params.defaultAgentId, storePath };
+ }
+ 
+-/** Resolves all configured and discoverable agent session stores synchronously. */
++/** Resolves configured and discoverable session stores eligible for runtime maintenance. */
+ export function resolveAllAgentSessionStoreTargetsSync(
+   cfg: OpenClawConfig,
+   params: { env?: NodeJS.ProcessEnv } = {},
+ ): SessionStoreTarget[] {
+   const env = params.env ?? process.env;
+-  const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
++  // Retained data and registry ownership survive deletion, but do not authorize maintenance.
++  // Refresh tombstones per scan; Doctor/explicit recovery discovery stays separate.
++  const deletedAgentIds = listAgentDeletionIds({ env });
++  // Filter logical claimants before dedupe so a deleted shared-store claimant cannot
++  // hide a surviving claimant. Physical ownership is still resolved by the normal dedupe.
++  const activeConfiguredTargets =
++    deletedAgentIds.size > 0
++      ? listConfiguredSessionStoreAgentIds(cfg)
++          .filter((agentId) => !deletedAgentIds.has(normalizeAgentId(agentId)))
++          .map((agentId) => ({
++            agentId,
++            storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
++          }))
++      : undefined;
++  const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(
++    cfg,
++    env,
++    activeConfiguredTargets,
++  );
+   const realAgentsRoots = new Map<string, string>();
+   const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
+     const cached = realAgentsRoots.get(agentsRoot);
+@@ -357,10 +376,25 @@
+       throw err;
+     }
+   });
+-  return dedupeSessionStoreTargetsBySqliteTarget(
+-    [...validatedConfiguredTargets, ...discoveredTargets],
+-    { defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg), env },
++  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
++  const targets = dedupeSessionStoreTargetsBySqliteTarget(
++    [...validatedConfiguredTargets, ...discoveredTargets].filter(
++      (target) => !deletedAgentIds.has(normalizeAgentId(target.agentId)),
++    ),
++    { defaultAgentId, env },
+   );
++  if (deletedAgentIds.size === 0) {
++    return targets;
++  }
++  return targets.filter((target) => {
++    // Shared SQLite stores can have a live logical claimant and a deleted physical owner.
++    const owner = resolveSqliteTargetFromSessionStorePath(target.storePath, {
++      agentId: target.agentId,
++      defaultAgentId,
++      env,
++    }).agentId;
++    return !owner || !deletedAgentIds.has(normalizeAgentId(owner));
++  });
+ }
+ 
+ /** Resolves only already-existing stores for one configured, retired, or manual agent. */
+diff --git a/src/gateway/session-startup-migration.test.ts b/src/gateway/session-startup-migration.test.ts
+--- a/src/gateway/session-startup-migration.test.ts
++++ b/src/gateway/session-startup-migration.test.ts
+@@ -3,6 +3,7 @@
+ import path from "node:path";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
++import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
+ import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
+ import {
+   loadExactSessionEntry,
+@@ -16,6 +17,7 @@
+ import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
+ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+ import type { OpenClawConfig } from "../config/types.openclaw.js";
++import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+ import {
+   closeOpenClawAgentDatabasesForTest,
+   openOpenClawAgentDatabase,
+@@ -37,6 +39,81 @@
+ }
+ 
+ describe("runStartupSessionMigration", () => {
++  it("cold-starts with retained deleted agents and still repairs live session history", async () => {
++    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-deleted-session-startup-"));
++    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++      const env = { ...process.env };
++      const scope = {
++        agentId: "main",
++        env,
++        sessionKey: "agent:main:startup",
++        sessionId: "live-session",
++      };
++      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
++      await persistSessionTranscriptTurn(scope, {
++        messages: [
++          { eventId: "live-message", message: { role: "user", content: "retained history" } },
++        ],
++        touchSessionEntry: false,
++      });
++      const options = toDatabaseOptions(resolveSqliteReadScope(scope));
++      await waitForSessionTranscriptIndexReconcile(options);
++      openOpenClawAgentDatabase(options)
++        .db.prepare(
++          "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
++        )
++        .run(scope.sessionId);
++      const deletedIds = ["a-deleted", "b-deleted"];
++      for (const agentId of deletedIds) {
++        await upsertSessionEntryCore(
++          { agentId, env, sessionKey: `agent:${agentId}:main` },
++          { sessionId: `${agentId}-session`, updatedAt: 10 },
++        );
++      }
++      closeOpenClawAgentDatabasesForTest();
++      const retained = deletedIds.map((agentId) => {
++        const deletion = beginAgentDeletion(
++          {
++            agentId,
++            agentDir: path.join(stateDir, "agents", agentId, "agent"),
++            workspaceDir: path.join(stateDir, `workspace-${agentId}`),
++            sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
++            deleteFiles: false,
++          },
++          { env },
++        );
++        deletion.commit();
++        deletion.finish();
++        const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
++        return { agentId, databasePath, bytes: fs.readFileSync(databasePath) };
++      });
++      closeOpenClawStateDatabaseForTest();
++      const log = makeLog();
++
++      await runStartupSessionMigration({
++        cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
++        env,
++        log,
++      });
++
++      expect(
++        sessionTranscriptIndexNeedsReconcile(
++          openOpenClawAgentDatabase(options).db,
++          scope.sessionId,
++        ),
++      ).toBe(false);
++      expect(loadExactSessionEntry(scope)?.entry.sessionId).toBe(scope.sessionId);
++      expect(log.warn).not.toHaveBeenCalled();
++      for (const { agentId, databasePath, bytes } of retained) {
++        expect(fs.readFileSync(databasePath)).toEqual(bytes);
++        expect(readAgentDeletionJournal(agentId, { env })).toMatchObject({
++          cleanupCompleted: true,
++          deleteFiles: false,
++        });
++      }
++    });
++  });
++
+   it("does not create databases for agents without durable sessions", async () => {
+     const stateDir = tempDirs.make("openclaw-empty-session-startup-");
+     const env = { OPENCLAW_STATE_DIR: stateDir };
+diff --git a/src/plugins/host-hook-cleanup.session-store.test.ts b/src/plugins/host-hook-cleanup.session-store.test.ts
+--- a/src/plugins/host-hook-cleanup.session-store.test.ts
++++ b/src/plugins/host-hook-cleanup.session-store.test.ts
+@@ -2,11 +2,15 @@
+ import fs from "node:fs/promises";
+ import path from "node:path";
+ import { afterEach, describe, expect, it, vi } from "vitest";
++import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
+ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+ import type { SessionEntry } from "../config/sessions/types.js";
+ import * as jsonFiles from "../infra/json-files.js";
+ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
++import {
++  closeOpenClawAgentDatabasesForTest,
++  resolveOpenClawAgentSqlitePath,
++} from "../state/openclaw-agent-db.js";
+ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+ import { runPluginHostCleanup } from "./host-hook-cleanup.js";
+@@ -24,6 +28,51 @@
+       await fs.rm(stateDir, { recursive: true, force: true });
+     }
+     stateDir = undefined;
++  });
++
++  it("cleans live plugin state without opening retained deleted agent databases", async () => {
++    stateDir = await fs.realpath(
++      await fs.mkdtemp(
++        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-deleted-"),
++      ),
++    );
++    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
++    for (const agentId of ["a-deleted", "main"]) {
++      await replaceSessionEntry(
++        { agentId, sessionKey: `agent:${agentId}:main` },
++        {
++          sessionId: `${agentId}-session`,
++          updatedAt: 100,
++          pluginExtensions: { cleanup: { state: { active: true } } },
++        },
++      );
++    }
++    closeOpenClawAgentDatabasesForTest();
++    const deletion = beginAgentDeletion({
++      agentId: "a-deleted",
++      agentDir: path.join(stateDir, "agents", "a-deleted", "agent"),
++      workspaceDir: path.join(stateDir, "workspace-a-deleted"),
++      sessionsDir: path.join(stateDir, "agents", "a-deleted", "sessions"),
++      deleteFiles: false,
++    });
++    deletion.commit();
++    deletion.finish();
++    const deletedPath = resolveOpenClawAgentSqlitePath({ agentId: "a-deleted" });
++    const retainedBytes = await fs.readFile(deletedPath);
++    closeOpenClawStateDatabaseForTest();
++
++    const result = await runPluginHostCleanup({
++      cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
++      registry: createEmptyPluginRegistry(),
++      pluginId: "cleanup",
++      reason: "disable",
++    });
++
++    expect(result).toEqual({ cleanupCount: 1, failures: [] });
++    const liveEntry = loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
++    expect(liveEntry?.sessionId).toBe("main-session");
++    expect(liveEntry?.pluginExtensions).toBeUndefined();
++    expect(await fs.readFile(deletedPath)).toEqual(retainedBytes);
+   });
+ 
+   it("does not rewrite session stores when cleanup scans find no plugin-owned state", async () => {
+diff --git a/src/state/agent-deletion-journal.discovery.test.ts b/src/state/agent-deletion-journal.discovery.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/state/agent-deletion-journal.discovery.test.ts
+@@ -0,0 +1,50 @@
++import fs from "node:fs";
++import path from "node:path";
++import { describe, expect, it } from "vitest";
++import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
++import { withTempDir } from "../test-utils/temp-dir.js";
++import { listAgentDeletionIds } from "./agent-deletion-journal.js";
++import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
++
++describe("read-only deletion discovery", () => {
++  it("does not create state when the caller's state directory is absent", async () => {
++    await withTempDir("openclaw-deletion-discovery-", async (root) => {
++      const stateDir = path.join(root, "absent");
++      expect(listAgentDeletionIds({ env: { OPENCLAW_STATE_DIR: stateDir } })).toEqual(new Set());
++      expect(fs.existsSync(stateDir)).toBe(false);
++    });
++  });
++
++  it("does not migrate an existing database without a deletion journal", async () => {
++    await withTempDir("openclaw-deletion-discovery-", async (stateDir) => {
++      const env = { OPENCLAW_STATE_DIR: stateDir };
++      const databasePath = resolveOpenClawStateSqlitePath(env);
++      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
++      const db = openNodeSqliteDatabase(databasePath);
++      db.exec("CREATE TABLE preserved (value TEXT)");
++      db.close();
++      const original = fs.readFileSync(databasePath);
++
++      expect(listAgentDeletionIds({ env })).toEqual(new Set());
++      expect(fs.readFileSync(databasePath)).toEqual(original);
++    });
++  });
++
++  it.each([
++    "CREATE VIEW agent_deletion_journal AS SELECT 'deleted' AS agent_id",
++    "CREATE TABLE agent_deletion_journal (invalid_column TEXT)",
++  ])("propagates invalid journal errors instead of enabling maintenance: %s", async (ddl) => {
++    await withTempDir("openclaw-deletion-discovery-", async (stateDir) => {
++      const env = { OPENCLAW_STATE_DIR: stateDir };
++      const databasePath = resolveOpenClawStateSqlitePath(env);
++      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
++      const db = openNodeSqliteDatabase(databasePath);
++      db.exec(ddl);
++      db.close();
++      const original = fs.readFileSync(databasePath);
++
++      expect(() => listAgentDeletionIds({ env })).toThrow();
++      expect(fs.readFileSync(databasePath)).toEqual(original);
++    });
++  });
++});
+diff --git a/src/state/agent-deletion-journal.ts b/src/state/agent-deletion-journal.ts
+--- a/src/state/agent-deletion-journal.ts
++++ b/src/state/agent-deletion-journal.ts
+@@ -14,6 +14,7 @@
+   OpenClawStateDatabase,
+   OpenClawStateDatabaseOptions,
+ } from "./openclaw-state-db-contract.js";
++import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+ import { ensureAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
+ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+ import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+@@ -80,6 +81,29 @@
+   cleanupCompleted: boolean;
+   deleteFiles: boolean;
+ };
++
++/** Both pending and completed deletions fence maintenance until identity recreation. */
++export function listAgentDeletionIds(
++  options: OpenClawStateDatabaseOptions = {},
++): ReadonlySet<string> {
++  const ids = withExistingOpenClawStateDatabaseReadOnly(({ db: database, path: pathname }) => {
++    const journal = database
++      .prepare("SELECT type FROM sqlite_master WHERE name = 'agent_deletion_journal'")
++      .get() as { type?: unknown } | undefined;
++    if (!journal) {
++      return [];
++    }
++    if (journal.type !== "table") {
++      throw new Error(`OpenClaw state database ${pathname} has an invalid agent deletion journal.`);
++    }
++    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database);
++    return executeSqliteQuerySync(
++      database,
++      db.selectFrom("agent_deletion_journal").select("agent_id"),
++    ).rows.map((row) => normalizeAgentId(row.agent_id));
++  }, options);
++  return new Set(ids ?? []);
++}
+ 
+ export function prepareAgentDeletionPathFence(
+   claim: { agentId: string; path: string; fenceAgentId?: string },

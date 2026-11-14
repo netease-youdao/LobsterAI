@@ -1,5 +1,68 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Skip deleted agents during automatic session maintenance
+
+`openclaw-deleted-agent-session-scan.patch` fixes gateway startup and plugin
+cleanup after deleting an agent with `deleteFiles: false`. Its database remains
+on disk for recovery, but the persisted deletion journal still fences writable
+access. Runtime discovery previously returned that retained database and startup
+transcript reconciliation failed with `agent ... is deleted`.
+
+The runtime all-store scanner reads deletion IDs once per scan without opening a
+write transaction, creating state, or migrating the schema. It excludes both
+pending and completed deletions, filtering logical claimants before collision
+resolution and checking the physical SQLite owner afterward. Explicit identity
+recreation becomes visible on the next scan. Registry rows, deletion fences, retained files, and
+Doctor candidate discovery remain intact. Invalid journal state still reports
+an error.
+
+The six bug regression cases cover pending/completed deletion, both directions
+of shared-store ownership, real SQLite gateway startup, and plugin cleanup.
+Each reproduced its corresponding failure before the repair. Four additional
+cases cover missing state/table and invalid journal schemas. Run in
+the patched OpenClaw checkout with Node 24:
+
+```sh
+node scripts/run-vitest.mjs run src/config/sessions/targets-discovery.test.ts src/gateway/session-startup-migration.test.ts src/plugins/host-hook-cleanup.session-store.test.ts src/state/agent-deletion-journal.discovery.test.ts
+```
+
+This belongs in OpenClaw's shared maintenance scanner; a LobsterAI adapter cannot
+filter its internal startup and plugin cleanup targets. Rebuild the bundled
+runtime to ship the fix. Remove this patch when upstream runtime discovery
+honors the deletion journal with the same retention and recovery guarantees.
+
+## Preserve deleted-agent media during background cleanup
+
+`openclaw-managed-media-deleted-agent-gc.patch` closes the separate background
+media-GC path left after the startup scan fix above. Its history reader acquires
+a writable database lease, which rejects retained deleted agents. Missing session
+rows are also insufficient evidence to discard their retained attachments.
+
+GC now checks deletion lifecycle eligibility before every cleanup branch and
+again after asynchronous reads. It preserves media records, cleanup claims and
+original files for pending/completed logical owners, retired fixed-store owners,
+shared physical owners, and databases inside pending deletion path fences. The
+journal snapshot is read without creating or migrating state. A read failure is
+treated as retained only if a fresh snapshot confirms deletion; unrelated errors
+still surface. Normal live-agent orphan cleanup continues. This is cooperative
+lifecycle protection, not an atomic filesystem transaction across processes.
+
+Thirteen new cases cover real SQLite cold starts, purged sessions, transient and
+claimed records, forced cleanup, shared stores, legacy global ownership, pending
+path fences and asynchronous deletion races. The twelve defect cases were
+observed failing before their corresponding repair; the unrelated-error control
+already passed. Existing read-only discovery checks also cover the full journal
+reader. Run in the patched OpenClaw checkout with Node 24:
+
+```sh
+node scripts/run-vitest.mjs src/gateway/managed-outgoing-gc-deleted-agents.test.ts src/gateway/managed-outgoing-gc-availability.test.ts src/gateway/managed-image-attachments.test.ts src/gateway/session-startup-migration.test.ts src/state/agent-deletion-journal.discovery.test.ts --maxWorkers=1
+```
+
+This is an internal OpenClaw GC decision, so it has no clean LobsterAI adapter
+hook. It intentionally keeps the general history reader and database deletion
+guards unchanged. Remove this patch when upstream GC honors these retention
+boundaries, and rebuild the bundled runtime when applying it.
+
 ## Stable timestamps for assistant-first history bootstraps
 
 `zzzz-openclaw-bootstrap-prefix-cache.patch` fixes a prompt-cache miss when
