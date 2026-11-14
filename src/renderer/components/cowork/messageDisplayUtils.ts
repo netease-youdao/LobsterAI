@@ -1621,7 +1621,7 @@ export const getActivityGroupSummary = (items: ConsolidatedItem[]): ActivityGrou
 
 const READ_TOOL_NAMES = new Set(['read', 'readfile']);
 const WRITE_TOOL_NAMES = new Set(['write', 'writefile']);
-const EDIT_ONLY_TOOL_NAMES = new Set(['edit', 'editfile', 'multiedit']);
+const EDIT_ONLY_TOOL_NAMES = new Set(['edit', 'editfile', 'multiedit', 'applypatch']);
 const EDIT_TOOL_NAMES = new Set([...WRITE_TOOL_NAMES, ...EDIT_ONLY_TOOL_NAMES]);
 
 const getFileBasename = (value: string): string => {
@@ -1634,6 +1634,9 @@ type ActivityCategoryCounts = {
   commands: number;
   reads: number;
   edits: number;
+  modifiedFiles: number;
+  failedEdits: number;
+  incompleteEdits: number;
   tools: number;
   thinking: number;
 };
@@ -1647,7 +1650,10 @@ const isAuxiliaryActivityStep = (item: ConsolidatedItem): boolean => (
 );
 
 const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCounts => {
-  const counts: ActivityCategoryCounts = { commands: 0, reads: 0, edits: 0, tools: 0, thinking: 0 };
+  const counts: ActivityCategoryCounts = {
+    commands: 0, reads: 0, edits: 0, modifiedFiles: 0, failedEdits: 0, incompleteEdits: 0, tools: 0, thinking: 0,
+  };
+  const modifiedFiles = new Set<string>();
   for (const item of items) {
     if (isAuxiliaryActivityStep(item)) continue;
     if (item.type === 'tool_group') {
@@ -1658,7 +1664,16 @@ const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCou
       } else if (READ_TOOL_NAMES.has(normalized)) {
         counts.reads += 1;
       } else if (EDIT_TOOL_NAMES.has(normalized)) {
-        counts.edits += 1;
+        if (item.group.toolResult?.metadata?.isError || item.group.toolResult?.metadata?.error) {
+          counts.failedEdits += 1;
+        } else if (!isToolGroupSettled(item.group)) {
+          counts.incompleteEdits += 1;
+        } else {
+          const path = getToolInputString(item.group.toolUse.metadata?.toolInput ?? {}, FILE_PATH_INPUT_KEYS);
+          if (path) modifiedFiles.add(normalizeFilePathForDedup(path));
+          // Without a path, report an operation rather than guessing a file count.
+          else counts.edits += 1;
+        }
       } else {
         counts.tools += 1;
       }
@@ -1674,6 +1689,7 @@ const countActivityCategories = (items: ConsolidatedItem[]): ActivityCategoryCou
     }
     counts.thinking += 1;
   }
+  counts.modifiedFiles = modifiedFiles.size;
   return counts;
 };
 
@@ -1705,6 +1721,15 @@ export const getActivityGroupHeaderLabel = (items: ConsolidatedItem[]): string =
   }
   if (counts.edits > 0) {
     segments.push(segment(counts.edits, 'coworkActivitySegmentEdit', 'coworkActivitySegmentEdits'));
+  }
+  if (counts.modifiedFiles > 0) {
+    segments.push(segment(counts.modifiedFiles, 'coworkActivitySegmentFileModified', 'coworkActivitySegmentFilesModified'));
+  }
+  if (counts.failedEdits > 0) {
+    segments.push(segment(counts.failedEdits, 'coworkActivitySegmentEditFailed', 'coworkActivitySegmentEditsFailed'));
+  }
+  if (counts.incompleteEdits > 0) {
+    segments.push(i18nService.t('coworkActivityIncompleteEditGeneric'));
   }
   if (counts.tools > 0) {
     segments.push(segment(counts.tools, 'coworkActivitySegmentTool', 'coworkActivitySegmentTools'));
@@ -2071,7 +2096,7 @@ export const getActivityLiveStatusText = (item: ConsolidatedItem): string => {
     return i18nService.t(isSkillInstructionPath(path) ? 'coworkActivityStatusReadingSkill' : 'coworkActivityStatusReading');
   }
   if (WRITE_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusWriting');
-  if (EDIT_ONLY_TOOL_NAMES.has(normalized) || normalized === 'applypatch') return i18nService.t('coworkActivityStatusEditing');
+  if (EDIT_ONLY_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusEditing');
   if (FILE_SEARCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusSearchingFiles');
   if (isWebSearchToolName(toolName)) return i18nService.t('coworkActivityStatusSearchingWeb');
   if (WEB_FETCH_TOOL_NAMES.has(normalized)) return i18nService.t('coworkActivityStatusFetchingWeb');
@@ -2101,7 +2126,7 @@ export const getActivityStepKind = (item: ConsolidatedItem): ActivityStepKind =>
   const normalized = toolName ? normalizeToolName(toolName) : '';
   if (isBashLikeToolName(toolName) || normalized === 'process') return ActivityStepKind.Command;
   if (READ_TOOL_NAMES.has(normalized)) return ActivityStepKind.Read;
-  if (EDIT_TOOL_NAMES.has(normalized) || normalized === 'applypatch') return ActivityStepKind.Edit;
+  if (EDIT_TOOL_NAMES.has(normalized)) return ActivityStepKind.Edit;
   if (FILE_SEARCH_TOOL_NAMES.has(normalized) || MEMORY_TOOL_NAMES.has(normalized)) return ActivityStepKind.Search;
   if (
     isWebSearchToolName(toolName)
@@ -2170,6 +2195,14 @@ export const getActivityStepDoneLabel = (item: ConsolidatedItem): string => {
       : i18nService.t(genericKey)
   );
   if (READ_TOOL_NAMES.has(normalized)) return verb('coworkActivityDoneRead', 'coworkActivityDoneReadGeneric');
+  if (EDIT_TOOL_NAMES.has(normalized)) {
+    if (item.group.toolResult?.metadata?.isError || item.group.toolResult?.metadata?.error) {
+      return verb('coworkActivityFailedEdit', 'coworkActivityFailedEditGeneric');
+    }
+    if (!isToolGroupSettled(item.group)) {
+      return verb('coworkActivityIncompleteEdit', 'coworkActivityIncompleteEditGeneric');
+    }
+  }
   if (WRITE_TOOL_NAMES.has(normalized)) return verb('coworkActivityDoneWrite', 'coworkActivityDoneWriteGeneric');
   if (EDIT_ONLY_TOOL_NAMES.has(normalized)) return verb('coworkActivityDoneEdit', 'coworkActivityDoneEditGeneric');
   return i18nService.t('coworkActivityDoneTool').replace('{target}', getToolDisplayName(toolName));

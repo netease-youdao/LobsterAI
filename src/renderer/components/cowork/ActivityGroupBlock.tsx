@@ -2,37 +2,20 @@ import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useMemo, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
-import { ActivityStepLine } from './ActivityStepLine';
+import { ActivityDetailDisclosure, ActivityStepLine } from './ActivityStepLine';
+import { ActivityStepKind } from './constants';
 import { bucketCount, reportConversationBlockAction } from './conversationAnalytics';
 import {
   type ActivityChunkEntry,
-  type ConsolidatedItem,
   getActivityGroupHeaderLabel,
   getActivityGroupStepKind,
   getActivityGroupSummary,
+  getActivityStepKind,
   getConsolidatedItemKey,
   getLiveActivityWindow,
   isActivityItemLive,
+  isToolGroupSettled,
 } from './messageDisplayUtils';
-import { type DiffStats, DiffStatsBadge, getToolGroupDiffStats } from './toolDiffStats';
-
-// Aggregate +N/-N line stats across the folded edit/write steps, shown on
-// the summary line like the Claude Code app. Null when no step changed
-// file content.
-const getActivityGroupDiffStats = (items: ConsolidatedItem[]): DiffStats | null => {
-  let added = 0;
-  let removed = 0;
-  let hasStats = false;
-  for (const item of items) {
-    if (item.type !== 'tool_group') continue;
-    const stats = getToolGroupDiffStats(item.group);
-    if (!stats) continue;
-    added += stats.added;
-    removed += stats.removed;
-    hasStats = true;
-  }
-  return hasStats && (added > 0 || removed > 0) ? { added, removed } : null;
-};
 
 /**
  * One run of consecutive agent work items (tool calls, thinking) between
@@ -45,8 +28,8 @@ const getActivityGroupDiffStats = (items: ConsolidatedItem[]): DiffStats | null 
  * A finished run — one followed by reply text, or any run once the turn is
  * done — folds into a single summary line ("运行了 3 个命令、读取了 2 个
  * 文件") that opens back onto its step lines; a lone step keeps its own
- * line. Tool errors stay on their own step line (Codex app behavior); they
- * do not color or open the summary line.
+ * line. File changes have a visible detail action; failed file changes
+ * also surface in the summary so they cannot read as successful edits.
  */
 const ActivityGroupBlock: React.FC<{
   entries: ActivityChunkEntry[];
@@ -54,7 +37,7 @@ const ActivityGroupBlock: React.FC<{
   isLiveRun?: boolean;
   /** The tail's streaming text stopped growing, so its step no longer reads as live. */
   isTailStalled?: boolean;
-  renderEntry: (entry: ActivityChunkEntry, isLive: boolean) => React.ReactNode;
+  renderEntry: (entry: ActivityChunkEntry, isLive: boolean, expandFileDetails?: boolean) => React.ReactNode;
 }> = ({ entries, isLiveRun = false, isTailStalled = false, renderEntry }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isEarlierExpanded, setIsEarlierExpanded] = useState(false);
@@ -68,7 +51,15 @@ const ActivityGroupBlock: React.FC<{
   const visible = isFolded ? [] : entries;
   const foldedItems = useMemo(() => folded.map((entry) => entry.item), [folded]);
   const summary = useMemo(() => getActivityGroupSummary(foldedItems), [foldedItems]);
-  const diffStats = useMemo(() => getActivityGroupDiffStats(foldedItems), [foldedItems]);
+  const fileSteps = foldedItems.filter((item) => getActivityStepKind(item) === ActivityStepKind.Edit);
+  const hasFileError = fileSteps.some((item) => item.type === 'tool_group'
+    && Boolean(item.group.toolResult?.metadata?.isError || item.group.toolResult?.metadata?.error));
+  const hasCompletedFileChange = fileSteps.some((item) => item.type === 'tool_group'
+    && isToolGroupSettled(item.group)
+    && !item.group.toolResult?.metadata?.isError && !item.group.toolResult?.metadata?.error);
+  const detailLabel = isExpanded ? 'coworkActivityHideDetails'
+    : hasFileError ? (hasCompletedFileChange ? 'coworkActivityViewDetails' : 'coworkActivityViewError')
+      : hasCompletedFileChange ? 'coworkActivityViewChanges' : 'coworkActivityViewDetails';
 
   const lastEntry = entries[entries.length - 1];
   // Only the running turn's tail run has live steps; its last step stops
@@ -80,7 +71,7 @@ const ActivityGroupBlock: React.FC<{
   );
   const renderStep = (entry: ActivityChunkEntry) => (
     <React.Fragment key={getConsolidatedItemKey(entry.item)}>
-      {renderEntry(entry, isEntryLive(entry))}
+      {renderEntry(entry, isEntryLive(entry), isFolded && getActivityStepKind(entry.item) === ActivityStepKind.Edit)}
     </React.Fragment>
   );
 
@@ -154,9 +145,12 @@ const ActivityGroupBlock: React.FC<{
           <ActivityStepLine
             kind={getActivityGroupStepKind(foldedItems)}
             label={getActivityGroupHeaderLabel(foldedItems)}
+            hasError={hasFileError}
             isExpanded={isExpanded}
             onToggle={handleToggle}
-            trailing={diffStats && <DiffStatsBadge stats={diffStats} className="text-sm" />}
+            trailing={fileSteps.length > 0 && (
+              <ActivityDetailDisclosure label={i18nService.t(detailLabel)} isExpanded={isExpanded} />
+            )}
           />
           {isExpanded && (
             <div className="ml-[0.5em] mt-1 space-y-1 border-l border-border pl-3 text-sm" data-activity-folded-steps>
