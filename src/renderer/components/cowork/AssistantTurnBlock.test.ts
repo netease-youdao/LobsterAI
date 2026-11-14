@@ -159,7 +159,8 @@ test('a running step line carries no timer of its own; the status line owns the 
     },
   ], true);
   expect(writing).toContain('正在写入文件');
-  expect(writing).toContain('data-diff-stats="151/0"');
+  expect(writing).not.toContain('data-diff-stats');
+  expect(writing).toContain('查看详情');
   expect(writing).not.toMatch(/ · \d+s/);
   // The write line leads with the app's compose icon (34×34 artboard).
   expect(writing).toMatch(/data-activity-step-kind="edit"[^]*?viewBox="0 0 34 34"/);

@@ -4,7 +4,9 @@
  * Supports unified and split (side-by-side) view modes.
  */
 
-import React, { useMemo,useState } from 'react';
+import React, { useMemo, useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
 
 type DiffLineType = 'added' | 'removed' | 'context';
 
@@ -124,7 +126,11 @@ function greedyDiff(oldLines: string[], newLines: string[]): DiffLine[] {
   return result;
 }
 
-type ViewMode = 'unified' | 'split';
+const DiffViewMode = {
+  Unified: 'unified',
+  Split: 'split',
+} as const;
+type DiffViewMode = typeof DiffViewMode[keyof typeof DiffViewMode];
 
 interface DiffViewProps {
   oldStr: string;
@@ -157,7 +163,7 @@ const DiffLinePrefix: Record<DiffLineType, string> = {
 };
 
 const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
-  const [viewMode, setViewMode] = useState<ViewMode>('unified');
+  const [viewMode, setViewMode] = useState<DiffViewMode>(DiffViewMode.Split);
 
   const diffLines = useMemo(() => computeDiffLines(oldStr, newStr), [oldStr, newStr]);
 
@@ -173,7 +179,7 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
 
   // Build split view pairs
   const splitPairs = useMemo(() => {
-    if (viewMode !== 'split') return [];
+    if (viewMode !== DiffViewMode.Split) return [];
 
     const pairs: Array<{ left: DiffLine | null; right: DiffLine | null }> = [];
     let i = 0;
@@ -215,53 +221,55 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
   return (
     <div className="rounded-lg overflow-hidden border dark:border-claude-darkBorder border-claude-border">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-1.5 dark:bg-claude-darkSurface bg-claude-surfaceInset border-b dark:border-claude-darkBorder border-claude-border">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 dark:bg-claude-darkSurface bg-claude-surfaceInset border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
           {filePath && (
             <span className="text-[11px] font-mono dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">
               {filePath}
             </span>
           )}
-          <span className="flex items-center gap-1.5 text-[10px] flex-shrink-0">
-            {stats.added > 0 && (
-              <span className="text-green-600 dark:text-green-400 font-medium">+{stats.added}</span>
-            )}
-            {stats.removed > 0 && (
-              <span className="text-red-500 dark:text-red-400 font-medium">-{stats.removed}</span>
-            )}
+          <span className="text-xs text-secondary tabular-nums" data-diff-line-summary>
+            {[
+              stats.added > 0 && i18nService.t(stats.added === 1 ? 'coworkDiffAddedLine' : 'coworkDiffAddedLines')
+                .replace('{count}', String(stats.added)),
+              stats.removed > 0 && i18nService.t(stats.removed === 1 ? 'coworkDiffRemovedLine' : 'coworkDiffRemovedLines')
+                .replace('{count}', String(stats.removed)),
+            ].filter(Boolean).join(' · ')}
           </span>
         </div>
         {/* View mode toggle */}
-        <div className="flex items-center gap-0.5 bg-black/5 dark:bg-white/5 rounded-md p-0.5 flex-shrink-0">
+        <div role="group" aria-label={i18nService.t('workspaceDiffLayout')} className="flex items-center gap-0.5 bg-black/5 dark:bg-white/5 rounded-md p-0.5 flex-shrink-0">
           <button
             type="button"
-            onClick={() => setViewMode('unified')}
+            onClick={() => setViewMode(DiffViewMode.Unified)}
+            aria-pressed={viewMode === DiffViewMode.Unified}
             className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
-              viewMode === 'unified'
+              viewMode === DiffViewMode.Unified
                 ? 'bg-white dark:bg-claude-darkSurfaceHover shadow-sm dark:text-claude-darkText text-claude-text'
                 : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
             }`}
           >
-            Unified
+            {i18nService.t('workspaceDiffUnified')}
           </button>
           <button
             type="button"
-            onClick={() => setViewMode('split')}
+            onClick={() => setViewMode(DiffViewMode.Split)}
+            aria-pressed={viewMode === DiffViewMode.Split}
             className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
-              viewMode === 'split'
+              viewMode === DiffViewMode.Split
                 ? 'bg-white dark:bg-claude-darkSurfaceHover shadow-sm dark:text-claude-darkText text-claude-text'
                 : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
             }`}
           >
-            Split
+            {i18nService.t('workspaceDiffSplit')}
           </button>
         </div>
       </div>
 
       {/* Diff content */}
       <div className="max-h-80 overflow-auto">
-        {viewMode === 'unified' ? (
-          <table className="w-full text-code font-mono border-collapse">
+        {viewMode === DiffViewMode.Unified ? (
+          <table className="m-0 w-full text-code font-mono border-collapse">
             <tbody>
               {diffLines.map((line, idx) => {
                 const colors = LINE_COLORS[line.type];
@@ -285,7 +293,23 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
             </tbody>
           </table>
         ) : (
-          <table className="w-full text-code font-mono border-collapse table-fixed">
+          <table className="m-0 w-full text-code font-mono border-collapse table-fixed">
+            <colgroup>
+              <col className="w-8" />
+              <col style={{ width: 'calc(50% - 2rem)' }} />
+              <col className="w-8" />
+              <col style={{ width: 'calc(50% - 2rem)' }} />
+            </colgroup>
+            <thead className="bg-surfaceInset font-sans text-xs text-secondary">
+              <tr>
+                <th colSpan={2} scope="colgroup" className="border-r border-border px-3 py-1.5 text-left font-medium">
+                  {i18nService.t('artifactDiffOld')}
+                </th>
+                <th colSpan={2} scope="colgroup" className="px-3 py-1.5 text-left font-medium">
+                  {i18nService.t('artifactDiffNew')}
+                </th>
+              </tr>
+            </thead>
             <tbody>
               {splitPairs.map((pair, idx) => {
                 const leftColors = pair.left ? LINE_COLORS[pair.left.type === 'context' ? 'context' : 'removed'] : LINE_COLORS.context;
@@ -296,14 +320,14 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
                     <td className={`select-none text-right px-2 py-0 w-8 ${leftColors.gutter} ${pair.left ? leftColors.bg : ''}`}>
                       {pair.left?.oldLineNo ?? ''}
                     </td>
-                    <td className={`px-2 py-0 w-1/2 whitespace-pre-wrap break-all border-r dark:border-claude-darkBorder/50 border-claude-border/50 ${pair.left ? `${leftColors.bg} ${leftColors.text}` : 'dark:bg-claude-darkSurfaceInset/50 bg-claude-surfaceInset/50'}`}>
+                    <td className={`px-2 py-0 whitespace-pre-wrap break-all border-r dark:border-claude-darkBorder/50 border-claude-border/50 ${pair.left ? `${leftColors.bg} ${leftColors.text}` : 'dark:bg-claude-darkSurfaceInset/50 bg-claude-surfaceInset/50'}`}>
                       {pair.left ? (pair.left.text || '\u00A0') : '\u00A0'}
                     </td>
                     {/* Right (new) */}
                     <td className={`select-none text-right px-2 py-0 w-8 ${rightColors.gutter} ${pair.right ? rightColors.bg : ''}`}>
                       {pair.right?.newLineNo ?? ''}
                     </td>
-                    <td className={`px-2 py-0 w-1/2 whitespace-pre-wrap break-all ${pair.right ? `${rightColors.bg} ${rightColors.text}` : 'dark:bg-claude-darkSurfaceInset/50 bg-claude-surfaceInset/50'}`}>
+                    <td className={`px-2 py-0 whitespace-pre-wrap break-all ${pair.right ? `${rightColors.bg} ${rightColors.text}` : 'dark:bg-claude-darkSurfaceInset/50 bg-claude-surfaceInset/50'}`}>
                       {pair.right ? (pair.right.text || '\u00A0') : '\u00A0'}
                     </td>
                   </tr>
