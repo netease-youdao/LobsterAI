@@ -178,6 +178,9 @@ heartbeat 渲染块追加 `skipWhenBusy: true`:agent 的会话/子 agent 通道�
    - `readBundledOpenClawAgentsTemplate()` 返回前经
      `stripProactiveHeartbeatSection()`(实现在 `openclawHeartbeatRepair.ts`,纯函数可测)
      剥除模板中的 "Be Proactive!" 段;
+     (2026-11 起由 `openclawAgentsTemplate.ts` 的 `slimPristineAgentsTemplateSections()`
+     接替:按章节指纹匹配,同时覆盖 v2026.8.1 改名后的 "Automations - Be Proactive" 段,
+     旧函数因标题改名已不再命中。)
    - `FALLBACK_OPENCLAW_AGENTS_TEMPLATE` 的 `## Heartbeats` 措辞收敛。
 4. heartbeat 渲染块追加 `skipWhenBusy: true`(FR-3)。
 

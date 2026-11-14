@@ -119,32 +119,3 @@ export const repairHeartbeatFile = (workspaceDir: string): boolean => {
   fs.renameSync(tmpPath, heartbeatPath);
   return true;
 };
-
-// Heading of the bundled runtime AGENTS.md template section that tells the
-// model to invent periodic checks (inbox/calendar/weather rotations) and write
-// them into HEARTBEAT.md — the opposite of LobsterAI's heartbeat cost policy.
-// Must match the heading in the pinned runtime's
-// docs/reference/templates/AGENTS.md.
-const PROACTIVE_HEARTBEAT_SECTION_HEADING = '## 💓 Heartbeats - Be Proactive!';
-
-/**
- * Remove the bundled template's "Heartbeats - Be Proactive!" section (from its
- * heading up to the next H2 heading) before the template is seeded into a
- * workspace.  Returns the content unchanged when the section is absent.
- */
-export const stripProactiveHeartbeatSection = (content: string): string => {
-  const lines = content.split('\n');
-  const start = lines.findIndex((line) => line.trim() === PROACTIVE_HEARTBEAT_SECTION_HEADING);
-  if (start < 0) {
-    return content;
-  }
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (lines[i].startsWith('## ')) {
-      end = i;
-      break;
-    }
-  }
-  lines.splice(start, end - start);
-  return lines.join('\n').replace(/\n{3,}/g, '\n\n');
-};

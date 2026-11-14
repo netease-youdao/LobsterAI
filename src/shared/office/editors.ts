@@ -1,14 +1,14 @@
 import { OfficeEditorId, type OfficeEditorSpec } from './core/officeEditor';
 import {
-  SHEET_AGENT_MCP_SERVER_NAME, SHEET_AGENT_PROMPT, SHEET_AGENT_TIMEOUT_MS, SHEET_AGENT_TOOL_DEFINITIONS,
+  SHEET_AGENT_GUIDANCE, SHEET_AGENT_MCP_SERVER_NAME, SHEET_AGENT_TIMEOUT_MS, SHEET_AGENT_TOOL_DEFINITIONS,
 } from './sheet/sheetAgent';
 import { type SheetFileBridge, SheetFileIpc } from './sheet/sheetFile';
 import {
-  SLIDES_AGENT_MCP_SERVER_NAME, SLIDES_AGENT_PROMPT, SLIDES_AGENT_TIMEOUT_MS, SLIDES_AGENT_TOOL_DEFINITIONS,
+  SLIDES_AGENT_GUIDANCE, SLIDES_AGENT_MCP_SERVER_NAME, SLIDES_AGENT_TIMEOUT_MS, SLIDES_AGENT_TOOL_DEFINITIONS,
 } from './slides/slidesAgent';
 import { type SlidesFileBridge, SlidesFileIpc } from './slides/slidesFile';
 import {
-  WORD_AGENT_MCP_SERVER_NAME, WORD_AGENT_PROMPT, WORD_AGENT_TIMEOUT_MS, WORD_AGENT_TOOL_DEFINITIONS,
+  WORD_AGENT_GUIDANCE, WORD_AGENT_MCP_SERVER_NAME, WORD_AGENT_TIMEOUT_MS, WORD_AGENT_TOOL_DEFINITIONS,
 } from './word/wordAgent';
 import { type WordFileBridge, WordFileIpc } from './word/wordFile';
 
@@ -27,7 +27,7 @@ export const WORD_EDITOR = {
     serverName: WORD_AGENT_MCP_SERVER_NAME,
     tools: WORD_AGENT_TOOL_DEFINITIONS,
     timeoutMs: WORD_AGENT_TIMEOUT_MS,
-    prompt: WORD_AGENT_PROMPT,
+    guidance: WORD_AGENT_GUIDANCE,
   },
 } as const satisfies OfficeEditorSpec;
 
@@ -40,7 +40,7 @@ export const SHEET_EDITOR = {
     serverName: SHEET_AGENT_MCP_SERVER_NAME,
     tools: SHEET_AGENT_TOOL_DEFINITIONS,
     timeoutMs: SHEET_AGENT_TIMEOUT_MS,
-    prompt: SHEET_AGENT_PROMPT,
+    guidance: SHEET_AGENT_GUIDANCE,
   },
 } as const satisfies OfficeEditorSpec;
 
@@ -53,7 +53,7 @@ export const SLIDES_EDITOR = {
     serverName: SLIDES_AGENT_MCP_SERVER_NAME,
     tools: SLIDES_AGENT_TOOL_DEFINITIONS,
     timeoutMs: SLIDES_AGENT_TIMEOUT_MS,
-    prompt: SLIDES_AGENT_PROMPT,
+    guidance: SLIDES_AGENT_GUIDANCE,
   },
 } as const satisfies OfficeEditorSpec;
 
