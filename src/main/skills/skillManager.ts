@@ -599,10 +599,56 @@ const resolveInstallFolderName = (skillDir: string, hints: InstallFolderNameHint
 };
 
 /** Whether both directories carry a `_meta.json` for the same published release. */
+/** Digest of a skill directory's relative file names and contents. Local zips
+ * usually carry no release metadata, so identical content is what makes them
+ * the same skill. */
+const skillContentDigest = (dir: string): string | null => {
+  const files: string[] = [];
+  const walk = (current: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        files.push(full);
+      }
+    }
+  };
+  walk(dir);
+  if (files.length === 0) return null;
+  files.sort();
+  const hash = crypto.createHash('sha256');
+  for (const file of files) {
+    hash.update(path.relative(dir, file).split(path.sep).join('/'));
+    hash.update('\0');
+    try {
+      hash.update(fs.readFileSync(file));
+    } catch {
+      return null;
+    }
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+};
+
+const sameSkillContent = (a: string, b: string): boolean => {
+  const digestA = skillContentDigest(a);
+  const digestB = skillContentDigest(b);
+  return digestA !== null && digestA === digestB;
+};
+
 const isSameSkillRelease = (incomingDir: string, existingDir: string): boolean => {
   const incoming = readSkillMetaFile(incomingDir);
   const existing = readSkillMetaFile(existingDir);
-  if (!incoming || !existing) return false;
+  // Local zips carry no _meta.json. Without metadata on either side, identical
+  // content is the only evidence that this is the same skill (issue #776).
+  if (!incoming || !existing) return sameSkillContent(incomingDir, existingDir);
   if (typeof incoming.slug !== 'string' || !incoming.slug) return false;
   if (typeof incoming.version !== 'string' || !incoming.version) return false;
   return incoming.slug === existing.slug
