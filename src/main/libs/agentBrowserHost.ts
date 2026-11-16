@@ -45,6 +45,7 @@ import {
   ManualCredentialCaptureService,
 } from '../browserCredentials/manualCredentialCaptureService';
 import { BrowserPasskeyService } from '../browserPasskeys/browserPasskeyService';
+import { selectAgentBrowserPagesToReclaim } from './agentBrowserPageRetention';
 import type {
   BrowserToolRequest,
   BrowserToolResponse,
@@ -135,6 +136,9 @@ type BrowserPage = {
   view: WebContentsView;
   loading: boolean;
   refs: Map<string, number>;
+  lastUsedAt: number;
+  /** Shown to the user or signed in with a saved credential; never reclaimed. */
+  retained: boolean;
 };
 
 type AgentBrowserHostDeps = {
@@ -580,20 +584,7 @@ export class AgentBrowserHost {
   closePage(pageId: number): AgentBrowserHostState {
     this.assertCredentialLoginInactive();
     this.clearCredentialLoginStatus();
-    const page = this.requirePage(pageId);
-    const fallbackPageId = this.getPageCloseFallbackId(pageId);
-    this.markBrowserToolBootstrapPageUsed(pageId);
-    this.manualCredentialCapture.clearPage(pageId);
-    this.detachPage(pageId);
-    this.debuggerActiveCounts.delete(pageId);
-    if (page.view.webContents.debugger.isAttached()) {
-      page.view.webContents.debugger.detach();
-    }
-    this.pages.delete(pageId);
-    if (this.selectedPageId === pageId) {
-      this.selectedPageId = fallbackPageId;
-    }
-    page.view.webContents.close();
+    this.destroyPage(this.requirePage(pageId));
     this.syncAttachment();
     this.emitState();
     return this.getState();
@@ -645,6 +636,10 @@ export class AgentBrowserHost {
       // Tool failures belong to the tool result, not the page's navigation state.
       console.warn('[AgentBrowserHost] Browser tool failed:', request.tool, error);
       return errorResult(message);
+    } finally {
+      const usedPageId = readPageId(request.args.pageId) ?? this.selectedPageId;
+      const usedPage = usedPageId ? this.pages.get(usedPageId) : undefined;
+      if (usedPage) usedPage.lastUsedAt = Date.now();
     }
   }
 
@@ -764,6 +759,7 @@ export class AgentBrowserHost {
           || result.outcome === BrowserCredentialLoginOutcome.NeedsMfa
           || result.outcome === BrowserCredentialLoginOutcome.NeedsCaptcha
         ) {
+          page.retained = true;
           this.preserveCredentialLoginStatusForNavigationPageId = page.pageId;
           page.view.webContents.reload();
         }
@@ -785,6 +781,7 @@ export class AgentBrowserHost {
     timeoutMs = DEFAULT_OPERATION_TIMEOUT_MS,
   ): Promise<BrowserPage> {
     const page = this.createPageView();
+    this.reclaimIdleBackgroundPages(page.pageId);
     try {
       await this.navigatePage(page, url, timeoutMs);
     } catch (error) {
@@ -825,6 +822,8 @@ export class AgentBrowserHost {
       view,
       loading: false,
       refs: new Map(),
+      lastUsedAt: Date.now(),
+      retained: false,
     };
     this.pages.set(pageId, page);
     this.selectedPageId = pageId;
@@ -1534,6 +1533,7 @@ export class AgentBrowserHost {
       this.detachPage(this.attachedPageId);
       const page = this.requirePage(this.selectedPageId!);
       mainWindow.contentView.addChildView(page.view);
+      page.retained = true;
       this.attachedPageId = page.pageId;
       console.debug('[AgentBrowserHost] Browser view attached:', page.pageId);
     }
@@ -1590,6 +1590,43 @@ export class AgentBrowserHost {
     if (this.credentialLogin.isActive) {
       throw new Error('A secure saved-credential sign-in is in progress.');
     }
+  }
+
+  private destroyPage(page: BrowserPage): void {
+    const { pageId } = page;
+    const fallbackPageId = this.getPageCloseFallbackId(pageId);
+    this.markBrowserToolBootstrapPageUsed(pageId);
+    this.manualCredentialCapture.clearPage(pageId);
+    this.detachPage(pageId);
+    this.debuggerActiveCounts.delete(pageId);
+    if (page.view.webContents.debugger.isAttached()) {
+      page.view.webContents.debugger.detach();
+    }
+    this.pages.delete(pageId);
+    if (this.selectedPageId === pageId) {
+      this.selectedPageId = fallbackPageId;
+    }
+    page.view.webContents.close();
+  }
+
+  /** Closes idle pages the user never saw once the in-app browser has too many. */
+  private reclaimIdleBackgroundPages(newPageId: number): void {
+    if (this.credentialLogin.isActive) return;
+    const keepPageIds = new Set<number>([newPageId]);
+    if (this.selectedPageId) keepPageIds.add(this.selectedPageId);
+    if (this.attachedPageId) keepPageIds.add(this.attachedPageId);
+    const pageIds = selectAgentBrowserPagesToReclaim(
+      Array.from(this.pages.values(), ({ pageId, lastUsedAt, retained }) => ({ pageId, lastUsedAt, retained })),
+      { now: Date.now(), keepPageIds },
+    );
+    if (pageIds.length === 0) return;
+    for (const pageId of pageIds) {
+      const page = this.pages.get(pageId);
+      if (page) this.destroyPage(page);
+    }
+    console.log('[AgentBrowserHost] Closed idle background pages:', pageIds);
+    this.syncAttachment();
+    this.emitState();
   }
 
   private getPageCloseFallbackId(pageId: number): number | undefined {
