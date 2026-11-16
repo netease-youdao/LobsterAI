@@ -1,6 +1,9 @@
 export const pptCreationTranslations = {
   zh: {
     pptCreationHeading: '从一份好演示开始', pptCreationMore: '查看全部示例', pptCreationPreview: '预览与定制',
+    pptCreationGalleryHint: '选一份喜欢的示例，直接试做，或换成你的内容。',
+    pptCreationExamplePreview: '示例预览', pptCreationDirectHint: '体验这份示例', pptCreationGuidedHint: '替换为你的主题和资料',
+    pptCreationPromptHint: '已为你准备好，可以直接使用或修改。',
     pptCreationDirect: '直接试做', pptCreationGuided: '用我的内容', pptCreationReal: 'LobsterAI 生成与编辑示例',
     pptCreationPage: '第 {page} 页', pptCreationPages: '{count} 页', pptCreationModel: '推荐模型：',
     pptCreationPrompt: '完整提示词', pptCreationTopic: '主题与内容要点', pptCreationTopicPlaceholder: '介绍给谁看、希望讲清什么？可以粘贴大纲或上传资料。',
@@ -25,6 +28,9 @@ export const pptCreationTranslations = {
   },
   en: {
     pptCreationHeading: 'Start with a great presentation', pptCreationMore: 'Browse all examples', pptCreationPreview: 'Preview and customize',
+    pptCreationGalleryHint: 'Choose an example to try, or make it your own.',
+    pptCreationExamplePreview: 'Example preview', pptCreationDirectHint: 'Explore this ready-made example', pptCreationGuidedHint: 'Add your own topic and materials',
+    pptCreationPromptHint: 'Ready to use. Adjust the prompt if you like.',
     pptCreationDirect: 'Try this example', pptCreationGuided: 'Use my content', pptCreationReal: 'LobsterAI creation and editing examples',
     pptCreationPage: 'Slide {page}', pptCreationPages: '{count} slides', pptCreationModel: 'Recommended model: ',
     pptCreationPrompt: 'Complete prompt', pptCreationTopic: 'Topic and key points', pptCreationTopicPlaceholder: 'Who is this for, and what should it explain? Paste an outline or add materials.',
