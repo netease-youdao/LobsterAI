@@ -2727,6 +2727,98 @@ test('pollChannelSessions still recovers a main session once meaningful history 
   ]);
 });
 
+test('OpenClaw system-agent run events never create a local session or turn', () => {
+  const sessionKey = 'agent:openclaw:main';
+  const runId = 'openclaw-turn-1';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'system-agent-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  const requests: string[] = [];
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      requests.push(method);
+      return { messages: [] };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+  const emitted = vi.fn();
+  adapter.on('message', emitted);
+  adapter.on('messageUpdate', emitted);
+  adapter.on('complete', emitted);
+  const assistantMessage = {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'Checking the MCP server config.' }],
+  };
+
+  for (const event of [
+    { event: 'agent', payload: { runId, sessionKey, stream: 'lifecycle', data: { phase: 'start' } } },
+    { event: 'agent', payload: { runId, sessionKey, stream: 'assistant', data: { text: 'Checking the MCP server config.' } } },
+    { event: 'chat', payload: { runId, sessionKey, state: 'delta', message: assistantMessage } },
+    { event: 'chat', payload: { runId, sessionKey, state: 'final', message: assistantMessage } },
+    { event: 'agent', payload: { runId, sessionKey, stream: 'lifecycle', data: { phase: 'end' } } },
+  ]) {
+    adapter.handleGatewayEvent(event);
+  }
+
+  expect(createSession).not.toHaveBeenCalled();
+  expect(adapter.activeTurns.size).toBe(0);
+  expect(adapter.sessionIdByRunId.has(runId)).toBe(false);
+  expect(adapter.sessionIdBySessionKey.has(sessionKey)).toBe(false);
+  expect(emitted).not.toHaveBeenCalled();
+  expect(requests).toEqual([]);
+});
+
+test('pollChannelSessions skips OpenClaw system-agent sessions even with history', async () => {
+  const sessionKey = 'agent:openclaw:main';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'system-agent-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  const requests: string[] = [];
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      requests.push(method);
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            key: sessionKey,
+            sessionId: 'openclaw-gateway-1',
+            updatedAt: 102,
+          }],
+        };
+      }
+      return {
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'why is the MCP tool missing?' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'Checking the config.' }] },
+        ],
+      };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+
+  await adapter.pollChannelSessions();
+
+  expect(createSession).not.toHaveBeenCalled();
+  expect(adapter.sessionIdBySessionKey.has(sessionKey)).toBe(false);
+  expect(requests).toEqual(['sessions.list']);
+});
+
 test('cron session routing retains only the latest real gateway run key per job', () => {
   const { session, store } = createReconcileStore([], {
     sessionId: 'cron-session-1',

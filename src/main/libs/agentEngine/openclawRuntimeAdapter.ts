@@ -118,6 +118,7 @@ import {
   extractAgentIdFromKey,
   isCronSessionKey,
   isManagedSessionKey,
+  isOpenClawSystemAgentSessionKey,
   type OpenClawChannelSessionSync,
   parseChannelSessionKey,
   parseManagedSessionKey,
@@ -7915,6 +7916,25 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       && (this.pendingBtwRuns.has(runId) || this.isTerminalBtwRunId(runId)),
     );
   }
+
+  /**
+   * OpenClaw system-agent runs (e.g. the `openclaw` delegate tool's turns on
+   * "agent:openclaw:main") return their reply to the calling session as a tool
+   * result. Drop their stream before session resolution so they never create
+   * a stray local session or an orphan turn.
+   */
+  private isOpenClawSystemAgentRunEvent(payload: unknown): boolean {
+    if (!isRecord(payload) || typeof payload.sessionKey !== 'string') return false;
+    if (!isOpenClawSystemAgentSessionKey(payload.sessionKey)) return false;
+    if (payload.stream === 'lifecycle' && getAgentLifecyclePhase(payload.data) === AgentLifecyclePhase.Start) {
+      console.debug(
+        '[OpenClawRuntime] ignored OpenClaw system-agent run; its reply returns through the delegating tool call.',
+        `Run ${typeof payload.runId === 'string' ? payload.runId : 'unknown'}.`,
+      );
+    }
+    return true;
+  }
+
   private handleGatewayEvent(event: GatewayEventFrame): void {
     if (isRecord(event.payload) && typeof event.payload.runId === 'string'
       && this.messageEditDiscardedRunIds.has(event.payload.runId)) return;
@@ -7985,7 +8005,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     if (event.event === 'chat') {
-      if (this.handleBtwChatEvent(event.payload)) {
+      if (this.isOpenClawSystemAgentRunEvent(event.payload) || this.handleBtwChatEvent(event.payload)) {
         return;
       }
       this.handleChatEvent(event.payload, event.seq);
@@ -7993,7 +8013,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     if (event.event === 'agent') {
-      if (this.isBtwAgentEvent(event.payload)) {
+      if (this.isOpenClawSystemAgentRunEvent(event.payload) || this.isBtwAgentEvent(event.payload)) {
         return;
       }
       const diagnostic = summarizeAgentEventForThinkingDiagnostics(event.payload, event.seq);
