@@ -1,6 +1,7 @@
 export const pptCoverTranslations = {
   zh: {
     pptCoverConfirmed: '已确认的封面', pptCoverUnitCredits: '参考费用：{credits} 积分 / 张输出图',
+    pptCoverLivePreview: '封面预览', pptCoverProgress: '封面制作进度', pptCoverIllustration: '插画方式',
     pptCoverEntry: '做同款封面', pptCoverHeading: '把这个封面变成你的', pptCoverContent: '填写内容', pptCoverPreview: '确认封面', pptCoverExport: '导出与继续',
     pptCoverTitle: '封面标题', pptCoverSubtitle: '副标题（可选）', pptCoverFooter: '署名与日期（可选）',
     pptCoverReuse: '沿用插画，只改文字', pptCoverGenerate: '按新主题生成插画', pptCoverReuseHint: '保留当前插画与版式，不产生新的生图费用。',
@@ -25,6 +26,7 @@ export const pptCoverTranslations = {
   },
   en: {
     pptCoverConfirmed: 'Confirmed cover', pptCoverUnitCredits: 'Reference price: {credits} credits / output image',
+    pptCoverLivePreview: 'Cover preview', pptCoverProgress: 'Cover creation progress', pptCoverIllustration: 'Illustration',
     pptCoverEntry: 'Make a matching cover', pptCoverHeading: 'Make this cover yours', pptCoverContent: 'Your content', pptCoverPreview: 'Review cover', pptCoverExport: 'Export and continue',
     pptCoverTitle: 'Cover title', pptCoverSubtitle: 'Subtitle (optional)', pptCoverFooter: 'Author and date (optional)',
     pptCoverReuse: 'Keep illustration, change text', pptCoverGenerate: 'Generate for my topic', pptCoverReuseHint: 'Keep this illustration and layout, with no new image generation charge.',

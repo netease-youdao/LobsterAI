@@ -58,21 +58,24 @@ export default function HomePptCreation({ active, onClose, onDraftReady, childre
     {backup && <div role="status" className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-primary-muted px-4 py-3 text-xs text-secondary">
       <span>{t('pptCreationReady')}</span><button type="button" className="shrink-0 font-medium text-primary hover:underline" onClick={() => { if (restorePptCreationDraft(backup)) onDraftReady(backup.prompt); setBackup(null); }}>{t('pptCreationRestore')}</button>
     </div>}
-    {active && catalog?.enabled ? <section data-ppt-creation-home className="absolute inset-x-0 top-full animate-fade-in-up pb-10 pt-6" aria-label={t('pptCreationHeading')}>
+    {active && catalog?.enabled ? <section data-ppt-creation-home className="absolute inset-x-0 top-full animate-fade-in-up pb-6 pt-4 motion-reduce:animate-none" aria-labelledby="ppt-home-title">
+      <div className="mb-3 flex items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1"><h2 id="ppt-home-title" className="text-sm font-semibold text-foreground">{t('pptCreationHeading')}</h2><p className="text-xs leading-5 text-foreground/65">{t('pptCreationGalleryHint')}</p></div>
+        <button type="button" className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs text-foreground/70 transition-colors hover:bg-surface-raised hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setShowAll(true)}>{t('pptCreationMore')}<ArrowRightIcon aria-hidden="true" className="h-3.5 w-3.5" /></button>
+      </div>
       {gallery()}
       {busy && <p role="status" className="mt-3 text-xs text-secondary">{t('pptCreationPreparing')}</p>}
-      <div className="mt-5 flex items-center justify-between gap-4 px-0.5 text-xs leading-5 text-muted">
-        <button type="button" className="flex items-center gap-1 hover:text-foreground" onClick={() => setShowAll(true)}>{t('pptCreationMore')}<ArrowRightIcon className="h-3.5 w-3.5" /></button>
-        <button type="button" className="flex shrink-0 items-center gap-1 hover:text-foreground" onClick={onClose}>{t('coworkQuickActionCollapse')}<ChevronUpIcon className="h-3.5 w-3.5" /></button>
+      <div className="mt-1 flex justify-end text-xs leading-5 text-secondary">
+        <button type="button" className="flex min-h-9 shrink-0 items-center gap-1 rounded-lg px-2 hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={onClose}>{t('coworkQuickActionCollapse')}<ChevronUpIcon aria-hidden="true" className="h-3.5 w-3.5" /></button>
       </div>
     </section> : <>
       {active && failed && <p className="mt-3 text-xs text-muted">{t('pptCreationLoadFailed')} <button type="button" className="text-primary" onClick={() => void retry()}>{t('retry')}</button></p>}
       {children}
     </>}
-    {showAll && catalog?.enabled && <Modal onClose={() => setShowAll(false)} onEscape={() => setShowAll(false)} className="w-[min(1040px,94vw)] rounded-2xl border border-border bg-surface p-6 shadow-float">
-      <div role="dialog" aria-modal="true" aria-labelledby="ppt-catalog-title" className="scrollbar-hidden max-h-[85vh] overflow-auto">
-        <div className="mb-5 flex items-center justify-between"><h2 id="ppt-catalog-title" className="text-xl font-semibold text-foreground">{t('pptCreationHeading')}</h2><button type="button" onClick={() => setShowAll(false)} aria-label={t('close')} className="rounded-lg p-1.5 text-secondary hover:bg-surface-raised"><XMarkIcon className="h-5 w-5" /></button></div>
-        {gallery(true)}
+    {showAll && catalog?.enabled && <Modal onClose={() => setShowAll(false)} onEscape={() => setShowAll(false)} className="w-[min(1040px,94vw)] overflow-hidden rounded-3xl border border-border bg-surface shadow-modal">
+      <div role="dialog" aria-modal="true" aria-labelledby="ppt-catalog-title" className="flex max-h-[90vh] flex-col">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-6 py-5"><div><h2 id="ppt-catalog-title" className="text-xl font-semibold text-foreground">{t('pptCreationHeading')}</h2><p className="mt-1 text-sm text-foreground/70">{t('pptCreationGalleryHint')}</p></div><button type="button" onClick={() => setShowAll(false)} aria-label={t('close')} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><XMarkIcon aria-hidden="true" className="h-5 w-5" /></button></div>
+        <div className="scrollbar-hidden min-h-0 overflow-y-auto overscroll-contain p-5 md:p-6">{gallery(true)}</div>
       </div>
     </Modal>}
     {selected && catalog?.enabled && <PptExampleDialog key={`${catalog.version}:${selected.id}`} catalog={catalog} example={selected}
