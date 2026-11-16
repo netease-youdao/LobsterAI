@@ -2112,6 +2112,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkDreamingDiaryEmptyHint: '启用 Dreaming 后，系统会在后台生成梦境日记',
     coworkDreamingDiaryRefresh: '刷新',
     coworkDreamingDiaryRefreshing: '刷新中...',
+    coworkDreamingDiaryLoadError: '梦境日记加载失败',
     coworkDreamingAdvancedTitle: '每日记忆信号',
     coworkDreamingAdvancedHint: '检视已扎根的回放信号、等待中的短期条目、以及今日已提升的条目',
     coworkDreamingAdvancedGroundedTitle: '已扎根信号',
@@ -7021,6 +7022,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Once Dreaming is enabled, the system will generate dream diary entries in the background',
     coworkDreamingDiaryRefresh: 'Refresh',
     coworkDreamingDiaryRefreshing: 'Refreshing...',
+    coworkDreamingDiaryLoadError: 'Failed to load dream diary',
     coworkDreamingAdvancedTitle: 'Daily Memory Signals',
     coworkDreamingAdvancedHint:
       "Inspect grounded replay signals, waiting short-term entries, and today's promoted entries",

@@ -12686,15 +12686,21 @@ if (!gotTheLock) {
     }
   });
   // ── Dreaming content display ──────────────────────────────────────────
-  ipcMain.handle('cowork:dreaming:status', async () => {
+  // Explicit agent ownership gives doctor.memory.* no implicit owner once a
+  // second agent exists, so always name the agent whose dreams are shown.
+  ipcMain.handle(CoworkIpcChannel.DreamingStatus, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
     try {
       const gwClient = openClawRuntimeAdapter?.getGatewayClient();
       if (!gwClient) {
         return { success: false, error: 'Gateway client not available' };
       }
+      const agentId = options?.agentId?.trim() || AgentId.Main;
       const result = await gwClient.request<Record<string, unknown>>(
         'doctor.memory.status',
-        {},
+        { agentId },
         { timeoutMs: 10_000 },
       );
       const dreaming = (result as any)?.dreaming;
@@ -12709,15 +12715,19 @@ if (!gotTheLock) {
       };
     }
   });
-  ipcMain.handle('cowork:dreaming:diary', async () => {
+  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
     try {
       const gwClient = openClawRuntimeAdapter?.getGatewayClient();
       if (!gwClient) {
         return { success: false, error: 'Gateway client not available' };
       }
+      const agentId = options?.agentId?.trim() || AgentId.Main;
       const result = await gwClient.request<Record<string, unknown>>(
         'doctor.memory.dreamDiary',
-        {},
+        { agentId },
         { timeoutMs: 10_000 },
       );
       return { success: true, data: result };
