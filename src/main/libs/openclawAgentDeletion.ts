@@ -45,7 +45,9 @@ export async function deleteOpenClawAgent(input: AgentDeletionInput): Promise<bo
         const result = await client.request<{ ok?: boolean; agentId?: string }>(
           OpenClawAgentRpcMethod.Delete,
           { agentId: input.agentId, deleteFiles: false },
-          { timeoutMs: 30_000 },
+          // Deletion also waits for the roster hot reload. Skill dependency
+          // checks on Windows can take longer than the normal 30-second RPC.
+          { timeoutMs: 60_000 },
         );
         if (result?.ok !== true || result.agentId !== input.agentId) {
           throw new Error('Gateway did not confirm agent deletion');

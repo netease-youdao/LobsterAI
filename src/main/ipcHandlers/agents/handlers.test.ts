@@ -192,6 +192,24 @@ test('creating an agent writes its persona over files left by a deleted agent wi
   expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: 'agent-created' });
 });
 
+test('creation failures preserve their cause in logs and never publish a successful change', async () => {
+  const failure = new Error('Agent identity cannot be reused');
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const sync = vi.fn();
+  registerAgentHandlers({
+    getAgentManager: () => ({ createAgent: () => { throw failure; } }),
+    resolveDefaultAgentModelRef: () => 'provider/model',
+    syncOpenClawConfig: sync,
+  } as unknown as AgentHandlerDeps);
+  const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.Create)![1];
+  expect(await handler({} as Electron.IpcMainInvokeEvent, { name: '111' })).toEqual({
+    success: false, error: failure.message,
+  });
+  expect(errorLog).toHaveBeenCalledExactlyOnceWith('[Agents] Failed to create agent:', failure);
+  expect(sync).not.toHaveBeenCalled();
+  expect(BrowserWindow.getAllWindows).not.toHaveBeenCalled();
+});
+
 test.each([
   [AgentIpcChannel.Presets, 'getPresetAgents'],
   [AgentIpcChannel.PresetTemplates, 'getAllPresetAgents'],

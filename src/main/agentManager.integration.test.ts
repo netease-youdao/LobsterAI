@@ -72,6 +72,39 @@ function installLegacyOwnershipSchema(db: Database.Database): void {
   `);
 }
 
+test.each([false, true])('recreates a custom agent without reusing its retired identity (ownership schema: %s)', legacyOwnership => {
+  const db = sqliteStore.getDatabase();
+  const legacy = store.createAgent({ name: '111', model: 'old/model' });
+  if (legacyOwnership) installLegacyOwnershipSchema(db);
+  const manager = new AgentManager(store, async () => catalog);
+  expect(manager.deleteAgent(legacy.id)).toBe(true);
+  const retiredIdentity = legacyOwnership
+    ? db.prepare('SELECT * FROM agent_ownership WHERE agent_id=?').get(legacy.id)
+    : null;
+  const triggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' ORDER BY name").all();
+
+  const first = manager.createAgent({ name: '111', workingDirectory: ' /new-work ' }, 'new/model');
+  const duplicateName = manager.createAgent({ name: '111' }, 'new/model');
+  expect(first).toMatchObject({ name: '111', model: 'new/model', workingDirectory: '/new-work' });
+  expect(new Set([legacy.id, first.id, duplicateName.id]).size).toBe(3);
+  expect(manager.deleteAgent(first.id)).toBe(true);
+  const recreated = manager.createAgent({ name: '111' });
+  expect(new Set([legacy.id, first.id, duplicateName.id, recreated.id]).size).toBe(4);
+  expect(manager.getAgent(duplicateName.id)).toEqual(duplicateName);
+  expect(db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' ORDER BY name").all()).toEqual(triggers);
+  if (legacyOwnership) {
+    expect(db.prepare('SELECT * FROM agent_ownership WHERE agent_id=?').get(legacy.id)).toEqual(retiredIdentity);
+    expect(() => store.createAgent({ id: legacy.id, name: '111' })).toThrow('Agent identity cannot be reused');
+  }
+});
+
+test('custom creation preserves an explicit caller-supplied identity', () => {
+  const manager = new AgentManager(store, async () => catalog);
+  expect(manager.createAgent({ id: 'imported-agent', name: 'Imported' })).toMatchObject({
+    id: 'imported-agent', name: 'Imported',
+  });
+});
+
 test.each([false, true])('resummons a deleted legacy preset with a fresh identity (ownership schema: %s)', async legacyOwnership => {
   const db = sqliteStore.getDatabase();
   const legacy = store.createAgent(presetToCreateRequest(catalog.experts[0]));

@@ -35,6 +35,9 @@ export class AgentManager {
   createAgent(request: CreateAgentRequest, defaultModel?: string): Agent {
     return this.store.createAgent({
       ...request,
+      // Deleted identities remain reserved by legacy ownership and OpenClaw.
+      // A display name must not reconnect a new instance to that old identity.
+      id: request.id || randomUUID(),
       model: request.model?.trim() || defaultModel?.trim() || '',
       workingDirectory: request.workingDirectory?.trim() || '',
     });
