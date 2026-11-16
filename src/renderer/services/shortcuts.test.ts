@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
-import { formatShortcutForDisplay, isTextEditingSafeShortcut, matchesShortcut } from './shortcuts';
+import { formatShortcutForDisplay, formatShortcutHint, isTextEditingSafeShortcut, matchesShortcut } from './shortcuts';
 
 describe('quick panel shortcut display', () => {
   test.each([
@@ -60,5 +60,17 @@ describe('matchesShortcut', () => {
     } as unknown as KeyboardEvent;
 
     expect(matchesShortcut(event, 'Ctrl+Alt+E')).toBe(false);
+  });
+});
+
+describe('formatShortcutHint', () => {
+  test('uses compact macOS glyphs', () => {
+    expect(formatShortcutHint('CommandOrControl+K', { isMac: true })).toBe('⌘K');
+    expect(formatShortcutHint('CommandOrControl+Shift+Alt+F', { isMac: true })).toBe('⌘⇧⌥F');
+  });
+
+  test('keeps the readable form elsewhere', () => {
+    expect(formatShortcutHint('CommandOrControl+K', { isMac: false })).toBe('Ctrl+K');
+    expect(formatShortcutHint('', { isMac: true })).toBe('');
   });
 });

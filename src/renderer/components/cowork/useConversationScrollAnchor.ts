@@ -19,7 +19,29 @@ interface OlderMessagesRequest {
   offset: number;
   expectedOffset?: number;
   anchor: ConversationScrollAnchor | null;
+  /** The page has committed and only the pin of its remounted anchor turn is outstanding. */
+  awaitingPin?: boolean;
+  settleTimer?: ReturnType<typeof setTimeout>;
 }
+
+/**
+ * Upper bound for a fetched page to commit and restore. Both normally happen
+ * within a frame; this only guarantees the loading guard cannot outlive them.
+ */
+export const OLDER_MESSAGES_SETTLE_TIMEOUT_MS = 1500;
+
+const DIAGNOSTIC_TAG = 'ConversationScrollAnchor';
+
+const reportDiagnostic = (level: 'debug' | 'warn', message: string): void => {
+  (level === 'warn' ? console.warn : console.debug)(`[${DIAGNOSTIC_TAG}] ${message}`);
+  if (typeof window !== 'undefined') window.electron?.log?.fromRenderer?.(level, DIAGNOSTIC_TAG, message);
+};
+
+const clearSettleTimer = (request: OlderMessagesRequest | null): void => {
+  if (request?.settleTimer === undefined) return;
+  clearTimeout(request.settleTimer);
+  request.settleTimer = undefined;
+};
 
 /** Owns history-page restoration while leaving following, search and navigation in control. */
 export function useConversationScrollAnchor(options: ConversationScrollAnchorOptions) {
@@ -35,6 +57,7 @@ export function useConversationScrollAnchor(options: ConversationScrollAnchorOpt
 
   const finishRequest = useCallback((request: OlderMessagesRequest) => {
     if (requestRef.current !== request) return;
+    clearSettleTimer(request);
     requestRef.current = null;
     isLoadingMoreMessagesRef.current = false;
     setIsLoadingMoreMessages(false);
@@ -42,6 +65,7 @@ export function useConversationScrollAnchor(options: ConversationScrollAnchorOpt
   }, []);
 
   useLayoutEffect(() => {
+    clearSettleTimer(requestRef.current);
     requestRef.current = null;
     readingAnchorRef.current = null;
     automaticAttemptRef.current = null;
@@ -49,6 +73,7 @@ export function useConversationScrollAnchor(options: ConversationScrollAnchorOpt
     setIsLoadingMoreMessages(false);
     setAnchorMessageId(null);
     return () => {
+      clearSettleTimer(requestRef.current);
       requestRef.current = null;
       readingAnchorRef.current = null;
     };
@@ -91,7 +116,24 @@ export function useConversationScrollAnchor(options: ConversationScrollAnchorOpt
     } finally {
       // A successful page is released by its layout commit, not by an unrelated
       // streaming append or the promise resolving before React has committed.
-      if (!loaded || request.expectedOffset === undefined) finishRequest(request);
+      if (!loaded || request.expectedOffset === undefined) {
+        finishRequest(request);
+      } else if (requestRef.current === request) {
+        // The commit and the anchor pin each depend on a later render. Never
+        // let a render that does not arrive keep history loading blocked.
+        request.settleTimer = setTimeout(() => {
+          request.settleTimer = undefined;
+          if (requestRef.current !== request) return;
+          reportDiagnostic(
+            'warn',
+            `released an older message page for session ${request.sessionId} that did not settle within `
+            + `${OLDER_MESSAGES_SETTLE_TIMEOUT_MS}ms; offset=${request.offset}; expectedOffset=${request.expectedOffset}; `
+            + `currentOffset=${optionsRef.current.messagesOffset}; awaitingPin=${request.awaitingPin === true}.`,
+          );
+          readingAnchorRef.current = null;
+          finishRequest(request);
+        }, OLDER_MESSAGES_SETTLE_TIMEOUT_MS);
+      }
     }
   }, [finishRequest]);
 
@@ -104,7 +146,12 @@ export function useConversationScrollAnchor(options: ConversationScrollAnchorOpt
       const restored = restoreConversationScrollAnchor(container, request.anchor);
       // External-store updates can commit before the local state that pins a
       // remounted turn. Let that state commit before giving up on its anchor.
-      if (!restored && anchorMessageId !== request.anchor.candidates[0]?.messageId) return;
+      // A reader gesture can cancel that pin before it commits, so the wait
+      // must be ended by the gesture itself rather than by another render.
+      if (!restored && anchorMessageId !== request.anchor.candidates[0]?.messageId) {
+        request.awaitingPin = true;
+        return;
+      }
       readingAnchorRef.current = captureConversationScrollAnchor(container, { includeTurnFallback: false });
     } else {
       readingAnchorRef.current = null;
@@ -125,7 +172,18 @@ export function useConversationScrollAnchor(options: ConversationScrollAnchorOpt
     };
     const interrupt = () => {
       readingAnchorRef.current = null;
-      if (requestRef.current) requestRef.current.anchor = null;
+      const request = requestRef.current;
+      if (request?.awaitingPin) {
+        // Dropping the pin may leave its state unchanged, so no render would
+        // re-run the commit effect that releases this already committed page.
+        reportDiagnostic(
+          'debug',
+          `reader gesture cancelled a pending history restore for session ${request.sessionId}; offset=${request.expectedOffset}.`,
+        );
+        finishRequest(request);
+        return;
+      }
+      if (request) request.anchor = null;
       setAnchorMessageId(null);
     };
     const resizeObserver = new ResizeObserver(() => {
@@ -145,7 +203,7 @@ export function useConversationScrollAnchor(options: ConversationScrollAnchorOpt
       container.removeEventListener('scroll', capture);
       interruptEvents.forEach(event => container.removeEventListener(event, interrupt));
     };
-  }, [contentElement, options.sessionId, options.scrollContainerRef]);
+  }, [contentElement, finishRequest, options.sessionId, options.scrollContainerRef]);
 
   return { loadOlderMessages, isLoadingMoreMessages, isLoadingMoreMessagesRef, anchorMessageId, setContentElement };
 }

@@ -32,6 +32,7 @@ interface OpenBrowserLoginOptions {
   openExternal: (url: string) => Promise<void>;
   startLocalCallback: () => Promise<AuthLocalCallback>;
   openTimeoutMs?: number;
+  isCurrent?: () => boolean;
 }
 
 const describeError = (error: unknown): string => (
@@ -90,6 +91,8 @@ const openWithTimeout = (
 export async function openBrowserLogin(options: OpenBrowserLoginOptions): Promise<AuthLoginResult> {
   const { baseUrl, openExternal, startLocalCallback } = options;
   const openTimeoutMs = options.openTimeoutMs ?? AUTH_BROWSER_OPEN_TIMEOUT_MS;
+  const isCurrent = options.isCurrent ?? (() => true);
+  const cancelled: AuthLoginResult = { success: false, reason: AuthLoginFailureReason.Cancelled };
   const deepLinkUrl = appendLoginParams(baseUrl, { source: 'electron' });
   let callbackUrl: string | null = null;
 
@@ -116,10 +119,12 @@ export async function openBrowserLogin(options: OpenBrowserLoginOptions): Promis
   let lastError: unknown = null;
 
   for (const url of candidates) {
+    if (!isCurrent()) return cancelled;
     console.log(url === callbackUrl
       ? '[Auth] opening portal login with local callback redirect'
       : '[Auth] opening portal login with deep link redirect');
     const attempt = await openWithTimeout(openExternal, url, openTimeoutMs);
+    if (!isCurrent()) return cancelled;
     if (attempt.status === OpenAttemptStatus.Opened) {
       return { success: true, redirectUrl: url };
     }

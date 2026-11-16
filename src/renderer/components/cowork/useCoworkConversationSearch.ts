@@ -194,6 +194,7 @@ export function useCoworkConversationSearch({
   const latestCurrentMessagesRef = useRef(currentMessages);
   const latestCurrentTotalMessagesRef = useRef(currentTotalMessages);
   const latestSessionIdRef = useRef(sessionId);
+  const queryRef = useRef('');
   const isOpenRef = useRef(false);
   const statusRef = useRef<ConversationSearchStatusValue>(ConversationSearchStatus.Idle);
   const fullMessagesRef = useRef<CoworkSearchMessage[]>([]);
@@ -204,6 +205,7 @@ export function useCoworkConversationSearch({
   latestCurrentMessagesRef.current = currentMessages;
   latestCurrentTotalMessagesRef.current = currentTotalMessages;
   latestSessionIdRef.current = sessionId;
+  queryRef.current = query;
   isOpenRef.current = isOpen;
   statusRef.current = status;
   fullMessagesRef.current = fullMessages;
@@ -246,6 +248,7 @@ export function useCoworkConversationSearch({
       streamMergeTimerRef.current = null;
     }
     isOpenRef.current = false;
+    queryRef.current = '';
     statusRef.current = ConversationSearchStatus.Idle;
     fullMessagesRef.current = [];
     loadedHistoryEndOffsetRef.current = 0;
@@ -456,6 +459,11 @@ export function useCoworkConversationSearch({
   }, [reset]);
 
   const setQuery = useCallback((nextQuery: string) => {
+    // Re-applying the current query (e.g. picking the same task-search hit again while the
+    // search is open) must keep its results: the search effect only re-runs when the query
+    // changes, so clearing them here would leave the search stuck at 0 results.
+    if (nextQuery === queryRef.current) return;
+    queryRef.current = nextQuery;
     searchRequestRef.current += 1;
     setQueryState(nextQuery);
     setMatches([]);

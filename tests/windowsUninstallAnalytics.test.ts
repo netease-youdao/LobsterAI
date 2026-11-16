@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 import { LogReporterEndpoint } from '../src/shared/analytics/constants';
 import { UninstallAnalytics, UninstallAnalyticsKey } from '../src/shared/analytics/uninstall';
 
-const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8');
+const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8').replace(/\r\n/g, '\n');
 const analytics = read('scripts/nsis-uninstall-analytics.nsh');
 const installer = read('scripts/nsis-installer.nsh');
 const uninstaller = read('node_modules/app-builder-lib/templates/nsis/uninstaller.nsh');
@@ -23,7 +23,21 @@ describe('Windows uninstall analytics integration contracts', () => {
     expect(analytics).toContain(`!define LOBSTER_UNINSTALL_ANALYTICS_SCHEMA "${UninstallAnalytics.SchemaVersion}"`);
     expect(analytics).toContain(`!define LOBSTER_UNINSTALL_ANALYTICS_ENDPOINT "${LogReporterEndpoint.YoudaoAnalyzer}"`);
     for (const key of Object.values(UninstallAnalyticsKey)) expect(analytics).toContain(`"${key}"`);
-    expect(installer).toContain('!include "${__FILEDIR__}/nsis-uninstall-analytics.nsh"');
+    expect(installer).toContain('!include "${__FILEDIR__}\\nsis-uninstall-analytics.nsh"');
+  });
+
+  test('uses Windows path separators in custom NSIS includes', () => {
+    // makensis on Windows splits an !include path only on "\" and then matches the
+    // remainder as a file name, so "${__FILEDIR__}/x.nsh" fails to resolve at build time.
+    for (const [file, source] of [
+      ['scripts/nsis-installer.nsh', installer],
+      ['scripts/nsis-uninstall-analytics.nsh', analytics],
+    ]) {
+      const forwardSlashIncludes = source
+        .split('\n')
+        .filter((line) => /^\s*!include\s/i.test(line) && line.includes('/'));
+      expect(forwardSlashIncludes, file).toEqual([]);
+    }
   });
 
   test('captures only after confirmation/process stop, before file and optional user-data removal', () => {

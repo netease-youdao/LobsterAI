@@ -45,7 +45,12 @@ import {
   PromptAnalyticsConversationState,
 } from '../shared/analytics/constants';
 import { UsageAnalytics, type UsageContext, UsageOrigin, UsageStage } from '../shared/analytics/usage';
-import { AppIpcChannel, type OpenSettingsRequest, OpenSettingsTab } from '../shared/app/constants';
+import {
+  AppIpcChannel,
+  type OpenSettingsRequest,
+  OpenSettingsTab,
+  WindowIpcChannel,
+} from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
@@ -57,6 +62,7 @@ import {
   AuthIpcChannel,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  AuthLoginFailureReason,
   AuthRefreshOutcome,
   AuthRefreshReason,
   type AuthSessionChangedEvent,
@@ -134,6 +140,7 @@ import {
   type CoworkSelectedTextSnippet,
   normalizeCoworkSelectedTextSnippets,
 } from '../shared/cowork/selectedText';
+import type { CoworkSessionFilterQuery } from '../shared/cowork/sessionFilter';
 import {
   CoworkSteerRejectReason,
   CoworkSteerStatus,
@@ -193,6 +200,7 @@ import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationG
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
+import { hasLayerDecompositionWarning } from '../shared/media/warnings';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
 import { isChatPresetSession, type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
 import {
@@ -347,13 +355,15 @@ import {
   quitAppWithoutConfirmation,
   showAppQuitConfirmation,
 } from './libs/appQuitConfirmation';
+import { focusAppQuitDialog } from './libs/appQuitDialog';
 import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
 import { ArtifactFileWatcher } from './libs/artifactFileWatcher';
 import { openBrowserLogin } from './libs/authBrowserLogin';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
-import { startAuthLocalCallback } from './libs/authLocalCallbackServer';
+import { startAuthLocalCallback, stopAuthLocalCallback } from './libs/authLocalCallbackServer';
+import { AuthLoginAttempt } from './libs/authLoginAttempt';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
@@ -508,6 +518,7 @@ import {
 import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { mediaConfirmationQuote } from './libs/mediaConfirmationRequests';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
+import { formatMediaLayerLines } from './libs/mediaLayers';
 import { compactMediaDetails, compactMessageMetadataMedia, mediaSourceKey } from './libs/mediaMetadataCompaction';
 import { migrateInlineMediaMetadata } from './libs/mediaMetadataMigration';
 import {
@@ -5331,7 +5342,9 @@ if (!gotTheLock) {
     app.setAsDefaultProtocolClient('lobsterai');
   }
 
+  const authLoginAttempt = new AuthLoginAttempt();
   const authCallbackRouter = new AuthCallbackRouter({
+    acceptsCallback: () => authLoginAttempt.acceptsCallback(),
     getTarget: () => {
       if (!mainWindow || mainWindow.isDestroyed()) return null;
       return mainWindow.webContents;
@@ -5797,6 +5810,10 @@ if (!gotTheLock) {
 
   ipcMain.handle('window:isMaximized', () => {
     return mainWindow?.isMaximized() ?? false;
+  });
+
+  ipcMain.handle(WindowIpcChannel.IsFullscreen, () => {
+    return mainWindow?.isFullScreen() ?? false;
   });
 
   ipcMain.on(
@@ -6909,6 +6926,7 @@ if (!gotTheLock) {
         let resultLines: string[];
         let detailsAssets: unknown[] = composesImageEditLocally(statusImageEdit?.operation) ? [] : assets;
         let savedCount = 0;
+        let savedImageAssets: PersistedGeneratedImageAsset[] = [];
         if (status === 'succeeded' && statusMediaType === 'image' && ownerSessionId) {
           const persistResult = await persistGeneratedImages(ownerSessionId, assets, statusImageEdit, String(task.taskId));
           if (!isRequestAccountCurrent()) return staleAccountResult();
@@ -6916,6 +6934,7 @@ if (!gotTheLock) {
           if (persistResult && persistResult.saved.length > 0) {
             savedCount = persistResult.saved.length;
             detailsAssets = persistResult.saved;
+            savedImageAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
               `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
             );
@@ -6954,6 +6973,8 @@ if (!gotTheLock) {
           ...(task.protocolVersion === MediaProtocol.Durable && !TERMINAL_MEDIA_TASK_STATUSES.has(status) ? ['This task continues in the background. Do not regenerate. Dependent steps must wait for a saved result.'] : []),
           ...(task.progress ? [`Progress: ${task.progress}%`] : []),
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
+          ...formatMediaLayerLines(task.layers, savedImageAssets),
+          ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
           ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
         ];
         const details = compactMediaDetails({
@@ -6970,6 +6991,7 @@ if (!gotTheLock) {
           status,
           generationStatus: task.status,
           billingStatus: task.billingStatus,
+          warnings: task.warnings,
           errorMessage: task.errorMessage,
           ...(deliveryPending ? { phase: MediaTaskPhase.Fetching, deliveryStatus: MediaDeliveryStatus.Retrying } : {}),
           ...(task.protocolVersion === MediaProtocol.Durable && status === MediaTaskStatus.Succeeded
@@ -7079,6 +7101,9 @@ if (!gotTheLock) {
         if (args.output_format) params.output_format = args.output_format;
         if (args.temperature != null) params.temperature = args.temperature;
         if (args.imageSize) params.imageSize = args.imageSize;
+        if (args.layerDecomposition != null) params.layer_decomposition = args.layerDecomposition;
+        if (args.layerDecompositionOptions) params.layer_decomposition_options = args.layerDecompositionOptions;
+        if (args.background) params.background = args.background;
       }
       if (args.count) params.count = args.count;
       if (args.durationSeconds != null) params.durationSeconds = args.durationSeconds;
@@ -7470,6 +7495,7 @@ if (!gotTheLock) {
         ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
         `Status: ${status}`,
         ...(task.quotaRemaining != null ? [`Quota remaining: ${task.quotaRemaining}`] : []),
+        ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
       ];
 
       if (status === 'succeeded' && mediaType === 'image' && ownerSessionId) {
@@ -7481,7 +7507,7 @@ if (!gotTheLock) {
           const fileLines = persistResult.saved.map(asset =>
             `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
           );
-          lines.push(`Results:\n${fileLines.join('\n')}`);
+          lines.push(`Results:\n${fileLines.join('\n')}`, ...formatMediaLayerLines(task.layers, persistResult.saved));
         } else if (assets.length > 0 && !composesImageEditLocally(imageEdit?.operation)) {
           const resultLines = resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           lines.push(`Results:\n${resultLines.join('\n')}`);
@@ -7538,6 +7564,7 @@ if (!gotTheLock) {
           taskId: String(task.taskId),
           clientStartedAt,
           protocolVersion: task.protocolVersion,
+          warnings: task.warnings,
           createdAt: task.createdAt,
           deadlineAt: task.deadlineAt,
           phase: task.phase,
@@ -7766,7 +7793,9 @@ if (!gotTheLock) {
               continue;
             }
             const content = status === MediaTaskStatus.Succeeded
-              ? (saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))).join('\n')
+              ? [...(saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))),
+                ...formatMediaLayerLines(task.layers, saved?.saved),
+                ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : [])].join('\n')
               : String(task.errorMessage || t(status === MediaTaskStatus.Timeout ? 'mediaTaskTimedOut'
                 : status === MediaTaskStatus.Cancelled ? 'mediaTaskCancelled' : 'mediaTaskFailed'));
             emitMediaTaskMessage(tracker.sessionId, content, { toolResultDetails: details }, tracker);
@@ -7785,13 +7814,15 @@ if (!gotTheLock) {
               const fileLines = persistResult.saved.map(asset => `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`);
               emitMediaTaskMessage(
                 tracker.sessionId,
-                `Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
+                [`Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
+                  ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : [])].join('\n'),
                 {
                   toolResultDetails: {
                     taskId,
                     status: 'succeeded',
                     mediaType: 'image',
                     assets: persistResult.saved,
+                    warnings: task.warnings,
                   },
                 },
               );
@@ -7799,6 +7830,7 @@ if (!gotTheLock) {
               const resultLines = resultUrls.map((_url, index) => `  - Generated image ${index + 1}`);
               emitMediaTaskMessage(tracker.sessionId, [
                 'Image generation succeeded.',
+                ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
                 `Task ID: ${taskId}`,
                 `Model: ${displayModel}`,
                 ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
@@ -8260,17 +8292,32 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, (_event, { loginUrl }: { loginUrl?: string } = {}) => openBrowserLogin({
-    baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
-    openExternal: url => shell.openExternal(url),
-    // The callback may be shared by another login page and cleans itself up on timeout.
-    startLocalCallback: () => startAuthLocalCallback({
-      onCode: code => {
-        authCallbackRouter.handleAuthCode(code);
-        focusMainWindow('local auth callback');
-      },
-    }),
-  }));
+  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
+    const generation = authLoginAttempt.begin();
+    authCallbackRouter.clearPending();
+    await Promise.all([stopAuthLocalCallback(), authLoginAttempt.waitForExchange()]);
+    const isCurrent = () => authLoginAttempt.isCurrent(generation);
+    if (!isCurrent()) return { success: false, reason: AuthLoginFailureReason.Cancelled };
+    return openBrowserLogin({
+      baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
+      openExternal: url => shell.openExternal(url),
+      isCurrent,
+      startLocalCallback: () => startAuthLocalCallback({
+        onCode: code => {
+          if (!isCurrent()) return;
+          authCallbackRouter.handleAuthCode(code);
+          focusMainWindow('local auth callback');
+        },
+      }),
+    });
+  });
+
+  ipcMain.handle(AuthIpcChannel.CancelLogin, async () => {
+    authLoginAttempt.cancel();
+    authCallbackRouter.clearPending();
+    await Promise.all([stopAuthLocalCallback(), authLoginAttempt.waitForExchange()]);
+    return { success: true };
+  });
 
   registerFeedbackIpc({
     ipcMain,
@@ -8304,11 +8351,12 @@ if (!gotTheLock) {
     fetchWithAuth,
   });
 
-  const activateLowCreditPurchaseOffer = async (): Promise<Record<string, unknown> | null> => {
+  const activateLowCreditPurchaseOffer = async (signal?: AbortSignal): Promise<Record<string, unknown> | null> => {
     try {
       const response = await fetchWithAuth(`${getServerApiBaseUrl()}/api/purchase-offers/low-credit/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
       });
       if (!response.ok) return null;
       const body = (await response.json()) as {
@@ -8323,7 +8371,7 @@ if (!gotTheLock) {
     }
   };
 
-  ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
+  ipcMain.handle(AuthIpcChannel.Exchange, (_event, { code }: { code: string }) => authLoginAttempt.runExchange(async (loginAttempt) => {
     const startingTokens = getAuthTokens();
     const startingUser = getAuthUser();
     const startingEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
@@ -8352,6 +8400,7 @@ if (!gotTheLock) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(withKeyfromBody({ authCode: code })),
+        signal: AbortSignal.any([loginAttempt.signal, AbortSignal.timeout(30_000)]),
       });
       if (!resp.ok) {
         return { success: false, error: `Exchange failed: ${resp.status}` };
@@ -8369,7 +8418,7 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
-      if (!isExchangeIntentCurrent()) {
+      if (!isExchangeIntentCurrent() || !loginAttempt.isCurrent()) {
         return { success: false, error: t('authAccountChanged') };
       }
 
@@ -8389,6 +8438,7 @@ if (!gotTheLock) {
       saveAuthUser(body.data.user);
       committedExchangeGeneration = exchangeAccountGeneration;
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
+      if (!loginAttempt.isCurrent()) throw new Error('Login was cancelled or replaced');
       const requiresEnterpriseContext = (
         readAccountMode(body.data) === EnterpriseAccountMode.Enterprise
         || body.data.quota.subscriptionStatus === AuthSubscriptionStatus.Enterprise
@@ -8415,7 +8465,8 @@ if (!gotTheLock) {
         `[Auth] exchange completed; enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
       const quota = normalizeQuota(body.data.quota);
-      const purchaseOffer = await activateLowCreditPurchaseOffer();
+      const purchaseOffer = await activateLowCreditPurchaseOffer(loginAttempt.signal);
+      if (!loginAttempt.isCurrent()) throw new Error('Login was cancelled or replaced');
       if (
         authAccountGeneration !== exchangeAccountGeneration
         || authExchangeIntentSequence !== exchangeIntent.intentId
@@ -8474,7 +8525,8 @@ if (!gotTheLock) {
         });
         console.warn('[Auth] rolled back local credentials after an incomplete exchange');
       }
-      console.error('[Auth] exchange failed:', error);
+      if (loginAttempt.isCurrent()) console.error('[Auth] exchange failed:', error);
+      else console.debug('[Auth] cancelled or replaced login exchange settled');
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Exchange failed',
@@ -8484,7 +8536,7 @@ if (!gotTheLock) {
         activeAuthExchangeIntent = null;
       }
     }
-  });
+  }));
 
   ipcMain.handle(AuthIpcChannel.GetUser, async () => {
     const createUnavailableResponse = () => {
@@ -11880,6 +11932,63 @@ if (!gotTheLock) {
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to get session messages',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    CoworkIpcChannel.ListFilteredSessions,
+    async (_event, query: CoworkSessionFilterQuery) => {
+      try {
+        const startedAt = Date.now();
+        const sessions = getCoworkStore().listFilteredSessions({
+          statuses: Array.isArray(query?.statuses) ? query.statuses : undefined,
+          sessionIds: Array.isArray(query?.sessionIds) ? query.sessionIds : undefined,
+          updatedSince: typeof query?.updatedSince === 'number' ? query.updatedSince : undefined,
+          limit: typeof query?.limit === 'number' ? query.limit : undefined,
+        });
+        console.debug(
+          `[CoworkIPC] listed filtered sessions; statuses=${query?.statuses?.length ?? 0}, `
+          + `ids=${query?.sessionIds?.length ?? 0}, since=${query?.updatedSince ?? 'none'}, `
+          + `returned ${sessions.length} in ${Date.now() - startedAt}ms.`,
+        );
+        return { success: true, sessions };
+      } catch (error) {
+        console.error('[CoworkIPC] failed to list filtered sessions:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to list filtered sessions',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    CoworkIpcChannel.SearchSessionContent,
+    async (_event, options: { query: string; limit?: number; agentId?: string }) => {
+      try {
+        const query = typeof options?.query === 'string' ? options.query.trim() : '';
+        const requestedLimit = options?.limit ?? 50;
+        const limit = Number.isFinite(requestedLimit)
+          ? Math.max(1, Math.min(100, Math.floor(requestedLimit)))
+          : 50;
+        const startedAt = Date.now();
+        const results = getCoworkStore().searchSessionContent({
+          query,
+          limit,
+          agentId: options?.agentId,
+        });
+        console.debug(
+          `[CoworkIPC] searched session content; query length ${query.length}, `
+          + `returned ${results.length} sessions in ${Date.now() - startedAt}ms.`,
+        );
+        return { success: true, results };
+      } catch (error) {
+        console.error('[CoworkIPC] failed to search session content:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to search session content',
         };
       }
     },
@@ -16034,6 +16143,7 @@ if (!gotTheLock) {
       isAppQuitConfirmationEnabled() || hasUnsafeDocumentEdits(),
     );
     if (verdict === AppQuitRequestVerdict.Ignore) {
+      if (!appQuitConfirmationGate.isBypassArmed()) focusAppQuitDialog();
       return;
     }
     if (verdict === AppQuitRequestVerdict.Bypass) {
@@ -16043,7 +16153,7 @@ if (!gotTheLock) {
 
     // User-initiated quit (Cmd+Q, app menu, Dock, tray): scheduled tasks and
     // IM replies stop with the app, so ask first.
-    void showAppQuitConfirmation(hasUnsafeDocumentEdits)
+    void showAppQuitConfirmation(hasUnsafeDocumentEdits, mainWindow)
       .then(
         confirmed => confirmed,
         error => {

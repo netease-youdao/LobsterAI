@@ -836,6 +836,7 @@ const SHORTCUT_COMMAND_GROUPS: Array<{
       { key: ShortcutAction.VoiceInput, labelKey: 'shortcutVoiceInput', descriptionKey: 'shortcutDescVoiceInput' },
       { key: ShortcutAction.StopCurrentTask, labelKey: 'shortcutStopCurrentTask', descriptionKey: 'shortcutDescStopCurrentTask' },
       { key: ShortcutAction.Search, labelKey: 'search', descriptionKey: 'shortcutDescSearch' },
+      { key: ShortcutAction.ConversationSearch, labelKey: 'shortcutConversationSearch', descriptionKey: 'shortcutDescConversationSearch' },
       { key: ShortcutAction.ToggleArtifacts, labelKey: 'shortcutToggleArtifacts', descriptionKey: 'shortcutDescToggleArtifacts' },
       {
         key: ShortcutAction.SendMessage,

@@ -42,6 +42,40 @@
   opacity: .75;
 }
 
+.login-introduction-first-run { padding: 44px 40px 28px; overflow-y: auto; }
+.login-first-run-panel { display: flex; flex-direction: column; gap: 22px; min-height: 100%; }
+.login-first-run-eyebrow { color: #777469; font-size: 12px; margin-bottom: 12px; }
+.login-first-run-title { font-size: clamp(24px, 2.6vw, 30px); font-weight: 600; line-height: 1.4; white-space: pre-line; }
+.login-first-run-description { color: #706d68; font-size: 14px; line-height: 1.8; margin-top: 16px; }
+.login-first-run-benefits { display: grid; gap: 13px; font-size: 13px; }
+.login-first-run-benefits p { display: flex; align-items: center; gap: 10px; }
+.login-first-run-panel svg { width: 16px; height: 16px; flex-shrink: 0; }
+.login-first-run-benefits svg { color: #d94e36; }
+.login-first-run-actions { display: grid; gap: 10px; margin-top: auto; }
+.login-first-run-primary, .login-first-run-secondary { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px; padding: 10px 14px; border-radius: 8px; font-size: 14px; font-weight: 500; }
+.login-first-run-primary { background: #252422; color: #fff; border: 1px solid #252422; }
+.login-first-run-primary:hover { background: #3b3936; }
+.login-first-run-secondary { background: #fff; color: #242321; border: 1px solid #e5e0db; }
+.login-first-run-secondary:hover { background: #f4f1ed; }
+.login-first-run-text { color: #706d68; font-size: 13px; min-height: 32px; padding: 4px; }
+.login-first-run-text:hover { color: #242321; text-decoration: underline; text-underline-offset: 3px; }
+.login-first-run-panel button:disabled { cursor: wait; opacity: .6; }
+.login-first-run-note, .login-first-run-benefits .login-first-run-note { color: #777469; font-size: 12px; line-height: 1.7; }
+.login-first-run-agreement { color: #777469; font-size: 11px; line-height: 1.7; text-align: center; }
+.login-first-run-agreement button:hover { color: #242321; text-decoration: underline; }
+.login-first-run-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.login-first-run-steps li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; color: #777469; font-size: 11px; text-align: center; }
+.login-first-run-steps li:not(:last-child)::after { content: ''; position: absolute; height: 1px; background: #e5e0db; width: calc(100% - 28px); top: 12px; left: calc(50% + 18px); }
+.login-first-run-step-number { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #f4f1ed; }
+.login-first-run-steps [aria-current='step'] { color: #242321; }
+.login-first-run-steps [aria-current='step'] .login-first-run-step-number { background: #252422; color: #fff; }
+.login-first-run-steps [data-complete='true'] .login-first-run-step-number { background: #edf5ef; color: #35765a; }
+.login-first-run-status { display: flex; gap: 9px; align-items: center; background: #f4f1ed; border-radius: 8px; padding: 12px 14px; font-size: 12px; }
+.login-first-run-spinner { width: 14px; height: 14px; border: 1.5px solid #d5d0cb; border-top-color: #242321; border-radius: 50%; flex-shrink: 0; animation: login-first-run-spin 1.3s linear infinite; }
+.login-first-run-help { text-align: center; }
+.login-first-run-help .login-first-run-text { font-size: 12px; }
+@keyframes login-first-run-spin { to { transform: rotate(360deg); } }
+
 .login-showcase-stage {
   mask-image: linear-gradient(#000 85%, transparent);
 }
@@ -91,6 +125,8 @@
   .login-introduction-welcome {
     padding: 56px 24px 52px 40px;
   }
+
+  .login-introduction-first-run { padding: 32px 24px 24px; }
 }
 
 @media (max-height: 680px) {
@@ -147,4 +183,5 @@
   .login-showcase-arrow {
     transition: none;
   }
+  .login-first-run-spinner { animation: none; }
 }

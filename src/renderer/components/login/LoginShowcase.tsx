@@ -27,7 +27,7 @@ const SLIDES = [
 ] as const;
 const AUTOPLAY_INTERVAL_MS = 5_000;
 
-const LoginShowcase: React.FC = () => {
+const LoginShowcase: React.FC<{ paused?: boolean }> = ({ paused = false }) => {
   const [activeIndex, setActiveIndex] = useState(0);
   const [pointerInside, setPointerInside] = useState(false);
   const [focusInside, setFocusInside] = useState(false);
@@ -37,7 +37,7 @@ const LoginShowcase: React.FC = () => {
   );
   const panelId = useId();
   const slide = SLIDES[activeIndex];
-  const isAutoPlaying = pageVisible && !pointerInside && !focusInside && !reducedMotion;
+  const isAutoPlaying = !paused && pageVisible && !pointerInside && !focusInside && !reducedMotion;
   const select = (index: number) => setActiveIndex((index + SLIDES.length) % SLIDES.length);
 
   useEffect(() => {

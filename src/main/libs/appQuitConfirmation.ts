@@ -2,20 +2,21 @@
  * Quit confirmation for user-initiated quits.
  *
  * Scheduled tasks and IM replies only run while LobsterAI is open, so a quit
- * the user triggers (Cmd+Q, app menu, Dock, tray "Quit") pauses at a native
+ * the user triggers (Cmd+Q, app menu, Dock, tray "Quit") pauses at a standalone
  * confirmation first. Programmatic quits — update install, relaunch, OS
  * logout/shutdown — arm a one-shot bypass so the prompt never gets in the way.
  * Users can turn the prompt off in Settings; it still appears while document
  * edits have neither been saved nor backed up.
  *
- * The alert is shown without an owner window. On macOS that runs a nested
- * native loop which still services main-process timers and IPC (verified on
- * Electron 40), so IM delivery and cron polling keep working while it is open.
+ * The dialog keeps main-process timers and IPC running, so IM delivery and
+ * cron polling keep working while it is open. A native alert is the fallback
+ * if the custom dialog cannot load.
  */
-import { app, dialog, type MessageBoxOptions } from 'electron';
+import { app, type BrowserWindow, dialog, type MessageBoxOptions } from 'electron';
 
 import { APP_NAME } from '../appConstants';
 import { t } from '../i18n';
+import { showAppQuitDialog } from './appQuitDialog';
 
 /** kv store key for the Settings switch; missing means enabled. */
 export const APP_QUIT_CONFIRMATION_STORE_KEY = 'app_quit_confirmation_enabled';
@@ -106,8 +107,7 @@ export interface AppQuitConfirmationText {
  * Native message box options. macOS lays `buttons[0]` out rightmost and Windows
  * leftmost, so this single order renders as
  * "Cancel | Quit" on macOS and "Quit | Cancel" on Windows — both native. The
- * `warning` type is what gives macOS the caution triangle badged with the app
- * icon; `title` only shows on Windows/Linux, where it is the window caption.
+ * `none` type keeps only the app icon in the native macOS fallback.
  * Quit is the default unless unsaved Markdown changes have no safe draft.
  */
 export function buildAppQuitConfirmationOptions({
@@ -116,7 +116,7 @@ export function buildAppQuitConfirmationOptions({
   hasUnsafeMarkdownEdits = false,
 }: AppQuitConfirmationText): MessageBoxOptions {
   return {
-    type: 'warning',
+    type: 'none',
     title: appName,
     message: translate('appQuitConfirmTitle'),
     detail: hasUnsafeMarkdownEdits
@@ -141,6 +141,7 @@ export function isAppQuitConfirmed(response: number): boolean {
  */
 export async function showAppQuitConfirmation(
   hasUnsafeMarkdownEdits: () => boolean = () => false,
+  ownerWindow?: BrowserWindow | null,
 ): Promise<boolean> {
   try {
     // A tray-menu quit can arrive while another app is frontmost; do not let
@@ -150,13 +151,17 @@ export async function showAppQuitConfirmation(
     console.debug('[AppQuit] failed to focus app before quit confirmation:', error);
   }
   const showPrompt = async (unsafeMarkdownEdits: boolean): Promise<boolean> => {
-    const { response } = await dialog.showMessageBox(
-      buildAppQuitConfirmationOptions({
-        appName: APP_NAME,
-        translate: t,
-        hasUnsafeMarkdownEdits: unsafeMarkdownEdits,
-      }),
-    );
+    const options = buildAppQuitConfirmationOptions({
+      appName: APP_NAME,
+      translate: t,
+      hasUnsafeMarkdownEdits: unsafeMarkdownEdits,
+    });
+    const { response } = await showAppQuitDialog(options, ownerWindow).catch(error => {
+      console.error('[AppQuit] failed to open quit confirmation, using native dialog:', error);
+      return ownerWindow && !ownerWindow.isDestroyed() && ownerWindow.isVisible() && !ownerWindow.isMinimized()
+        ? dialog.showMessageBox(ownerWindow, options)
+        : dialog.showMessageBox(options);
+    });
     return isAppQuitConfirmed(response);
   };
   const warnedAboutUnsafeEdits = hasUnsafeMarkdownEdits();

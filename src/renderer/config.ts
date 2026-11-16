@@ -13,6 +13,7 @@ import {
 export const ShortcutAction = {
   NewChat: 'newChat',
   Search: 'search',
+  ConversationSearch: 'conversationSearch',
   Settings: 'settings',
   SendMessage: 'sendMessage',
   ShowShortcuts: 'showShortcuts',
@@ -75,6 +76,11 @@ export const FontPreferences = {
 export const UI_FONT_SIZE_MIGRATION_VERSION = 1;
 export const CODE_FONT_SIZE_MIGRATION_VERSION = 1;
 
+// Bump when a default shortcut moves so stored configs still carrying the old
+// default follow it once. v1: task search Cmd/Ctrl+F -> K, focus prompt K -> L,
+// find in conversation gets its own Cmd/Ctrl+F action.
+export const SHORTCUTS_MIGRATION_VERSION = 1;
+
 export const normalizeFontPreference = (
   value: unknown,
   fallback: number,
@@ -129,6 +135,8 @@ export interface AppConfig {
   codeFontSize?: number;
   // 已应用的代码字号强制重置版本(见 CODE_FONT_SIZE_MIGRATION_VERSION)
   codeFontSizeMigrationVersion?: number;
+  // 已应用的快捷键默认值迁移版本(见 SHORTCUTS_MIGRATION_VERSION)
+  shortcutsMigrationVersion?: number;
   // 语言配置
   language: 'zh' | 'en';
   // 是否使用系统代理
@@ -214,11 +222,12 @@ export const defaultConfig: AppConfig = {
   },
   shortcuts: {
     [ShortcutAction.NewChat]: 'CommandOrControl+N',
-    [ShortcutAction.Search]: 'CommandOrControl+F',
+    [ShortcutAction.Search]: 'CommandOrControl+K',
+    [ShortcutAction.ConversationSearch]: 'CommandOrControl+F',
     [ShortcutAction.Settings]: 'CommandOrControl+,',
     [ShortcutAction.SendMessage]: 'Enter',
     [ShortcutAction.ShowShortcuts]: 'CommandOrControl+/',
-    [ShortcutAction.FocusPrompt]: 'CommandOrControl+K',
+    [ShortcutAction.FocusPrompt]: 'CommandOrControl+L',
     [ShortcutAction.VoiceInput]: '',
     [ShortcutAction.StopCurrentTask]: 'CommandOrControl+.',
     [ShortcutAction.ToggleSidebar]: 'CommandOrControl+B',

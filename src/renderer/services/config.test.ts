@@ -1,7 +1,7 @@
 import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { type AppConfig, CODE_FONT_SIZE_MIGRATION_VERSION, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction, UI_FONT_SIZE_MIGRATION_VERSION } from '../config';
+import { type AppConfig, CODE_FONT_SIZE_MIGRATION_VERSION, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction, SHORTCUTS_MIGRATION_VERSION, UI_FONT_SIZE_MIGRATION_VERSION } from '../config';
 
 const makeLegacyConfigWithoutMiniMaxAddedModels = (): AppConfig => ({
   ...defaultConfig,
@@ -388,6 +388,66 @@ describe('configService shortcut migrations', () => {
     await configService.init();
 
     expect(configService.getConfig().shortcuts?.[ShortcutAction.PreviousAgent]).toBe('CommandOrControl+Alt+Left');
+  });
+});
+
+describe('configService search shortcut migration', () => {
+  const previousDefaults = {
+    ...defaultConfig.shortcuts!,
+    [ShortcutAction.Search]: 'CommandOrControl+F',
+    [ShortcutAction.FocusPrompt]: 'CommandOrControl+K',
+  };
+
+  test('moves task search to Cmd/Ctrl+K and focus prompt to Cmd/Ctrl+L', async () => {
+    const { [ShortcutAction.ConversationSearch]: _conversationSearch, ...storedShortcuts } = previousDefaults;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig({
+      ...defaultConfig,
+      shortcuts: storedShortcuts as AppConfig['shortcuts'],
+    });
+
+    await configService.init();
+
+    const shortcuts = configService.getConfig().shortcuts!;
+    expect(shortcuts[ShortcutAction.Search]).toBe('CommandOrControl+K');
+    expect(shortcuts[ShortcutAction.ConversationSearch]).toBe('CommandOrControl+F');
+    expect(shortcuts[ShortcutAction.FocusPrompt]).toBe('CommandOrControl+L');
+    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).shortcutsMigrationVersion).toBe(SHORTCUTS_MIGRATION_VERSION);
+  });
+
+  test('keeps customized bindings and does not steal keys already in use', async () => {
+    const { configService } = await loadConfigServiceWithStoredConfig({
+      ...defaultConfig,
+      shortcuts: {
+        ...previousDefaults,
+        [ShortcutAction.Search]: 'CommandOrControl+Shift+F',
+        [ShortcutAction.FocusPrompt]: 'CommandOrControl+K',
+        [ShortcutAction.NewChat]: 'CommandOrControl+L',
+        [ShortcutAction.ToggleSidebar]: 'CommandOrControl+F',
+      },
+    });
+
+    await configService.init();
+
+    const shortcuts = configService.getConfig().shortcuts!;
+    expect(shortcuts[ShortcutAction.Search]).toBe('CommandOrControl+Shift+F');
+    expect(shortcuts[ShortcutAction.FocusPrompt]).toBe('CommandOrControl+K');
+    expect(shortcuts[ShortcutAction.ConversationSearch]).toBe('');
+  });
+
+  test('runs only once, so a later choice of the old binding survives', async () => {
+    const { configService } = await loadConfigServiceWithStoredConfig({
+      ...defaultConfig,
+      shortcutsMigrationVersion: SHORTCUTS_MIGRATION_VERSION,
+      shortcuts: {
+        ...defaultConfig.shortcuts!,
+        [ShortcutAction.Search]: 'CommandOrControl+J',
+        [ShortcutAction.FocusPrompt]: 'CommandOrControl+K',
+      },
+    });
+
+    await configService.init();
+
+    expect(configService.getConfig().shortcuts?.[ShortcutAction.FocusPrompt]).toBe('CommandOrControl+K');
   });
 });
 

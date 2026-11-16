@@ -12,7 +12,7 @@ import type { AgentModelSelectionMode } from '../shared/agent/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
 import type { AgentModelSelection } from '../shared/agent/modelSelection';
 import type { UsageContext } from '../shared/analytics/usage';
-import { AppIpcChannel } from '../shared/app/constants';
+import { AppIpcChannel, WindowIpcChannel } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
@@ -66,6 +66,7 @@ import {
 } from '../shared/cowork/constants';
 import type { CoworkTurnUsage } from '../shared/cowork/llmTurnUsage';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
+import type { CoworkSessionFilterQuery } from '../shared/cowork/sessionFilter';
 import { DataMigrationIpc } from '../shared/dataMigration/constants';
 import { type DecisionModelConfigUpdate, DecisionModelIpcChannel } from '../shared/decisionModel/constants';
 import {
@@ -218,6 +219,8 @@ contextBridge.exposeInMainWorld('electron', {
     dismissContextMenu: () => ipcRenderer.invoke(CompanionContextMenuIpc.Dismiss),
     drag: (phase, grab) => ipcRenderer.send(DesktopCompanionIpc.Drag, { phase, grab }),
     orbFileDrag: (phase, kinds) => ipcRenderer.send(DesktopCompanionIpc.OrbFileDrag, { phase, kinds }),
+    orbHover: hovering => ipcRenderer.send(DesktopCompanionIpc.OrbHover, hovering),
+    setStagePassThrough: passThrough => ipcRenderer.send(DesktopCompanionIpc.StagePassThrough, passThrough),
     taskStarted: sessionId => ipcRenderer.invoke(DesktopCompanionIpc.TaskStarted, sessionId),
     taskUpdated: () => ipcRenderer.send(DesktopCompanionIpc.TaskUpdated),
     setPanelPassThrough: passThrough => ipcRenderer.send(DesktopCompanionIpc.PanelPassThrough, passThrough),
@@ -424,6 +427,7 @@ contextBridge.exposeInMainWorld('electron', {
     toggleMaximize: () => ipcRenderer.send('window-maximize'),
     close: () => ipcRenderer.send('window-close'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    isFullscreen: () => ipcRenderer.invoke(WindowIpcChannel.IsFullscreen),
     showSystemMenu: (position: { x: number; y: number }) =>
       ipcRenderer.send('window:showSystemMenu', position),
     onStateChanged: (
@@ -759,6 +763,10 @@ contextBridge.exposeInMainWorld('electron', {
       knownTotal?: number;
     }) =>
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionSearchMessages, options),
+    searchSessionContent: (options: { query: string; limit?: number; agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SearchSessionContent, options),
+    listFilteredSessions: (query: CoworkSessionFilterQuery) =>
+      ipcRenderer.invoke(CoworkIpcChannel.ListFilteredSessions, query),
     getSessionMessageRailIndex: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.GetSessionMessageRailIndex, sessionId),
     getContextUsage: (sessionId: string) =>
@@ -1537,6 +1545,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   auth: {
     login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
+    cancelLogin: () => ipcRenderer.invoke(AuthIpcChannel.CancelLogin),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),

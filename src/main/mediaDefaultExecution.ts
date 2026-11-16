@@ -1,10 +1,18 @@
 import { type MediaDefaultModel, MediaType } from '../shared/media/defaultPolicy';
 
+const normalizeOutputFormat = (params: Record<string, unknown>): Record<string, unknown> => {
+  const { outputFormat, ...normalized } = params;
+  if (outputFormat != null && normalized.output_format == null) normalized.output_format = outputFormat;
+  return normalized;
+};
+
 export function applyMediaDefaultParameters(
   params: Record<string, unknown>, defaults: MediaDefaultModel | undefined, type: MediaType,
 ): Record<string, unknown> {
-  if (!defaults) return params;
-  const merged = { ...defaults.params, ...params };
+  const explicit = type === MediaType.Image ? normalizeOutputFormat(params) : params;
+  if (!defaults) return explicit;
+  const fallback = type === MediaType.Image ? normalizeOutputFormat(defaults.params) : defaults.params;
+  const merged = { ...fallback, ...explicit };
   if (type === MediaType.Image) {
     // Default image execution has one output per call; additional calls require confirmation.
     merged.n = 1;

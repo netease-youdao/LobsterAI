@@ -12,6 +12,7 @@ import {
 } from '../shared/cowork/openclawCronSessionKey';
 import { DB_FILENAME } from './appConstants';
 import { initializeLibraryTables } from './library/libraryMigrations';
+import { repairForkedSessionToolUseIds } from './libs/coworkForkToolUseIds';
 import {
   openSqliteDatabaseWithRecovery,
   SqliteBackupManager,
@@ -26,6 +27,7 @@ type ChangePayload<T = unknown> = {
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 const AGENT_WORKING_DIRECTORY_BACKFILL_KEY = 'agents.workingDirectoryBackfill.v1.completed';
 const SCHEDULED_TASK_SESSION_BACKFILL_KEY = 'coworkSessions.scheduledTaskIdBackfill.v1.completed';
+export const FORK_TOOL_USE_ID_REPAIR_KEY = 'coworkMessages.forkToolUseIdRepair.v1.completed';
 const EXTRACT_SCHEDULED_TASK_ID_SQL_FUNCTION = 'lobster_extract_scheduled_task_id';
 
 const extractScheduledTaskIdFromMessageMetadata = (metadata: unknown): string | null => {
@@ -612,6 +614,23 @@ export class SqliteStore {
       }
     } catch (error) {
       console.warn('[SqliteStore] failed to backfill scheduled task session ids:', error);
+    }
+
+    // Migration: forks used to drop toolUseId from copied messages, so parallel tool
+    // results no longer paired with their calls. Restore the ids from the parent once.
+    try {
+      if (this.get<string>(FORK_TOOL_USE_ID_REPAIR_KEY) !== '1') {
+        const repairedMessageCount = repairForkedSessionToolUseIds(this.db);
+        if (repairedMessageCount > 0) {
+          this.didRunMigration = true;
+          console.log(
+            `[SqliteStore] restored tool call ids on ${repairedMessageCount} forked messages.`,
+          );
+        }
+        this.set(FORK_TOOL_USE_ID_REPAIR_KEY, '1');
+      }
+    } catch (error) {
+      console.warn('[SqliteStore] failed to restore tool call ids on forked messages:', error);
     }
 
     // `thinking_level` is also required by all agent reads. Migrate it before

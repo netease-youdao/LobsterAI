@@ -23,8 +23,10 @@ import {
   createSessionBatchKey,
 } from './agentSidebar/batchSelection';
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
+import { SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME } from './agentSidebar/sidebarHeaderTooltip';
 import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
+import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './agentSidebar/taskFilter';
 import Modal from './common/Modal';
 import {
   type CoworkTaskSearchRequestEventDetail,
@@ -44,6 +46,7 @@ import LowCreditPurchaseOfferCard from './LowCreditPurchaseOfferCard';
 import SidebarCapabilitiesMenu from './SidebarCapabilitiesMenu';
 import SidebarExperienceSlot from './SidebarExperienceSlot';
 import { useSidebarPurchaseGuide } from './useSidebarPurchaseGuide';
+import { useIsWindowFullscreen } from './window/useIsWindowFullscreen';
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -59,9 +62,9 @@ interface SidebarProps {
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  isTaskFilterActive: boolean;
+  taskFilter: SidebarTaskFilter;
   hasUnreadCompletedTasks: boolean;
-  onToggleTaskFilter: () => void;
+  onTaskFilterChange: (filter: SidebarTaskFilter) => void;
   onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onWidthChange?: (width: number) => void;
   updateNotice?: React.ReactNode;
@@ -88,7 +91,7 @@ const sidebarNavItemClassName =
   'w-full inline-flex h-9 items-center gap-2.5 rounded-full px-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 const activeSidebarNavItemClassName =
   `${sidebarNavItemClassName} bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] dark:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)] dark:hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)]`;
-const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/75';
+const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/80';
 const sidebarBottomIconButtonClassName =
   'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
 
@@ -188,9 +191,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   isCollapsed,
   onToggleCollapse,
-  isTaskFilterActive,
+  taskFilter,
   hasUnreadCompletedTasks,
-  onToggleTaskFilter,
+  onTaskFilterChange,
   onTaskFilterSummaryChange,
   onWidthChange,
   updateNotice,
@@ -229,7 +232,11 @@ const Sidebar: React.FC<SidebarProps> = ({
   const paymentGuideVisible = canShowPurchaseGuide && purchaseGuide.candidate !== null;
   const paymentGuideOwnsSlot = canShowPurchaseGuide && (paymentGuideVisible || purchaseGuide.loading);
   const isWindows = window.electron.platform === 'win32';
+  const isMac = window.electron.platform === 'darwin';
   const showHeaderRow = !isWindows;
+  const isWindowFullscreen = useIsWindowFullscreen();
+  // macOS hides the traffic lights in full screen; take their slot instead of leaving a gap.
+  const alignHeaderStart = isMac && isWindowFullscreen;
   const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn && !accountConnectionState;
   const shouldShowLoginPromoTip = showLoginPromo && showLoginPromoTip;
   const batchSelectableKeySet = useMemo(
@@ -632,13 +639,19 @@ const Sidebar: React.FC<SidebarProps> = ({
       >
       <div className="pt-3 pb-3">
         {showHeaderRow && (
-          <div className="draggable sidebar-header-drag h-8 flex items-center justify-end px-3">
+          <div
+            // When left-aligned, 13px (not 12px) puts the toggle icon's drawn edge in line
+            // with the nav icons below, whose artwork sits about 1.6px further in.
+            className={`draggable sidebar-header-drag h-8 flex items-center ${
+              alignHeaderStart ? 'justify-start gap-0.5 pl-[13px] pr-3' : 'justify-end px-3'
+            }`}
+          >
             {!isWindows && (
               <>
                 <button
                   type="button"
                   onClick={onToggleCollapse}
-                  className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
+                  className={`non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                   aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
                 >
                   <SidebarToggleIcon className="h-[18px] w-[18px]" isCollapsed={isCollapsed} />
@@ -653,12 +666,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                       className="non-draggable"
                       label={i18nService.t('search')}
                     />
-                    {SIDEBAR_TASK_FILTER_ENABLED && activeView === MainView.Cowork && (
+                    {/* Shown on every page: the task list below is visible and filtered on all of them. */}
+                    {SIDEBAR_TASK_FILTER_ENABLED && (
                       <SidebarTaskFilterButton
-                        isActive={isTaskFilterActive}
+                        filter={taskFilter}
+                        onChange={onTaskFilterChange}
                         hasUnreadCompletedTasks={hasUnreadCompletedTasks}
                         label={i18nService.t('sidebarFilter')}
-                        onClick={onToggleTaskFilter}
                         className="non-draggable"
                       />
                     )}
@@ -668,7 +682,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
         )}
-        <div className="mt-[5px] space-y-0.5 px-3">
+        {/* Keep the highlighted nav item clear of the icon row above it; Windows has no row here. */}
+        <div className={`${showHeaderRow ? 'mt-3' : 'mt-[5px]'} space-y-0.5 px-3`}>
           <button
             type="button"
             data-onboarding-target="new-task"
@@ -762,7 +777,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             batchAgentId={batchAgentId}
             deletedSessionIds={deletedSessionIds}
             selectedKeys={selectedKeys}
-            isTaskFilterActive={isTaskFilterActive}
+            taskFilter={taskFilter}
+            onClearTaskFilter={() => onTaskFilterChange(DEFAULT_SIDEBAR_TASK_FILTER)}
             onShowCowork={onShowCowork}
             onTaskFilterSummaryChange={onTaskFilterSummaryChange}
             onTaskSelected={(params) => {

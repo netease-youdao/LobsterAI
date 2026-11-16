@@ -9,8 +9,17 @@ const hooks = vi.hoisted(() => {
   let slots: unknown[] = [];
   let effects: Array<() => void> = [];
   let dirty = false;
+  let heldUpdates: Array<() => void> | null = null;
   return {
-    reset: () => { cursor = 0; slots = []; effects = []; dirty = false; },
+    reset: () => { cursor = 0; slots = []; effects = []; dirty = false; heldUpdates = null; },
+    // React can commit an external-store update before local state queued
+    // earlier. Hold local updates to replay them later, in their original order.
+    holdState: () => { heldUpdates = []; },
+    releaseState: () => {
+      const pending = heldUpdates ?? [];
+      heldUpdates = null;
+      pending.forEach(apply => apply());
+    },
     begin: () => { cursor = 0; dirty = false; },
     commit: () => {
       const pending = effects;
@@ -27,8 +36,12 @@ const hooks = vi.hoisted(() => {
       const index = cursor++;
       if (!(index in slots)) slots[index] = initial;
       return [slots[index] as T, (value: T) => {
-        if (!Object.is(slots[index], value)) dirty = true;
-        slots[index] = value;
+        const apply = () => {
+          if (!Object.is(slots[index], value)) dirty = true;
+          slots[index] = value;
+        };
+        if (heldUpdates) heldUpdates.push(apply);
+        else apply();
       }] as const;
     },
     useLayoutEffect: (effect: () => void | (() => void), deps: unknown[]) => {
@@ -52,7 +65,7 @@ vi.mock('react', () => ({
   useLayoutEffect: hooks.useLayoutEffect,
 }));
 
-import { useConversationScrollAnchor } from './useConversationScrollAnchor';
+import { OLDER_MESSAGES_SETTLE_TIMEOUT_MS, useConversationScrollAnchor } from './useConversationScrollAnchor';
 
 const deferred = () => {
   let resolve!: (value: boolean) => void;
@@ -66,6 +79,7 @@ let resize: () => void;
 function makeFixture() {
   let messageTop = 0;
   let canRestore = true;
+  let anchorMounted = true;
   let beforePrepend!: (offset: number) => boolean;
   const page = deferred();
   const container = Object.assign(new EventTarget(), {
@@ -73,7 +87,9 @@ function makeFixture() {
     scrollHeight: 3000,
     clientHeight: 600,
     getBoundingClientRect: () => ({ top: 50, bottom: 650, height: 600 }),
-    querySelectorAll: (selector: string) => selector === `[${ConversationScrollAnchorAttribute.Message}]` ? [message] : [],
+    querySelectorAll: (selector: string) => (
+      anchorMounted && selector === `[${ConversationScrollAnchorAttribute.Message}]` ? [message] : []
+    ),
   }) as unknown as HTMLElement & { scrollHeight: number };
   const message = {
     getAttribute: () => 'reading',
@@ -109,7 +125,23 @@ function makeFixture() {
     capture: () => beforePrepend(0),
     growAbove: (height: number) => { messageTop += height; container.scrollHeight += height; },
     lock: () => { canRestore = false; },
+    // A prepend can give the anchor's leading partial turn a new key. The
+    // remounted turn renders a lazy placeholder until the anchor pin commits.
+    setAnchorMounted: (mounted: boolean) => { anchorMounted = mounted; },
   };
+}
+
+/** Commits a fetched page while the pin of its remounted anchor turn is still queued. */
+async function commitPageBeforeAnchorPin(fixture: ReturnType<typeof makeFixture>) {
+  const pending = fixture.render().loadOlderMessages();
+  hooks.holdState();
+  fixture.capture();
+  fixture.setAnchorMounted(false);
+  fixture.growAbove(1000);
+  fixture.options.messagesOffset = 0;
+  fixture.render();
+  fixture.page.resolve(true);
+  await expect(pending).resolves.toBe(true);
 }
 
 beforeEach(() => {
@@ -123,6 +155,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -245,5 +278,64 @@ describe('conversation history scroll lifecycle', () => {
     fixture.growAbove(400);
     resize();
     expect(fixture.container.scrollTop).toBe(960);
+  });
+
+  test('restores a remounted anchor once its pin commits after the page', async () => {
+    const fixture = makeFixture();
+    await commitPageBeforeAnchorPin(fixture);
+    expect(fixture.render().isLoadingMoreMessagesRef.current).toBe(true);
+    fixture.setAnchorMounted(true);
+    hooks.releaseState();
+    const result = fixture.render();
+    expect(fixture.container.scrollTop).toBe(1060);
+    expect(result.isLoadingMoreMessages).toBe(false);
+    expect(result.anchorMessageId).toBeNull();
+  });
+
+  test('releases the loading guard when a gesture cancels the pin of a remounted anchor', async () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    const fixture = makeFixture();
+    fixture.render().setContentElement({} as HTMLElement);
+    await commitPageBeforeAnchorPin(fixture);
+    expect(fixture.render().isLoadingMoreMessagesRef.current).toBe(true);
+    // The cancelled pin leaves the anchor state unchanged, so no render re-runs the commit effect.
+    fixture.container.dispatchEvent(new Event('wheel'));
+    hooks.releaseState();
+    const result = fixture.render();
+    expect(result.isLoadingMoreMessages).toBe(false);
+    expect(result.isLoadingMoreMessagesRef.current).toBe(false);
+    expect(result.anchorMessageId).toBeNull();
+    expect(fixture.container.scrollTop).toBe(60);
+    expect(debug).toHaveBeenCalledOnce();
+  });
+
+  test('releases a committed page whose anchor pin never arrives', async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fixture = makeFixture();
+    await commitPageBeforeAnchorPin(fixture);
+    vi.advanceTimersByTime(OLDER_MESSAGES_SETTLE_TIMEOUT_MS - 1);
+    expect(fixture.render().isLoadingMoreMessagesRef.current).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(fixture.render().isLoadingMoreMessagesRef.current).toBe(false);
+    hooks.releaseState();
+    expect(fixture.render().isLoadingMoreMessages).toBe(false);
+    expect(warning).toHaveBeenCalledOnce();
+  });
+
+  test('does not leave a settle timer behind once the page has been restored', async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fixture = makeFixture();
+    const pending = fixture.render().loadOlderMessages();
+    fixture.capture();
+    fixture.page.resolve(true);
+    await pending;
+    fixture.growAbove(1000);
+    fixture.options.messagesOffset = 0;
+    expect(fixture.render().isLoadingMoreMessages).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.runAllTimers();
+    expect(warning).not.toHaveBeenCalled();
   });
 });

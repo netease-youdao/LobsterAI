@@ -123,6 +123,8 @@ export const CoworkIpcChannel = {
   ExportSessionDiagnostics: 'cowork:session:exportDiagnostics',
   GetSessionMessageRailIndex: 'cowork:session:getMessageRailIndex',
   GetSessionSearchMessages: 'cowork:session:getSearchMessages',
+  SearchSessionContent: 'cowork:session:searchContent',
+  ListFilteredSessions: 'cowork:session:listFiltered',
   OpenSessionFromNotification: 'cowork:session:openFromNotification',
   OpenSessionFromNotificationReady: 'cowork:session:openFromNotificationReady',
   GoalCommand: 'cowork:session:goalCommand',

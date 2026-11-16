@@ -91,7 +91,7 @@ async function release(root, plan, config, env, dependencies = {}) {
     outputDir = fs.mkdtempSync(path.join(work, 'codown-build-'));
     await build(plan.args, outputDir);
     await (dependencies.verifySignatures || verifySignatures)(outputDir, plan.identity);
-    manifestPath = await stageManifest(root, outputDir, plan.identity, config.publicBaseUrl);
+    manifestPath = await stageManifest(root, outputDir, plan.identity, config.publicBaseUrl, config.ticketUrl);
     console.log(`[Codown] Release snapshot: ${manifestPath}`);
   } finally {
     if (outputDir) fs.rmSync(outputDir, { recursive: true, force: true });

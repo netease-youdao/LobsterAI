@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { type BrowserWindow, type Rectangle, screen } from 'electron';
 
-import { CompanionAnalyticsAction, CompanionAnalyticsSource, CompanionAnalyticsStage } from '../../shared/desktopCompanion/analytics';
+import { CompanionAnalyticsAction, CompanionAnalyticsInteraction, CompanionAnalyticsSource, CompanionAnalyticsStage } from '../../shared/desktopCompanion/analytics';
 import {
   type DesktopCompanionAttachment,
   type DesktopCompanionDropFile,
@@ -17,6 +17,7 @@ import {
 import type { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { type CompanionSize, resolveCompanionStageBounds } from '../../shared/desktopCompanion/geometry';
 import { type CompanionHintOutcome, CompanionHintOutcome as Outcome, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
+import { type CompanionLauncherAction, isCompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import type { CompanionAnalytics } from './companionAnalytics';
 
 const NONE: DesktopCompanionStage = { kind: DesktopCompanionStageKind.None };
@@ -37,6 +38,7 @@ export interface StageHandlers {
   onDropAsk(attachments: DesktopCompanionAttachment[]): void;
   onDropStarted(sessionId: string): void;
   onTaskOpen(sessionId: string): void;
+  onLauncherRun(action: CompanionLauncherAction): void;
 }
 
 export function normalizeStageAttachments(value: unknown): DesktopCompanionAttachment[] {
@@ -50,8 +52,9 @@ export function normalizeStageAttachments(value: unknown): DesktopCompanionAttac
 
 /**
  * The "stage" is a small window that comes out of the orb: a hint bubble, the
- * drop zone for files, or the status strip of a task handed to the orb. Only
- * one of them is ever shown.
+ * drop zone for files, the status strip of a task handed to the orb, or the
+ * launcher that opens on hover. Only one of them is ever shown, and the
+ * launcher gives way to all the others.
  */
 export class CompanionStageController {
   private window: BrowserWindow | null = null;
@@ -83,6 +86,28 @@ export class CompanionStageController {
     this.size = { ...DesktopCompanionSize.Hint };
     this.present();
     return true;
+  }
+
+  /** The hover launcher only ever takes an empty stage. */
+  showLauncher(): boolean {
+    if (this.current.kind !== DesktopCompanionStageKind.None) return false;
+    this.current = { kind: DesktopCompanionStageKind.Launcher, id: randomUUID() };
+    this.size = { ...DesktopCompanionSize.Launcher };
+    this.present();
+    return true;
+  }
+
+  closeLauncher(): void {
+    if (this.current.kind === DesktopCompanionStageKind.Launcher) this.clear();
+  }
+
+  /**
+   * The launcher's transparent margin reaches over the edge of the orb. Clicks
+   * there belong to the orb, so the window takes the mouse only over its card.
+   */
+  setPassThrough(passThrough: boolean): void {
+    if (this.current.kind !== DesktopCompanionStageKind.Launcher) return;
+    this.browserWindow?.setIgnoreMouseEvents(passThrough, { forward: true });
   }
 
   /** Shows how a task is doing; a drop in progress keeps the stage. */
@@ -143,7 +168,8 @@ export class CompanionStageController {
   setContentSize(size: CompanionSize): void {
     if (this.current.kind === DesktopCompanionStageKind.None) return;
     const max = this.current.kind === DesktopCompanionStageKind.Drop ? DesktopCompanionSize.Drop
-      : this.current.kind === DesktopCompanionStageKind.Task ? DesktopCompanionSize.Task : DesktopCompanionSize.Hint;
+      : this.current.kind === DesktopCompanionStageKind.Task ? DesktopCompanionSize.Task
+        : this.current.kind === DesktopCompanionStageKind.Launcher ? DesktopCompanionSize.Launcher : DesktopCompanionSize.Hint;
     this.size = {
       width: Math.max(160, Math.min(Math.ceil(size.width), max.width)),
       height: Math.max(60, Math.min(Math.ceil(size.height), max.height)),
@@ -199,6 +225,12 @@ export class CompanionStageController {
       case DesktopCompanionStageCommandType.TaskDismiss:
         if (current.kind === DesktopCompanionStageKind.Task) this.clear();
         return;
+      case DesktopCompanionStageCommandType.LauncherRun:
+        if (current.kind !== DesktopCompanionStageKind.Launcher || !isCompanionLauncherAction(command.action)) return;
+        // Close first, so an action that opens another surface beside the orb finds the place free.
+        this.clear();
+        this.handlers.onLauncherRun(command.action);
+        return;
       default:
     }
   }
@@ -219,7 +251,9 @@ export class CompanionStageController {
   }
 
   private present(): void {
-    this.ensureWindow();
+    const win = this.ensureWindow();
+    // The launcher opens under a pointer that is still on the orb; its card takes the mouse once the pointer reaches it.
+    win.setIgnoreMouseEvents(this.current.kind === DesktopCompanionStageKind.Launcher, { forward: true });
     this.reposition();
     this.host.publish();
     this.pendingShow = true;
@@ -242,6 +276,9 @@ export class CompanionStageController {
     } else if (this.current.kind === DesktopCompanionStageKind.Drop) {
       this.host.analytics?.report({ action: CompanionAnalyticsAction.FileDrop, source: CompanionAnalyticsSource.FileDrop,
         stage: CompanionAnalyticsStage.Shown, fileKinds: this.current.kinds.join(',') });
+    } else if (this.current.kind === DesktopCompanionStageKind.Launcher) {
+      this.host.analytics?.report({ action: CompanionAnalyticsAction.Action, source: CompanionAnalyticsSource.Launcher,
+        interactionType: CompanionAnalyticsInteraction.Open, stage: CompanionAnalyticsStage.Shown });
     }
   }
 }

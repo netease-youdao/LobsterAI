@@ -22,6 +22,8 @@ export const CompanionAnalyticsSource = {
   Orb: 'orb', Shortcut: 'shortcut', Tray: 'tray', ContextMenu: 'context_menu',
   Panel: 'panel', Selection: 'selection', LanguageTools: 'language_tools',
   Result: 'result', FileDrop: 'file_drop', Hint: 'hint', Settings: 'settings', System: 'system', MainChat: 'main_chat',
+  /** The card that opens when the pointer rests on the orb. */
+  Launcher: 'launcher',
 } as const;
 export type CompanionAnalyticsSource = typeof CompanionAnalyticsSource[keyof typeof CompanionAnalyticsSource];
 
@@ -31,6 +33,8 @@ export const CompanionAnalyticsInteraction = {
   Pause: 'pause', Resume: 'resume', Stop: 'stop', Dismiss: 'dismiss', ExcludeApp: 'exclude_app',
   More: 'more', Permission: 'permission', LoginShown: 'login_shown', Run: 'run',
   LoginClick: 'login_click', LoginSuccess: 'login_success',
+  /** Files picked from the launcher's file dialog. */
+  AttachFiles: 'attach_files',
   /** A selecting gesture over text that no readable selection followed. */
   Miss: 'miss',
 } as const;

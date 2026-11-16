@@ -4,6 +4,7 @@ import { CheckCircleIcon, ExclamationTriangleIcon, FilmIcon, SparklesIcon } from
 import React, { useEffect, useState } from 'react';
 
 import { MediaBillingStatus, MediaDeliveryStatus, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
+import { hasLayerDecompositionWarning } from '../../../shared/media/warnings';
 import { i18nService } from '../../services/i18n';
 
 export const hasRecoveredMediaAssets = (details: Record<string, unknown> | undefined): boolean =>
@@ -13,6 +14,7 @@ export const mediaTaskLabelKey = (details: Record<string, unknown>): string => {
   if (details.deliveryStatus === MediaDeliveryStatus.Failed) return 'imageEditFailed';
   if (details.deliveryStatus === MediaDeliveryStatus.Retrying) return 'mediaTaskDownloadRetry';
   if (details.deliveryStatus === MediaDeliveryStatus.Pending) return 'mediaTaskFetching';
+  if (details.status === MediaTaskStatus.Succeeded && hasLayerDecompositionWarning(details.warnings)) return 'mediaLayerDecompositionWarning';
   if (details.deliveryStatus === MediaDeliveryStatus.Saved && hasRecoveredMediaAssets(details)) return 'mediaImageSavedToRecovery';
   switch (details.status) {
     case MediaTaskStatus.Succeeded: return 'mediaTaskSaved';
@@ -99,7 +101,9 @@ const MediaTaskCard: React.FC<{ details: Record<string, unknown>; startedAt?: nu
   if (success) {
     return (
       <div className="my-2 flex items-center gap-1.5 text-xs text-secondary" title={detailTitle} data-media-task-id={taskId}>
-        <CheckCircleIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-green-500" />
+        {hasLayerDecompositionWarning(details.warnings)
+          ? <ExclamationTriangleIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-amber-500" />
+          : <CheckCircleIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-green-500" />}
         <span>{label}</span>
         {details.billingStatus === MediaBillingStatus.Refunded && <span className="text-muted">· {i18nService.t('mediaTaskRefunded')}</span>}
       </div>

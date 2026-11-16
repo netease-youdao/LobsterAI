@@ -75,7 +75,9 @@ import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type {
   CoworkSearchMessage,
   CoworkSearchMessageCursor,
+  CoworkSessionContentMatch,
 } from '../../shared/cowork/search';
+import type { CoworkSessionFilterQuery } from '../../shared/cowork/sessionFilter';
 import type {
   DataMigrationBackupResult,
   DataMigrationLastRestoreResponse,
@@ -1013,6 +1015,7 @@ interface IElectronAPI {
     toggleMaximize: () => void;
     close: () => void;
     isMaximized: () => Promise<boolean>;
+    isFullscreen: () => Promise<boolean>;
     showSystemMenu: (position: { x: number; y: number }) => void;
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
@@ -1183,6 +1186,20 @@ interface IElectronAPI {
       nextOffset?: number;
       nextCursor?: CoworkSearchMessageCursor;
       total?: number;
+      error?: string;
+    }>;
+    listFilteredSessions: (query: CoworkSessionFilterQuery) => Promise<{
+      success: boolean;
+      sessions?: CoworkSessionSummary[];
+      error?: string;
+    }>;
+    searchSessionContent: (options: {
+      query: string;
+      limit?: number;
+      agentId?: string;
+    }) => Promise<{
+      success: boolean;
+      results?: Array<{ session: CoworkSessionSummary; match: CoworkSessionContentMatch }>;
       error?: string;
     }>;
     getSessionMessageRailIndex: (
@@ -2112,6 +2129,7 @@ interface IElectronAPI {
   };
   auth: {
     login: (loginUrl?: string) => Promise<AuthLoginResult>;
+    cancelLogin: () => Promise<{ success: boolean }>;
     exchange: (
       code: string,
     ) => Promise<{

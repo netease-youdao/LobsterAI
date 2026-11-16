@@ -35,6 +35,7 @@ import { ModelPresetId } from '../shared/modelPresets/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
 // ---------------------------------------------------------------------------
@@ -537,6 +538,69 @@ test('getSessionSearchMessagePage keyset cursor preserves ROWID order for legacy
     ['tie-4', 4],
   ]);
   expect(thirdPage.nextOffset).toBe(5);
+});
+
+test('listFilteredSessions combines status, session ids and time across all agents', () => {
+  insertSession('running-old', 'main', 'Running old', 1000);
+  insertSession('running-new', 'writer', 'Running new', 3000);
+  insertSession('failed', 'main', 'Failed', 2000);
+  insertSession('done', 'main', 'Done', 4000);
+  db.prepare("UPDATE cowork_sessions SET status = 'running' WHERE id IN ('running-old', 'running-new')").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'error' WHERE id = 'failed'").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'completed' WHERE id = 'done'").run();
+
+  const ids = (sessions: { id: string }[]) => sessions.map(session => session.id);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'] }))).toEqual(['running-new', 'running-old']);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'], updatedSince: 2000 }))).toEqual(['running-new']);
+  expect(ids(store.listFilteredSessions({ sessionIds: ['done', 'failed', 'missing'] }))).toEqual(['done', 'failed']);
+  expect(ids(store.listFilteredSessions({ updatedSince: 2500 }))).toEqual(['done', 'running-new']);
+  expect(ids(store.listFilteredSessions({ limit: 1 }))).toEqual(['done']);
+  expect(store.listFilteredSessions({ statuses: [] })).toEqual([]);
+  expect(store.listFilteredSessions({ sessionIds: [] })).toEqual([]);
+});
+
+test('searchSessionContent returns one hit per session from user and visible assistant messages', () => {
+  insertSession('older', 'main', 'Ski poster', 1000);
+  insertSession('newer', 'main', 'Jacket edit', 2000);
+  insertSession('thinking-only', 'main', 'Thinking only', 3000);
+  insertSession('tool-only', 'main', 'Tool only', 4000);
+  insertSession('other-agent', 'writer', 'Other agent', 5000);
+
+  insertMessage('older-user', 'older', 'user', 'Remove the zipper on the left arm', null, 1, 100);
+  insertMessage('newer-user', 'newer', 'user', 'Keep the zipper', null, 1, 200);
+  insertMessage('newer-reply', 'newer', 'assistant', 'Done: the ZIPPER now matches.', '{"isFinal":true}', 2, 300);
+  insertMessage('newer-unrelated', 'newer', 'assistant', 'Anything else?', null, 3, 400);
+  insertMessage('thinking', 'thinking-only', 'assistant', 'zipper reasoning', '{"isThinking":true}', 1, 500);
+  insertMessage('tool', 'tool-only', 'tool_result', 'zipper.png', null, 1, 600);
+  insertMessage('other', 'other-agent', 'user', 'zipper on another agent', '{broken', 1, 700);
+
+  const results = store.searchSessionContent({ query: 'zipper' });
+  expect(results.map(result => result.session.id)).toEqual(['other-agent', 'newer', 'older']);
+
+  const newer = results.find(result => result.session.id === 'newer');
+  expect(newer?.match).toMatchObject({
+    messageId: 'newer-reply',
+    messageType: 'assistant',
+    matchCount: 2,
+    matchedAt: 300,
+  });
+  const snippet = newer?.match.snippet ?? '';
+  const highlightStart = newer?.match.highlightStart ?? -1;
+  expect(snippet.slice(highlightStart, highlightStart + 6)).toBe('ZIPPER');
+
+  expect(store.searchSessionContent({ query: 'zipper', agentId: 'writer' }).map(result => result.session.id))
+    .toEqual(['other-agent']);
+  expect(store.searchSessionContent({ query: 'zipper', limit: 1 })).toHaveLength(1);
+  expect(store.searchSessionContent({ query: '   ' })).toEqual([]);
+});
+
+test('searchSessionContent treats LIKE wildcards in the query literally', () => {
+  insertSession('percent', 'main', 'Percent', 1000);
+  insertSession('plain', 'main', 'Plain', 2000);
+  insertMessage('percent-msg', 'percent', 'user', 'Discount is 50% off', null, 1, 100);
+  insertMessage('plain-msg', 'plain', 'user', 'Discount is 500 off', null, 1, 200);
+
+  expect(store.searchSessionContent({ query: '50%' }).map(result => result.session.id)).toEqual(['percent']);
 });
 
 test('searchSessions finds matching titles beyond the recent page', () => {
@@ -1252,7 +1316,10 @@ test('forkSession copies stable history and records fork metadata', () => {
   expect(fork.messages.map((message) => message.content)).toEqual(['start here', 'finished answer']);
   expect(fork.messages.every((message) => !['msg-user', 'msg-assistant'].includes(message.id))).toBe(true);
   expect(fork.messages[0].metadata).toEqual({ keep: true });
-  expect(fork.messages[1].metadata).toEqual({ keep: 'yes' });
+  expect(fork.messages[1].metadata).toEqual({
+    keep: 'yes',
+    toolUseId: deriveForkToolUseId(fork.id, 'tool-done'),
+  });
 
   const forkRows = db
     .prepare('SELECT content, sequence FROM cowork_messages WHERE session_id = ? ORDER BY sequence ASC')
@@ -1261,6 +1328,27 @@ test('forkSession copies stable history and records fork metadata', () => {
     { content: 'start here', sequence: 1 },
     { content: 'finished answer', sequence: 3 },
   ]);
+});
+
+test('forkSession keeps parallel tool results paired with their calls', () => {
+  const sid = 'sess-fork-parallel-tools';
+  insertSession(sid);
+  insertMessage('msg-user-parallel', sid, 'user', 'write three files', null, 1, 1000);
+  insertMessage('use-1', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_00_a' }), 2, 2000);
+  insertMessage('use-2', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_01_b' }), 3, 2001);
+  insertMessage('result-2', sid, 'tool_result', 'wrote 2', JSON.stringify({ toolResult: 'wrote 2', toolUseId: 'call_01_b' }), 4, 2002);
+  insertMessage('result-1', sid, 'tool_result', 'wrote 1', JSON.stringify({ toolResult: 'wrote 1', toolUseId: 'call_00_a' }), 5, 2003);
+  insertMessage('msg-done-parallel', sid, 'assistant', 'done', null, 6, 3000);
+
+  const fork = store.forkSession({ sourceSessionId: sid });
+  const toolUseIdByContent = new Map(fork.messages.map(message => [message.content, message.metadata?.toolUseId]));
+
+  expect(toolUseIdByContent.get('wrote 1')).toBe(deriveForkToolUseId(fork.id, 'call_00_a'));
+  expect(toolUseIdByContent.get('wrote 2')).toBe(deriveForkToolUseId(fork.id, 'call_01_b'));
+  const [firstUse, secondUse] = fork.messages.filter(message => message.type === 'tool_use');
+  expect(firstUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 1'));
+  expect(secondUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 2'));
+  expect(fork.messages.some(message => message.metadata?.toolUseId === 'call_00_a')).toBe(false);
 });
 
 test('forkSession keeps the selected plan message when its streaming flag is stale', () => {

@@ -46,7 +46,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
   const [category, setCategory] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const [detail, setDetail] = useState<PresetAgent | null>(null);
-  const { scrollRef: detailScrollRef, canScrollDown: detailCanScrollDown, scrollNext: scrollDetailNext } = useScrollAffordance<HTMLDivElement>(detail?.id ?? '');
+  const { scrollRef: detailScrollRef, canScrollUp: detailCanScrollUp, canScrollDown: detailCanScrollDown, scrollNext: scrollDetailNext } = useScrollAffordance<HTMLDivElement>(detail?.id ?? '');
   useEffect(() => {
     if (!initialPresetId || openedInitialPreset.current === initialPresetId) return;
     const initial = presets.find(preset => preset.id === initialPresetId);
@@ -181,7 +181,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
     <button type="button" disabled={summoning !== null} onClick={() => void summon(preset)}
       aria-label={`${t('expertSummon')} ${name(preset)}`}
       className={`pointer-events-auto relative z-10 inline-flex shrink-0 items-center justify-center rounded-lg bg-neutral-900 font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 ${large
-        ? 'px-5 py-2.5 text-sm'
+        ? 'h-8 px-5 text-sm'
         : `h-7 px-3 ${MANAGEMENT_META_TEXT} ${summoning === preset.id ? '' : 'invisible group-hover:visible group-focus-within:visible'}`}`}>
       {summoning === preset.id ? t('expertSummoning') : t('expertSummon')}
     </button>
@@ -270,13 +270,19 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
       </div>
       {detail && <Modal onClose={closeDetail} onEscape={closeDetail} className="mx-5 flex max-h-[85vh] w-full max-w-[600px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-xl">
         <div role="dialog" aria-modal="true" aria-labelledby="expert-detail-title" className="relative flex min-h-0 flex-col">
-          <button type="button" autoFocus aria-label={t('close')} onClick={closeDetail} className="absolute right-5 top-7 z-10 rounded-lg bg-surface/95 p-1 text-secondary hover:bg-surface-raised"><XMarkIcon className="h-5 w-5" /></button>
+          <button type="button" autoFocus aria-label={t('close')} onClick={closeDetail} className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-secondary hover:bg-surface-raised hover:text-foreground"><XMarkIcon className="h-5 w-5" /></button>
+          {/* Identity + primary action stay pinned above the scrolling body, like the skill and kit detail headers. */}
+          <div className={`flex shrink-0 items-center gap-4 border-b px-7 pb-5 pr-16 pt-7 transition-colors ${detailCanScrollUp ? 'border-border' : 'border-transparent'}`}>
+            <AgentAvatarIcon value={detail.icon} expertFallback className="h-16 w-16" iconClassName="h-9 w-9" />
+            <div className="min-w-0 flex-1"><h2 id="expert-detail-title" className="break-words text-xl font-semibold text-foreground">{name(detail)}</h2><p className="mt-1.5 text-xs text-muted">{categoryName(detail.category)}</p></div>
+            {summonButton(detail, true)}
+          </div>
+          {summonFailed && <div className="px-7 pt-4">{errorNotice}</div>}
           <div ref={detailScrollRef} id="expert-detail-content" data-expert-detail-scroll data-more-content={detailCanScrollDown}
             tabIndex={0} aria-labelledby="expert-detail-title"
             className="image-creation-scrollbar image-creation-detail-scroll min-h-0 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30">
-            <div className="p-7">
-              <div className="flex items-start gap-4 pr-7"><AgentAvatarIcon value={detail.icon} expertFallback className="h-16 w-16" iconClassName="h-9 w-9" /><div className="flex-1"><h2 id="expert-detail-title" className="text-xl font-semibold text-foreground">{name(detail)}</h2><p className="mt-1.5 text-xs text-muted">{categoryName(detail.category)}</p></div></div>
-              <p className="my-5 text-sm leading-6 text-secondary">{description(detail)}</p>
+            <div className="px-7 pb-7">
+              <p className="mb-5 text-sm leading-6 text-secondary">{description(detail)}</p>
               <div className="mb-7 flex flex-wrap gap-2">{detail.tags.map(item => <button type="button" key={item.zh} title={t('expertFilterByTag').replace('{tag}', expertText(item, language))} onClick={() => { setTag(item.zh); setCategory(null); closeDetail(); }} className="rounded-md bg-surface-raised px-2.5 py-1 text-xs text-secondary hover:text-primary">{expertText(item, language)}</button>)}</div>
               {imageCatalog?.enabled && detail.id === imageCatalog.expertPresetId && <section className="mb-6">
                 <h3 className="mb-3 text-sm font-semibold text-foreground">{t('imageCreationExpertExamples')}</h3>
@@ -284,8 +290,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
               </section>}
               <h3 className="mb-3 text-sm font-semibold text-foreground">{t('expertExampleHeading')}</h3>
               <div className="space-y-3">{detail.starterPrompts.map((prompt, index) => <button type="button" key={prompt.zh} disabled={summoning !== null} onClick={() => void summon(detail, expertText(prompt, language), index)} className="flex w-full items-center gap-4 rounded-xl border border-border p-4 text-left text-sm leading-6 text-secondary transition-colors hover:border-primary/40 hover:bg-primary/5 disabled:opacity-50"><span className="flex-1">{expertText(prompt, language)}</span><ArrowRightIcon className="h-4 w-4 shrink-0 text-muted" /></button>)}</div>
-              <div className="mt-5">{errorNotice}</div>
-              <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-5"><p className="max-w-[300px] text-xs leading-5 text-muted">{t('expertDraftHint')}</p>{summonButton(detail, true)}</div>
+              <p className="mt-4 text-xs leading-5 text-muted">{t('expertDraftHint')}</p>
             </div>
           </div>
           {detailCanScrollDown && <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">

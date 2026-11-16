@@ -16,6 +16,22 @@ const localCallback: AuthLocalCallback = {
 const startLocalCallback = () => Promise.resolve(localCallback);
 
 describe('openBrowserLogin', () => {
+  test('cancel while the callback server starts prevents opening the browser', async () => {
+    const openExternal = vi.fn();
+    let current = true;
+    let ready: (value: AuthLocalCallback) => void = () => {};
+    const pending = openBrowserLogin({
+      baseUrl: BASE_URL,
+      openExternal,
+      startLocalCallback: () => new Promise(resolve => { ready = resolve; }),
+      isCurrent: () => current,
+    });
+    current = false;
+    ready(localCallback);
+    await expect(pending).resolves.toEqual({ success: false, reason: AuthLoginFailureReason.Cancelled });
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -85,7 +85,7 @@ test('renders the Codex-style two-row search surface and result count', () => {
   }));
 
   expect(html).toContain('data-cowork-conversation-search="true"');
-  expect(html).toContain('viewBox="0 0 34 34"');
+  expect(html).toContain('viewBox="0 0 24 24"');
   expect(html).toContain('value="needle"');
   expect(html).toMatch(/2 \/ 7 (?:个结果|results)/);
   expect(html).toContain('border-t');

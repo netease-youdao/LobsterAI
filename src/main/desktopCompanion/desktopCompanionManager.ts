@@ -68,6 +68,7 @@ import {
 } from '../../shared/desktopCompanion/geometry';
 import { companionHintCopyKeys, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
 import { isSpeechActive, LanguageTool } from '../../shared/desktopCompanion/languageTools';
+import { canOpenCompanionLauncher, CompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import type { CompanionTaskInfo } from '../../shared/desktopCompanion/results';
 import { normalizeSelectionTaskContext } from '../../shared/desktopCompanion/selectionTaskContext';
 import { normalizeCompanionToolbarOrder } from '../../shared/desktopCompanion/selectionToolbar';
@@ -78,6 +79,7 @@ import { CompanionAnalytics, type CompanionAnalyticsReporter } from './companion
 import { copyCompanionText } from './companionClipboard';
 import { CompanionContextMenuController, type CompanionMenuEntry } from './companionContextMenu';
 import { CompanionHintsController } from './companionHints';
+import { CompanionLauncherHover } from './companionLauncher';
 import { CompanionLoginTracker, isCompanionLoginSource, normalizeCompanionLoginStart } from './companionLogin';
 import { CompanionPermissionGuideController, type CompanionPermissionGuideServices } from './companionPermissionGuide';
 import { CompanionResultsController } from './companionResults';
@@ -100,6 +102,8 @@ import { getCompanionSelectionApps } from './selectionApps';
 import { readWindowsNative } from './windowsNative';
 
 const MAX_SNOOZE_TIMER_MS = 24 * 60 * 60_000;
+const MAX_DRAFT_ATTACHMENTS = 20;
+const IMAGE_FILE_PATTERN = /\.(png|jpe?g|webp|gif|bmp|heic)$/i;
 
 interface CompanionStore {
   get<T = unknown>(key: string): T | undefined;
@@ -220,6 +224,8 @@ export class DesktopCompanionManager {
   private registeredShortcut = '';
   private disposing = false;
   private capturing = false;
+  /** The launcher's file dialog is open. */
+  private choosingFiles = false;
   private fileDragActive = false;
   private draggedFiles: DesktopCompanionDropFile[] = [];
   private foregroundAppId: string | null = null;
@@ -233,6 +239,7 @@ export class DesktopCompanionManager {
   private readonly dragProximity: CompanionFileDragProximity;
   private readonly quickAnswer: CompanionQuickAnswerService;
   private readonly stage: CompanionStageController;
+  private readonly launcher: CompanionLauncherHover;
   private readonly hints: CompanionHintsController;
   private readonly selection: CompanionSelectionController;
   private readonly languageTools: CompanionLanguageToolsController;
@@ -296,6 +303,16 @@ export class DesktopCompanionManager {
       onDropAsk: attachments => this.openPanelWithAttachments(attachments),
       onDropStarted: id => this.followTask(id),
       onTaskOpen: id => this.openTask(id),
+      onLauncherRun: action => this.runLauncherAction(action),
+    });
+    this.launcher = new CompanionLauncherHover({
+      getCursor: () => screen.getCursorScreenPoint(),
+      getOrbBounds: () => this.orbBounds(),
+      getCardBounds: () => (this.isLauncherOpen() ? this.stage.browserWindow?.getBounds() ?? null : null),
+      canOpen: () => this.canOpenLauncher(),
+      isOpen: () => this.isLauncherOpen(),
+      open: () => this.stage.showLauncher(),
+      close: () => this.stage.closeLauncher(),
     });
     this.dragProximity = new CompanionFileDragProximity({
       getCursor: () => screen.getCursorScreenPoint(),
@@ -449,6 +466,8 @@ export class DesktopCompanionManager {
   }
 
   private toggleOrb(fromPointer: boolean): void {
+    // Activating the orb is the user's choice; the hover launcher does not also offer it.
+    this.launcher.suppress();
     if (this.capturing || !this.isTaskReady()) return;
     this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Orb, interactionType: Interaction.Click });
     const closeOnly = fromPointer && this.orbPressVisible;
@@ -533,6 +552,7 @@ export class DesktopCompanionManager {
     for (const channel of [
       DesktopCompanionIpc.Drag, DesktopCompanionIpc.OrbFileDrag, DesktopCompanionIpc.ResizeSurface,
       DesktopCompanionIpc.TaskUpdated, DesktopCompanionIpc.PanelPassThrough, DesktopCompanionIpc.PanelLoginVisible,
+      DesktopCompanionIpc.OrbHover, DesktopCompanionIpc.StagePassThrough,
     ]) ipcMain.removeAllListeners(channel);
     for (const channel of Object.values(DesktopCompanionIpc)) ipcMain.removeHandler(channel);
     this.foreground.removeListener('change', this.onForegroundChange);
@@ -541,6 +561,7 @@ export class DesktopCompanionManager {
     this.dragProximity.stop();
     this.foreground.stop();
     this.fileDrag.stop();
+    this.launcher.reset();
     this.hints.dispose();
     this.selection.dispose();
     this.stage.dispose();
@@ -677,6 +698,7 @@ export class DesktopCompanionManager {
   }
 
   private hideOrb(): void {
+    this.launcher.reset();
     if (this.orb && !this.orb.isDestroyed()) this.orb.destroy();
     this.orb = null;
   }
@@ -692,6 +714,8 @@ export class DesktopCompanionManager {
     const cursor = screen.getCursorScreenPoint();
     const size = this.orbSize();
     if (phase === DesktopCompanionDragPhase.Start) {
+      // A press is a click or the start of a move; either way the hover launcher is no longer wanted.
+      this.launcher.suppress();
       // Capture before blur can hide the surface, using main-process state even during rapid clicks.
       this.orbPressVisible = this.panelVisible || this.results.state.visible;
       // The cursor has often moved on by the time this message arrives. Measuring the drag
@@ -752,7 +776,8 @@ export class DesktopCompanionManager {
     if (opening) this.panelJourneyId = randomUUID();
     this.results.hide();
     const stageKind = this.stage.stage.kind;
-    if (stageKind === DesktopCompanionStageKind.Hint || stageKind === DesktopCompanionStageKind.Task) this.stage.clear();
+    if (stageKind === DesktopCompanionStageKind.Hint || stageKind === DesktopCompanionStageKind.Task
+      || stageKind === DesktopCompanionStageKind.Launcher) this.stage.clear();
     if (!this.panelVisible) {
       this.analytics.report({ action: AnalyticsAction.Action, source, interactionType: Interaction.Open,
         surface: DesktopCompanionSurface.Panel, enabled: this.preferences.enabled, journeyId: this.panelJourneyId });
@@ -856,14 +881,85 @@ export class DesktopCompanionManager {
   }
 
   private openPanelWithAttachments(attachments: DesktopCompanionAttachment[], source: AnalyticsSource = AnalyticsSource.FileDrop): void {
-    const files = [...new Map([...this.draft.attachments, ...attachments].map(file => [file.path, file])).values()].slice(0, 20);
+    const files = [...new Map([...this.draft.attachments, ...attachments].map(file => [file.path, file])).values()].slice(0, MAX_DRAFT_ATTACHMENTS);
     this.setDraft({ ...this.draft, attachments: files });
     this.showPanel(source);
   }
 
-  private async askScreenshot(): Promise<void> {
+  // ── Hover launcher ────────────────────────────────────────
+
+  private isLauncherOpen(): boolean {
+    return this.stage.stage.kind === DesktopCompanionStageKind.Launcher;
+  }
+
+  private canOpenLauncher(): boolean {
+    return canOpenCompanionLauncher({
+      orbVisible: this.isPresent() && !!this.orb && !this.orb.isDestroyed() && this.orb.isVisible(),
+      panelVisible: this.panelVisible,
+      resultsVisible: this.results.state.visible,
+      stageBusy: this.stage.stage.kind !== DesktopCompanionStageKind.None,
+      fileDragActive: this.fileDragActive,
+      orbDragging: this.drag !== null,
+      contextMenuOpen: this.contextMenu.isOpen,
+      capturing: this.capturing,
+    });
+  }
+
+  /** The stage has already closed the launcher; each entry opens what it names. */
+  private runLauncherAction(action: CompanionLauncherAction): void {
+    switch (action) {
+      case CompanionLauncherAction.Ask:
+        this.showPanel(AnalyticsSource.Launcher);
+        return;
+      case CompanionLauncherAction.Screenshot:
+        void this.askScreenshot(AnalyticsSource.Launcher);
+        return;
+      case CompanionLauncherAction.Files:
+        void this.chooseFiles();
+        return;
+      case CompanionLauncherAction.OpenApp:
+        this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Launcher, interactionType: Interaction.OpenMain, hasSession: !!this.sessionId });
+        this.hidePanel();
+        this.options.openMain(this.sessionId);
+        return;
+      default:
+    }
+  }
+
+  /** Picks files to hand to the quick panel, where the user says what to do with them. */
+  private async chooseFiles(): Promise<void> {
+    if (this.choosingFiles || this.capturing || this.disposing) return;
+    if (this.draft.attachments.length >= MAX_DRAFT_ATTACHMENTS) {
+      await dialog.showMessageBox({ type: 'info', message: t('desktopCompanionLauncherFilesFull') });
+      return;
+    }
+    this.choosingFiles = true;
+    let paths: string[] = [];
+    let failed = false;
+    try {
+      const result = await dialog.showOpenDialog({
+        title: t('desktopCompanionLauncherFilesTitle'),
+        properties: ['openFile', 'multiSelections'],
+      });
+      if (!result.canceled) paths = result.filePaths;
+    } catch (error) {
+      failed = true;
+      console.error('[DesktopCompanion] Choosing files failed', error);
+    } finally {
+      this.choosingFiles = false;
+    }
+    const attachments = paths.slice(0, MAX_DRAFT_ATTACHMENTS).map(filePath => ({
+      path: filePath, name: path.basename(filePath), isImage: IMAGE_FILE_PATTERN.test(filePath), isDirectory: false,
+    }));
+    this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Launcher, interactionType: Interaction.AttachFiles,
+      outcome: failed ? AnalyticsOutcome.Failed : attachments.length ? AnalyticsOutcome.Success : AnalyticsOutcome.Cancelled,
+      attachmentCount: attachments.length });
+    if (attachments.length && !this.disposing) this.openPanelWithAttachments(attachments, AnalyticsSource.Launcher);
+  }
+
+  private async askScreenshot(source: AnalyticsSource = AnalyticsSource.ContextMenu): Promise<void> {
     if (this.capturing || this.disposing) return;
-    if (this.draft.attachments.length >= 20) {
+    if (this.draft.attachments.length >= MAX_DRAFT_ATTACHMENTS) {
       await dialog.showMessageBox({ type: 'info', message: t('desktopCompanionScreenshotFull') });
       return;
     }
@@ -872,7 +968,7 @@ export class DesktopCompanionManager {
       this.permissionGuide.explain(CompanionPermissionValue.ScreenRecording);
       return;
     }
-    const finish = this.analytics.tool({ source: AnalyticsSource.ContextMenu, tool: CompanionAnalyticsTool.Screenshot });
+    const finish = this.analytics.tool({ source, tool: CompanionAnalyticsTool.Screenshot });
     this.capturing = true;
     const restorePanel = this.panelVisible;
     this.hidePanel();
@@ -895,7 +991,7 @@ export class DesktopCompanionManager {
       this.capturing = false;
       if (!this.disposing) {
         this.applyActivity();
-        if (attachment) this.openPanelWithAttachments([attachment], AnalyticsSource.ContextMenu);
+        if (attachment) this.openPanelWithAttachments([attachment], source);
         else if (restorePanel) this.showPanel();
       }
     }
@@ -1012,19 +1108,18 @@ export class DesktopCompanionManager {
     if (!allowed.some(id => id !== undefined && id !== null && id === senderId)) throw new Error('Unknown desktop companion IPC sender');
   }
 
+  /**
+   * The orb's menu holds what changes the companion itself. What the companion
+   * can do for the user is in the hover launcher; only playback that is already
+   * running keeps a way back to its card here.
+   */
   private showContextMenu(): void {
+    this.launcher.suppress();
     this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Orb, interactionType: Interaction.ContextMenu });
     const entries: CompanionMenuEntry[] = [
-      { label: t('desktopCompanionOpenApp'), click: () => {
-        this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.ContextMenu, interactionType: Interaction.OpenMain, hasSession: !!this.sessionId });
-        this.hidePanel(); this.options.openMain(this.sessionId);
-      } },
-      { label: t('desktopCompanionOpenPanel'), click: () => this.showPanel(AnalyticsSource.ContextMenu) },
       ...(isSpeechActive(this.languageTools.speechStatus)
-        ? [{ label: t('desktopToolsPlayback'), click: () => this.languageTools.open({ tool: LanguageTool.Tts }) }]
+        ? [{ label: t('desktopToolsPlayback'), click: () => this.languageTools.open({ tool: LanguageTool.Tts }) }, { type: 'separator' as const }]
         : []),
-      { type: 'separator' },
-      { label: t('desktopCompanionScreenshot'), click: () => this.askScreenshot() },
       {
         label: t('desktopCompanionChangeSkin'),
         submenu: COMPANION_SKINS.map(skin => ({
@@ -1032,11 +1127,10 @@ export class DesktopCompanionManager {
           click: () => this.setPreferences({ skin: skin.id }, AnalyticsSource.ContextMenu),
         })),
       },
-      { type: 'separator' },
       this.snooze
         ? { label: t('desktopCompanionWake'), click: () => this.wake() }
         : { label: t('desktopCompanionSnoozeToday'), click: () => this.snoozeFor(DesktopCompanionSnoozeMode.Quiet) },
-      ...(this.options.openSettings ? [{ label: t('desktopCompanionSettings'), click: () => {
+      ...(this.options.openSettings ? [{ type: 'separator' as const }, { label: t('desktopCompanionSettings'), click: () => {
         this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.ContextMenu, interactionType: Interaction.OpenSettings });
         this.options.openSettings?.();
       } }] : []),
@@ -1171,6 +1265,14 @@ export class DesktopCompanionManager {
       if (value) this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.Panel, interactionType: Interaction.LoginShown });
       this.panelLoginVisible = value;
       this.positionPanel();
+    });
+    on(DesktopCompanionIpc.OrbHover, (value, senderId) => {
+      if (senderId !== this.orb?.webContents.id || typeof value !== 'boolean') return;
+      this.launcher.setOrbHover(value);
+    });
+    on(DesktopCompanionIpc.StagePassThrough, (value, senderId) => {
+      if (senderId !== this.stage.webContentsId || typeof value !== 'boolean') return;
+      this.stage.setPassThrough(value);
     });
     on(DesktopCompanionIpc.OrbFileDrag, (value, senderId) => {
       if (senderId !== this.orb?.webContents.id) return;

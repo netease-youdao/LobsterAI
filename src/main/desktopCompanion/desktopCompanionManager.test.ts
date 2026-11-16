@@ -31,6 +31,7 @@ import { CompanionContextMenuIpc, CompanionContextMenuSize } from '../../shared/
 import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
+import { CompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import {
   COMPANION_PERMISSION_GUIDE_SIZE,
   COMPANION_PERMISSION_INTRO_SIZE,
@@ -113,7 +114,10 @@ vi.mock('electron', async () => {
       screenToDipPoint: (point: unknown) => point,
     }),
     Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
-    dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
+    dialog: {
+      showMessageBox: vi.fn(async () => ({ response: 0 })),
+      showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })),
+    },
     clipboard: { writeText: vi.fn() },
     shell: { openExternal: vi.fn(() => Promise.resolve()) },
     systemPreferences: { isTrustedAccessibilityClient: vi.fn(() => true), getMediaAccessStatus: vi.fn(() => 'granted') },
@@ -227,6 +231,34 @@ function menu(): MenuItemConstructorOptions[] {
 
 function clickMenu(label: string) {
   return menu().find(item => item.label === label)!.click!(null as never, undefined, {} as never);
+}
+
+function hoverOrb(hovering: boolean, sender = orb().webContents) {
+  ipcMain.emit(DesktopCompanionIpc.OrbHover, { sender, senderFrame: sender.mainFrame }, hovering);
+}
+
+function stageWindow() {
+  return mocks.windows.find(win => win.surface === DesktopCompanionSurface.Stage && !win.destroyed);
+}
+
+/** A fresh visit: the pointer arrives on the orb and stays as long as its launcher takes to open. */
+function restOnOrb() {
+  if (!orb().visible) orb().emit('ready-to-show');
+  const { x, y, width, height } = orb().bounds;
+  vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: x + width / 2, y: y + height / 2 });
+  const faked = vi.isFakeTimers();
+  if (!faked) vi.useFakeTimers();
+  hoverOrb(false);
+  hoverOrb(true);
+  vi.advanceTimersByTime(DesktopCompanionTiming.LauncherOpenDelayMs);
+  if (!faked) vi.useRealTimers();
+}
+
+/** Opens the hover launcher and picks one of its entries. */
+function launch(action: CompanionLauncherAction) {
+  restOnOrb();
+  expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.Launcher);
+  invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.LauncherRun, action }, stageWindow().webContents);
 }
 
 function readyPanel(panel = mocks.windows.at(-1)) {
@@ -979,18 +1011,12 @@ describe('desktop companion lifecycle', () => {
     expect(center()).toEqual(start);
   });
 
-  test('the context menu keeps desktop actions and settings without task or feature-switch entries', () => {
+  test('the context menu holds only what changes the companion itself; what it does is in the hover launcher', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
-    expect(menu().filter(item => item.type !== 'separator').map(item => item.label)).toEqual([
-      'desktopCompanionOpenApp', 'desktopCompanionOpenPanel', 'desktopCompanionScreenshot',
-      'desktopCompanionChangeSkin', 'desktopCompanionSnoozeToday', 'desktopCompanionSettings',
+    expect(menu().map(item => item.type === 'separator' ? '-' : item.label)).toEqual([
+      'desktopCompanionChangeSkin', 'desktopCompanionSnoozeToday', '-', 'desktopCompanionSettings',
     ]);
-    clickMenu('desktopCompanionOpenPanel');
-    expect(manager.getState().panelVisible).toBe(true);
-    clickMenu('desktopCompanionOpenApp');
-    expect(manager.getState().panelVisible).toBe(false);
-    expect(openMain).toHaveBeenCalledWith(null);
     clickMenu('desktopCompanionSnoozeToday');
     expect(manager.getState().snooze?.mode).toBe(DesktopCompanionSnoozeMode.Quiet);
     expect(orb().destroyed).toBe(true);
@@ -1008,49 +1034,56 @@ describe('desktop companion lifecycle', () => {
     invoke(DesktopCompanionIpc.SetDraft, {
       prompt: 'Explain this', workingDirectory: '/tasks', attachments: [{ path: '/tasks/a.pdf', name: 'a.pdf' }],
     });
-    await clickMenu('desktopCompanionScreenshot');
+    launch(CompanionLauncherAction.Screenshot);
+    await vi.waitFor(() => expect(manager.getState().panelVisible).toBe(true));
     expect(manager.getState()).toMatchObject({
-      panelVisible: true, sessionId: null,
+      sessionId: null,
       draft: { prompt: 'Explain this', workingDirectory: '/tasks', attachments: [{ path: '/tasks/a.pdf' }, attachment] },
     });
     expect(openMain).not.toHaveBeenCalled();
+    expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      action: AnalyticsAction.Tool, source: AnalyticsSource.Launcher, tool: 'screenshot', stage: AnalyticsStage.Result, outcome: 'success',
+    }));
   });
 
-  test('canceling capture keeps the draft and restores the panel, and a second click cannot start another capture', async () => {
+  test('canceling capture keeps the draft, and nothing else can start or open while the screen is being captured', async () => {
     let finish!: (value: null) => void;
     const capture = vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockReturnValue(new Promise(resolve => { finish = resolve; }));
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
-    manager.togglePanel();
     invoke(DesktopCompanionIpc.SetDraft, { prompt: 'Keep this', attachments: [] });
     const draft = manager.getState().draft;
-    const pending = clickMenu('desktopCompanionScreenshot');
-    await clickMenu('desktopCompanionScreenshot');
+    launch(CompanionLauncherAction.Screenshot);
+    restOnOrb();
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
     manager.togglePanel();
     expect(capture).toHaveBeenCalledOnce();
     expect(manager.getState().panelVisible).toBe(false);
     finish(null);
-    await pending;
+    await vi.waitFor(() => expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      tool: 'screenshot', stage: AnalyticsStage.Result, outcome: 'cancelled',
+    })));
     expect(manager.getState().draft).toEqual(draft);
-    expect(manager.getState().panelVisible).toBe(true);
+    expect(manager.getState().panelVisible).toBe(false);
   });
 
-  test('capture failure restores the panel and explains the failure', async () => {
+  test('capture failure explains the failure', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockRejectedValue(new Error('Permission denied'));
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
-    manager.togglePanel();
-    await clickMenu('desktopCompanionScreenshot');
-    expect(manager.getState().panelVisible).toBe(true);
-    expect(dialog.showMessageBox).toHaveBeenCalledWith({ type: 'error', message: 'desktopCompanionScreenshotFailed' });
+    launch(CompanionLauncherAction.Screenshot);
+    await vi.waitFor(() => expect(dialog.showMessageBox).toHaveBeenCalledWith({ type: 'error', message: 'desktopCompanionScreenshotFailed' }));
+    expect(manager.getState().panelVisible).toBe(false);
   });
 
   test('explains Screen Recording before capturing; 去开启 lists LobsterAI and guides the user in System Settings', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
     vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValueOnce('denied');
     const capture = vi.spyOn(CompanionScreenshotController.prototype, 'capture');
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
-    await clickMenu('desktopCompanionScreenshot');
+    launch(CompanionLauncherAction.Screenshot);
     expect(capture).not.toHaveBeenCalled();
     expect(dialog.showMessageBox).not.toHaveBeenCalled();
     const card = mocks.windows.at(-1);
@@ -1066,8 +1099,9 @@ describe('desktop companion lifecycle', () => {
   test('closing the Screen Recording explanation leaves System Settings alone', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
     vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValueOnce('denied');
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
-    await clickMenu('desktopCompanionScreenshot');
+    launch(CompanionLauncherAction.Screenshot);
     const card = mocks.windows.at(-1);
     await invoke(CompanionPermissionGuideIpc.Close, undefined, card.webContents);
     expect(card.isDestroyed()).toBe(true);
@@ -1079,19 +1113,21 @@ describe('desktop companion lifecycle', () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(CompanionScreenshotController.prototype, 'capture').mockRejectedValue(new CompanionScreenPermissionError());
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
-    await clickMenu('desktopCompanionScreenshot');
+    launch(CompanionLauncherAction.Screenshot);
+    await vi.waitFor(() => expect(mocks.windows.at(-1).getBounds()).toMatchObject(COMPANION_PERMISSION_INTRO_SIZE));
     expect(dialog.showMessageBox).not.toHaveBeenCalled();
-    expect(mocks.windows.at(-1).getBounds()).toMatchObject(COMPANION_PERMISSION_INTRO_SIZE);
   });
 
-  test('a full draft does not start a screenshot that would silently lose an attachment', async () => {
+  test('a full draft does not start a screenshot that would silently lose an attachment', () => {
     const capture = vi.spyOn(CompanionScreenshotController.prototype, 'capture');
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
     invoke(DesktopCompanionIpc.SetDraft, {
       attachments: Array.from({ length: 20 }, (_, index) => ({ path: `/tmp/${index}.png`, name: `${index}.png` })),
     });
-    await clickMenu('desktopCompanionScreenshot');
+    launch(CompanionLauncherAction.Screenshot);
     expect(capture).not.toHaveBeenCalled();
     expect(manager.getState().draft.attachments).toHaveLength(20);
     expect(dialog.showMessageBox).toHaveBeenCalledWith({ type: 'info', message: 'desktopCompanionScreenshotFull' });
@@ -2374,14 +2410,13 @@ describe('orb menu on macOS', () => {
     expect(Menu.buildFromTemplate).not.toHaveBeenCalled();
     expect(window).not.toBe(orb());
     expect(state.items.map(item => item.label)).toEqual([
-      'desktopCompanionOpenApp', 'desktopCompanionOpenPanel', 'desktopCompanionScreenshot',
       'desktopCompanionChangeSkin', 'desktopCompanionSnoozeToday', 'desktopCompanionSettings',
     ]);
-    expect(state.items.filter(item => item.divided).map(item => item.label)).toEqual(['desktopCompanionScreenshot', 'desktopCompanionSnoozeToday']);
-    expect(state.items[3].submenu!.map(item => item.checked)).toEqual([true, false, false, false, false, false, false, false, false]);
-    expect(state.cards).toEqual({ root: expect.any(Object), [state.items[3].id]: expect.any(Object) });
+    expect(state.items.filter(item => item.divided).map(item => item.label)).toEqual(['desktopCompanionSettings']);
+    expect(state.items[0].submenu!.map(item => item.checked)).toEqual([true, false, false, false, false, false, false, false, false]);
+    expect(state.cards).toEqual({ root: expect.any(Object), [state.items[0].id]: expect.any(Object) });
     // Beside the orb in the lower right, rising from its middle, wherever the pointer is.
-    const menuHeight = CompanionContextMenuSize.Chrome * 2 + CompanionContextMenuSize.Item * 6 + CompanionContextMenuSize.Divider * 2;
+    const menuHeight = CompanionContextMenuSize.Chrome * 2 + CompanionContextMenuSize.Item * 3 + CompanionContextMenuSize.Divider;
     expect(window.bounds.x + state.cards.root.x + CompanionContextMenuSize.Width).toBe(orb().bounds.x);
     expect(window.bounds.y + state.cards.root.y + menuHeight).toBe(orb().bounds.y + orb().bounds.height / 2);
     expect(window.visible).toBe(false);
@@ -2401,17 +2436,17 @@ describe('orb menu on macOS', () => {
     create();
     const first = openMenu();
     first.ready();
-    first.run(first.state.items[1].id);
+    first.run(first.state.items[2].id);
     expect(manager.getState().contextMenu).toBeNull();
     expect(first.window.visible).toBe(false);
-    expect(manager.getState().panelVisible).toBe(true);
+    expect(openSettings).toHaveBeenCalledOnce();
 
     const second = openMenu();
     second.ready();
-    second.run(second.state.items[3].submenu![1].id);
+    second.run(second.state.items[0].submenu![1].id);
     expect(manager.getState().preferences.skin).toBe('ruanruanxia');
     expect(orb().bounds).toMatchObject(DesktopCompanionSize.Orb);
-    second.run(second.state.items[4].id);
+    second.run(second.state.items[1].id);
     expect(manager.getState().snooze).toBeNull();
   });
 
@@ -2451,5 +2486,224 @@ describe('orb menu on macOS', () => {
     vi.advanceTimersByTime(500);
     expect(manager.getState().contextMenu).toBeNull();
     expect(manager.getState().panelVisible).toBe(false);
+  });
+});
+
+describe('hover launcher', () => {
+  const { LauncherOpenDelayMs, LauncherCloseDelayMs, LauncherPollMs } = DesktopCompanionTiming;
+  const stageKind = () => manager.getState().stage.kind;
+  const emitFromStage = (channel: string, value: unknown) => {
+    const { webContents } = stageWindow();
+    ipcMain.emit(channel, { sender: webContents, senderFrame: webContents.mainFrame }, value);
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+  });
+
+  test('resting on the orb opens the launcher beside it; a pointer passing over does not', () => {
+    create();
+    orb().emit('ready-to-show');
+    const { x, y, width, height } = orb().bounds;
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: x + width / 2, y: y + height / 2 });
+    hoverOrb(true);
+    vi.advanceTimersByTime(LauncherOpenDelayMs - 1);
+    hoverOrb(false);
+    vi.advanceTimersByTime(LauncherOpenDelayMs * 2);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    expect(stageWindow()).toBeUndefined();
+
+    restOnOrb();
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Launcher);
+    const stage = stageWindow();
+    emitFromStage(DesktopCompanionIpc.ResizeSurface, { width: 276, height: 223 });
+    expect(stage.visible).toBe(true);
+    expect(stage.focused).toBe(false);
+    // Toward the middle of the screen, the card's edge on the orb's, its last row level with the orb.
+    expect(stage.bounds).toMatchObject({ width: 276, height: 223 });
+    expect(stage.bounds.x + stage.bounds.width - DesktopCompanionSize.SurfacePad).toBe(x);
+    expect(stage.bounds.y + stage.bounds.height).toBe(y + height + DesktopCompanionSize.SurfacePad / 2);
+    expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      action: AnalyticsAction.Action, source: AnalyticsSource.Launcher, interactionType: Interaction.Open, stage: AnalyticsStage.Shown,
+    }));
+  });
+
+  test('stays while the pointer is on the orb or the card and closes once it has left both', () => {
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    emitFromStage(DesktopCompanionIpc.ResizeSurface, { width: 276, height: 223 });
+    hoverOrb(false);
+    vi.mocked(screen.getCursorScreenPoint).mockReturnValue({ x: stage.bounds.x + 60, y: stage.bounds.y + 60 });
+    vi.advanceTimersByTime(LauncherCloseDelayMs * 5);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Launcher);
+
+    vi.mocked(screen.getCursorScreenPoint).mockReturnValue({ x: 100, y: 100 });
+    vi.advanceTimersByTime(LauncherPollMs);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Launcher);
+    vi.advanceTimersByTime(LauncherCloseDelayMs + LauncherPollMs);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    expect(stage.visible).toBe(false);
+  });
+
+  test('its window takes the mouse only over its cards, and only for the launcher', () => {
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    // Opens under a pointer that is still on the orb.
+    expect(stage.ignoreMouse).toBe(true);
+    emitFromStage(DesktopCompanionIpc.StagePassThrough, false);
+    expect(stage.ignoreMouse).toBe(false);
+    ipcMain.emit(DesktopCompanionIpc.StagePassThrough, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame }, true);
+    emitFromStage(DesktopCompanionIpc.StagePassThrough, 'yes');
+    expect(stage.ignoreMouse).toBe(false);
+    emitFromStage(DesktopCompanionIpc.StagePassThrough, true);
+    expect(stage.ignoreMouse).toBe(true);
+
+    // A file brought to the orb replaces the launcher, and the drop zone must receive the drop.
+    dragOverOrb(DesktopCompanionFileDragPhase.Enter, [CompanionFileKind.Pdf]);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Drop);
+    expect(stage.ignoreMouse).toBe(false);
+    emitFromStage(DesktopCompanionIpc.StagePassThrough, true);
+    expect(stage.ignoreMouse).toBe(false);
+  });
+
+  test('does not open over the quick panel, during a file drag or while the orb is being moved', () => {
+    create();
+    manager.togglePanel();
+    restOnOrb();
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    manager.hidePanel();
+
+    fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
+    hoverOrb(false);
+    hoverOrb(true);
+    vi.advanceTimersByTime(LauncherOpenDelayMs);
+    expect(stageKind()).not.toBe(DesktopCompanionStageKind.Launcher);
+    fileDrag.emit(FileDragEvent.End);
+    vi.advanceTimersByTime(DesktopCompanionTiming.DropLingerMs + 1);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+
+    hoverOrb(false);
+    hoverOrb(true);
+    emitDrag(DesktopCompanionDragPhase.Start, { x: 0.5, y: 0.5 });
+    emitDrag(DesktopCompanionDragPhase.Move);
+    vi.advanceTimersByTime(LauncherOpenDelayMs);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    emitDrag(DesktopCompanionDragPhase.End);
+
+    restOnOrb();
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Launcher);
+  });
+
+  test('pressing or right-clicking the orb closes it until the pointer leaves and comes back', () => {
+    create();
+    restOnOrb();
+    emitDrag(DesktopCompanionDragPhase.Start, { x: 0.5, y: 0.5 });
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    emitDrag(DesktopCompanionDragPhase.Cancel);
+    invoke(DesktopCompanionIpc.ToggleOrb, true, orb().webContents);
+    expect(manager.getState().panelVisible).toBe(true);
+    manager.hidePanel();
+    // Still on the orb after the click: the user asked for the panel, not the launcher.
+    hoverOrb(true);
+    vi.advanceTimersByTime(LauncherOpenDelayMs * 2);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+
+    restOnOrb();
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Launcher);
+    menu();
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+  });
+
+  test('task news takes its place, and it waits while task bubbles are showing', () => {
+    values.set(COMPANION_RECENT_TASKS_KEY, [{ sessionId: 'task', viewedAt: 0 }]);
+    create();
+    invoke(DesktopCompanionIpc.SelectSession, 'task');
+    restOnOrb();
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Launcher);
+    ipcMain.emit(DesktopCompanionIpc.TaskUpdated, { sender: orb().webContents, senderFrame: orb().webContents.mainFrame });
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    expect(manager.getState().result.visible).toBe(true);
+    restOnOrb();
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+  });
+
+  test('the input-shaped button opens the quick panel and the last row opens the app', () => {
+    create();
+    launch(CompanionLauncherAction.Ask);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    expect(manager.getState().panelVisible).toBe(true);
+    expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      source: AnalyticsSource.Launcher, interactionType: Interaction.Open, surface: DesktopCompanionSurface.Panel,
+    }));
+    manager.hidePanel();
+
+    launch(CompanionLauncherAction.OpenApp);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    expect(openMain).toHaveBeenCalledWith(null);
+    expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      source: AnalyticsSource.Launcher, interactionType: Interaction.OpenMain, hasSession: false,
+    }));
+  });
+
+  test('chosen files are attached in the quick panel; canceling the dialog opens nothing', async () => {
+    create();
+    launch(CompanionLauncherAction.Files);
+    await vi.waitFor(() => expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      source: AnalyticsSource.Launcher, interactionType: Interaction.AttachFiles, outcome: 'cancelled', attachmentCount: 0,
+    })));
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith({
+      title: 'desktopCompanionLauncherFilesTitle', properties: ['openFile', 'multiSelections'],
+    });
+    expect(manager.getState().panelVisible).toBe(false);
+
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/report.pdf', '/tmp/shot.PNG'] });
+    launch(CompanionLauncherAction.Files);
+    await vi.waitFor(() => expect(manager.getState().panelVisible).toBe(true));
+    expect(manager.getState().draft.attachments).toEqual([
+      { path: '/tmp/report.pdf', name: 'report.pdf', isImage: false, isDirectory: false },
+      { path: '/tmp/shot.PNG', name: 'shot.PNG', isImage: true, isDirectory: false },
+    ]);
+    expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      interactionType: Interaction.AttachFiles, outcome: 'success', attachmentCount: 2,
+    }));
+  });
+
+  test('a full draft explains itself instead of opening a file dialog', () => {
+    create();
+    invoke(DesktopCompanionIpc.SetDraft, {
+      attachments: Array.from({ length: 20 }, (_, index) => ({ path: `/tmp/${index}.pdf`, name: `${index}.pdf` })),
+    });
+    launch(CompanionLauncherAction.Files);
+    expect(dialog.showOpenDialog).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).toHaveBeenCalledWith({ type: 'info', message: 'desktopCompanionLauncherFilesFull' });
+  });
+
+  test('only the orb reports hovering, and only a showing launcher runs known entries', () => {
+    create();
+    orb().emit('ready-to-show');
+    const { x, y, width, height } = orb().bounds;
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: x + width / 2, y: y + height / 2 });
+    hoverOrb(true, main.webContents);
+    vi.advanceTimersByTime(LauncherOpenDelayMs);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.LauncherRun, action: CompanionLauncherAction.Ask });
+    expect(manager.getState().panelVisible).toBe(false);
+
+    restOnOrb();
+    invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.LauncherRun, action: 'settings' }, stageWindow().webContents);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Launcher);
+    expect(openSettings).not.toHaveBeenCalled();
+  });
+
+  test('turning the companion off closes the launcher and forgets the hover', () => {
+    create();
+    restOnOrb();
+    invoke(DesktopCompanionIpc.SetPreferences, { enabled: false });
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+    vi.advanceTimersByTime(LauncherOpenDelayMs + LauncherCloseDelayMs * 2);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.None);
   });
 });

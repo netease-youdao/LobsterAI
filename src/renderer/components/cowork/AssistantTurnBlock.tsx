@@ -12,6 +12,7 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { hasLayerDecompositionWarning } from '../../../shared/media/warnings';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
 import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
@@ -741,6 +742,9 @@ const AssistantTurnBlock: React.FC<{
       ? message.content
       : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');
     if (getMediaCompletionDisplayText(message, rawContent)) {
+      if (hasLayerDecompositionWarning((message.metadata?.toolResultDetails as Record<string, unknown> | undefined)?.warnings)) {
+        return <p role="status" className="text-xs text-amber-600 dark:text-amber-400">{i18nService.t('mediaLayerDecompositionWarning')}</p>;
+      }
       return hasRecoveredMediaAssets(message.metadata?.toolResultDetails as Record<string, unknown> | undefined)
         ? <p role="status" className="text-xs text-secondary">{i18nService.t('mediaImageSavedToRecovery')}</p>
         : null;
