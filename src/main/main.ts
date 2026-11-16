@@ -749,6 +749,9 @@ import { createWindowStatePersistManager } from './windowStatePersist';
 
 protocol.registerSchemesAsPrivileged([
   {
+    // localfile:// serves media from anywhere on disk. Pages can show those files but not read
+    // their bytes only because the scheme is not CORS-enabled and does not bypass CSP: never add
+    // `corsEnabled` or `bypassCSP` here.
     scheme: ArtifactPreviewProtocol.LocalFile,
     privileges: {
       standard: true,

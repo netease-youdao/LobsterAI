@@ -11,8 +11,11 @@ import {
 } from './artifactLocalFileProtocol';
 
 let tempDir: string | undefined;
+const originalPlatform = process.platform;
 
 afterEach(() => {
+  Object.defineProperty(process, 'platform', { value: originalPlatform });
+  vi.restoreAllMocks();
   if (tempDir) {
     fs.rmSync(tempDir, { recursive: true, force: true });
     tempDir = undefined;
@@ -114,5 +117,64 @@ describe('artifact local file protocol', () => {
     const failed = await request('?v=1&thumb=512');
     expect(failed.headers.get('content-type')).toBe('image/png');
     expect(await failed.text()).toBe('original-bytes');
+  });
+
+  test('refuses documents and files of unknown type', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    createTempFile('placeholder.png', '');
+    for (const fileName of ['page.html', 'page.htm', 'notes.md', 'notes.txt', 'report.pdf', 'id_rsa', 'data.json']) {
+      const filePath = path.join(tempDir!, fileName);
+      fs.writeFileSync(filePath, 'secret');
+      const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(filePath)));
+      expect(response.status, fileName).toBe(403);
+      expect(await response.text(), fileName).not.toContain('secret');
+    }
+  });
+
+  test('serves every response as a sandboxed page without CORS access', async () => {
+    const filePath = createTempFile('drawing.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const url = toLocalFileUrl(filePath);
+    const responses = [
+      await createLocalFileProtocolResponse(new Request(url)),
+      await createLocalFileProtocolResponse(new Request(url, { headers: { Range: 'bytes=0-3' } })),
+      await createLocalFileProtocolResponse(new Request(url, { headers: { Range: 'bytes=900-' } })),
+    ];
+
+    expect(responses.map(response => response.status)).toEqual([200, 206, 416]);
+    for (const response of responses) {
+      expect(response.headers.get('content-security-policy')).toMatch(/^sandbox;/);
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    }
+    expect(responses[0].headers.get('content-type')).toBe('image/svg+xml');
+  });
+
+  test('refuses Windows network and device paths before touching the disk', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stat = vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+    for (const url of [
+      'localfile://local//attacker.example/share/a.png',
+      'localfile://local//%3F/C:/Users/me/a.png',
+      'localfile://local//./C:/Users/me/a.png',
+    ]) {
+      expect((await createLocalFileProtocolResponse(new Request(url))).status, url).toBe(403);
+    }
+    expect(stat).not.toHaveBeenCalled();
+
+    expect((await createLocalFileProtocolResponse(new Request('localfile://local/C%3A/Users/me/a.png'))).status).toBe(404);
+    expect((await createLocalFileProtocolResponse(new Request('localfile://c/Users/me/a.png'))).status).toBe(404);
+    expect(stat.mock.calls.map(([filePath]) => filePath)).toEqual(['C:\\Users\\me\\a.png', 'c:\\Users\\me\\a.png']);
+  });
+
+  test('refuses paths that are not absolute', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stat = vi.spyOn(fs.promises, 'stat');
+
+    const response = await createLocalFileProtocolResponse(new Request('localfile://local/MEDIA%3A%20generated.png'));
+    expect(response.status).toBe(403);
+    expect(stat).not.toHaveBeenCalled();
   });
 });
