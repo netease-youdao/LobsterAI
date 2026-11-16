@@ -854,8 +854,8 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/plugins/install-package.ts',
       snippets: [
-        'Large signed plugin archives can take several minutes to scan and unpack on Windows.',
-        'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS = process.platform === "win32" ? 900_000 : 120_000',
+        'large signed plugin archives can take several minutes to unpack on Windows and slower Macs.',
+        'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS = 900_000',
         'params.timeoutMs ?? DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
       ],
     },
