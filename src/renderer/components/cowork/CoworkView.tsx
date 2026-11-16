@@ -8,6 +8,7 @@ import { buildSessionTitleFromInput, buildSessionTitleInput } from '../../../com
 import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import { PptCreation } from '../../../shared/pptCreation/constants';
 import startupCreditEntryGiftUrl from '../../assets/startup-credit-entry-gift.svg';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
 import { refreshEnterpriseAccountContext } from '../../features/enterpriseAccount/context';
@@ -47,6 +48,7 @@ import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import HomeImageCreation from '../imageCreation/HomeImageCreation';
 import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
+import HomePptCreation from '../pptCreation/HomePptCreation';
 import { PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
 import HomeSkinEmblem from '../skin/HomeSkinEmblem';
@@ -948,7 +950,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           {homeHeader}
 
           {/* Main content */}
-          <div className="relative z-10 flex-1 overflow-y-auto min-h-0">
+          <div className={`relative z-10 flex-1 overflow-y-auto min-h-0 ${selectedActionId === PptCreation.ActionId ? 'scrollbar-hidden' : ''}`}>
             <div className="relative flex min-h-full w-full min-w-[320px] flex-col items-center px-4 py-8">
               {/* Flexible spacers (2:3) keep the welcome block at the optical
                   center on tall windows; min-h preserves breathing room before
@@ -1021,15 +1023,18 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                     promptInputRef.current?.focus();
                   }}
                 >
-                  {selectedAction && (
-                    <div className="mt-4 w-full">
-                      <PromptPanel
-                        action={selectedAction}
-                        onPromptSelect={handleQuickActionPromptSelect}
-                        onClose={handleQuickActionDeselect}
-                      />
-                    </div>
-                  )}
+                  <HomePptCreation active={selectedActionId === PptCreation.ActionId} onClose={handleQuickActionDeselect}
+                    onDraftReady={prompt => { promptInputRef.current?.setValue(prompt, 'template'); promptInputRef.current?.focus(); }}>
+                    {selectedAction && (
+                      <div className="mt-4 w-full">
+                        <PromptPanel
+                          action={selectedAction}
+                          onPromptSelect={handleQuickActionPromptSelect}
+                          onClose={handleQuickActionDeselect}
+                        />
+                      </div>
+                    )}
+                  </HomePptCreation>
                 </HomeImageCreation>
                 <CreditsResetCampaignFloat />
               </div>

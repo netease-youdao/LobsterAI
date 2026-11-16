@@ -101,3 +101,9 @@ export const getImageCreationExamplesUrl = (): string => (
     ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/image-creation-examples'
     : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/image-creation-examples'
 );
+
+export const getPptCreationExamplesUrl = (): string => (
+  isTestModeEnabled()
+    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/ppt-creation-examples'
+    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/ppt-creation-examples'
+);
