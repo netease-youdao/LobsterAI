@@ -113,6 +113,9 @@ test('externalizes DB maintenance chunks but leaves unrelated and outside module
   expect(inputs.some(file => file.endsWith(maintenance))).toBe(false);
   expect(inputs.some(file => file.endsWith(`/outside/${DB_CHUNK}`))).toBe(true);
   expect(inputs.some(file => file.endsWith('/agent-ui.js'))).toBe(true);
-  expect(result.outputFiles![0].text).toContain(`./dist/${maintenance}`);
-  expect(result.outputFiles![0].text).not.toContain(runtime);
+  // Source comments can include build paths; validate emitted imports directly.
+  const imports = Object.values(result.metafile!.outputs).flatMap(output => output.imports);
+  expect(imports).toEqual([
+    expect.objectContaining({ path: `./dist/${maintenance}`, external: true }),
+  ]);
 });
