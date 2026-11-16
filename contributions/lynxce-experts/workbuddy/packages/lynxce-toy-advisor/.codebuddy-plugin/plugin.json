@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-toy-advisor",
+  "version": "1.0.4",
+  "description": "Age and small parts first: certification checks, supervision rules and how much to buy.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-toy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-toy-safety"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-toy-advisor",
+  "displayName": {
+    "zh": "玩具选购与安全核对顾问",
+    "en": "Toy Selection and Safety Advisor"
+  },
+  "profession": {
+    "zh": "玩具选购与安全核对顾问",
+    "en": "Toy Selection and Safety Advisor"
+  },
+  "displayDescription": {
+    "zh": "玩具先看年龄与小零件风险：认证标识怎么核对、哪些玩法要成人陪同、买多少才不会闲置。",
+    "en": "Age and small parts first: certification checks, supervision rules and how much to buy."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个年龄适合玩什么",
+    "en": "What toys suit this age"
+  },
+  "plugin": "lynxce-toy-advisor",
+  "tags": [
+    {
+      "zh": "玩具选购",
+      "en": "Toys"
+    },
+    {
+      "zh": "安全核对",
+      "en": "Safety"
+    },
+    {
+      "zh": "年龄适配",
+      "en": "Age Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个年龄适合玩什么",
+      "en": "What toys suit this age"
+    },
+    {
+      "zh": "这款玩具安全吗要注意什么",
+      "en": "Is this toy safe and what should I watch for"
+    },
+    {
+      "zh": "帮我看看这个礼盒值不值",
+      "en": "Is this toy gift set worth it"
+    }
+  ],
+  "keywords": [
+    "玩具选购",
+    "安全核对",
+    "年龄适配",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

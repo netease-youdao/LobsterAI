@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-mesh-router-advisor",
+  "version": "1.0.0",
+  "description": "Pick routers: node count, port speed, backhaul, bands and per node cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-mesh-router-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-mesh-router"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-mesh-router-advisor",
+  "displayName": {
+    "zh": "路由器组网选购顾问",
+    "en": "Router and Mesh Wi-Fi Advisor"
+  },
+  "profession": {
+    "zh": "11.11 路由器与 Mesh 组网选购顾问",
+    "en": "11.11 Router and Mesh Wi-Fi Advisor"
+  },
+  "displayDescription": {
+    "zh": "路由器怎么挑：按户型墙体定节点数、核网口速率与宽带、看回程方式与频段、算每节点到手价。",
+    "en": "Pick routers: node count, port speed, backhaul, bands and per node cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "120 平三室要几个 Mesh 节点",
+    "en": "How many mesh nodes a 120 square meter flat needs"
+  },
+  "plugin": "lynxce-mesh-router-advisor",
+  "tags": [
+    {
+      "zh": "节点数量",
+      "en": "Node Count"
+    },
+    {
+      "zh": "网口回程",
+      "en": "Ports and Backhaul"
+    },
+    {
+      "zh": "频段协议",
+      "en": "Bands and Standards"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "120 平三室要几个 Mesh 节点",
+      "en": "How many mesh nodes a 120 square meter flat needs"
+    },
+    {
+      "zh": "千兆宽带为什么要 2.5G 网口",
+      "en": "Why gigabit broadband needs a 2.5G port"
+    },
+    {
+      "zh": "有线回程和无线回程怎么选",
+      "en": "Wired versus wireless backhaul for mesh"
+    }
+  ],
+  "keywords": [
+    "节点数量",
+    "网口回程",
+    "频段协议",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

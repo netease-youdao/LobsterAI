@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-tea-coffee-stock-advisor",
+  "version": "1.0.2",
+  "description": "Plan tea and coffee stocking: usage-based limit, roast/production date check, per-gram price, gift box premium and storage.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tea-coffee-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tea-coffee-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tea-coffee-stock-advisor",
+  "displayName": {
+    "zh": "茶叶咖啡豆囤货与新鲜度顾问",
+    "en": "Tea and Coffee Stocking and Freshness Advisor"
+  },
+  "profession": {
+    "zh": "11.11 茶叶咖啡豆囤货与新鲜度顾问",
+    "en": "11.11 Tea and Coffee Stocking and Freshness Advisor"
+  },
+  "displayDescription": {
+    "zh": "囤茶叶咖啡豆怎么算：按饮用量定囤货上限、烘焙生产日期对赏味期、克单价换算、礼盒溢价与存放条件。",
+    "en": "Plan tea and coffee stocking: usage-based limit, roast/production date check, per-gram price, gift box premium and storage."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "咖啡豆大促买几袋合适",
+    "en": "How many bags of coffee beans should I buy"
+  },
+  "plugin": "lynxce-tea-coffee-stock-advisor",
+  "tags": [
+    {
+      "zh": "新鲜度核对",
+      "en": "Freshness Check"
+    },
+    {
+      "zh": "克单价换算",
+      "en": "Per-Gram Price"
+    },
+    {
+      "zh": "囤货上限",
+      "en": "Stock Limit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "咖啡豆大促买几袋合适",
+      "en": "How many bags of coffee beans should I buy"
+    },
+    {
+      "zh": "怎么看这批茶叶新不新鲜",
+      "en": "How do I tell if this tea batch is fresh"
+    },
+    {
+      "zh": "礼盒装比散装贵这么多值吗",
+      "en": "Is the gift box worth the extra price"
+    }
+  ],
+  "keywords": [
+    "新鲜度核对",
+    "克单价换算",
+    "囤货上限",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

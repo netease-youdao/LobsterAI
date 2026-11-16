@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-green-factory-evidence-b49",
+  "version": "1.0.0",
+  "description": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-green-factory-evidence-b49.md"
+  ],
+  "skills": [
+    "./skills/lynxce-green-factory-boundary",
+    "./skills/lynxce-green-factory-resource",
+    "./skills/lynxce-green-factory-self-report"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-green-factory-evidence-b49",
+  "displayName": {
+    "zh": "绿色顾问",
+    "en": "Green Factory Evidence Advisor"
+  },
+  "profession": {
+    "zh": "绿色工厂顾问",
+    "en": "Green Factory Evidence Advisor"
+  },
+  "displayDescription": {
+    "zh": "为制造工厂统一能耗、水耗与固废统计边界，核算指标和证据缺口，完成绿色工厂自评、改进及补正稿。",
+    "en": "Prepare traceable enterprise application materials, reconcile evidence and produce complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按本轮绿色工厂通知，统一整厂边界并写自评稿。",
+    "en": "Green Factory Evidence Advisor"
+  },
+  "plugin": "lynxce-green-factory-evidence-b49",
+  "tags": [
+    {
+      "zh": "绿色工厂",
+      "en": "绿色工厂"
+    },
+    {
+      "zh": "能耗水耗",
+      "en": "能耗水耗"
+    },
+    {
+      "zh": "自评材料",
+      "en": "自评材料"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按本轮绿色工厂通知，统一整厂边界并写自评稿。",
+      "en": "Green Factory Evidence Advisor"
+    },
+    {
+      "zh": "电量两份摘要不一致，保留双口径重出全表和V2。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "请把能源、水和固废材料整理成可追溯的改进说明。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "绿色工厂",
+    "能耗水耗",
+    "自评材料"
+  ]
+}

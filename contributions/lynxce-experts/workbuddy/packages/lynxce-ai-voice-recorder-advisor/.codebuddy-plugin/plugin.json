@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ai-voice-recorder-advisor",
+  "version": "1.0.0",
+  "description": "Pick AI voice recorders: transcription accuracy, battery, storage, yearly fees, recording notice.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ai-voice-recorder-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ai-voice-recorder"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ai-voice-recorder-advisor",
+  "displayName": {
+    "zh": "AI录音笔采购顾问",
+    "en": "AI Voice Recorder Advisor"
+  },
+  "profession": {
+    "zh": "AI 录音笔与会议纪要硬件办公采购顾问",
+    "en": "AI Voice Recorder and Meeting Notes Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "AI录音笔怎么选：用字错率测转写、按会议时长算续航存储、核转写年费与数据存储，附会议录音告知模板。",
+    "en": "Pick AI voice recorders: transcription accuracy, battery, storage, yearly fees, recording notice."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "团队开会用哪种 AI 录音笔合适",
+    "en": "Which AI recorder suits team meetings"
+  },
+  "plugin": "lynxce-ai-voice-recorder-advisor",
+  "tags": [
+    {
+      "zh": "转写字错率",
+      "en": "Transcription Error Rate"
+    },
+    {
+      "zh": "续航存储",
+      "en": "Battery and Storage"
+    },
+    {
+      "zh": "录音告知",
+      "en": "Recording Notice"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "团队开会用哪种 AI 录音笔合适",
+      "en": "Which AI recorder suits team meetings"
+    },
+    {
+      "zh": "录音笔转写准确率怎么自己测",
+      "en": "How to test recorder transcription accuracy"
+    },
+    {
+      "zh": "会议录音要怎么提前告知参会人",
+      "en": "How to notify attendees before recording"
+    }
+  ],
+  "keywords": [
+    "转写字错率",
+    "续航存储",
+    "录音告知",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

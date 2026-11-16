@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-water-resource-tax-b53",
+  "version": "1.0.0",
+  "description": "Water Resource Tax Advisor evidence worksheets and complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-water-resource-tax-b53.md"
+  ],
+  "skills": [
+    "./skills/lynxce-water-resource-tax-s1-b53",
+    "./skills/lynxce-water-resource-tax-s2-b53",
+    "./skills/lynxce-water-resource-tax-s3-b53"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-water-resource-tax-b53",
+  "displayName": {
+    "zh": "水税顾问",
+    "en": "Water Resource Tax Advisor"
+  },
+  "profession": {
+    "zh": "水资源税顾问",
+    "en": "Water Resource Tax Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务逐口核对取水量、属地税额和优惠条件，交付水资源税底稿、计量差异清单及完整修订稿。",
+    "en": "Water Resource Tax Advisor evidence worksheets and complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "两个取水口水源和税额不同，怎样逐口准备？",
+    "en": "Water Resource Tax Advisor"
+  },
+  "plugin": "lynxce-water-resource-tax-b53",
+  "tags": [
+    {
+      "zh": "水资源税",
+      "en": "水资源税"
+    },
+    {
+      "zh": "取水计量",
+      "en": "取水计量"
+    },
+    {
+      "zh": "属地税额",
+      "en": "属地税额"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两个取水口水源和税额不同，怎样逐口准备？",
+      "en": "Water Resource Tax Advisor"
+    },
+    {
+      "zh": "只有节水称号，可以直接享工业减征吗？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "月末读数两版相反，帮我保留两分支修订。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "水资源税",
+    "取水计量",
+    "属地税额"
+  ]
+}

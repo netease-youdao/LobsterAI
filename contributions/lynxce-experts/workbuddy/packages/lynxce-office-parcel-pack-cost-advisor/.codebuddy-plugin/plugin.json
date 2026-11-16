@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-parcel-pack-cost-advisor",
+  "version": "1.0.0",
+  "description": "Calculate office parcel packing costs, billable weight and freight discrepancies.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-parcel-pack-cost-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-parcel-pack-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-parcel-pack-cost-advisor",
+  "displayName": {
+    "zh": "企业寄件核算助理",
+    "en": "Office Parcel Packing and Freight Advisor"
+  },
+  "profession": {
+    "zh": "企业快递寄件打包运费核算顾问",
+    "en": "Office Parcel Packing and Freight Advisor"
+  },
+  "displayDescription": {
+    "zh": "按企业寄件重量体积与承运报价核算包装运费，区分计费进位和附加费用，交付寄件预算与账单差异表。",
+    "en": "Calculate office parcel packing costs, billable weight and freight discrepancies."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "箱子40乘30乘25厘米运费怎么算",
+    "en": "Calculate freight for a 40 by 30 by 25 cm box"
+  },
+  "plugin": "lynxce-office-parcel-pack-cost-advisor",
+  "tags": [
+    {
+      "zh": "计费重量",
+      "en": "Billable Weight"
+    },
+    {
+      "zh": "包装核算",
+      "en": "Packing Costs"
+    },
+    {
+      "zh": "账单复核",
+      "en": "Bill Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "箱子40乘30乘25厘米运费怎么算",
+      "en": "Calculate freight for a 40 by 30 by 25 cm box"
+    },
+    {
+      "zh": "承运复称比自称重怎么核账",
+      "en": "Reconcile carrier and internal weight readings"
+    },
+    {
+      "zh": "缩小箱子后包装运费能省多少",
+      "en": "Compare packing and freight after downsizing a box"
+    }
+  ],
+  "keywords": [
+    "计费重量",
+    "包装核算",
+    "账单复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

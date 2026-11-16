@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-livereview-advisor",
+  "version": "1.0.1",
+  "description": "Review livestreams: which metrics, segment analysis and next-session fixes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-livereview-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-live-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-livereview-advisor",
+  "displayName": {
+    "zh": "直播复盘与数据分析顾问",
+    "en": "Livestream Performance Review Advisor"
+  },
+  "profession": {
+    "zh": "直播复盘与数据分析顾问",
+    "en": "Livestream Performance Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "直播播完怎么复盘：看哪些数据、分段怎么拆解、话术怎么改、下一场重点要改哪三件事。",
+    "en": "Review livestreams: which metrics, segment analysis and next-session fixes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "昨天直播数据怎么看",
+    "en": "How do I read yesterday livestream data"
+  },
+  "plugin": "lynxce-livereview-advisor",
+  "tags": [
+    {
+      "zh": "直播复盘",
+      "en": "Live Review"
+    },
+    {
+      "zh": "分段分析",
+      "en": "Segments"
+    },
+    {
+      "zh": "话术改进",
+      "en": "Scripts"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "昨天直播数据怎么看",
+      "en": "How do I read yesterday livestream data"
+    },
+    {
+      "zh": "人来了留不住怎么办",
+      "en": "Viewers come in but leave quickly"
+    },
+    {
+      "zh": "帮我改一版开场话术",
+      "en": "Help me rewrite my opening script"
+    }
+  ],
+  "keywords": [
+    "直播复盘",
+    "分段分析",
+    "话术改进",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

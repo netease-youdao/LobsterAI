@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-archive-space-advisor",
+  "version": "1.0.0",
+  "description": "Calculate archive boxes and shelf capacity from file thickness, box dimensions, load and approved growth.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-archive-space-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-archive-space"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-archive-space-advisor",
+  "displayName": {
+    "zh": "档案盒空间核算顾问",
+    "en": "Archive Box and Space Advisor"
+  },
+  "profession": {
+    "zh": "档案盒采购与文件保存空间核算顾问",
+    "en": "Archive Box Purchase and Storage Capacity Advisor"
+  },
+  "displayDescription": {
+    "zh": "档案保存按实测文件厚度、盒内净宽与柜层尺寸核算档案盒及空间，校核承重和增长余量，输出采购与定位表。",
+    "en": "Calculate archive boxes and shelf capacity from file thickness, box dimensions, load and approved growth."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按各类文件实测厚度算档案盒数",
+    "en": "Calculate archive boxes from measured file thickness"
+  },
+  "plugin": "lynxce-office-archive-space-advisor",
+  "tags": [
+    {
+      "zh": "分组装盒",
+      "en": "Grouped Box Allocation"
+    },
+    {
+      "zh": "柜层承重",
+      "en": "Shelf Load Capacity"
+    },
+    {
+      "zh": "采购定位表",
+      "en": "Purchase and Location Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按各类文件实测厚度算档案盒数",
+      "en": "Calculate archive boxes from measured file thickness"
+    },
+    {
+      "zh": "盒子宽度和层承重分别能放多少",
+      "en": "Calculate box capacity by shelf width and load"
+    },
+    {
+      "zh": "生成档案增长空间和采购定位表",
+      "en": "Build archive growth and purchase location tables"
+    }
+  ],
+  "keywords": [
+    "分组装盒",
+    "柜层承重",
+    "采购定位表",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

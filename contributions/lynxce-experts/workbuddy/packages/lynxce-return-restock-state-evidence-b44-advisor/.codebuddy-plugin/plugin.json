@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-return-restock-state-evidence-b44-advisor",
+  "version": "1.0.0",
+  "description": "Help staff review return restock state evidence with three focused evidence workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-return-restock-state-evidence-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-return-restock-state-evidence-b44",
+    "./skills/lynxce-return-unit-identity-crosswalk-b44",
+    "./skills/lynxce-return-inspection-proof-coverage-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-return-restock-state-evidence-b44-advisor",
+  "displayName": {
+    "zh": "退货再入库核对专家",
+    "en": "Return Restock Evidence Advisor"
+  },
+  "profession": {
+    "zh": "退货再入库核对专家",
+    "en": "Return Restock Evidence Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助退货仓检员依据逐件身份与检查记录核对再次入库条件，交付状态证据矩阵、缺项清单与待确认动作。",
+    "en": "Help staff review return restock state evidence with three focused evidence workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我的资料生成退货逐件再入库状态证据表",
+    "en": "Create the review from my supplied records"
+  },
+  "plugin": "lynxce-return-restock-state-evidence-b44-advisor",
+  "tags": [
+    {
+      "zh": "电商退货仓储",
+      "en": "Domain Workflow"
+    },
+    {
+      "zh": "退货逐件再入库状态证据表",
+      "en": "Evidence Review"
+    },
+    {
+      "zh": "人工复核",
+      "en": "Human Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我的资料生成退货逐件再入库状态证据表",
+      "en": "Create the review from my supplied records"
+    },
+    {
+      "zh": "请保留这些矛盾原值并列最少补证材料",
+      "en": "Keep conflicting values and list missing evidence"
+    },
+    {
+      "zh": "请追加新记录并复算受影响的版本差异",
+      "en": "Compare new evidence and recalculate affected rows"
+    }
+  ],
+  "keywords": [
+    "电商退货仓储",
+    "退货逐件再入库状态证据表",
+    "人工复核"
+  ]
+}

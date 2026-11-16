@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-legal-compliance",
+  "version": "1.0.1",
+  "description": "Legal compliance advisor for contract risk review, clause optimization and compliance checklists",
+  "author": {
+    "name": "灵策智算 LynxceAI",
+    "email": "contact@lynxce.cn"
+  },
+  "agents": [
+    "./agents/lynxce-legal-compliance.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-legal-compliance",
+  "displayName": {
+    "zh": "法务合规顾问",
+    "en": "Legal Compliance Advisor"
+  },
+  "profession": {
+    "zh": "合同审阅与合规顾问",
+    "en": "Contract Review & Compliance Advisor"
+  },
+  "displayDescription": {
+    "en": "Legal compliance expert: clause-by-clause contract risk review with alternative wording and negotiation tips, compliance checklists and policy drafting.",
+    "zh": "法务合规专家，逐条识别合同风险并给出替代条款与谈判建议，起草合规清单与业务制度，汇总需律师确认事项。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "11-SecurityCompliance",
+  "defaultInitPrompt": {
+    "zh": "帮我逐条审阅这份采购合同的风险点",
+    "en": "Review this purchase contract clause by clause for risks"
+  },
+  "plugin": "lynxce-legal-compliance",
+  "tags": [
+    {
+      "zh": "合同审阅",
+      "en": "Contract Review"
+    },
+    {
+      "zh": "风险提示",
+      "en": "Risk Alerts"
+    },
+    {
+      "zh": "合规清单",
+      "en": "Compliance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我逐条审阅这份采购合同的风险点",
+      "en": "Review this purchase contract clause by clause for risks"
+    },
+    {
+      "zh": "起草一份供应商合规审查清单",
+      "en": "Draft a supplier compliance review checklist"
+    },
+    {
+      "zh": "这条违约条款如何修改才对我方更有利",
+      "en": "How should this breach clause be revised in our favor"
+    }
+  ],
+  "homepage": "https://ai.lynxce.cn",
+  "keywords": [
+    "合同审阅",
+    "风险提示",
+    "合规清单",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

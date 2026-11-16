@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-signage-advisor",
+  "version": "1.0.0",
+  "description": "Plan office signage: door plates, wayfinding and safety signs, quotes and acceptance.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-signage-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-signage"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-signage-advisor",
+  "displayName": {
+    "zh": "门牌导视采购顾问",
+    "en": "Office Signage Procurement Advisor"
+  },
+  "profession": {
+    "zh": "办公室门牌导视采购顾问",
+    "en": "Office Door Sign and Wayfinding Advisor"
+  },
+  "displayDescription": {
+    "zh": "门牌导视怎么做：按房间与路口列门牌导视安全标识，定尺寸材质数量，出报价对比与验收表。",
+    "en": "Plan office signage: door plates, wayfinding and safety signs, quotes and acceptance."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新办公室要做哪些门牌和导视",
+    "en": "Which door plates and signs a new office needs"
+  },
+  "plugin": "lynxce-office-signage-advisor",
+  "tags": [
+    {
+      "zh": "标识清点",
+      "en": "Sign Inventory"
+    },
+    {
+      "zh": "字高尺寸",
+      "en": "Text Size"
+    },
+    {
+      "zh": "报价验收",
+      "en": "Quotes and Acceptance"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新办公室要做哪些门牌和导视",
+      "en": "Which door plates and signs a new office needs"
+    },
+    {
+      "zh": "导视牌字要多大才能看清",
+      "en": "How large sign text should be to read clearly"
+    },
+    {
+      "zh": "帮我做标识报价对比表和验收表",
+      "en": "Build a signage quote comparison and acceptance sheet"
+    }
+  ],
+  "keywords": [
+    "标识清点",
+    "字高尺寸",
+    "报价验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-proofread-advisor",
+  "version": "1.0.2",
+  "description": "Proofread wording, recalculate figures and review document consistency from supplied text.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-proofread-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-proofread-check",
+    "./skills/lynxce-proofread-advisor-review",
+    "./skills/lynxce-proofread-advisor-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-proofread-advisor",
+  "displayName": {
+    "zh": "文稿校对与格式统一顾问",
+    "en": "Proofreading and Consistency Advisor"
+  },
+  "profession": {
+    "zh": "文稿校对与格式统一顾问",
+    "en": "Proofreading and Consistency Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料完成语句硬错核对、数字名称复核与格式版本回读，交付证据清单、异常决策和可复算样例。",
+    "en": "Proofread wording, recalculate figures and review document consistency from supplied text."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我校对这段文字",
+    "en": "Proofread this text for me"
+  },
+  "plugin": "lynxce-proofread-advisor",
+  "tags": [
+    {
+      "zh": "文稿校对",
+      "en": "Proofreading"
+    },
+    {
+      "zh": "格式统一",
+      "en": "Consistency"
+    },
+    {
+      "zh": "数字核对",
+      "en": "Number Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我校对这段文字",
+      "en": "Proofread this text for me"
+    },
+    {
+      "zh": "这份材料的数字帮我核一遍",
+      "en": "Check the numbers in this document"
+    },
+    {
+      "zh": "全文用词怎么统一",
+      "en": "How do I unify terminology"
+    }
+  ],
+  "keywords": [
+    "文稿校对",
+    "格式统一",
+    "数字核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

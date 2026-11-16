@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-saas-account-advisor",
+  "version": "1.0.1",
+  "description": "Manage SaaS access: subscription ledger, role baselines, onboarding and offboarding.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-saas-account-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-saas-account-ledger"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-saas-account-advisor",
+  "displayName": {
+    "zh": "账号权限管理顾问",
+    "en": "SaaS Account and Access Review Advisor"
+  },
+  "profession": {
+    "zh": "SaaS账号与权限管理顾问",
+    "en": "SaaS Account and Access Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据账号清单、岗位基线与入离职记录，交付逐账号权限核对、回收证据表与席位续费测算，保留待核项。",
+    "en": "Review supplied records and deliver traceable tables, worked examples and change plans for human execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据账号和在职名单生成权限差异与回收待办表",
+    "en": "Compare these accounts with the employee list and draft access gaps and revocation evidence"
+  },
+  "plugin": "lynxce-saas-account-advisor",
+  "tags": [
+    {
+      "zh": "账号台账",
+      "en": "Account Ledger"
+    },
+    {
+      "zh": "权限复核",
+      "en": "Access Review"
+    },
+    {
+      "zh": "续费测算",
+      "en": "Renewal Analysis"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据账号和在职名单生成权限差异与回收待办表",
+      "en": "Compare these accounts with the employee list and draft access gaps and revocation evidence"
+    },
+    {
+      "zh": "核对转岗权限和资料移交，列出执行证据缺口",
+      "en": "Review role changes and ownership transfer, keeping unverified implementation steps explicit"
+    },
+    {
+      "zh": "按合约席位和使用记录测算续费方案，不假定已减席",
+      "en": "Calculate renewal scenarios from the contract and seat usage records"
+    }
+  ],
+  "keywords": [
+    "账号台账",
+    "权限基线",
+    "离职回收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

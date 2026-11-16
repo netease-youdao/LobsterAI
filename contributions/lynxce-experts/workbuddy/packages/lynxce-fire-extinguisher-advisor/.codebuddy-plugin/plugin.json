@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-fire-extinguisher-advisor",
+  "version": "1.0.0",
+  "description": "Equip homes: agent type, certification, production date, smoke alarm battery and placement.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fire-extinguisher-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fire-extinguisher"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fire-extinguisher-advisor",
+  "displayName": {
+    "zh": "灭火器烟感选购顾问",
+    "en": "Fire Extinguisher and Smoke Alarm Advisor"
+  },
+  "profession": {
+    "zh": "11.11 家用灭火器与烟雾报警器选购顾问",
+    "en": "11.11 Home Fire Extinguisher and Smoke Alarm Advisor"
+  },
+  "displayDescription": {
+    "zh": "灭火器怎么挑：按场景选灭火剂类型、核认证与生产日期、烟感看标准与电池、按房间定位置数量。",
+    "en": "Equip homes: agent type, certification, production date, smoke alarm battery and placement."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "家里厨房该配哪种灭火器",
+    "en": "Which extinguisher suits a home kitchen"
+  },
+  "plugin": "lynxce-fire-extinguisher-advisor",
+  "tags": [
+    {
+      "zh": "灭火剂类型",
+      "en": "Agent Type"
+    },
+    {
+      "zh": "报废年限",
+      "en": "Service Life"
+    },
+    {
+      "zh": "烟感布点",
+      "en": "Alarm Placement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "家里厨房该配哪种灭火器",
+      "en": "Which extinguisher suits a home kitchen"
+    },
+    {
+      "zh": "灭火器生产日期多久算过期",
+      "en": "How long a fire extinguisher stays in service"
+    },
+    {
+      "zh": "两室一厅要装几个烟雾报警器",
+      "en": "How many smoke alarms a two bedroom home needs"
+    }
+  ],
+  "keywords": [
+    "灭火剂类型",
+    "报废年限",
+    "烟感布点",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-approval-advisor",
+  "version": "1.0.1",
+  "description": "Faster approvals: node design, form fields, branch rules and SLA handling.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-approval-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-approval-form"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-approval-advisor",
+  "displayName": {
+    "zh": "审批流与表单设计顾问",
+    "en": "Approval Workflow Design Advisor"
+  },
+  "profession": {
+    "zh": "审批流与表单设计顾问",
+    "en": "Approval Workflow Design Advisor"
+  },
+  "displayDescription": {
+    "zh": "审批又慢又老被退回：节点怎么定、表单该填哪些、分支怎么走、超时之后怎么兜底处理。",
+    "en": "Faster approvals: node design, form fields, branch rules and SLA handling."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "审批太慢怎么优化",
+    "en": "How do I speed up our approval process"
+  },
+  "plugin": "lynxce-approval-advisor",
+  "tags": [
+    {
+      "zh": "审批流程",
+      "en": "Approval Flow"
+    },
+    {
+      "zh": "表单设计",
+      "en": "Form Design"
+    },
+    {
+      "zh": "流程提速",
+      "en": "Speed"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "审批太慢怎么优化",
+      "en": "How do I speed up our approval process"
+    },
+    {
+      "zh": "这个表单要哪些字段",
+      "en": "Which fields should this form have"
+    },
+    {
+      "zh": "帮我设计一版审批流",
+      "en": "Help me design an approval flow"
+    }
+  ],
+  "keywords": [
+    "审批流程",
+    "表单设计",
+    "流程提速",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

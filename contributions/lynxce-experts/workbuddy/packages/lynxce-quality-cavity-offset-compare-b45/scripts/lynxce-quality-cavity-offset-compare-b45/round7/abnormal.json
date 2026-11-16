@@ -1,0 +1,61 @@
+{
+  "inputStatus": "假设",
+  "nominal": "10.00",
+  "lower": "9.90",
+  "inclusive": true,
+  "resolvedVersion": null,
+  "groups": [
+    {
+      "cavity": "A",
+      "readings": [
+        "10.00",
+        "10.01",
+        "10.02"
+      ]
+    },
+    {
+      "cavity": "B",
+      "readings": [
+        "10.05",
+        "10.06",
+        "10.07"
+      ]
+    },
+    {
+      "cavity": "C",
+      "readings": [
+        "9.98",
+        "9.99",
+        "10.00"
+      ]
+    },
+    {
+      "cavity": "D",
+      "readings": [
+        "10.09",
+        "10.11",
+        "10.10"
+      ]
+    }
+  ],
+  "versions": [
+    {
+      "id": "旧图纸口径",
+      "upper": "10.10",
+      "source": "旧图纸"
+    },
+    {
+      "id": "新摘要口径",
+      "upper": "10.08",
+      "source": "新摘要"
+    }
+  ],
+  "samplingPlan": {
+    "rounds": [
+      "R1",
+      "R2",
+      "R3"
+    ],
+    "perCavityPerRound": 3
+  }
+}

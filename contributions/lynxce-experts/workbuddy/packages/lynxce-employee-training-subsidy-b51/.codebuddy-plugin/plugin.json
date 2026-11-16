@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-employee-training-subsidy-b51",
+  "version": "1.0.0",
+  "description": "Organize traceable enterprise policy materials, reconcile records and prepare complete correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-employee-training-subsidy-b51.md"
+  ],
+  "skills": [
+    "./skills/lynxce-employee-training-subsidy-b51-1",
+    "./skills/lynxce-employee-training-subsidy-b51-2",
+    "./skills/lynxce-employee-training-subsidy-b51-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-employee-training-subsidy-b51",
+  "displayName": {
+    "zh": "培训顾问",
+    "en": "Employee Training Subsidy Advisor"
+  },
+  "profession": {
+    "zh": "培训补贴顾问",
+    "en": "Employee Training Subsidy Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业培训经办核对人员课时证书及费用，梳理补贴证据缺口，交付名单底稿、申请说明和完整补正稿。",
+    "en": "Organize traceable enterprise policy materials, reconcile records and prepare complete correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把培训计划签到证书和付款整理成补贴说明。",
+    "en": "Employee Training Subsidy Advisor"
+  },
+  "plugin": "lynxce-employee-training-subsidy-b51",
+  "tags": [
+    {
+      "zh": "培训补贴",
+      "en": "培训补贴"
+    },
+    {
+      "zh": "证书勾稽",
+      "en": "证书勾稽"
+    },
+    {
+      "zh": "费用核对",
+      "en": "费用核对"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把培训计划签到证书和付款整理成补贴说明。",
+      "en": "Employee Training Subsidy Advisor"
+    },
+    {
+      "zh": "结业18人但只有16份证书，帮我核对全量名单。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "两名学员签到版本冲突，请重出完整补正稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "培训补贴",
+    "证书勾稽",
+    "费用核对"
+  ]
+}

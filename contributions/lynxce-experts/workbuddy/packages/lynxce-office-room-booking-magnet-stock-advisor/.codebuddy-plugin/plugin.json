@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-room-booking-magnet-stock-advisor",
+  "version": "1.0.0",
+  "description": "Match booking magnets and reconcile sets and losses.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-room-booking-magnet-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-room-booking-magnet-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-room-booking-magnet-stock-advisor",
+  "displayName": {
+    "zh": "预约牌磁贴周转师",
+    "en": "Meeting Room Booking Sign Magnet Stock Advisor"
+  },
+  "profession": {
+    "zh": "会议室门口预约牌磁贴耗材顾问",
+    "en": "Meeting Room Booking Sign Magnet Stock Advisor"
+  },
+  "displayDescription": {
+    "zh": "按会议室门口预约牌尺寸与磁吸基面核磁贴适配，登记状态套数及遗失报损，计算分规格补给与费用。",
+    "en": "Match booking magnets and reconcile sets and losses."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按已有记录核对会议室门口预约牌磁贴耗材",
+    "en": "Check the supplied records"
+  },
+  "plugin": "lynxce-office-room-booking-magnet-stock-advisor",
+  "tags": [
+    {
+      "zh": "适配复核",
+      "en": "Fit Review"
+    },
+    {
+      "zh": "数量核算",
+      "en": "Quantity Calculation"
+    },
+    {
+      "zh": "异常台账",
+      "en": "Exception Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按已有记录核对会议室门口预约牌磁贴耗材",
+      "en": "Check the supplied records"
+    },
+    {
+      "zh": "列数量差异与待补依据",
+      "en": "List quantity gaps and missing evidence"
+    },
+    {
+      "zh": "输出可复核算式与异常台账",
+      "en": "Build calculations and an exception ledger"
+    }
+  ],
+  "keywords": [
+    "适配复核",
+    "数量核算",
+    "异常台账",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

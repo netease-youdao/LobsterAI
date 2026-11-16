@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-apparel-advisor",
+  "version": "1.0.4",
+  "description": "Fewer returns: taking measurements, reading real size charts, fabrics and return terms.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-apparel-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-apparel-size"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-apparel-advisor",
+  "displayName": {
+    "zh": "服装尺码与网购退换核对顾问",
+    "en": "Apparel Sizing Advisor"
+  },
+  "profession": {
+    "zh": "服装尺码与网购退换核对顾问",
+    "en": "Apparel Sizing Advisor"
+  },
+  "displayDescription": {
+    "zh": "网购服装少退货的做法：三围怎么量、实测尺寸表怎么对照、面料与退换规则要看清哪几项。",
+    "en": "Fewer returns: taking measurements, reading real size charts, fabrics and return terms."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我该按哪个尺码下单",
+    "en": "Which size should I order"
+  },
+  "plugin": "lynxce-apparel-advisor",
+  "tags": [
+    {
+      "zh": "服装尺码",
+      "en": "Sizing"
+    },
+    {
+      "zh": "面料标签",
+      "en": "Fabric"
+    },
+    {
+      "zh": "退换成本",
+      "en": "Returns"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我该按哪个尺码下单",
+      "en": "Which size should I order"
+    },
+    {
+      "zh": "这个面料成分好不好打理",
+      "en": "Is this fabric easy to care for"
+    },
+    {
+      "zh": "这件衣服现在什么价",
+      "en": "What is the current price for this item"
+    }
+  ],
+  "keywords": [
+    "服装尺码",
+    "面料标签",
+    "退换成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

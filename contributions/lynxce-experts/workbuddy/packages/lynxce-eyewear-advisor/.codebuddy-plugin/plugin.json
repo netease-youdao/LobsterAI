@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-eyewear-advisor",
+  "version": "1.0.4",
+  "description": "Get the parameters right: reading a prescription, comparing lenses and matching frame size.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-eyewear-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-eyewear-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-eyewear-advisor",
+  "displayName": {
+    "zh": "眼镜选购与配镜参数核对顾问",
+    "en": "Eyewear Spec and Buying Advisor"
+  },
+  "profession": {
+    "zh": "眼镜选购与配镜参数核对顾问",
+    "en": "Eyewear Spec and Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "配镜先把参数核准：验光单四项怎么读、折射率与膜层怎么比、镜架三个数字怎么对得上。",
+    "en": "Get the parameters right: reading a prescription, comparing lenses and matching frame size."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我看看这张验光单",
+    "en": "Explain this prescription"
+  },
+  "plugin": "lynxce-eyewear-advisor",
+  "tags": [
+    {
+      "zh": "配镜参数",
+      "en": "Prescription"
+    },
+    {
+      "zh": "镜片对比",
+      "en": "Lenses"
+    },
+    {
+      "zh": "镜架尺寸",
+      "en": "Frame Size"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我看看这张验光单",
+      "en": "Explain this prescription"
+    },
+    {
+      "zh": "折射率该选多少",
+      "en": "Which refractive index should I pick"
+    },
+    {
+      "zh": "这副镜架尺寸合适吗",
+      "en": "Does this frame size fit me"
+    }
+  ],
+  "keywords": [
+    "配镜参数",
+    "镜片对比",
+    "镜架尺寸",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-commute-parking-advisor",
+  "version": "1.0.2",
+  "description": "Review supplied records and deliver traceable tables, worked calculations and plans for human execution.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-commute-parking-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-commute-parking"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-commute-parking-advisor",
+  "displayName": {
+    "zh": "通勤管理顾问",
+    "en": "Shuttle and Parking Planning Advisor"
+  },
+  "profession": {
+    "zh": "班车与停车位管理顾问",
+    "en": "Shuttle and Parking Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据班车需求、容量和车位规则，交付分时段缺口测算、候补台账、运行复核与调整方案，保留待核项。",
+    "en": "Review supplied records and deliver traceable tables, worked calculations and plans for human execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "按上车时段和有效座位核算缺口，比较两种班次方案",
+    "en": "Create the first deliverable from my records"
+  },
+  "plugin": "lynxce-commute-parking-advisor",
+  "tags": [
+    {
+      "zh": "材料核对",
+      "en": "Record Review"
+    },
+    {
+      "zh": "交付模板",
+      "en": "Templates"
+    },
+    {
+      "zh": "变更复算",
+      "en": "Change Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按上车时段和有效座位核算缺口，比较两种班次方案",
+      "en": "Create the first deliverable from my records"
+    },
+    {
+      "zh": "用车位总量、预留和已批准规则生成分配与候补台账",
+      "en": "Review exceptions and evidence gaps"
+    },
+    {
+      "zh": "根据本周运行记录复算利用率和准点口径，做下周调整草稿",
+      "en": "Recalculate and draft the next plan"
+    }
+  ],
+  "keywords": [
+    "班车与停车位管理顾问",
+    "交付模板",
+    "证据核对",
+    "灵策智算"
+  ],
+  "needEncrypt": true
+}

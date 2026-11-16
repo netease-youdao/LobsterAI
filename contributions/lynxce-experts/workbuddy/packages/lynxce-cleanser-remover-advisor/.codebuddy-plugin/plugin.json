@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-cleanser-remover-advisor",
+  "version": "1.0.1",
+  "description": "Pick cleansers and removers: amino acid vs soap by ingredients, oil, water or balm by makeup, price per ml.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cleanser-remover-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cleanser-remover"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cleanser-remover-advisor",
+  "displayName": {
+    "zh": "洁面与卸妆选购核算顾问",
+    "en": "Cleanser and Makeup Remover Advisor"
+  },
+  "profession": {
+    "zh": "11.11 洁面与卸妆选购核算顾问",
+    "en": "11.11 Cleanser and Makeup Remover Advisor"
+  },
+  "displayDescription": {
+    "zh": "洁面卸妆怎么挑：看成分表辨氨基酸与皂基、按妆容选卸妆油水膏、算正装小样单毫升价。",
+    "en": "Pick cleansers and removers: amino acid vs soap by ingredients, oil, water or balm by makeup, price per ml."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "怎么从成分表看出是氨基酸还是皂基洁面",
+    "en": "How do I tell amino acid from soap cleanser by ingredients"
+  },
+  "plugin": "lynxce-cleanser-remover-advisor",
+  "tags": [
+    {
+      "zh": "成分表辨类型",
+      "en": "Ingredient Check"
+    },
+    {
+      "zh": "卸妆油水膏",
+      "en": "Oil Water or Balm"
+    },
+    {
+      "zh": "单毫升价",
+      "en": "Price per ml"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "怎么从成分表看出是氨基酸还是皂基洁面",
+      "en": "How do I tell amino acid from soap cleanser by ingredients"
+    },
+    {
+      "zh": "淡妆用卸妆水还是卸妆油",
+      "en": "Should light makeup use micellar water or cleansing oil"
+    },
+    {
+      "zh": "正装加小样和单买正装哪个单毫升更便宜",
+      "en": "Is a full size with minis cheaper per ml than a full size alone"
+    }
+  ],
+  "keywords": [
+    "成分表辨类型",
+    "卸妆油水膏",
+    "单毫升价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

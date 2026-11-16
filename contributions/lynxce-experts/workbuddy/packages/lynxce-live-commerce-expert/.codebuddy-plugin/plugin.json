@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-live-commerce-expert",
+  "version": "1.0.1",
+  "description": "Prepare live-show talking points, price checks and incident handoffs using supplied product materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-live-commerce-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-live-commerce-expert",
+  "displayName": {
+    "zh": "直播带货编导",
+    "en": "Live Commerce Director"
+  },
+  "profession": {
+    "zh": "直播脚本与场控设计顾问",
+    "en": "Live Script & Run-of-Show Designer"
+  },
+  "displayDescription": {
+    "zh": "依据商品与活动材料编制直播讲解和场控流程核对价格时长及异常衔接交付主播可读话术与人工复核清单",
+    "en": "Prepare live-show talking points, price checks and incident handoffs using supplied product materials."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "把这些商品资料整理成单品讲解稿和价格解释表",
+    "en": "Draft a product script and price explanation from these materials"
+  },
+  "plugin": "lynxce-live-commerce-expert",
+  "tags": [
+    {
+      "zh": "单品讲解",
+      "en": "Product script"
+    },
+    {
+      "zh": "场控排程",
+      "en": "Session schedule"
+    },
+    {
+      "zh": "突发衔接",
+      "en": "Exception transitions"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这些商品资料整理成单品讲解稿和价格解释表",
+      "en": "Draft a product script and price explanation from these materials"
+    },
+    {
+      "zh": "按我给的商品顺序和时长编制整场排程",
+      "en": "Build a session schedule using my product order and durations"
+    },
+    {
+      "zh": "缺货或超时怎样衔接？请整理场控话术与待确认项",
+      "en": "Draft host transitions for stockouts and overruns with open questions"
+    }
+  ],
+  "keywords": [
+    "直播脚本",
+    "逼单话术",
+    "场控节奏",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/lynxce-live-product-script",
+    "./skills/lynxce-live-run-sheet",
+    "./skills/lynxce-live-price-review"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-subscribe-stock-advisor",
+  "version": "1.0.2",
+  "description": "Compare subscriptions to bulk buying: discount and shipping, pause or cancel rules, shelf life versus storage, payment reminders.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-subscribe-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-subscribe-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-subscribe-stock-advisor",
+  "displayName": {
+    "zh": "周期购订阅与囤货对比顾问",
+    "en": "Subscription vs Bulk Stock-up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 周期购订阅与囤货对比顾问",
+    "en": "11.11 Subscription vs Bulk Stock-up Advisor"
+  },
+  "displayDescription": {
+    "zh": "周期购划不划算：折扣与运费换算、暂停取消规则、保质期存放空间、扣款提醒与囤货上限判断。",
+    "en": "Compare subscriptions to bulk buying: discount and shipping, pause or cancel rules, shelf life versus storage, payment reminders."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "周期购和一次性囤货哪个划算",
+    "en": "Which is cheaper, subscription or bulk buying"
+  },
+  "plugin": "lynxce-subscribe-stock-advisor",
+  "tags": [
+    {
+      "zh": "折扣换算",
+      "en": "Discount Rate"
+    },
+    {
+      "zh": "囤货上限",
+      "en": "Stock-up Limit"
+    },
+    {
+      "zh": "暂停取消",
+      "en": "Pause or Cancel"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "周期购和一次性囤货哪个划算",
+      "en": "Which is cheaper, subscription or bulk buying"
+    },
+    {
+      "zh": "这次囤多少不算超囤",
+      "en": "How much can I stock up without overbuying"
+    },
+    {
+      "zh": "暂停订阅要提前几天操作",
+      "en": "How many days ahead do I need to pause the subscription"
+    }
+  ],
+  "keywords": [
+    "折扣换算",
+    "囤货上限",
+    "暂停取消",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

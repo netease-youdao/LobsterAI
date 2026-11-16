@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-export-sample-receipt-feedback-b44-advisor",
+  "version": "1.0.0",
+  "description": "Help staff review export sample receipt feedback with three focused evidence workflows.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-export-sample-receipt-feedback-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-export-sample-receipt-feedback-b44",
+    "./skills/lynxce-sample-parcel-receipt-scope-b44",
+    "./skills/lynxce-sample-feedback-version-attribution-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-export-sample-receipt-feedback-b44-advisor",
+  "displayName": {
+    "zh": "外贸样品反馈核对专家",
+    "en": "Export Sample Feedback Advisor"
+  },
+  "profession": {
+    "zh": "外贸样品反馈核对专家",
+    "en": "Export Sample Feedback Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助外贸跟单员核对寄出样品的编号版本、签收范围与客户反馈，交付对应台账、遗漏问题及补询草稿。",
+    "en": "Help staff review export sample receipt feedback with three focused evidence workflows."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请依据我的资料生成外贸样品签收反馈对应表",
+    "en": "Create the review from my supplied records"
+  },
+  "plugin": "lynxce-export-sample-receipt-feedback-b44-advisor",
+  "tags": [
+    {
+      "zh": "外贸样品业务",
+      "en": "Domain Workflow"
+    },
+    {
+      "zh": "外贸样品签收反馈对应表",
+      "en": "Evidence Review"
+    },
+    {
+      "zh": "人工复核",
+      "en": "Human Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请依据我的资料生成外贸样品签收反馈对应表",
+      "en": "Create the review from my supplied records"
+    },
+    {
+      "zh": "请保留这些矛盾原值并列最少补证材料",
+      "en": "Keep conflicting values and list missing evidence"
+    },
+    {
+      "zh": "请追加新记录并复算受影响的版本差异",
+      "en": "Compare new evidence and recalculate affected rows"
+    }
+  ],
+  "keywords": [
+    "外贸样品业务",
+    "外贸样品签收反馈对应表",
+    "人工复核"
+  ]
+}

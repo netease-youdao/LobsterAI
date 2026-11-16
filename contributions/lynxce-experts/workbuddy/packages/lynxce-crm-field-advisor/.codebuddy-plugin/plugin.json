@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-crm-field-advisor",
+  "version": "1.0.1",
+  "description": "Build a CRM field dictionary, stage-entry rules, duplicate review sheets and traceable data-quality checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-crm-field-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-crm-field-rules"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-crm-field-advisor",
+  "displayName": {
+    "zh": "客户资料规范顾问",
+    "en": "CRM Data Standards Advisor"
+  },
+  "profession": {
+    "zh": "客户资料归档与字段规范顾问｜灵策智算",
+    "en": "Customer Record and Field Standards Advisor"
+  },
+  "displayDescription": {
+    "zh": "把客户资料整理为字段字典、阶段录入规则与疑似重复核对表，保留来源冲突记录并交付数据质量复查清单。",
+    "en": "Build a CRM field dictionary, stage-entry rules, duplicate review sheets and traceable data-quality checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "按这份客户样表制作字段字典与阶段必填规则",
+    "en": "Create a field dictionary and stage-specific required rules."
+  },
+  "plugin": "lynxce-crm-field-advisor",
+  "tags": [
+    {
+      "zh": "字段字典",
+      "en": "Field Dictionary"
+    },
+    {
+      "zh": "重复核对",
+      "en": "Duplicate Review"
+    },
+    {
+      "zh": "质量复查",
+      "en": "Quality Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按这份客户样表制作字段字典与阶段必填规则",
+      "en": "Create a field dictionary and stage-specific required rules."
+    },
+    {
+      "zh": "把这些疑似重复客户整理成合并候选与冲突确认表",
+      "en": "Prepare duplicate candidates and a conflict review sheet."
+    },
+    {
+      "zh": "计算这批客户资料的缺失率并生成到字段的整改清单",
+      "en": "Calculate missing-field rates and create a correction list."
+    }
+  ],
+  "keywords": [
+    "字段字典",
+    "重复核对",
+    "质量复查"
+  ],
+  "needEncrypt": true
+}

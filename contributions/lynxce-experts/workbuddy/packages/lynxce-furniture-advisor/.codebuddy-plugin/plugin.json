@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-furniture-advisor",
+  "version": "1.0.4",
+  "description": "Measure three things first: product size, delivery access and clearance around it.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-furniture-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-furniture-fit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-furniture-advisor",
+  "displayName": {
+    "zh": "家具选购与尺寸核对顾问",
+    "en": "Furniture Selection Advisor"
+  },
+  "profession": {
+    "zh": "家具选购与尺寸核对顾问",
+    "en": "Furniture Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "家具下单前先量三处尺寸：成品、搬运通道与使用留白，避免抬不进门又退换不掉白花钱。",
+    "en": "Measure three things first: product size, delivery access and clearance around it."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个沙发放得下吗",
+    "en": "Will this sofa fit my living room"
+  },
+  "plugin": "lynxce-furniture-advisor",
+  "tags": [
+    {
+      "zh": "家具选购",
+      "en": "Furniture"
+    },
+    {
+      "zh": "尺寸核对",
+      "en": "Fit Check"
+    },
+    {
+      "zh": "到手总价",
+      "en": "Delivered Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个沙发放得下吗",
+      "en": "Will this sofa fit my living room"
+    },
+    {
+      "zh": "定制柜怎么算才不吃亏",
+      "en": "How is custom cabinetry priced fairly"
+    },
+    {
+      "zh": "这套家具到手要多少钱",
+      "en": "What is the delivered price for this set"
+    }
+  ],
+  "keywords": [
+    "家具选购",
+    "尺寸核对",
+    "到手总价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

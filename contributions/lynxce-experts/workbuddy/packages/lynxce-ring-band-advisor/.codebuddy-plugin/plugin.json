@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ring-band-advisor",
+  "version": "1.0.0",
+  "description": "Check rings: purity marks, weight and labor fee, per gram price, ring size and resizing.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ring-band-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ring-band"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ring-band-advisor",
+  "displayName": {
+    "zh": "戒指对戒核算顾问",
+    "en": "Ring and Wedding Band Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 戒指与对戒材质核算顾问",
+    "en": "11.11 Ring and Wedding Band Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "戒指对戒怎么核：认纯度印记、按克重与工费拆价、一口价折克价、测准圈号、核改圈售后。",
+    "en": "Check rings: purity marks, weight and labor fee, per gram price, ring size and resizing."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一口价戒指怎么折算成每克价格",
+    "en": "How to convert a fixed price ring to a per gram price"
+  },
+  "plugin": "lynxce-ring-band-advisor",
+  "tags": [
+    {
+      "zh": "纯度印记",
+      "en": "Purity Marks"
+    },
+    {
+      "zh": "克重工费",
+      "en": "Weight and Labor Fee"
+    },
+    {
+      "zh": "圈号测量",
+      "en": "Ring Sizing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一口价戒指怎么折算成每克价格",
+      "en": "How to convert a fixed price ring to a per gram price"
+    },
+    {
+      "zh": "白色 18K 金和铂金有什么区别",
+      "en": "How white 18K gold differs from platinum"
+    },
+    {
+      "zh": "在家怎么量准戒指圈号",
+      "en": "How to measure ring size accurately at home"
+    }
+  ],
+  "keywords": [
+    "纯度印记",
+    "克重工费",
+    "圈号测量",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

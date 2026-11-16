@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-recap-advisor",
+  "version": "1.0.3",
+  "description": "Recap promo spending: consolidate orders, verify refund arrival and amount, spot impulse buys, set next budget.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-recap-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-recap"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-recap-advisor",
+  "displayName": {
+    "zh": "大促账单复盘与退款核对顾问",
+    "en": "Promotion Spending Recap and Refund Check Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促账单复盘与退款核对顾问",
+    "en": "11.11 Promotion Spending Recap and Refund Check Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促买完怎么复盘：多平台订单汇总、逐笔核对退款到账与金额、识别冲动消费、定下次预算。",
+    "en": "Recap promo spending: consolidate orders, verify refund arrival and amount, spot impulse buys, set next budget."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我复盘这次大促一共花了多少",
+    "en": "Recap how much I spent this promotion"
+  },
+  "plugin": "lynxce-promo-recap-advisor",
+  "tags": [
+    {
+      "zh": "订单汇总",
+      "en": "Order Summary"
+    },
+    {
+      "zh": "退款核对",
+      "en": "Refund Check"
+    },
+    {
+      "zh": "冲动消费",
+      "en": "Impulse Buys"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我复盘这次大促一共花了多少",
+      "en": "Recap how much I spent this promotion"
+    },
+    {
+      "zh": "退款金额对不对，为什么少退了",
+      "en": "Is my refund right, why is it less"
+    },
+    {
+      "zh": "下次大促预算该定多少",
+      "en": "What budget should I set for next time"
+    }
+  ],
+  "keywords": [
+    "订单汇总",
+    "退款核对",
+    "冲动消费",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-edudevice-advisor",
+  "version": "1.0.4",
+  "description": "Choose study devices by need: eye-comfort specs, content ecosystems and usage rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-edudevice-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-edudevice-pick"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-edudevice-advisor",
+  "displayName": {
+    "zh": "学习设备与教育硬件选购顾问",
+    "en": "Study Device Selection Advisor"
+  },
+  "profession": {
+    "zh": "学习设备与教育硬件选购顾问",
+    "en": "Study Device Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "学习设备按真实用途选：护眼参数怎么读、内容生态怎么比、使用规则怎么和孩子一起定下来。",
+    "en": "Choose study devices by need: eye-comfort specs, content ecosystems and usage rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "该买学习平板还是墨水屏",
+    "en": "Study tablet or e-reader"
+  },
+  "plugin": "lynxce-edudevice-advisor",
+  "tags": [
+    {
+      "zh": "学习设备",
+      "en": "Study Devices"
+    },
+    {
+      "zh": "护眼参数",
+      "en": "Eye Comfort"
+    },
+    {
+      "zh": "使用规则",
+      "en": "Usage Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "该买学习平板还是墨水屏",
+      "en": "Study tablet or e-reader"
+    },
+    {
+      "zh": "这台设备的护眼参数怎么看",
+      "en": "How do I read the eye-comfort specs"
+    },
+    {
+      "zh": "帮我定一份使用规则",
+      "en": "Draft usage rules for the device"
+    }
+  ],
+  "keywords": [
+    "学习设备",
+    "护眼参数",
+    "使用规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

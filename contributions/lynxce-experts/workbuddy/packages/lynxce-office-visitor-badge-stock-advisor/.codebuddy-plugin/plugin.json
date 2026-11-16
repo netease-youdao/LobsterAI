@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-visitor-badge-stock-advisor",
+  "version": "1.0.0",
+  "description": "Size reusable badge stock by peak occupancy and registration supplies by arrivals.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-visitor-badge-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-visitor-badge-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-visitor-badge-stock-advisor",
+  "displayName": {
+    "zh": "临时访客胸牌备量助理",
+    "en": "Temporary Visitor Badge Supply Assistant"
+  },
+  "profession": {
+    "zh": "临时访客可回收胸牌耗材核算助理",
+    "en": "Reusable Visitor Badge and Register Supply Assistant"
+  },
+  "displayDescription": {
+    "zh": "访客胸牌挂绳怎么备：按同时在场峰值测算周转库存，按人次备登记耗材，交付领还表与缺件补货核算表。",
+    "en": "Size reusable badge stock by peak occupancy and registration supplies by arrivals."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三场访客重叠需要多少套胸牌",
+    "en": "Calculate badges for three overlapping visitor groups"
+  },
+  "plugin": "lynxce-office-visitor-badge-stock-advisor",
+  "tags": [
+    {
+      "zh": "重叠峰值",
+      "en": "Concurrent Peak"
+    },
+    {
+      "zh": "分件回收",
+      "en": "Component Returns"
+    },
+    {
+      "zh": "登记耗材",
+      "en": "Register Supplies"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三场访客重叠需要多少套胸牌",
+      "en": "Calculate badges for three overlapping visitor groups"
+    },
+    {
+      "zh": "卡套归还但挂绳没还怎样算库存",
+      "en": "Reconcile returned holders and missing lanyards"
+    },
+    {
+      "zh": "做临时访客胸牌领还与采购核算表",
+      "en": "Make a visitor badge return and purchase sheet"
+    }
+  ],
+  "keywords": [
+    "重叠峰值",
+    "分件回收",
+    "登记耗材",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

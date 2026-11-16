@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-green-screen-advisor",
+  "version": "1.0.2",
+  "description": "Prepare a green-screen diagnosis worksheet, controlled keying trials and shot-by-shot acceptance plan.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-green-screen-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-green-screen"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-green-screen-advisor",
+  "displayName": {
+    "zh": "绿幕拍摄顾问",
+    "en": "Green Screen Advisor"
+  },
+  "profession": {
+    "zh": "绿幕拍摄与抠像顾问｜灵策智算",
+    "en": "Green Screen Shooting and Keying Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "绿幕边缘怎么核对：现场条件、主体与背景分离、参数对照、动态复验，交付逐镜头试调和验收底稿。",
+    "en": "Prepare a green-screen diagnosis worksheet, controlled keying trials and shot-by-shot acceptance plan."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "绿幕抠完头发一圈绿边怎么办",
+    "en": "Green fringe around hair after keying"
+  },
+  "plugin": "lynxce-green-screen-advisor",
+  "tags": [
+    {
+      "zh": "绿幕拍摄",
+      "en": "Green Screen"
+    },
+    {
+      "zh": "抠像",
+      "en": "Chroma Key"
+    },
+    {
+      "zh": "溢色处理",
+      "en": "Spill Removal"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "绿幕抠完头发一圈绿边怎么办",
+      "en": "Green fringe around hair after keying"
+    },
+    {
+      "zh": "小房间绿幕灯怎么摆",
+      "en": "How to light a green screen in a small room"
+    },
+    {
+      "zh": "帮我列一份绿幕拍摄检查表",
+      "en": "Make a green screen shooting checklist"
+    }
+  ],
+  "keywords": [
+    "绿幕拍摄",
+    "抠像",
+    "溢色处理",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "name": "lynxce-stock-analyst",
+  "version": "1.0.1",
+  "description": "Stock research assistant for A-share announcements, deep-dive analysis, technical indicators and risk assessment",
+  "author": {
+    "name": "灵策智算 LynxceAI",
+    "email": "contact@lynxce.cn"
+  },
+  "agents": [
+    "./agents/lynxce-stock-analyst.md"
+  ],
+  "skills": [
+    "./skills/stock-analyzer",
+    "./skills/stock-announcements",
+    "./skills/stock-explorer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-stock-analyst",
+  "displayName": {
+    "zh": "股票研究助手",
+    "en": "Stock Research Assistant"
+  },
+  "profession": {
+    "zh": "证券市场研究分析师",
+    "en": "Equity Market Research Analyst"
+  },
+  "displayDescription": {
+    "en": "Equity research expert: tracks A-share announcements, produces deep-dive stock reports covering US/HK quotes, fundamentals, technical indicators and risk. Not investment advice.",
+    "zh": "股票研究专家，追踪 A 股公告并生成个股深度分析报告，覆盖美港股行情、基本面、技术指标与风险评估。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "帮我做一份贵州茅台的深度分析报告",
+    "en": "Produce a deep-dive analysis report on Kweichow Moutai"
+  },
+  "plugin": "lynxce-stock-analyst",
+  "tags": [
+    {
+      "zh": "个股分析",
+      "en": "Stock Analysis"
+    },
+    {
+      "zh": "公告追踪",
+      "en": "Announcements"
+    },
+    {
+      "zh": "技术指标",
+      "en": "Technicals"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我做一份贵州茅台的深度分析报告",
+      "en": "Produce a deep-dive analysis report on Kweichow Moutai"
+    },
+    {
+      "zh": "查看今天A股有哪些重要公告",
+      "en": "List today's important A-share announcements"
+    },
+    {
+      "zh": "分析特斯拉近期的技术指标和风险",
+      "en": "Analyze Tesla's recent technical indicators and risks"
+    }
+  ],
+  "homepage": "https://ai.lynxce.cn",
+  "keywords": [
+    "个股分析",
+    "公告追踪",
+    "技术指标",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

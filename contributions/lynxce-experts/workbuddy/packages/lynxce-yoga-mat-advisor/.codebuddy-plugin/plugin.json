@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-yoga-mat-advisor",
+  "version": "1.0.1",
+  "description": "Pick yoga mats and wear: thickness and material, grip and rebound, size by height, fabric, sizing and returns.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-yoga-mat-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-yoga-mat"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-yoga-mat-advisor",
+  "displayName": {
+    "zh": "瑜伽垫与瑜伽服选购顾问",
+    "en": "Yoga Mat and Yoga Wear Advisor"
+  },
+  "profession": {
+    "zh": "11.11 瑜伽垫与瑜伽服选购顾问",
+    "en": "11.11 Yoga Mat and Yoga Wear Advisor"
+  },
+  "displayDescription": {
+    "zh": "瑜伽垫和服怎么挑：按用途定厚度材质、看防滑回弹、尺寸按身高、面料尺码先看退换规则。",
+    "en": "Pick yoga mats and wear: thickness and material, grip and rebound, size by height, fabric, sizing and returns."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "练瑜伽选 6 毫米还是 10 毫米的垫子",
+    "en": "Should I pick a 6mm or 10mm yoga mat"
+  },
+  "plugin": "lynxce-yoga-mat-advisor",
+  "tags": [
+    {
+      "zh": "厚度材质",
+      "en": "Thickness and Material"
+    },
+    {
+      "zh": "垫子尺寸",
+      "en": "Mat Size"
+    },
+    {
+      "zh": "尺码退换",
+      "en": "Sizing and Returns"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "练瑜伽选 6 毫米还是 10 毫米的垫子",
+      "en": "Should I pick a 6mm or 10mm yoga mat"
+    },
+    {
+      "zh": "手心爱出汗选什么材质的瑜伽垫",
+      "en": "Which yoga mat material suits sweaty hands"
+    },
+    {
+      "zh": "瑜伽裤腰围 68 臀围 92 穿什么码",
+      "en": "What yoga pants size for waist 68 and hips 92"
+    }
+  ],
+  "keywords": [
+    "厚度材质",
+    "垫子尺寸",
+    "尺码退换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

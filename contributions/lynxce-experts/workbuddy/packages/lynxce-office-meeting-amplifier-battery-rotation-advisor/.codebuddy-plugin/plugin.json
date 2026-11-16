@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-meeting-amplifier-battery-rotation-advisor",
+  "version": "1.0.0",
+  "description": "Plan amplifier runtime, battery sets and swaps.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-meeting-amplifier-battery-rotation-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-meeting-amplifier-battery-rotation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-meeting-amplifier-battery-rotation-advisor",
+  "displayName": {
+    "zh": "扩音器电池轮换助理",
+    "en": "Amplifier Battery Advisor"
+  },
+  "profession": {
+    "zh": "会议扩音器续航电池轮换顾问",
+    "en": "Amplifier Battery Advisor"
+  },
+  "displayDescription": {
+    "zh": "按会议扩音时段与同工况实测续航核算电池套数，复核可更换型号和轮换窗口，交付采购排期及异常表。",
+    "en": "Plan amplifier runtime, battery sets and swaps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三场会议如何安排换电窗口",
+    "en": "Schedule battery swaps for three meetings"
+  },
+  "plugin": "lynxce-office-meeting-amplifier-battery-rotation-advisor",
+  "tags": [
+    {
+      "zh": "实测续航",
+      "en": "Tested Runtime"
+    },
+    {
+      "zh": "换电排期",
+      "en": "Swap Schedule"
+    },
+    {
+      "zh": "型号核对",
+      "en": "Battery Fit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三场会议如何安排换电窗口",
+      "en": "Schedule battery swaps for three meetings"
+    },
+    {
+      "zh": "每套4节按6节包装如何采购",
+      "en": "Buy four-cell sets sold in six-cell packs"
+    },
+    {
+      "zh": "续航缩短后原排期还能否执行",
+      "en": "Review a schedule after runtime falls"
+    }
+  ],
+  "keywords": [
+    "实测续航",
+    "换电排期",
+    "型号核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

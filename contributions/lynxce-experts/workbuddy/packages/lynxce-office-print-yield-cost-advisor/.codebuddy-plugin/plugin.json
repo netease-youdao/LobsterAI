@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-print-yield-cost-advisor",
+  "version": "1.0.0",
+  "description": "Verify toner and ink compatibility, distinguish rated and actual yields, and calculate qualified page cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-print-yield-cost-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-print-yield-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-print-yield-cost-advisor",
+  "displayName": {
+    "zh": "打印耗材单页成本顾问",
+    "en": "Printer Cartridge Page Cost Advisor"
+  },
+  "profession": {
+    "zh": "打印硒鼓墨盒兼容与单页成本核算顾问",
+    "en": "Printer Cartridge Compatibility and Page Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "打印耗材按机型与芯片核对硒鼓墨盒兼容性，区分标称页量和实测合格页数，核算单页成本并输出试打验收表。",
+    "en": "Verify toner and ink compatibility, distinguish rated and actual yields, and calculate qualified page cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这些硒鼓墨盒能否匹配当前机型",
+    "en": "Check cartridge compatibility with the current printer"
+  },
+  "plugin": "lynxce-office-print-yield-cost-advisor",
+  "tags": [
+    {
+      "zh": "机型芯片适配",
+      "en": "Model and Chip Compatibility"
+    },
+    {
+      "zh": "合格页量",
+      "en": "Qualified Print Yield"
+    },
+    {
+      "zh": "单页成本表",
+      "en": "Cost per Page Table"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这些硒鼓墨盒能否匹配当前机型",
+      "en": "Check cartridge compatibility with the current printer"
+    },
+    {
+      "zh": "扣除废页后算实际单页耗材成本",
+      "en": "Calculate actual page cost after rejected prints"
+    },
+    {
+      "zh": "生成鼓粉分摊和试打验收对比表",
+      "en": "Build drum allocation and print acceptance tables"
+    }
+  ],
+  "keywords": [
+    "机型芯片适配",
+    "合格页量",
+    "单页成本表",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-company-profile-advisor",
+  "version": "1.0.1",
+  "description": "Organize company facts, audience-specific profiles, brochure pages, evidence notes and revision records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-company-profile-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-company-profile",
+    "./skills/lynxce-company-cases",
+    "./skills/lynxce-company-brochure"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-company-profile-advisor",
+  "displayName": {
+    "zh": "公司介绍材料顾问",
+    "en": "Company Profile Advisor"
+  },
+  "profession": {
+    "zh": "公司介绍材料与宣传册编写顾问｜灵策智算",
+    "en": "Company Profile and Brochure Writer | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "依据企业材料统一业务与规模口径区分客户招聘合作读者需求安排宣传册分页交付可追溯介绍稿和版本清单",
+    "en": "Organize company facts, audience-specific profiles, brochure pages, evidence notes and revision records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我统一公司介绍的口径",
+    "en": "Unify our company profile messaging"
+  },
+  "plugin": "lynxce-company-profile-advisor",
+  "tags": [
+    {
+      "zh": "公司介绍",
+      "en": "Company Profile"
+    },
+    {
+      "zh": "宣传册",
+      "en": "Brochure"
+    },
+    {
+      "zh": "口径统一",
+      "en": "Consistent Messaging"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我统一公司介绍的口径",
+      "en": "Unify our company profile messaging"
+    },
+    {
+      "zh": "写一份 8 页宣传册的分页",
+      "en": "Outline an 8-page brochure"
+    },
+    {
+      "zh": "一句话公司介绍怎么写",
+      "en": "How to write a one-line company intro"
+    }
+  ],
+  "keywords": [
+    "公司介绍",
+    "宣传册",
+    "口径统一",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

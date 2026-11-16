@@ -1,0 +1,79 @@
+{
+  "name": "lynxce-iot-advisor",
+  "version": "1.0.1",
+  "description": "Review supplied device logs, protocol differences and test plans without operating devices or claiming a verified fix.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-iot-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-iot-timeline",
+    "./skills/lynxce-protocol-review",
+    "./skills/lynxce-iot-validation"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-iot-advisor",
+  "displayName": {
+    "zh": "灵策物联网调试顾问",
+    "en": "IoT Debugging"
+  },
+  "profession": {
+    "zh": "嵌入式与物联网联调顾问",
+    "en": "Embedded & IoT Integration Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户设备日志与协议材料对齐事件时间线区分消息到达和业务成功整理联调验证计划与回退交接",
+    "en": "Review supplied device logs, protocol differences and test plans without operating devices or claiming a verified fix."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "设备偶发离线,从哪查起",
+    "en": "Devices go offline intermittently — where do I start"
+  },
+  "plugin": "lynxce-iot-advisor",
+  "tags": [
+    {
+      "zh": "分层排查",
+      "en": "Layered Debug"
+    },
+    {
+      "zh": "通信协议",
+      "en": "Protocols"
+    },
+    {
+      "zh": "现场取证",
+      "en": "Field Evidence"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "设备偶发离线,从哪查起",
+      "en": "Devices go offline intermittently — where do I start"
+    },
+    {
+      "zh": "数据上报丢包严重,怎么定位",
+      "en": "Heavy packet loss on uplink — how do I locate it"
+    },
+    {
+      "zh": "现场该采集哪些信息",
+      "en": "What data should I collect on site"
+    }
+  ],
+  "keywords": [
+    "分层排查",
+    "通信协议",
+    "现场取证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "pricing": {
+    "mode": "buyout",
+    "payMode": 1,
+    "priceFen": 999,
+    "durationDays": 0
+  },
+  "needEncrypt": true
+}

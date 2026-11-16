@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ergonomic-advisor",
+  "version": "1.0.4",
+  "description": "Size desks and chairs to your body: seat height math, key adjustments and desk travel range.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ergonomic-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ergonomic-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ergonomic-advisor",
+  "displayName": {
+    "zh": "办公桌椅与人体工学选购顾问",
+    "en": "Office Furniture and Ergonomics Advisor"
+  },
+  "profession": {
+    "zh": "办公桌椅与人体工学选购顾问",
+    "en": "Office Furniture and Ergonomics Advisor"
+  },
+  "displayDescription": {
+    "zh": "桌椅按身体尺寸买不返工：坐高与桌高怎么算、椅子看哪几项可调、升降桌行程要留多大。",
+    "en": "Size desks and chairs to your body: seat height math, key adjustments and desk travel range."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "我这个身高该买多高的桌椅",
+    "en": "What desk and chair height fits me"
+  },
+  "plugin": "lynxce-ergonomic-advisor",
+  "tags": [
+    {
+      "zh": "工学椅",
+      "en": "Ergonomic Chair"
+    },
+    {
+      "zh": "尺寸核对",
+      "en": "Sizing"
+    },
+    {
+      "zh": "办公采购",
+      "en": "Procurement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这个身高该买多高的桌椅",
+      "en": "What desk and chair height fits me"
+    },
+    {
+      "zh": "这把椅子值不值这个价",
+      "en": "Is this chair worth the price"
+    },
+    {
+      "zh": "帮我做一份办公采购清单",
+      "en": "Draft an office purchase list"
+    }
+  ],
+  "keywords": [
+    "工学椅",
+    "尺寸核对",
+    "办公采购",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

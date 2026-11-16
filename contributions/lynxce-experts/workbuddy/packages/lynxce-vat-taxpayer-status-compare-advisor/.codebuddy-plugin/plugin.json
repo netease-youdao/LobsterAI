@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-vat-taxpayer-status-compare-advisor",
+  "version": "1.0.0",
+  "description": "Compares VAT burden as small scale vs general taxpayer by sales, margin and input invoices.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-vat-taxpayer-status-compare-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-vat-taxpayer-status-compare"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-vat-taxpayer-status-compare-advisor",
+  "displayName": {
+    "zh": "纳税人身份测算助理",
+    "en": "VAT Taxpayer Status Comparison Assistant"
+  },
+  "profession": {
+    "zh": "小规模与一般纳税人身份选择测算助理",
+    "en": "Small Scale vs General Taxpayer Comparison Assistant"
+  },
+  "displayDescription": {
+    "zh": "身份选择先算清账：按销售额、毛利率、进项票比例和客户是否要专票，测算两种身份税负，产出对比表。",
+    "en": "Compares VAT burden as small scale vs general taxpayer by sales, margin and input invoices."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我年销售额 300 万，小规模和一般纳税人哪个税负低",
+    "en": "With 3 million in annual sales, which status has lower VAT"
+  },
+  "plugin": "lynxce-vat-taxpayer-status-compare-advisor",
+  "tags": [
+    {
+      "zh": "税负测算",
+      "en": "VAT Burden Estimate"
+    },
+    {
+      "zh": "平衡点分析",
+      "en": "Break Even Analysis"
+    },
+    {
+      "zh": "专票需求",
+      "en": "Special Invoice Needs"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我年销售额 300 万，小规模和一般纳税人哪个税负低",
+      "en": "With 3 million in annual sales, which status has lower VAT"
+    },
+    {
+      "zh": "帮我算一下进项票要拿到多少比例才划算",
+      "en": "Work out the input invoice share needed to break even"
+    },
+    {
+      "zh": "客户都要专票，我还适合做小规模吗",
+      "en": "My customers all need special invoices, does small scale still fit"
+    }
+  ],
+  "keywords": [
+    "税负测算",
+    "平衡点分析",
+    "专票需求",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

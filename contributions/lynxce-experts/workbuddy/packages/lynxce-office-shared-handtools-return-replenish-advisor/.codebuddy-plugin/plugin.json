@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-shared-handtools-return-replenish-advisor",
+  "version": "1.0.0",
+  "description": "Reconcile shared hand tools and replenish stock.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-shared-handtools-return-replenish-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-shared-handtools-return-replenish"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-shared-handtools-return-replenish-advisor",
+  "displayName": {
+    "zh": "共享手工具台账顾问",
+    "en": "Shared Hand Tool Advisor"
+  },
+  "profession": {
+    "zh": "共享手工具借还盘点与补损补货顾问",
+    "en": "Shared Hand Tool Advisor"
+  },
+  "displayDescription": {
+    "zh": "共享手工具逐件记录借还与完好状态，区分在借维修待查和已核报损，平衡库存并核补货，输出复核台账。",
+    "en": "Reconcile shared hand tools and replenish stock."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对共享手工具借还盘点与补损补货的输入条件",
+    "en": "Check inputs and compatibility"
+  },
+  "plugin": "lynxce-office-shared-handtools-return-replenish-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "台账核算",
+      "en": "Ledger Reconciliation"
+    },
+    {
+      "zh": "异常复核",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对共享手工具借还盘点与补损补货的输入条件",
+      "en": "Check inputs and compatibility"
+    },
+    {
+      "zh": "依据确认数据计算净购与余量",
+      "en": "Calculate net purchases and remaining stock"
+    },
+    {
+      "zh": "生成专项台账与异常复核表",
+      "en": "Build records and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "台账核算",
+    "异常复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

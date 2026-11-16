@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-hand-warmer-advisor",
+  "version": "1.0.0",
+  "description": "Pick hand warmers: type, certification, run time, season cost and burn safety.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hand-warmer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hand-warmer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hand-warmer-advisor",
+  "displayName": {
+    "zh": "暖手宝热水袋选购顾问",
+    "en": "Hand Warmer and Hot Water Bottle Advisor"
+  },
+  "profession": {
+    "zh": "11.11 暖手宝与热水袋选购顾问",
+    "en": "11.11 Hand Warmer and Hot Water Bottle Advisor"
+  },
+  "displayDescription": {
+    "zh": "暖手宝怎么挑：分充电式电热式注水式、核认证标志与标准标注、按瓦时算续航、算每季成本并防低温烫伤。",
+    "en": "Pick hand warmers: type, certification, run time, season cost and burn safety."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "10000 毫安暖手宝能热几个小时",
+    "en": "How long a 10000 mAh hand warmer stays warm"
+  },
+  "plugin": "lynxce-hand-warmer-advisor",
+  "tags": [
+    {
+      "zh": "类型场景",
+      "en": "Type and Scene"
+    },
+    {
+      "zh": "认证标准",
+      "en": "Certification Check"
+    },
+    {
+      "zh": "续航成本",
+      "en": "Run Time and Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "10000 毫安暖手宝能热几个小时",
+      "en": "How long a 10000 mAh hand warmer stays warm"
+    },
+    {
+      "zh": "电热水袋怎么看安全认证",
+      "en": "How to check safety marks on an electric heat pack"
+    },
+    {
+      "zh": "热水袋怎么用不会低温烫伤",
+      "en": "How to use a hot water bottle without low heat burns"
+    }
+  ],
+  "keywords": [
+    "类型场景",
+    "认证标准",
+    "续航成本",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

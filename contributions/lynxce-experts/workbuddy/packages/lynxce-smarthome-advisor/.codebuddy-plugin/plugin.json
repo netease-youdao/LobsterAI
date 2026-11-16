@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-smarthome-advisor",
+  "version": "1.0.3",
+  "description": "Pick the ecosystem first: protocols and network, wiring prerequisites and a staged automation rollout.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-smarthome-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-smarthome-setup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-smarthome-advisor",
+  "displayName": {
+    "zh": "智能家居选配与联动规划顾问",
+    "en": "Smart Home Planning Advisor"
+  },
+  "profession": {
+    "zh": "智能家居选配与联动规划顾问",
+    "en": "Smart Home Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "先选生态再买设备：协议与网络怎么定、布线前提怎么核对、联动怎么分批做才不至于折腾。",
+    "en": "Pick the ecosystem first: protocols and network, wiring prerequisites and a staged automation rollout."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "智能家居从哪几件开始买",
+    "en": "Which smart devices should I start with"
+  },
+  "plugin": "lynxce-smarthome-advisor",
+  "tags": [
+    {
+      "zh": "智能家居",
+      "en": "Smart Home"
+    },
+    {
+      "zh": "生态选择",
+      "en": "Ecosystem"
+    },
+    {
+      "zh": "分批落地",
+      "en": "Staged"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "智能家居从哪几件开始买",
+      "en": "Which smart devices should I start with"
+    },
+    {
+      "zh": "这些设备能互相联动吗",
+      "en": "Can these devices work together"
+    },
+    {
+      "zh": "租房能装智能门锁吗",
+      "en": "Can I install a smart lock in a rental"
+    }
+  ],
+  "keywords": [
+    "智能家居",
+    "生态选择",
+    "分批落地",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

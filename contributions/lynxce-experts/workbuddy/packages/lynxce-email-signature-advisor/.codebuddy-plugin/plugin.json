@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-email-signature-advisor",
+  "version": "1.0.1",
+  "description": "Turn signatures, business cards and HR title records into an inconsistency list, unified templates, a bilingual title table and audits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-email-signature-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-email-signature"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-email-signature-advisor",
+  "displayName": {
+    "zh": "签名名片规范顾问",
+    "en": "Email Signature Advisor"
+  },
+  "profession": {
+    "zh": "邮件签名与名片信息规范顾问｜灵策智算",
+    "en": "Email Signature and Business Card Standards Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据现有签名名片样本和人事职务登记，交付不一致清单、统一签名模板、中英头衔对照表和变更抽查流程。",
+    "en": "Turn signatures, business cards and HR title records into an inconsistency list, unified templates, a bilingual title table and audits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "根据这批签名和名片样本生成统一模板与不一致清单",
+    "en": "Build unified templates and an inconsistency list from these samples"
+  },
+  "plugin": "lynxce-email-signature-advisor",
+  "tags": [
+    {
+      "zh": "签名模板",
+      "en": "Signature Template"
+    },
+    {
+      "zh": "中英头衔",
+      "en": "Bilingual Titles"
+    },
+    {
+      "zh": "变更抽查",
+      "en": "Update Audit"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这批签名和名片样本生成统一模板与不一致清单",
+      "en": "Build unified templates and an inconsistency list from these samples"
+    },
+    {
+      "zh": "帮我复核这版签名模板和中英头衔对照表",
+      "en": "Review this signature template and bilingual title table"
+    },
+    {
+      "zh": "只有几张签名截图时先给字段标准和待确认项",
+      "en": "With only a few signature screenshots give a field standard and open items"
+    }
+  ],
+  "keywords": [
+    "签名模板",
+    "中英头衔",
+    "变更抽查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

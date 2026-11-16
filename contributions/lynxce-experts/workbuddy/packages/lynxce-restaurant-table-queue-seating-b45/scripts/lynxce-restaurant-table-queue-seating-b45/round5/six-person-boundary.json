@@ -1,0 +1,36 @@
+{
+  "date": null,
+  "cutoff": "18:00",
+  "allowSplitting": false,
+  "allowSharing": false,
+  "groups": [
+    {
+      "id": "六人组",
+      "people": 6,
+      "arrival": "17:50",
+      "actualFeedback": null
+    }
+  ],
+  "scenarios": [
+    {
+      "label": "迎宾表18:20",
+      "source": "本轮用户假设资料",
+      "tables": [
+        {
+          "id": "T2",
+          "seats": 4,
+          "release": "18:00",
+          "releaseKind": "已确认空",
+          "blocked": false
+        },
+        {
+          "id": "T3",
+          "seats": 4,
+          "release": "18:20",
+          "releaseKind": "预计",
+          "blocked": false
+        }
+      ]
+    }
+  ]
+}

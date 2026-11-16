@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-aidbox-nondrug-audit-advisor",
+  "version": "1.0.0",
+  "description": "Audit non drug stock by box and reconcile supply packs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-aidbox-nondrug-audit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-aidbox-nondrug-audit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-aidbox-nondrug-audit-advisor",
+  "displayName": {
+    "zh": "急救箱非药耗材盘点助理",
+    "en": "Aid Box Non Drug Supply Audit Assistant"
+  },
+  "profession": {
+    "zh": "办公室急救箱非药耗材逐箱盘点助理",
+    "en": "Office Aid Box Non Drug Supply Audit Assistant"
+  },
+  "displayDescription": {
+    "zh": "办公室急救箱非药耗材怎么盘：按箱号核封装、批次与可用数量，测算整包补货，交付差异表与领用台账。",
+    "en": "Audit non drug stock by box and reconcile supply packs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三个急救箱的非药耗材缺口怎么按包采购",
+    "en": "Calculate supply packs for three office aid boxes"
+  },
+  "plugin": "lynxce-office-aidbox-nondrug-audit-advisor",
+  "tags": [
+    {
+      "zh": "逐箱盘点",
+      "en": "Box Audit"
+    },
+    {
+      "zh": "封装批次",
+      "en": "Sealed Batches"
+    },
+    {
+      "zh": "整包补货",
+      "en": "Pack Replenishment"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三个急救箱的非药耗材缺口怎么按包采购",
+      "en": "Calculate supply packs for three office aid boxes"
+    },
+    {
+      "zh": "破封耗材怎样剔除并修正可用库存",
+      "en": "Exclude opened stock and revise usable quantities"
+    },
+    {
+      "zh": "做逐箱盘点与补货领用表",
+      "en": "Make a box audit and supply issue ledger"
+    }
+  ],
+  "keywords": [
+    "逐箱盘点",
+    "封装批次",
+    "整包补货",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

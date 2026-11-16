@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-autoparts-advisor",
+  "version": "1.0.4",
+  "description": "Specs before price: reading tire parameters, installed-price math and accessories to avoid.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-autoparts-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-autoparts-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-autoparts-advisor",
+  "displayName": {
+    "zh": "汽车用品与轮胎选购顾问",
+    "en": "Auto Parts Buying Advisor"
+  },
+  "profession": {
+    "zh": "汽车用品与轮胎选购顾问",
+    "en": "Auto Parts Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "车品先核对规格再谈价格：轮胎的六项参数怎么读、装车价怎么算全、哪些加装项目不建议做。",
+    "en": "Specs before price: reading tire parameters, installed-price math and accessories to avoid."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我这台车该换什么规格的胎",
+    "en": "Which tire size fits my car"
+  },
+  "plugin": "lynxce-autoparts-advisor",
+  "tags": [
+    {
+      "zh": "汽车用品",
+      "en": "Auto Parts"
+    },
+    {
+      "zh": "轮胎规格",
+      "en": "Tire Specs"
+    },
+    {
+      "zh": "装车价",
+      "en": "Installed Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这台车该换什么规格的胎",
+      "en": "Which tire size fits my car"
+    },
+    {
+      "zh": "这个轮胎报价含什么",
+      "en": "What does this tire quote include"
+    },
+    {
+      "zh": "这个配件值得装吗",
+      "en": "Is this accessory worth installing"
+    }
+  ],
+  "keywords": [
+    "汽车用品",
+    "轮胎规格",
+    "装车价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

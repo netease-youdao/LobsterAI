@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-speech-advisor",
+  "version": "1.0.1",
+  "description": "Write source-grounded speeches with audience fit, timing estimates, shorter alternatives and delivery cues.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-speech-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-speech-draft",
+    "./skills/lynxce-speech-timing",
+    "./skills/lynxce-speech-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-speech-advisor",
+  "displayName": {
+    "zh": "讲话稿撰写顾问",
+    "en": "Speechwriting Advisor"
+  },
+  "profession": {
+    "zh": "讲话稿与发言稿撰写顾问｜灵策智算",
+    "en": "Speech and Remarks Writing Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "依据场合受众与事实材料组织讲话主线控制字数和停顿节奏提供长短版本及现场替换段落交付可朗读草稿",
+    "en": "Write source-grounded speeches with audience fit, timing estimates, shorter alternatives and delivery cues."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "帮我写一篇 5 分钟年会讲话",
+    "en": "Write a 5-minute annual party speech"
+  },
+  "plugin": "lynxce-speech-advisor",
+  "tags": [
+    {
+      "zh": "讲话稿",
+      "en": "Speech"
+    },
+    {
+      "zh": "发言稿",
+      "en": "Remarks"
+    },
+    {
+      "zh": "口语化",
+      "en": "Spoken Style"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一篇 5 分钟年会讲话",
+      "en": "Write a 5-minute annual party speech"
+    },
+    {
+      "zh": "这篇发言稿太书面了帮我改口语",
+      "en": "Make this speech sound less formal"
+    },
+    {
+      "zh": "项目启动会开场发言怎么写",
+      "en": "Draft opening remarks for a project kickoff"
+    }
+  ],
+  "keywords": [
+    "讲话稿",
+    "发言稿",
+    "口语化",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

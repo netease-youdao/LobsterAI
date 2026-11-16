@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-content-data-advisor",
+  "version": "1.0.1",
+  "description": "Weekly content reviews: key metrics, hits versus flops, causes and next experiments.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-content-data-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-content-weekly"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-content-data-advisor",
+  "displayName": {
+    "zh": "自媒体内容数据复盘顾问",
+    "en": "Creator Content Data Review Advisor"
+  },
+  "profession": {
+    "zh": "自媒体内容数据复盘顾问",
+    "en": "Creator Content Data Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "自媒体每周数据怎么复盘：该看哪几个指标、爆款和扑街怎么对比、原因怎么归、下周做什么实验。",
+    "en": "Weekly content reviews: key metrics, hits versus flops, causes and next experiments."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "04-DataAI",
+  "defaultInitPrompt": {
+    "zh": "帮我复盘这周的视频数据",
+    "en": "Review this week of video data"
+  },
+  "plugin": "lynxce-content-data-advisor",
+  "tags": [
+    {
+      "zh": "数据复盘",
+      "en": "Data Review"
+    },
+    {
+      "zh": "内容分析",
+      "en": "Content Analytics"
+    },
+    {
+      "zh": "单变量实验",
+      "en": "A/B Tests"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我复盘这周的视频数据",
+      "en": "Review this week of video data"
+    },
+    {
+      "zh": "为什么这条爆了那条没有",
+      "en": "Why did this one hit and that one flop"
+    },
+    {
+      "zh": "下周该做什么实验",
+      "en": "What experiment should I run next week"
+    }
+  ],
+  "keywords": [
+    "数据复盘",
+    "内容分析",
+    "单变量实验",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

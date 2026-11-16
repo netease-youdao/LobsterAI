@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-floor-heating-advisor",
+  "version": "1.0.2",
+  "description": "Estimate floor heating costs: gas use by area, constant vs intermittent, boiler sizing, yearly upkeep.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-floor-heating-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-floor-heating"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-floor-heating-advisor",
+  "displayName": {
+    "zh": "壁挂炉与地暖运行费用核算顾问",
+    "en": "Wall Boiler and Floor Heating Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 壁挂炉与地暖运行费用核算顾问",
+    "en": "11.11 Wall Boiler and Floor Heating Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "地暖冬季费用怎么算：按面积保温估燃气用量、恒温与间歇怎么选、壁挂炉功率匹配、年度保养与耗材。",
+    "en": "Estimate floor heating costs: gas use by area, constant vs intermittent, boiler sizing, yearly upkeep."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "100 平米地暖一个冬天要多少燃气",
+    "en": "How much gas does 100 square meters of floor heating use per winter"
+  },
+  "plugin": "lynxce-floor-heating-advisor",
+  "tags": [
+    {
+      "zh": "燃气用量",
+      "en": "Gas Usage"
+    },
+    {
+      "zh": "恒温间歇",
+      "en": "Constant or Intermittent"
+    },
+    {
+      "zh": "壁挂炉功率",
+      "en": "Boiler Sizing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "100 平米地暖一个冬天要多少燃气",
+      "en": "How much gas does 100 square meters of floor heating use per winter"
+    },
+    {
+      "zh": "地暖白天上班该关掉还是低温开着",
+      "en": "Should I turn floor heating off or down while at work"
+    },
+    {
+      "zh": "壁挂炉该选多大功率",
+      "en": "What output should my wall-hung boiler have"
+    }
+  ],
+  "keywords": [
+    "燃气用量",
+    "恒温间歇",
+    "壁挂炉功率",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

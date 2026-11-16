@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-campus-content-advisor",
+  "version": "1.0.2",
+  "description": "Turn school rules and class timetables into campus content columns, term schedules, venue permission and on-camera consent checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-campus-content-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-campus-content"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-campus-content-advisor",
+  "displayName": {
+    "zh": "校园内容拍摄顾问",
+    "en": "Campus Content Advisor"
+  },
+  "profession": {
+    "zh": "校园与学生生活内容拍摄顾问｜灵策智算",
+    "en": "Campus and Student Life Content Shooting Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据学校规定和课表拟定栏目选题与学期排期，核对场地许可和出镜同意，交付校园内容拍摄与发布检查底稿。",
+    "en": "Turn school rules and class timetables into campus content columns, term schedules, venue permission and on-camera consent checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据我的课表和栏目生成本学期拍摄发布排期表",
+    "en": "Build a term shooting and posting schedule from my timetable and columns"
+  },
+  "plugin": "lynxce-campus-content-advisor",
+  "tags": [
+    {
+      "zh": "场地许可",
+      "en": "Venue Permission"
+    },
+    {
+      "zh": "出镜同意",
+      "en": "On-camera Consent"
+    },
+    {
+      "zh": "学期排期",
+      "en": "Term Schedule"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的课表和栏目生成本学期拍摄发布排期表",
+      "en": "Build a term shooting and posting schedule from my timetable and columns"
+    },
+    {
+      "zh": "复核这条校园视频的场地许可和出镜同意是否齐全",
+      "en": "Review this campus video for venue permission and consent gaps"
+    },
+    {
+      "zh": "还没确认学校规定时先给选题和待问清单",
+      "en": "Draft topics and a question list before school rules are confirmed"
+    }
+  ],
+  "keywords": [
+    "场地许可",
+    "出镜同意",
+    "学期排期",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

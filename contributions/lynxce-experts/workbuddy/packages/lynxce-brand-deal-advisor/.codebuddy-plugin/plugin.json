@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-brand-deal-advisor",
+  "version": "1.0.1",
+  "description": "Quote and scope brand deals: pricing, deliverables, briefs, revisions and payment.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-brand-deal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-brand-deal"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-brand-deal-advisor",
+  "displayName": {
+    "zh": "达人商单报价与合作顾问",
+    "en": "Creator Brand Deal and Pricing Advisor"
+  },
+  "profession": {
+    "zh": "达人商单报价与合作顾问",
+    "en": "Creator Brand Deal and Pricing Advisor"
+  },
+  "displayDescription": {
+    "zh": "达人接商单怎么报价和对齐需求：报价怎么构成、交付物怎么写清、Brief 该问哪些、改稿结算怎么约定。",
+    "en": "Quote and scope brand deals: pricing, deliverables, briefs, revisions and payment."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "品牌找我合作该报多少钱",
+    "en": "A brand wants to work with me, how to quote"
+  },
+  "plugin": "lynxce-brand-deal-advisor",
+  "tags": [
+    {
+      "zh": "商单报价",
+      "en": "Deal Pricing"
+    },
+    {
+      "zh": "合作Brief",
+      "en": "Creative Brief"
+    },
+    {
+      "zh": "达人合作",
+      "en": "Creator Deals"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "品牌找我合作该报多少钱",
+      "en": "A brand wants to work with me, how to quote"
+    },
+    {
+      "zh": "帮我写一份合作确认单",
+      "en": "Write a collaboration confirmation for me"
+    },
+    {
+      "zh": "Brief 要问品牌方哪些问题",
+      "en": "What to ask the brand in a brief"
+    }
+  ],
+  "keywords": [
+    "商单报价",
+    "合作Brief",
+    "达人合作",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-water-return-deposit-ledger-advisor",
+  "version": "1.0.0",
+  "description": "Reconcile water containers, delivery fees and deposits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-water-return-deposit-ledger-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-water-return-deposit-ledger"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-water-return-deposit-ledger-advisor",
+  "displayName": {
+    "zh": "送水押桶核销助理",
+    "en": "Water Container Deposit Ledger Assistant"
+  },
+  "profession": {
+    "zh": "桶装水配送换桶与退押核销助理",
+    "en": "Office Water Delivery and Deposit Return Ledger Assistant"
+  },
+  "displayDescription": {
+    "zh": "桶装水配送押桶怎么核：逐单核实收满桶、交回空桶与押桶凭据，分列水费押金，交付桶数表与退押台账。",
+    "en": "Reconcile water containers, delivery fees and deposits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "送8桶收6桶怎样核占用桶数",
+    "en": "Reconcile eight deliveries and six container returns"
+  },
+  "plugin": "lynxce-office-water-return-deposit-ledger-advisor",
+  "tags": [
+    {
+      "zh": "配送签收",
+      "en": "Delivery Receipt"
+    },
+    {
+      "zh": "空桶核销",
+      "en": "Container Returns"
+    },
+    {
+      "zh": "退押追踪",
+      "en": "Deposit Tracking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "送8桶收6桶怎样核占用桶数",
+      "en": "Reconcile eight deliveries and six container returns"
+    },
+    {
+      "zh": "退押申请100元只到账50元怎样登记",
+      "en": "Record a 100 yuan claim with only 50 yuan received"
+    },
+    {
+      "zh": "做配送换桶与押金追踪表",
+      "en": "Make a delivery and deposit tracking ledger"
+    }
+  ],
+  "keywords": [
+    "配送签收",
+    "空桶核销",
+    "退押追踪",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-ereader-advisor",
+  "version": "1.0.1",
+  "description": "Choose an e-reader: screen size and PPI by content, formats and book sources, stylus need, battery and price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-ereader-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ereader"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-ereader-advisor",
+  "displayName": {
+    "zh": "电子阅读器墨水屏选购顾问",
+    "en": "E-ink E-reader Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 电子阅读器墨水屏选购顾问",
+    "en": "11.11 E-ink E-reader Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "墨水屏阅读器怎么选：屏幕尺寸与分辨率按内容选、格式与书源生态、手写笔是否真需要、续航与价格。",
+    "en": "Choose an e-reader: screen size and PPI by content, formats and book sources, stylus need, battery and price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "看 PDF 论文该买多大的阅读器",
+    "en": "What size e-reader is best for PDF papers"
+  },
+  "plugin": "lynxce-ereader-advisor",
+  "tags": [
+    {
+      "zh": "屏幕尺寸",
+      "en": "Screen Size"
+    },
+    {
+      "zh": "书源生态",
+      "en": "Book Sources"
+    },
+    {
+      "zh": "手写需求",
+      "en": "Stylus Need"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "看 PDF 论文该买多大的阅读器",
+      "en": "What size e-reader is best for PDF papers"
+    },
+    {
+      "zh": "阅读器要不要买带手写笔的",
+      "en": "Do I need an e-reader with a stylus"
+    },
+    {
+      "zh": "开放系统和封闭书城怎么选",
+      "en": "Open system or closed bookstore, which is better"
+    }
+  ],
+  "keywords": [
+    "屏幕尺寸",
+    "书源生态",
+    "手写需求",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

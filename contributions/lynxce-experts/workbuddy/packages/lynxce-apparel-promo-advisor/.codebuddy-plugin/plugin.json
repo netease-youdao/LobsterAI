@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-apparel-promo-advisor",
+  "version": "1.0.2",
+  "description": "Cut apparel returns in the sale: size-chart conversion, multi-size order cost, return windows and tag rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-apparel-promo-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-apparel-promo"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-apparel-promo-advisor",
+  "displayName": {
+    "zh": "服饰鞋包大促尺码与退换顾问",
+    "en": "Apparel and Footwear Promo Sizing and Returns Advisor"
+  },
+  "profession": {
+    "zh": "服饰鞋包大促尺码与退换顾问",
+    "en": "Apparel and Footwear Promo Sizing and Returns Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促买衣服鞋包怎么少退货：尺码表换算、多码下单的退货成本、退换时限与吊牌规则逐项核对。",
+    "en": "Cut apparel returns in the sale: size-chart conversion, multi-size order cost, return windows and tag rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我看这件衣服该买哪个码",
+    "en": "Which size should I buy for this item"
+  },
+  "plugin": "lynxce-apparel-promo-advisor",
+  "tags": [
+    {
+      "zh": "尺码换算",
+      "en": "Size Conversion"
+    },
+    {
+      "zh": "退货成本",
+      "en": "Return Cost"
+    },
+    {
+      "zh": "退换规则",
+      "en": "Return Rules"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我看这件衣服该买哪个码",
+      "en": "Which size should I buy for this item"
+    },
+    {
+      "zh": "两个码都买划不划算",
+      "en": "Is ordering two sizes worth it"
+    },
+    {
+      "zh": "买鞋怎么按脚长选码",
+      "en": "How to pick shoe size by foot length"
+    }
+  ],
+  "keywords": [
+    "尺码换算",
+    "退货成本",
+    "退换规则",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

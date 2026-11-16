@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-floor-lamp-advisor",
+  "version": "1.0.0",
+  "description": "Pick floor lamps: light type, lux, CCT, CRI, flicker, stability and power cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-floor-lamp-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-floor-lamp"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-floor-lamp-advisor",
+  "displayName": {
+    "zh": "落地灯氛围灯选购顾问",
+    "en": "Floor Lamp and Ambient Light Advisor"
+  },
+  "profession": {
+    "zh": "11.11 落地灯与氛围灯选购顾问",
+    "en": "11.11 Floor Lamp and Ambient Light Advisor"
+  },
+  "displayDescription": {
+    "zh": "落地灯怎么挑：按用途选光型与照度、核色温显色与频闪、量灯高与底座稳定、算年电费。",
+    "en": "Pick floor lamps: light type, lux, CCT, CRI, flicker, stability and power cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "沙发旁看书的落地灯要多亮",
+    "en": "How bright a sofa side reading lamp should be"
+  },
+  "plugin": "lynxce-floor-lamp-advisor",
+  "tags": [
+    {
+      "zh": "阅读照度",
+      "en": "Reading Lux"
+    },
+    {
+      "zh": "显色频闪",
+      "en": "CRI and Flicker"
+    },
+    {
+      "zh": "底座稳定",
+      "en": "Base Stability"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "沙发旁看书的落地灯要多亮",
+      "en": "How bright a sofa side reading lamp should be"
+    },
+    {
+      "zh": "鱼竿灯能当阅读灯用吗",
+      "en": "Can an arc floor lamp work as a reading lamp"
+    },
+    {
+      "zh": "落地灯显色指数选多少",
+      "en": "What color rendering index a floor lamp needs"
+    }
+  ],
+  "keywords": [
+    "阅读照度",
+    "显色频闪",
+    "底座稳定",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-gift-plan-advisor",
+  "version": "1.0.3",
+  "description": "Plan sale gifts on time: recipients and budget, pre-sale delivery back-calculation, wrapping, cards and addresses.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-gift-plan-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-gift-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-gift-plan-advisor",
+  "displayName": {
+    "zh": "大促礼物预购与到货规划顾问",
+    "en": "Promo Gift Pre-order and Delivery Planning Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促礼物预购与到货规划顾问",
+    "en": "Promo Gift Pre-order and Delivery Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促囤礼物怎么不误事：送礼对象与预算、预售发货倒推到货日、礼盒包装与代写贺卡、送达地址核对。",
+    "en": "Plan sale gifts on time: recipients and budget, pre-sale delivery back-calculation, wrapping, cards and addresses."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我算这份礼物能不能按时送到",
+    "en": "Will this gift arrive on time"
+  },
+  "plugin": "lynxce-promo-gift-plan-advisor",
+  "tags": [
+    {
+      "zh": "送礼清单",
+      "en": "Gift List"
+    },
+    {
+      "zh": "到货倒推",
+      "en": "Delivery Back-plan"
+    },
+    {
+      "zh": "礼盒贺卡",
+      "en": "Wrapping and Cards"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我算这份礼物能不能按时送到",
+      "en": "Will this gift arrive on time"
+    },
+    {
+      "zh": "预算有限怎么给几个人分配礼物",
+      "en": "How to split a gift budget across people"
+    },
+    {
+      "zh": "礼物怎么寄才不露价格",
+      "en": "How to ship a gift without showing the price"
+    }
+  ],
+  "keywords": [
+    "送礼清单",
+    "到货倒推",
+    "礼盒贺卡",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

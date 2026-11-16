@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-promo-invoice-advisor",
+  "version": "1.0.3",
+  "description": "Organise promo invoices and warranty proof: invoice titles, e-invoice filing, warranty start dates and serial records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-promo-invoice-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-promo-invoice"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-promo-invoice-advisor",
+  "displayName": {
+    "zh": "订单发票与保修凭证整理顾问",
+    "en": "Order Invoice and Warranty Record Advisor"
+  },
+  "profession": {
+    "zh": "11.11 订单发票与保修凭证整理顾问",
+    "en": "11.11 Order Invoice and Warranty Record Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促发票与保修怎么留：开票抬头税号填写、电子发票归档命名、保修起算与凭证、换货后保修核对。",
+    "en": "Organise promo invoices and warranty proof: invoice titles, e-invoice filing, warranty start dates and serial records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "大促买的东西发票怎么开怎么存",
+    "en": "How do I request and file invoices for my promo orders"
+  },
+  "plugin": "lynxce-promo-invoice-advisor",
+  "tags": [
+    {
+      "zh": "开票抬头",
+      "en": "Invoice Title"
+    },
+    {
+      "zh": "发票归档",
+      "en": "Invoice Filing"
+    },
+    {
+      "zh": "保修凭证",
+      "en": "Warranty Proof"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "大促买的东西发票怎么开怎么存",
+      "en": "How do I request and file invoices for my promo orders"
+    },
+    {
+      "zh": "公司报销的发票抬头税号怎么填",
+      "en": "How to fill the company title and tax ID for reimbursement"
+    },
+    {
+      "zh": "换货以后保修从哪天算",
+      "en": "When does warranty start after an exchange"
+    }
+  ],
+  "keywords": [
+    "开票抬头",
+    "发票归档",
+    "保修凭证",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

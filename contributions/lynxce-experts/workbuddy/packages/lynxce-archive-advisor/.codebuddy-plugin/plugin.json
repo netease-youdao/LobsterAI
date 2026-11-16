@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-archive-advisor",
+  "version": "1.0.1",
+  "description": "Build archive catalogs, custody logs and retention evidence registers with reconciliation and review checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-archive-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-archive-rules"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-archive-advisor",
+  "displayName": {
+    "zh": "档案管理顾问",
+    "en": "Records Management Advisor"
+  },
+  "profession": {
+    "zh": "档案归档与文件保管顾问｜灵策智算",
+    "en": "Records Archiving and Retention Advisor"
+  },
+  "displayDescription": {
+    "zh": "将散落档案整理为分类目录借阅台账与保管依据清单逐项核对实物去向缺失材料和到期评审便于移交复核",
+    "en": "Build archive catalogs, custody logs and retention evidence registers with reconciliation and review checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请把这批资料整理成档案目录与编号对照表",
+    "en": "Build an archive catalog and identifier mapping"
+  },
+  "plugin": "lynxce-archive-advisor",
+  "tags": [
+    {
+      "zh": "档案目录",
+      "en": "Archive Catalog"
+    },
+    {
+      "zh": "借阅留痕",
+      "en": "Custody Log"
+    },
+    {
+      "zh": "盘点差异",
+      "en": "Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请把这批资料整理成档案目录与编号对照表",
+      "en": "Build an archive catalog and identifier mapping"
+    },
+    {
+      "zh": "请根据目录和盘点记录交付账实差异清单",
+      "en": "Reconcile catalog entries against custody records"
+    },
+    {
+      "zh": "请把到期档案整理成依据核对与评审待办表",
+      "en": "Prepare retention evidence checks and review tasks"
+    }
+  ],
+  "keywords": [
+    "档案目录",
+    "借阅留痕",
+    "盘点差异"
+  ],
+  "needEncrypt": true
+}

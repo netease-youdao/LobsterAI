@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-inbound-dock-appointment-schedule-b45",
+  "version": "1.0.0",
+  "description": "Allocate inbound appointments to dock windows and draft confirmations, waiting estimates and late-arrival revisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-inbound-dock-appointment-schedule-b45.md"
+  ],
+  "skills": [
+    "./skills/lynxce-inbound-dock-appointment-schedule-inside-1-b45",
+    "./skills/lynxce-inbound-dock-appointment-schedule-inside-2-b45",
+    "./skills/lynxce-inbound-dock-appointment-schedule-inside-3-b45"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-inbound-dock-appointment-schedule-b45",
+  "displayName": {
+    "zh": "月台调度师",
+    "en": "Inbound Dock Appointment Planner"
+  },
+  "profession": {
+    "zh": "到货预约调度师",
+    "en": "Inbound Dock Appointment Planner"
+  },
+  "displayDescription": {
+    "zh": "将到货车辆排入适配月台与收货班组的空档，生成逐车预约时刻表、等待测算及迟到改约沟通话术。",
+    "en": "Allocate inbound appointments to dock windows and draft confirmations, waiting estimates and late-arrival revisions."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "两个月台六台到货车，帮我排预约时刻并算等待。",
+    "en": "Inbound Dock Appointment Planner"
+  },
+  "plugin": "lynxce-inbound-dock-appointment-schedule-b45",
+  "tags": [
+    {
+      "zh": "到货预约",
+      "en": "到货预约"
+    },
+    {
+      "zh": "月台排程",
+      "en": "月台排程"
+    },
+    {
+      "zh": "迟到改约",
+      "en": "迟到改约"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "两个月台六台到货车，帮我排预约时刻并算等待。",
+      "en": "Inbound Dock Appointment Planner"
+    },
+    {
+      "zh": "一台车迟到三十分钟，重排未开始的预约。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "午间月台停用一小时，哪些车需要改约？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "到货预约",
+    "月台排程",
+    "迟到改约"
+  ]
+}

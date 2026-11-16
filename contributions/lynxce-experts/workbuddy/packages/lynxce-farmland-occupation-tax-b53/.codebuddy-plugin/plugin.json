@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-farmland-occupation-tax-b53",
+  "version": "1.0.0",
+  "description": "Farmland Occupation Tax Advisor evidence worksheets and complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-farmland-occupation-tax-b53.md"
+  ],
+  "skills": [
+    "./skills/lynxce-farmland-occupation-tax-s1-b53",
+    "./skills/lynxce-farmland-occupation-tax-s2-b53",
+    "./skills/lynxce-farmland-occupation-tax-s3-b53"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-farmland-occupation-tax-b53",
+  "displayName": {
+    "zh": "耕占税顾问",
+    "en": "Farmland Occupation Tax Advisor"
+  },
+  "profession": {
+    "zh": "耕占税申报顾问",
+    "en": "Farmland Occupation Tax Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业建设用地财务核对实际占地、地类和属地税额，交付耕占税底稿、材料目录及完整差异核实稿。",
+    "en": "Farmland Occupation Tax Advisor evidence worksheets and complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "厂房项目普通地和基本农田如何做税额底稿？",
+    "en": "Farmland Occupation Tax Advisor"
+  },
+  "plugin": "lynxce-farmland-occupation-tax-b53",
+  "tags": [
+    {
+      "zh": "耕地占用税",
+      "en": "耕地占用税"
+    },
+    {
+      "zh": "实际占地",
+      "en": "实际占地"
+    },
+    {
+      "zh": "税基核对",
+      "en": "税基核对"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "厂房项目普通地和基本农田如何做税额底稿？",
+      "en": "Farmland Occupation Tax Advisor"
+    },
+    {
+      "zh": "批准面积和实际测量不一致，先补什么材料？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "临时占地复垦后，退税准备需要哪些证据？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "耕地占用税",
+    "实际占地",
+    "税基核对"
+  ]
+}

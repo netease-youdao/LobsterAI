@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-studio-opening-purchase-advisor",
+  "version": "1.0.0",
+  "description": "Plan a studio opening: furniture, network, printing and cleaning in priority batches.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-studio-opening-purchase-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-studio-opening-purchase"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-studio-opening-purchase-advisor",
+  "displayName": {
+    "zh": "工作室开业采购顾问",
+    "en": "Studio Opening Procurement Advisor"
+  },
+  "profession": {
+    "zh": "小微工作室开业采购预算顾问",
+    "en": "Small Studio Opening Procurement Budget Advisor"
+  },
+  "displayDescription": {
+    "zh": "工作室开业买什么：家具网络打印清洁按优先级分三批，核面积工位与带宽，出开业采购预算表。",
+    "en": "Plan a studio opening: furniture, network, printing and cleaning in priority batches."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "8 人工作室开业要买哪些东西",
+    "en": "What an 8 person studio needs on opening day"
+  },
+  "plugin": "lynxce-studio-opening-purchase-advisor",
+  "tags": [
+    {
+      "zh": "分批采购",
+      "en": "Batch Purchasing"
+    },
+    {
+      "zh": "工位网络",
+      "en": "Desks and Network"
+    },
+    {
+      "zh": "打印租购",
+      "en": "Printer Lease or Buy"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "8 人工作室开业要买哪些东西",
+      "en": "What an 8 person studio needs on opening day"
+    },
+    {
+      "zh": "打印机买还是租更划算怎么算",
+      "en": "How to compare buying and leasing a printer"
+    },
+    {
+      "zh": "帮我做一份开业采购预算表",
+      "en": "Build an opening purchase budget sheet"
+    }
+  ],
+  "keywords": [
+    "分批采购",
+    "工位网络",
+    "打印租购",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

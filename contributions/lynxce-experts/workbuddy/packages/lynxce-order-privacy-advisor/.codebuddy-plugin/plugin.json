@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-order-privacy-advisor",
+  "version": "1.0.2",
+  "description": "Protect order privacy during promotions: virtual number, privacy waybill, label destruction, locker codes, fake courier calls.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-order-privacy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-order-privacy"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-order-privacy-advisor",
+  "displayName": {
+    "zh": "大促订单隐私保护顾问",
+    "en": "Promotion Order Privacy Protection Advisor"
+  },
+  "profession": {
+    "zh": "11.11 大促订单隐私保护顾问",
+    "en": "11.11 Promotion Order Privacy Protection Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促订单隐私怎么护：用虚拟号隐私面单、快递单及时销毁、快递柜取件码、识别假冒快递客服来电。",
+    "en": "Protect order privacy during promotions: virtual number, privacy waybill, label destruction, locker codes, fake courier calls."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "怎么开启隐私面单和虚拟号",
+    "en": "How do I turn on the privacy waybill and virtual number"
+  },
+  "plugin": "lynxce-order-privacy-advisor",
+  "tags": [
+    {
+      "zh": "隐私面单",
+      "en": "Privacy Waybill"
+    },
+    {
+      "zh": "取件码保护",
+      "en": "Pickup Code Safety"
+    },
+    {
+      "zh": "冒充来电识别",
+      "en": "Fake Caller Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "怎么开启隐私面单和虚拟号",
+      "en": "How do I turn on the privacy waybill and virtual number"
+    },
+    {
+      "zh": "快递单丢之前要怎么处理",
+      "en": "What should I do with the label before throwing it away"
+    },
+    {
+      "zh": "接到自称客服说要退款理赔的电话怎么判断",
+      "en": "How do I judge a call claiming a refund or compensation"
+    }
+  ],
+  "keywords": [
+    "隐私面单",
+    "取件码保护",
+    "冒充来电识别",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

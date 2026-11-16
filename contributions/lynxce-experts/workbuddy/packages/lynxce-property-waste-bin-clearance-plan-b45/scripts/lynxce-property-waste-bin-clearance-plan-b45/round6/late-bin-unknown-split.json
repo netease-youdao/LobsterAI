@@ -1,0 +1,59 @@
+{
+  "point": "P",
+  "date": null,
+  "categoryConfirmation": null,
+  "actualExecutionStatus": null,
+  "initialL": 0,
+  "segments": [
+    {
+      "start": "08:00",
+      "end": "10:00",
+      "addedL": 100
+    },
+    {
+      "start": "10:00",
+      "end": "12:00",
+      "addedL": 130
+    },
+    {
+      "start": "12:00",
+      "end": "14:00",
+      "addedL": 90
+    }
+  ],
+  "clearWindows": [
+    "10:00",
+    "12:00",
+    "14:00"
+  ],
+  "closingClearRequired": false,
+  "clearDurationMinutes": null,
+  "crewAvailableWindows": null,
+  "crewBusyIntervals": null,
+  "scenarios": [
+    {
+      "label": "第三只80升桶10:30才启用",
+      "source": "独立本地假设；10—12内部新增分布未知",
+      "bins": [
+        {
+          "id": "桶1",
+          "nominalL": 80,
+          "usableRatio": "0.8",
+          "activeFrom": "08:00"
+        },
+        {
+          "id": "桶2",
+          "nominalL": 80,
+          "usableRatio": "0.8",
+          "activeFrom": "08:00"
+        },
+        {
+          "id": "新桶",
+          "nominalL": 80,
+          "usableRatio": "0.8",
+          "activeFrom": "10:30"
+        }
+      ]
+    }
+  ]
+}

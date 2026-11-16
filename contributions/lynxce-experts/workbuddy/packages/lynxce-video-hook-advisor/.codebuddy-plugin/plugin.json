@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-video-hook-advisor",
+  "version": "1.0.1",
+  "description": "Hold viewers past three seconds: hooks, first frames, retention diagnosis and tests.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-video-hook-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-video-hook"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-video-hook-advisor",
+  "displayName": {
+    "zh": "短视频开头钩子与完播诊断顾问",
+    "en": "Short Video Hook and Retention Advisor"
+  },
+  "profession": {
+    "zh": "短视频开头钩子与完播诊断顾问",
+    "en": "Short Video Hook and Retention Advisor"
+  },
+  "displayDescription": {
+    "zh": "短视频开头怎么留住人：前三秒钩子怎么写、首帧画面怎么设计、完播曲线掉点怎么看、怎么做对比测试。",
+    "en": "Hold viewers past three seconds: hooks, first frames, retention diagnosis and tests."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我改一下这条视频的开头",
+    "en": "Rewrite the opening of this video"
+  },
+  "plugin": "lynxce-video-hook-advisor",
+  "tags": [
+    {
+      "zh": "开头钩子",
+      "en": "Hooks"
+    },
+    {
+      "zh": "完播率",
+      "en": "Retention"
+    },
+    {
+      "zh": "短视频诊断",
+      "en": "Video Diagnosis"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我改一下这条视频的开头",
+      "en": "Rewrite the opening of this video"
+    },
+    {
+      "zh": "3 秒留存很低怎么办",
+      "en": "My 3-second retention is low"
+    },
+    {
+      "zh": "完播曲线在中间掉了怎么改",
+      "en": "Retention drops midway, what to fix"
+    }
+  ],
+  "keywords": [
+    "开头钩子",
+    "完播率",
+    "短视频诊断",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-bilibili-advisor",
+  "version": "1.0.1",
+  "description": "Turn channel niche, cadence and comment data into weekly posts, danmaku prompts, pinned comments and monthly reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-bilibili-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-bilibili-community"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-bilibili-advisor",
+  "displayName": {
+    "zh": "B站互动运营顾问",
+    "en": "Bilibili Community Advisor"
+  },
+  "profession": {
+    "zh": "B 站动态与弹幕互动运营顾问｜灵策智算",
+    "en": "Bilibili Posts and Danmaku Engagement Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据分区、更新频率和评论弹幕数据，生成每周动态计划、弹幕互动点、置顶评论稿与月度互动复盘表。",
+    "en": "Turn channel niche, cadence and comment data into weekly posts, danmaku prompts, pinned comments and monthly reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的分区和更新节奏生成本周动态计划与弹幕互动点",
+    "en": "Plan this week's posts and danmaku prompts for my channel"
+  },
+  "plugin": "lynxce-bilibili-advisor",
+  "tags": [
+    {
+      "zh": "动态规划",
+      "en": "Post Planning"
+    },
+    {
+      "zh": "弹幕互动",
+      "en": "Danmaku Prompts"
+    },
+    {
+      "zh": "互动复盘",
+      "en": "Engagement Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的分区和更新节奏生成本周动态计划与弹幕互动点",
+      "en": "Plan this week's posts and danmaku prompts for my channel"
+    },
+    {
+      "zh": "帮我复核这条置顶评论和本期互动设计是否到位",
+      "en": "Review my pinned comment and this video's interaction design"
+    },
+    {
+      "zh": "只有最近几期播放和弹幕数先给我一份互动诊断",
+      "en": "Diagnose engagement from only my recent views and danmaku counts"
+    }
+  ],
+  "keywords": [
+    "动态规划",
+    "弹幕互动",
+    "互动复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

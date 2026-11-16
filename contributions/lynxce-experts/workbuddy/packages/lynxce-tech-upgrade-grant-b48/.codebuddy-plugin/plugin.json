@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-tech-upgrade-grant-b48",
+  "version": "1.0.0",
+  "description": "Turn actual project records and applicable policies into traceable application drafts and correction notes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-tech-upgrade-grant-b48.md"
+  ],
+  "skills": [
+    "./skills/lynxce-tech-upgrade-grant-machine-chain",
+    "./skills/lynxce-tech-upgrade-grant-upgrade-story",
+    "./skills/lynxce-tech-upgrade-grant-grant-revision"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-tech-upgrade-grant-b48",
+  "displayName": {
+    "zh": "技改顾问",
+    "en": "Technical Upgrade Grant Advisor"
+  },
+  "profession": {
+    "zh": "技改申报顾问",
+    "en": "Technical Upgrade Grant Advisor"
+  },
+  "displayDescription": {
+    "zh": "为制造企业核对设备投资、票款和改造成效，对照本轮技改通知，完成投资台账、申报说明与冲突补正稿。",
+    "en": "Turn actual project records and applicable policies into traceable application drafts and correction notes."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按本轮通知和设备清单，完成技改投资台账与申报说明。",
+    "en": "Technical Upgrade Grant Advisor"
+  },
+  "plugin": "lynxce-tech-upgrade-grant-b48",
+  "tags": [
+    {
+      "zh": "技改申报",
+      "en": "技改申报"
+    },
+    {
+      "zh": "设备投资",
+      "en": "设备投资"
+    },
+    {
+      "zh": "票款勾稽",
+      "en": "票款勾稽"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按本轮通知和设备清单，完成技改投资台账与申报说明。",
+      "en": "Technical Upgrade Grant Advisor"
+    },
+    {
+      "zh": "设备发票120万和110万两版冲突，帮我重算并写完整补正稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "请把改造前后工况记录写成有来源的成效章节。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "技改申报",
+    "设备投资",
+    "票款勾稽"
+  ]
+}

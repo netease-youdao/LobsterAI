@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-water-saving-enterprise-b53",
+  "version": "1.0.0",
+  "description": "Prepare water-use evidence, reconcile metering boundaries and draft complete water-saving enterprise dossiers.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-water-saving-enterprise-b53.md"
+  ],
+  "skills": [
+    "./skills/lynxce-water-saving-1",
+    "./skills/lynxce-water-saving-2",
+    "./skills/lynxce-water-saving-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-water-saving-enterprise-b53",
+  "displayName": {
+    "zh": "节水顾问",
+    "en": "Water Saving Enterprise Dossier Advisor"
+  },
+  "profession": {
+    "zh": "节水企业申报顾问",
+    "en": "Water Saving Enterprise Dossier Advisor"
+  },
+  "displayDescription": {
+    "zh": "为工业企业节水经办核对用水边界、计量与重复利用证据，交付用水底稿、自查说明和完整数据补正稿。",
+    "en": "Prepare water-use evidence, reconcile metering boundaries and draft complete water-saving enterprise dossiers."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把新水、重复用水和产量整理成节水材料底稿。",
+    "en": "Water Saving Enterprise Dossier Advisor"
+  },
+  "plugin": "lynxce-water-saving-enterprise-b53",
+  "tags": [
+    {
+      "zh": "节水企业",
+      "en": "节水企业"
+    },
+    {
+      "zh": "用水统计",
+      "en": "用水统计"
+    },
+    {
+      "zh": "计量证据",
+      "en": "计量证据"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把新水、重复用水和产量整理成节水材料底稿。",
+      "en": "Water Saving Enterprise Dossier Advisor"
+    },
+    {
+      "zh": "两份取水量不一致，请重算指标并写完整补正。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "本地窗口已过，帮我预备节水评价证据和自查稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "节水企业",
+    "用水统计",
+    "计量证据"
+  ]
+}

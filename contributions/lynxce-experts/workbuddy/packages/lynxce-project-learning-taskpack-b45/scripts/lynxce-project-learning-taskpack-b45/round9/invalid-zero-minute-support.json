@@ -1,0 +1,3598 @@
+{
+  "actors": [
+    "P1",
+    "P2",
+    "P3",
+    "P4",
+    "P5",
+    "P6",
+    "P7",
+    "P8",
+    "P9",
+    "P10",
+    "P11",
+    "P12",
+    "P13",
+    "P14",
+    "P15",
+    "P16",
+    "T"
+  ],
+  "deliverables": {
+    "学生任务书": "五年级纸笔项目：让洗手区少浪费一点水。{{group_basis}} {{materials}} 先解释量和单位，再各自推算、交叉复核、制作一页五栏建议单。每名学生保留个人计算与说明稿，提出一条指向作品位置的反馈，并写个人反思；组内合稿保留署名，不以投票决定数学。材料甲只是课堂假设：每天等待流水30次，每次15秒，每分钟4升，学校真实情况未知。站展规格和课时按本包各方案自动表格，不把旧示例当本轮原文。",
+    "角色卡": "组员分别担任数据解释、计算、行动设计、表达整合。角色可轮换，每人仍完成个人稿、反馈与反思。缺席者已有稿保留署名；临时分工注明，不由缺席推断能力。{{group_basis}} {{materials}}",
+    "完整建议单样稿": "①问题：以下只按练习假设计算等待流水，不代表学校实测。②推算：30×15=450秒/天，450÷60=7.5分钟/天，7.5×4=30升/天；若5个同样上课日则150升/5日。③两项行动：等待时关水；只根据已给数字材料设计纸面提醒语，不新增现场工作。④限制：次数、流量或适用日数改变必须重算；流量若3或5升/分钟，则每天22.5或37.5升，5日112.5或187.5升，均为条件推算。⑤给值日生一句话：先按真实条件判断何时可关水，再采用提醒。作品保留个人署名、复算与修改痕迹。",
+    "教师说明": "先让学生解释秒与分钟，卡住才给换算支架；高基础可以比较给定流量情景。反馈须指出作品位置与下一步修改动作，个人反思说明为何改变一处做法。固定个人成品、个人反馈、个人反思与本方案组记录不能删除；试读反馈和建议单若另有活动则分别保留，不说不存在。{{group_basis}} {{materials}}\n\n{{request_diagnosis}}\n\n{{plan_summaries}}\n\n同步教师工作以本轮实际资源行安排；学生自助环节依事先讲解的纸面支架独立进行，不要求教师同时检查、答疑或评分。若现场必须即时指导，先暂停并按教师实际资源重排，不把原候选继续标为已可行。预给、执行、回收均待实际回执。"
+  },
+  "state": null,
+  "plans": [
+    {
+      "id": "基线v1",
+      "lessons": [
+        {
+          "id": "课1",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课1-导入",
+              "actionId": "导入",
+              "name": "导入",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-读材料",
+              "actionId": "读材料",
+              "name": "读材料",
+              "start": 5,
+              "minutes": 8,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-单位比较",
+              "actionId": "单位比较",
+              "name": "单位比较",
+              "start": 13,
+              "minutes": 12,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-独算",
+              "actionId": "独算",
+              "name": "独算",
+              "start": 25,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-疑问",
+              "actionId": "疑问",
+              "name": "疑问",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课2",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课2-回顾",
+              "actionId": "回顾",
+              "name": "回顾",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-复算",
+              "actionId": "复算",
+              "name": "复算",
+              "start": 5,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-设计行动",
+              "actionId": "设计行动",
+              "name": "设计行动",
+              "start": 15,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-比较取舍",
+              "actionId": "比较取舍",
+              "name": "比较取舍",
+              "start": 25,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-交草图",
+              "actionId": "交草图",
+              "name": "交草图",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课3",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课3-看示范",
+              "actionId": "看示范",
+              "name": "看示范",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-个人说明",
+              "actionId": "个人说明",
+              "name": "个人说明",
+              "start": 5,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "每名学生一份计算与理由说明",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "individual",
+                  "name": "带署名的个人计算与说明稿",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8",
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "独立写清换算、计算和适用限制，保留个人稿",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-合稿",
+              "actionId": "合稿",
+              "name": "合稿",
+              "start": 15,
+              "minutes": 15,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "每组一份完整建议单，个人说明稿保留",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "name": "带组员署名的一页建议单",
+                  "groupIds": [
+                    "G1",
+                    "G2",
+                    "G3",
+                    "G4"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "按共同数据合稿，保留个人署名和分歧处理记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-邻组试读",
+              "actionId": "邻组试读",
+              "name": "邻组试读",
+              "start": 30,
+              "minutes": 7,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "逐人写一条指向作品位置的反馈",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "feedback",
+                  "name": "逐人试读反馈单",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8",
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "试读邻组稿，写具体差异与建议，不只说很好",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-整理修改点",
+              "actionId": "整理修改点",
+              "name": "整理修改点",
+              "start": 37,
+              "minutes": 3,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课4",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课4-回看",
+              "actionId": "回看",
+              "name": "回看",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课4-修改",
+              "actionId": "修改",
+              "name": "修改",
+              "start": 5,
+              "minutes": 12,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课4-单组示范",
+              "actionId": "单组示范",
+              "name": "单组示范",
+              "start": 17,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "首组说明，其余同学按纸面材料回应",
+              "presentationGroup": "G1",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "请首组示范，其余组写书面回应，不声称各组均已展示"
+            },
+            {
+              "id": "课4-反思",
+              "actionId": "反思",
+              "name": "反思",
+              "start": 22,
+              "minutes": 8,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "每名学生反思一处改变和依据",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "reflection",
+                  "name": "每名学生个人反思卡",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8",
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "独立写为何修改一处做法，不用组员代填",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课4-收齐",
+              "actionId": "收齐",
+              "name": "收齐",
+              "start": 30,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        }
+      ],
+      "executionState": null,
+      "presentation": {
+        "mode": "baseline_single_demo"
+      }
+    },
+    {
+      "id": "并行候选",
+      "lessons": [
+        {
+          "id": "课1",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课1-导入",
+              "actionId": "导入",
+              "name": "导入",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-读材料",
+              "actionId": "读材料",
+              "name": "读材料",
+              "start": 5,
+              "minutes": 8,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-单位比较",
+              "actionId": "单位比较",
+              "name": "单位比较",
+              "start": 13,
+              "minutes": 12,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-独算",
+              "actionId": "独算",
+              "name": "独算",
+              "start": 25,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-疑问",
+              "actionId": "疑问",
+              "name": "疑问",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课2",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课2-回顾",
+              "actionId": "回顾",
+              "name": "回顾",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-复算",
+              "actionId": "复算",
+              "name": "复算",
+              "start": 5,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-设计行动",
+              "actionId": "设计行动",
+              "name": "设计行动",
+              "start": 15,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-比较取舍",
+              "actionId": "比较取舍",
+              "name": "比较取舍",
+              "start": 25,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-交草图",
+              "actionId": "交草图",
+              "name": "交草图",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课3",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课3-看示范",
+              "actionId": "看示范",
+              "name": "看示范",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-个人说明",
+              "actionId": "个人说明",
+              "name": "个人说明",
+              "start": 5,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "每名学生一份计算与理由说明",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "individual",
+                  "name": "带署名的个人计算与说明稿",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8",
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "独立写清换算、计算和适用限制，保留个人稿",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-合稿",
+              "actionId": "合稿",
+              "name": "合稿",
+              "start": 15,
+              "minutes": 13,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "每组一份完整建议单，个人说明稿保留",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupDraft",
+                  "name": "带组员署名的一页建议单",
+                  "groupIds": [
+                    "G1",
+                    "G2",
+                    "G3",
+                    "G4"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "按共同数据合稿，保留个人署名和分歧处理记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-邻组试读",
+              "actionId": "邻组试读",
+              "name": "邻组试读",
+              "start": 28,
+              "minutes": 7,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "逐人写一条指向作品位置的反馈",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "peerFeedback",
+                  "name": "逐人试读反馈单",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8",
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "试读邻组稿，写具体差异与建议，不只说很好",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-回看",
+              "actionId": "回看",
+              "name": "回看",
+              "start": 35,
+              "minutes": 2,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-修改",
+              "actionId": "修改",
+              "name": "修改",
+              "start": 37,
+              "minutes": 2,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-收齐",
+              "actionId": "收齐",
+              "name": "收齐",
+              "start": 39,
+              "minutes": 1,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课4",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "讲解",
+              "actionId": "讲解",
+              "name": "讲解",
+              "start": 0,
+              "minutes": 20,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "共同理解与确认",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [
+                "巡读检查单",
+                "反馈句式",
+                "反思提示",
+                "听众记录单",
+                "展示回应卡"
+              ],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "讲解展示流程、单位核对方法与学生自助要求，预先把下列支架写在纸面材料上并说明如何使用；分组展示后不再承诺同时查看其他组卡片"
+            },
+            {
+              "id": "教师巡回",
+              "actionId": "巡回观察",
+              "name": "巡回观察",
+              "start": 20,
+              "minutes": 20,
+              "actors": [
+                "T"
+              ],
+              "product": "观察记录",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "教师资源行，不占用学生时间",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "在当前站展区间巡回观察，不冒称逐组全程评分"
+            },
+            {
+              "id": "展位1",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 20,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "groupIds": [
+                    "G1"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "presentationGroup": "G1",
+              "providesSupportIds": [],
+              "supportIds": [
+                "展示回应卡"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "presentation"
+            },
+            {
+              "id": "展位2",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 20,
+              "minutes": 10,
+              "actors": [
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "groupIds": [
+                    "G2"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "presentationGroup": "G2",
+              "providesSupportIds": [],
+              "supportIds": [
+                "展示回应卡"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "presentation"
+            },
+            {
+              "id": "展位3",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 30,
+              "minutes": 10,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "groupIds": [
+                    "G3"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "presentationGroup": "G3",
+              "providesSupportIds": [],
+              "supportIds": [
+                "展示回应卡"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "presentation"
+            },
+            {
+              "id": "展位4",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 30,
+              "minutes": 10,
+              "actors": [
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "groupIds": [
+                    "G4"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "presentationGroup": "G4",
+              "providesSupportIds": [],
+              "supportIds": [
+                "展示回应卡"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "presentation"
+            },
+            {
+              "id": "巡读1",
+              "actionId": "巡读提问",
+              "name": "巡读提问",
+              "start": 20,
+              "minutes": 6,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "巡读检查单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "peer_read"
+            },
+            {
+              "id": "反馈1",
+              "actionId": "个人反馈",
+              "name": "个人反馈",
+              "start": 26,
+              "minutes": 2,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "feedback",
+                  "actorIds": [
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反馈句式"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "feedback"
+            },
+            {
+              "id": "反思1",
+              "actionId": "反思",
+              "name": "反思",
+              "start": 28,
+              "minutes": 2,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "reflection",
+                  "actorIds": [
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反思提示"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "reflection"
+            },
+            {
+              "id": "巡读2",
+              "actionId": "巡读提问",
+              "name": "巡读提问",
+              "start": 30,
+              "minutes": 6,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "巡读检查单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "peer_read"
+            },
+            {
+              "id": "反馈2",
+              "actionId": "个人反馈",
+              "name": "个人反馈",
+              "start": 36,
+              "minutes": 2,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "feedback",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反馈句式"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "feedback"
+            },
+            {
+              "id": "反思2",
+              "actionId": "反思",
+              "name": "反思",
+              "start": 38,
+              "minutes": 2,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "reflection",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反思提示"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "reflection"
+            }
+          ]
+        }
+      ],
+      "executionState": null,
+      "presentation": {
+        "mode": "parallel",
+        "evaluation": "circulating",
+        "spaceConfirmed": null,
+        "stationsConfirmed": null,
+        "evaluationConfirmed": null
+      }
+    },
+    {
+      "id": "缩时候选",
+      "lessons": [
+        {
+          "id": "课1",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课1-导入",
+              "actionId": "导入",
+              "name": "导入",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-读材料",
+              "actionId": "读材料",
+              "name": "读材料",
+              "start": 5,
+              "minutes": 8,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-单位比较",
+              "actionId": "单位比较",
+              "name": "单位比较",
+              "start": 13,
+              "minutes": 12,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-独算",
+              "actionId": "独算",
+              "name": "独算",
+              "start": 25,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课1-疑问",
+              "actionId": "疑问",
+              "name": "疑问",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课2",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课2-回顾",
+              "actionId": "回顾",
+              "name": "回顾",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-复算",
+              "actionId": "复算",
+              "name": "复算",
+              "start": 5,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-设计行动",
+              "actionId": "设计行动",
+              "name": "设计行动",
+              "start": 15,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-比较取舍",
+              "actionId": "比较取舍",
+              "name": "比较取舍",
+              "start": 25,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课2-交草图",
+              "actionId": "交草图",
+              "name": "交草图",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课3",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "课3-看示范",
+              "actionId": "看示范",
+              "name": "看示范",
+              "start": 0,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-个人说明",
+              "actionId": "个人说明",
+              "name": "个人说明",
+              "start": 5,
+              "minutes": 10,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "每名学生一份计算与理由说明",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "individual",
+                  "name": "带署名的个人计算与说明稿",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8",
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "独立写清换算、计算和适用限制，保留个人稿",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-合稿",
+              "actionId": "合稿",
+              "name": "合稿",
+              "start": 15,
+              "minutes": 13,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "每组一份完整建议单，个人说明稿保留",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupDraft",
+                  "name": "带组员署名的一页建议单",
+                  "groupIds": [
+                    "G1",
+                    "G2",
+                    "G3",
+                    "G4"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "按共同数据合稿，保留个人署名和分歧处理记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-邻组试读",
+              "actionId": "邻组试读",
+              "name": "邻组试读",
+              "start": 28,
+              "minutes": 7,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "逐人写一条指向作品位置的反馈",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "peerFeedback",
+                  "name": "逐人试读反馈单",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4",
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8",
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12",
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "试读邻组稿，写具体差异与建议，不只说很好",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-回看",
+              "actionId": "回看",
+              "name": "回看",
+              "start": 35,
+              "minutes": 2,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-修改",
+              "actionId": "修改",
+              "name": "修改",
+              "start": 37,
+              "minutes": 2,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            },
+            {
+              "id": "课3-收齐",
+              "actionId": "收齐",
+              "name": "收齐",
+              "start": 39,
+              "minutes": 1,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "按本段动作查看学生纸面记录，必要时给单位或表达支架"
+            }
+          ]
+        },
+        {
+          "id": "课4",
+          "budgetMinutes": 40,
+          "activities": [
+            {
+              "id": "讲解",
+              "actionId": "讲解",
+              "name": "讲解",
+              "start": 0,
+              "minutes": 0,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "课堂任务产物",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "studentTask": "完成本段可查看的纸面推理与记录",
+              "providesSupportIds": [
+                "巡读检查单",
+                "反馈句式",
+                "反思提示",
+                "听众记录单",
+                "展示回应卡"
+              ],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "讲解展示流程、单位核对方法与学生自助要求，预先把下列支架写在纸面材料上并说明如何使用；分组展示后不再承诺同时查看其他组卡片"
+            },
+            {
+              "id": "串行展1",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 20,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "T"
+              ],
+              "product": "本组站展与回应记录一份",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "name": "本组站展回应记录",
+                  "groupIds": [
+                    "G1"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "本组共同说明并回应问题",
+              "presentationGroup": "G1",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "逐组在本活动时段内全程听评"
+            },
+            {
+              "id": "指定巡读1",
+              "actionId": "巡读提问",
+              "name": "巡读提问",
+              "start": 20,
+              "minutes": 3,
+              "actors": [
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "巡读检查单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "peer_read"
+            },
+            {
+              "id": "指定反馈1",
+              "actionId": "个人反馈",
+              "name": "个人反馈",
+              "start": 23,
+              "minutes": 1,
+              "actors": [
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "feedback",
+                  "actorIds": [
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反馈句式"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "feedback"
+            },
+            {
+              "id": "指定反思1",
+              "actionId": "反思",
+              "name": "反思",
+              "start": 24,
+              "minutes": 1,
+              "actors": [
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "reflection",
+                  "actorIds": [
+                    "P5",
+                    "P6",
+                    "P7",
+                    "P8"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反思提示"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "reflection"
+            },
+            {
+              "id": "听众1",
+              "actionId": "听众学习",
+              "name": "听众学习",
+              "start": 20,
+              "minutes": 5,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "听众记录单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "audience"
+            },
+            {
+              "id": "串行展2",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 25,
+              "minutes": 5,
+              "actors": [
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "T"
+              ],
+              "product": "本组站展与回应记录一份",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "name": "本组站展回应记录",
+                  "groupIds": [
+                    "G2"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "本组共同说明并回应问题",
+              "presentationGroup": "G2",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "逐组在本活动时段内全程听评"
+            },
+            {
+              "id": "指定巡读2",
+              "actionId": "巡读提问",
+              "name": "巡读提问",
+              "start": 25,
+              "minutes": 3,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "巡读检查单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "peer_read"
+            },
+            {
+              "id": "指定反馈2",
+              "actionId": "个人反馈",
+              "name": "个人反馈",
+              "start": 28,
+              "minutes": 1,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "feedback",
+                  "actorIds": [
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反馈句式"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "feedback"
+            },
+            {
+              "id": "指定反思2",
+              "actionId": "反思",
+              "name": "反思",
+              "start": 29,
+              "minutes": 1,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "reflection",
+                  "actorIds": [
+                    "P9",
+                    "P10",
+                    "P11",
+                    "P12"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反思提示"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "reflection"
+            },
+            {
+              "id": "听众2",
+              "actionId": "听众学习",
+              "name": "听众学习",
+              "start": 25,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "听众记录单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "audience"
+            },
+            {
+              "id": "串行展3",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 30,
+              "minutes": 5,
+              "actors": [
+                "P9",
+                "P10",
+                "P11",
+                "P12",
+                "T"
+              ],
+              "product": "本组站展与回应记录一份",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "name": "本组站展回应记录",
+                  "groupIds": [
+                    "G3"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "本组共同说明并回应问题",
+              "presentationGroup": "G3",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "逐组在本活动时段内全程听评"
+            },
+            {
+              "id": "指定巡读3",
+              "actionId": "巡读提问",
+              "name": "巡读提问",
+              "start": 30,
+              "minutes": 3,
+              "actors": [
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "巡读检查单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "peer_read"
+            },
+            {
+              "id": "指定反馈3",
+              "actionId": "个人反馈",
+              "name": "个人反馈",
+              "start": 33,
+              "minutes": 1,
+              "actors": [
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "feedback",
+                  "actorIds": [
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反馈句式"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "feedback"
+            },
+            {
+              "id": "指定反思3",
+              "actionId": "反思",
+              "name": "反思",
+              "start": 34,
+              "minutes": 1,
+              "actors": [
+                "P13",
+                "P14",
+                "P15",
+                "P16"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "reflection",
+                  "actorIds": [
+                    "P13",
+                    "P14",
+                    "P15",
+                    "P16"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反思提示"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "reflection"
+            },
+            {
+              "id": "听众3",
+              "actionId": "听众学习",
+              "name": "听众学习",
+              "start": 30,
+              "minutes": 5,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4",
+                "P5",
+                "P6",
+                "P7",
+                "P8"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "听众记录单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "audience"
+            },
+            {
+              "id": "串行展4",
+              "actionId": "站展",
+              "name": "站展",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P13",
+                "P14",
+                "P15",
+                "P16",
+                "T"
+              ],
+              "product": "本组站展与回应记录一份",
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "groupRecord",
+                  "name": "本组站展回应记录",
+                  "groupIds": [
+                    "G4"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "studentTask": "本组共同说明并回应问题",
+              "presentationGroup": "G4",
+              "providesSupportIds": [],
+              "supportIds": [],
+              "teacherMode": "synchronous",
+              "teacherInstruction": "逐组在本活动时段内全程听评"
+            },
+            {
+              "id": "指定巡读4",
+              "actionId": "巡读提问",
+              "name": "巡读提问",
+              "start": 35,
+              "minutes": 3,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "巡读检查单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "peer_read"
+            },
+            {
+              "id": "指定反馈4",
+              "actionId": "个人反馈",
+              "name": "个人反馈",
+              "start": 38,
+              "minutes": 1,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "feedback",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反馈句式"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "feedback"
+            },
+            {
+              "id": "指定反思4",
+              "actionId": "反思",
+              "name": "反思",
+              "start": 39,
+              "minutes": 1,
+              "actors": [
+                "P1",
+                "P2",
+                "P3",
+                "P4"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [
+                {
+                  "role": "reflection",
+                  "actorIds": [
+                    "P1",
+                    "P2",
+                    "P3",
+                    "P4"
+                  ],
+                  "actualReceived": null
+                }
+              ],
+              "providesSupportIds": [],
+              "supportIds": [
+                "反思提示"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "reflection"
+            },
+            {
+              "id": "听众4",
+              "actionId": "听众学习",
+              "name": "听众学习",
+              "start": 35,
+              "minutes": 5,
+              "actors": [
+                "P5",
+                "P6",
+                "P7",
+                "P8",
+                "P9",
+                "P10",
+                "P11",
+                "P12"
+              ],
+              "materials": [
+                "纸",
+                "笔",
+                "用户给定数字材料"
+              ],
+              "outputs": [],
+              "providesSupportIds": [],
+              "supportIds": [
+                "听众记录单"
+              ],
+              "teacherMode": "student_self",
+              "selfActionId": "audience"
+            }
+          ]
+        }
+      ],
+      "executionState": null,
+      "presentation": {
+        "mode": "shortened"
+      }
+    }
+  ],
+  "requirement": {
+    "groups": 4,
+    "minutesPerGroup": 10,
+    "lectureMinutes": 20,
+    "budgetMinutes": 40
+  },
+  "changeClaims": [
+    {
+      "baseline": "基线v1",
+      "candidate": "并行候选",
+      "actor": "P1",
+      "actionIds": [
+        "回看",
+        "修改"
+      ],
+      "beforeMinutes": 17,
+      "afterMinutes": 4,
+      "reductionMinutes": 13
+    }
+  ],
+  "participantIds": [
+    "P1",
+    "P2",
+    "P3",
+    "P4",
+    "P5",
+    "P6",
+    "P7",
+    "P8",
+    "P9",
+    "P10",
+    "P11",
+    "P12",
+    "P13",
+    "P14",
+    "P15",
+    "P16"
+  ],
+  "groups": {
+    "G1": [
+      "P1",
+      "P2",
+      "P3",
+      "P4"
+    ],
+    "G2": [
+      "P5",
+      "P6",
+      "P7",
+      "P8"
+    ],
+    "G3": [
+      "P9",
+      "P10",
+      "P11",
+      "P12"
+    ],
+    "G4": [
+      "P13",
+      "P14",
+      "P15",
+      "P16"
+    ]
+  },
+  "context": {
+    "participantBasis": "design_assumption",
+    "teacherId": "T",
+    "materials": [
+      "纸",
+      "笔",
+      "用户给定数字材料"
+    ]
+  },
+  "supportTemplateIds": [
+    "巡读检查单",
+    "反馈句式",
+    "反思提示",
+    "听众记录单",
+    "展示回应卡"
+  ]
+}

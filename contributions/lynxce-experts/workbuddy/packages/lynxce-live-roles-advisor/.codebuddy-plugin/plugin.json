@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-live-roles-advisor",
+  "version": "1.0.1",
+  "description": "Turn team size and stream type into role splits, cue words, a run-of-show, incident owners and post-stream handover reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-live-roles-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-live-roles"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-live-roles-advisor",
+  "displayName": {
+    "zh": "直播团队分工顾问",
+    "en": "Live Team Roles Advisor"
+  },
+  "profession": {
+    "zh": "直播团队分工与协作顾问｜灵策智算",
+    "en": "Live Stream Team Roles and Floor Control Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据团队人数与直播类型生成角色分工和内部口令表，附突发情况第一处理人与下播交接复盘，每场照着协作。",
+    "en": "Turn team size and stream type into role splits, cue words, a run-of-show, incident owners and post-stream handover reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "根据三个人的带货直播生成分工表口令表和流程时间轴",
+    "en": "Build role split cue sheet and run-of-show for a three-person selling stream"
+  },
+  "plugin": "lynxce-live-roles-advisor",
+  "tags": [
+    {
+      "zh": "直播团队",
+      "en": "Live Team"
+    },
+    {
+      "zh": "内部口令",
+      "en": "Cue Words"
+    },
+    {
+      "zh": "交接复盘",
+      "en": "Handover Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据三个人的带货直播生成分工表口令表和流程时间轴",
+      "en": "Build role split cue sheet and run-of-show for a three-person selling stream"
+    },
+    {
+      "zh": "复核我们现有的直播分工和突发预案有没有漏洞",
+      "en": "Review our live roles and incident plan for gaps"
+    },
+    {
+      "zh": "只知道团队人数先给我一版最小可用的分工和口令",
+      "en": "Only team size is known so give me a minimal role split and cue sheet"
+    }
+  ],
+  "keywords": [
+    "直播团队",
+    "内部口令",
+    "交接复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

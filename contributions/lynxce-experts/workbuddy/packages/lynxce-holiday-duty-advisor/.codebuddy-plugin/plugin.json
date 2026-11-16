@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-holiday-duty-advisor",
+  "version": "1.0.1",
+  "description": "Build primary and backup duty rosters with coverage checks, handover logs and traceable shift changes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-holiday-duty-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-holiday-duty"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-holiday-duty-advisor",
+  "displayName": {
+    "zh": "值班安排顾问",
+    "en": "Holiday Duty Advisor"
+  },
+  "profession": {
+    "zh": "节假日值班安排与交接顾问｜灵策智算",
+    "en": "Holiday Duty Roster and Handover Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据人员可用时段和值守要求编排主备班表配齐交接日志调班记录与覆盖核对逐项标明缺岗冲突和待确认参数",
+    "en": "Build primary and backup duty rosters with coverage checks, handover logs and traceable shift changes."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请按人员可用时间交付主备值班表和缺岗清单",
+    "en": "Build a primary backup roster and list uncovered shifts"
+  },
+  "plugin": "lynxce-holiday-duty-advisor",
+  "tags": [
+    {
+      "zh": "主备排班",
+      "en": "Duty Roster"
+    },
+    {
+      "zh": "交接日志",
+      "en": "Handover Log"
+    },
+    {
+      "zh": "覆盖核对",
+      "en": "Coverage Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请按人员可用时间交付主备值班表和缺岗清单",
+      "en": "Build a primary backup roster and list uncovered shifts"
+    },
+    {
+      "zh": "请把这些未结事项整理为逐班交接单和联系草案",
+      "en": "Turn open issues into shift handover sheets and contact plans"
+    },
+    {
+      "zh": "请重排这次调班并交付工时变化与冲突核对表",
+      "en": "Review a shift swap and show workload and conflict changes"
+    }
+  ],
+  "keywords": [
+    "主备排班",
+    "交接日志",
+    "覆盖核对"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-pet-care-advisor",
+  "version": "1.0.1",
+  "description": "Turn pet weight, body condition and routines into feeding math, weight logs, reward-based training plans and travel checklists.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pet-care-advisor.md"
+  ],
+  "skills": [],
+  "expertType": "agent",
+  "agentName": "lynxce-pet-care-advisor",
+  "displayName": {
+    "zh": "宠物养护顾问",
+    "en": "Pet Care Advisor"
+  },
+  "profession": {
+    "zh": "犬猫日常养护与行为训练顾问",
+    "en": "Dog and Cat Daily Care and Behavior Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据犬猫体重体况与日常记录，交付喂食热量换算表、体重追踪单、正向训练计划和出行清单，异常先就医。",
+    "en": "Turn pet weight, body condition and routines into feeding math, weight logs, reward-based training plans and travel checklists."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家狗超重了，按体重和狗粮热量帮我算每天喂多少",
+    "en": "My dog is overweight so calculate daily food from weight and food calories"
+  },
+  "plugin": "lynxce-pet-care-advisor",
+  "tags": [
+    {
+      "zh": "喂食换算",
+      "en": "Feeding Math"
+    },
+    {
+      "zh": "正向训练",
+      "en": "Reward Training"
+    },
+    {
+      "zh": "出行准备",
+      "en": "Travel Prep"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家狗超重了，按体重和狗粮热量帮我算每天喂多少",
+      "en": "My dog is overweight so calculate daily food from weight and food calories"
+    },
+    {
+      "zh": "帮我复核这份喂食减重计划的计算和观察指标",
+      "en": "Check the math and indicators in this feeding and weight plan"
+    },
+    {
+      "zh": "只知道猫总抓沙发时先给最小训练方案和记录表",
+      "en": "With only sofa scratching give me a minimal training plan and log"
+    }
+  ],
+  "keywords": [
+    "喂食换算",
+    "正向训练",
+    "出行准备",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

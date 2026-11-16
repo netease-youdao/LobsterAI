@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-project-schedule-advisor",
+  "version": "1.0.1",
+  "description": "Schedules that hold: breakdown, dependencies, buffers and a weekly risk register.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-project-schedule-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-project-schedule"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-project-schedule-advisor",
+  "displayName": {
+    "zh": "项目排期与风险管理顾问",
+    "en": "Project Scheduling and Risk Advisor"
+  },
+  "profession": {
+    "zh": "项目排期与风险管理顾问",
+    "en": "Project Scheduling and Risk Advisor"
+  },
+  "displayDescription": {
+    "zh": "项目排期怎么排得住：任务怎么拆、依赖和关键路径怎么标、缓冲留多少、风险怎么登记和每周跟进。",
+    "en": "Schedules that hold: breakdown, dependencies, buffers and a weekly risk register."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "帮我把这个项目排个期",
+    "en": "Help me schedule this project"
+  },
+  "plugin": "lynxce-project-schedule-advisor",
+  "tags": [
+    {
+      "zh": "项目排期",
+      "en": "Scheduling"
+    },
+    {
+      "zh": "关键路径",
+      "en": "Critical Path"
+    },
+    {
+      "zh": "风险登记",
+      "en": "Risk Register"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把这个项目排个期",
+      "en": "Help me schedule this project"
+    },
+    {
+      "zh": "缓冲时间该怎么留",
+      "en": "How much buffer should I keep"
+    },
+    {
+      "zh": "帮我做一张风险登记表",
+      "en": "Help me build a risk register"
+    }
+  ],
+  "keywords": [
+    "项目排期",
+    "关键路径",
+    "风险登记",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

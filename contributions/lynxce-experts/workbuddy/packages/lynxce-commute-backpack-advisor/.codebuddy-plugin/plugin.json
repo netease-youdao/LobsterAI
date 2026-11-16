@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-commute-backpack-advisor",
+  "version": "1.0.1",
+  "description": "Pick commuter bags: laptop compartment fit, capacity in liters, carrying comfort and water resistance, price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-commute-backpack-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-commute-backpack"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-commute-backpack-advisor",
+  "displayName": {
+    "zh": "通勤双肩包与电脑包选购顾问",
+    "en": "Commute Backpack and Laptop Bag Advisor"
+  },
+  "profession": {
+    "zh": "11.11 通勤双肩包与电脑包选购顾问",
+    "en": "11.11 Commute Backpack and Laptop Bag Advisor"
+  },
+  "displayDescription": {
+    "zh": "通勤包怎么挑：按电脑实际尺寸配隔层、按日常物品算容量升数、看背负与防泼水、比券后价。",
+    "en": "Pick commuter bags: laptop compartment fit, capacity in liters, carrying comfort and water resistance, price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的 16 寸电脑能放进这个包吗",
+    "en": "Will my 16-inch laptop fit in this backpack"
+  },
+  "plugin": "lynxce-commute-backpack-advisor",
+  "tags": [
+    {
+      "zh": "电脑隔层",
+      "en": "Laptop Fit"
+    },
+    {
+      "zh": "容量升数",
+      "en": "Capacity"
+    },
+    {
+      "zh": "背负防水",
+      "en": "Comfort and Rain"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的 16 寸电脑能放进这个包吗",
+      "en": "Will my 16-inch laptop fit in this backpack"
+    },
+    {
+      "zh": "每天带电脑水杯饭盒要多大容量",
+      "en": "What capacity do I need for a laptop, bottle and lunch box"
+    },
+    {
+      "zh": "骑车通勤的包怎么防雨",
+      "en": "How do I keep my bag dry when cycling to work"
+    }
+  ],
+  "keywords": [
+    "电脑隔层",
+    "容量升数",
+    "背负防水",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-waste-sorting-advisor",
+  "version": "1.0.1",
+  "description": "Plan office waste categories, bin points, labels, recycling and hazardous logs, device handover records and error-rate checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-waste-sorting-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-waste-sorting"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-waste-sorting-advisor",
+  "displayName": {
+    "zh": "办公垃圾分类顾问",
+    "en": "Waste Sorting Advisor"
+  },
+  "profession": {
+    "zh": "办公室垃圾分类与环保回收顾问｜灵策智算",
+    "en": "Office Waste Sorting and Recycling Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据城市目录与楼层布局规划分类口径和点位桶型，建立回收与有害垃圾台账，统计错投率并给出逐周改进动作。",
+    "en": "Plan office waste categories, bin points, labels, recycling and hazardous logs, device handover records and error-rate checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据我们的城市和楼层布局生成分类口径与点位桶型方案",
+    "en": "Plan categories and bin points for our city and floor layout"
+  },
+  "plugin": "lynxce-waste-sorting-advisor",
+  "tags": [
+    {
+      "zh": "点位规划",
+      "en": "Bin Placement"
+    },
+    {
+      "zh": "回收台账",
+      "en": "Recycling Log"
+    },
+    {
+      "zh": "错投抽查",
+      "en": "Spot Checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的城市和楼层布局生成分类口径与点位桶型方案",
+      "en": "Plan categories and bin points for our city and floor layout"
+    },
+    {
+      "zh": "复核我们的回收台账和抽查记录并计算各点位错投率",
+      "en": "Review our recycling log and spot checks and compute error rates by bin point"
+    },
+    {
+      "zh": "还不清楚当地目录时先给通用框架和待确认清单",
+      "en": "Give a generic framework and confirmation list before the local catalog is known"
+    }
+  ],
+  "keywords": [
+    "点位规划",
+    "回收台账",
+    "错投抽查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

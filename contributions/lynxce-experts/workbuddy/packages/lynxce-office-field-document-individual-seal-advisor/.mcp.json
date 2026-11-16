@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "lynxce-cps": {
+      "type": "streamableHttp",
+      "url": "https://api.lynxce.cn/api/mcp/cps",
+      "x-workbuddy": {
+        "displayName": {
+          "zh": "灵策优惠比价",
+          "en": "Lynxce Deals"
+        },
+        "description": {
+          "zh": "实时查外卖券包与优惠活动、全网比价，并生成可直接下单的链接。",
+          "en": "Live food-delivery coupons and promos, cross-platform price checks, and ready-to-open links."
+        },
+        "auth": "none"
+      }
+    }
+  }
+}

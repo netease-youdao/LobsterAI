@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-honor-trophy-advisor",
+  "version": "1.0.0",
+  "description": "Award items: tiers, engraving checks, backward lead times, order and acceptance sheets.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-honor-trophy-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-honor-trophy"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-honor-trophy-advisor",
+  "displayName": {
+    "zh": "表彰奖杯定制助理",
+    "en": "Award Trophy Order Assistant"
+  },
+  "profession": {
+    "zh": "表彰奖杯锦旗证书办公采购顾问",
+    "en": "Award Trophy and Certificate Purchase Advisor"
+  },
+  "displayDescription": {
+    "zh": "表彰奖杯锦旗怎么定不出错：按奖项分档选品、刻字信息双人核对、交期倒排，产出定制采购单与验收表。",
+    "en": "Award items: tiers, engraving checks, backward lead times, order and acceptance sheets."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "颁奖前两周奖杯来得及吗",
+    "en": "Is two weeks enough for trophies before the ceremony"
+  },
+  "plugin": "lynxce-honor-trophy-advisor",
+  "tags": [
+    {
+      "zh": "奖项分档",
+      "en": "Award Tiers"
+    },
+    {
+      "zh": "刻字核对",
+      "en": "Engraving Check"
+    },
+    {
+      "zh": "交期倒排",
+      "en": "Backward Schedule"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "颁奖前两周奖杯来得及吗",
+      "en": "Is two weeks enough for trophies before the ceremony"
+    },
+    {
+      "zh": "开版费怎么分摊到单价里",
+      "en": "How to split setup fees into unit cost"
+    },
+    {
+      "zh": "帮我做刻字核对表和验收表",
+      "en": "Make an engraving check list and acceptance sheet"
+    }
+  ],
+  "keywords": [
+    "奖项分档",
+    "刻字核对",
+    "交期倒排",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

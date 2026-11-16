@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-doc-classification-advisor",
+  "version": "1.0.1",
+  "description": "Turn document types and current practice into internal levels, marking rules, circulation logs, copy reconciliation and disposal records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-doc-classification-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-doc-classification"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-doc-classification-advisor",
+  "displayName": {
+    "zh": "文件保密管理顾问",
+    "en": "Document Confidentiality Advisor"
+  },
+  "profession": {
+    "zh": "文件密级标注与保密传阅销毁顾问｜灵策智算",
+    "en": "Document Classification and Disposal Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据文件类型与管理现状，制定内部分级与标注规则，交付传阅借阅登记、份数核对表和双人监销留痕清单。",
+    "en": "Turn document types and current practice into internal levels, marking rules, circulation logs, copy reconciliation and disposal records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "根据我们的文件类型制定内部分级和标注规则",
+    "en": "Build internal levels and marking rules for our document types"
+  },
+  "plugin": "lynxce-doc-classification-advisor",
+  "tags": [
+    {
+      "zh": "内部分级",
+      "en": "Internal Levels"
+    },
+    {
+      "zh": "传阅借阅",
+      "en": "Circulation Log"
+    },
+    {
+      "zh": "监销留痕",
+      "en": "Witnessed Disposal"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我们的文件类型制定内部分级和标注规则",
+      "en": "Build internal levels and marking rules for our document types"
+    },
+    {
+      "zh": "复核我们的借阅台账和销毁清单份数是否对得上",
+      "en": "Check whether our borrowing log and disposal list reconcile"
+    },
+    {
+      "zh": "只知道报价和合同要保密时先给最小登记方案",
+      "en": "Give a minimal logging setup when only quotes and contracts are sensitive"
+    }
+  ],
+  "keywords": [
+    "内部分级",
+    "传阅借阅",
+    "监销留痕",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,72 @@
+{
+  "name": "lynxce-hr-recruiter",
+  "version": "1.0.1",
+  "description": "Offline, user-material-based workflow assistance with traceable drafts and explicit review decisions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hr-recruiter.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hr-recruiter",
+  "displayName": {
+    "zh": "HR 招聘专家",
+    "en": "HR Recruiter"
+  },
+  "profession": {
+    "zh": "招聘与人才评估顾问",
+    "en": "Recruiting & Talent Assessment Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据岗位和候选材料建立能力证据、面试评分与追问清单，帮助招聘团队一致记录和比较岗位匹配。",
+    "en": "Turn supplied materials into traceable drafts, checked calculations and review templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我写一份高级前端工程师的岗位JD",
+    "en": "Write a JD for a senior frontend engineer"
+  },
+  "plugin": "lynxce-hr-recruiter",
+  "tags": [
+    {
+      "zh": "JD撰写",
+      "en": "Job Descriptions"
+    },
+    {
+      "zh": "简历筛选",
+      "en": "Resume Screening"
+    },
+    {
+      "zh": "面试设计",
+      "en": "Interview Design"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一份高级前端工程师的岗位JD",
+      "en": "Write a JD for a senior frontend engineer"
+    },
+    {
+      "zh": "对比这几份简历与岗位要求的匹配度",
+      "en": "Compare these resumes against the job requirements"
+    },
+    {
+      "zh": "设计产品经理岗位的结构化面试题库",
+      "en": "Design a structured interview bank for a PM role"
+    }
+  ],
+  "keywords": [
+    "JD撰写",
+    "简历筛选",
+    "面试设计",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/hiring-role-scorecard",
+    "./skills/candidate-evidence-review",
+    "./skills/structured-interview-review"
+  ]
+}

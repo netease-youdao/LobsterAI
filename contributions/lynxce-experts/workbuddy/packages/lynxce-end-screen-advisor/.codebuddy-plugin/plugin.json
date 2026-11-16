@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-end-screen-advisor",
+  "version": "1.0.2",
+  "description": "Draft clear video closings and reconcile comparable, video-attributed performance data without promising growth.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-end-screen-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-end-screen"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-end-screen-advisor",
+  "displayName": {
+    "zh": "片尾复盘顾问",
+    "en": "Closing Review Advisor"
+  },
+  "profession": {
+    "zh": "短视频片尾设计与效果复盘顾问｜灵策智算",
+    "en": "Short Video Closing Design and Performance Review Advisor | Lynxce"
+  },
+  "displayDescription": {
+    "zh": "片尾怎么说清楚：结尾脚本、系列内容衔接、时间轴验收与同口径数据复盘，交付可直接试读的方案。",
+    "en": "Draft clear video closings and reconcile comparable, video-attributed performance data without promising growth."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "把这条42秒视频的片尾改成4秒，并给试读验收表",
+    "en": "Draft a four-second closing for a 42-second video."
+  },
+  "plugin": "lynxce-end-screen-advisor",
+  "tags": [
+    {
+      "zh": "片尾脚本",
+      "en": "Closing Script"
+    },
+    {
+      "zh": "效果复盘",
+      "en": "Performance Review"
+    },
+    {
+      "zh": "系列内容",
+      "en": "Content Series"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把这条42秒视频的片尾改成4秒，并给试读验收表",
+      "en": "Draft a four-second closing for a 42-second video."
+    },
+    {
+      "zh": "帮我复核两组片尾数据的关注播放比",
+      "en": "Reconcile two closing versions with consistent metrics."
+    },
+    {
+      "zh": "片尾缩短一秒后怎么重新排时间轴",
+      "en": "Re-time a closing after shortening it by one second."
+    }
+  ],
+  "keywords": [
+    "片尾脚本",
+    "时间轴",
+    "效果复盘",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

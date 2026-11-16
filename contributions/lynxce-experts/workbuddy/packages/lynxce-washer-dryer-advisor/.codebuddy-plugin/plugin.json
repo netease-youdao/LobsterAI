@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-washer-dryer-advisor",
+  "version": "1.0.1",
+  "description": "Choose a washer-dryer set: capacity by household, heat pump versus condenser, stacking space, energy, water and price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-washer-dryer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-washer-dryer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-washer-dryer-advisor",
+  "displayName": {
+    "zh": "洗烘套装与干衣机顾问",
+    "en": "Washer, Dryer and Stacked Set Advisor"
+  },
+  "profession": {
+    "zh": "11.11 洗烘套装与干衣机顾问",
+    "en": "11.11 Washer, Dryer and Stacked Set Advisor"
+  },
+  "displayDescription": {
+    "zh": "洗烘套装怎么选：按人口定容量、热泵与冷凝区别、叠放尺寸与预留空间、耗电耗水与价格对比。",
+    "en": "Choose a washer-dryer set: capacity by household, heat pump versus condenser, stacking space, energy, water and price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "一家四口洗烘套装选多大容量",
+    "en": "What capacity suits a family of four"
+  },
+  "plugin": "lynxce-washer-dryer-advisor",
+  "tags": [
+    {
+      "zh": "容量测算",
+      "en": "Capacity Sizing"
+    },
+    {
+      "zh": "热泵冷凝",
+      "en": "Heat Pump vs Condenser"
+    },
+    {
+      "zh": "叠放空间",
+      "en": "Stacking Space"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "一家四口洗烘套装选多大容量",
+      "en": "What capacity suits a family of four"
+    },
+    {
+      "zh": "热泵干衣机多花的钱几年能省回来",
+      "en": "How long until a heat pump dryer pays off"
+    },
+    {
+      "zh": "阳台这个尺寸能不能叠放洗烘",
+      "en": "Can I stack a washer and dryer on my balcony"
+    }
+  ],
+  "keywords": [
+    "容量测算",
+    "热泵冷凝",
+    "叠放空间",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

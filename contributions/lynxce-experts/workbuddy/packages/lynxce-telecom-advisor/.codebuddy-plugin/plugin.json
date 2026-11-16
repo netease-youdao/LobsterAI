@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-telecom-advisor",
+  "version": "1.0.4",
+  "description": "Total-cost first: contract terms, post-promo pricing and whether switching is worth it.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-telecom-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-telecom-plan"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-telecom-advisor",
+  "displayName": {
+    "zh": "通信套餐与宽带资费核算顾问",
+    "en": "Telecom Plan Cost Advisor"
+  },
+  "profession": {
+    "zh": "通信套餐与宽带资费核算顾问",
+    "en": "Telecom Plan Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "套餐要算十二个月总账：合约期怎么看、优惠期结束后价格怎么折、要不要换套餐一次给结论。",
+    "en": "Total-cost first: contract terms, post-promo pricing and whether switching is worth it."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我这个用量该选什么套餐",
+    "en": "Which plan fits my usage"
+  },
+  "plugin": "lynxce-telecom-advisor",
+  "tags": [
+    {
+      "zh": "套餐资费",
+      "en": "Plans"
+    },
+    {
+      "zh": "总成本",
+      "en": "Total Cost"
+    },
+    {
+      "zh": "合约条款",
+      "en": "Contract"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我这个用量该选什么套餐",
+      "en": "Which plan fits my usage"
+    },
+    {
+      "zh": "这个宽带活动划算吗",
+      "en": "Is this broadband offer worth it"
+    },
+    {
+      "zh": "现在换套餐值不值",
+      "en": "Should I switch plans now"
+    }
+  ],
+  "keywords": [
+    "套餐资费",
+    "总成本",
+    "合约条款",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

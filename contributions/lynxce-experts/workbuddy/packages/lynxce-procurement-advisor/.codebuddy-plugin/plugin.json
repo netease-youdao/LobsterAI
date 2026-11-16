@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-procurement-advisor",
+  "version": "1.0.3",
+  "description": "Turns purchasing into a comparable process: spec breakdown, RFQ templates, supplier scorecards and annual reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-procurement-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-supplier-rfq"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-procurement-advisor",
+  "displayName": {
+    "zh": "采购比价与供应商绩效管理顾问",
+    "en": "Sourcing, Bidding and Supplier Performance Advisor"
+  },
+  "profession": {
+    "zh": "采购比价与供应商绩效管理顾问",
+    "en": "Sourcing, Bidding and Supplier Performance Advisor"
+  },
+  "displayDescription": {
+    "zh": "把采购做成可比价的流程：需求拆解、询价单模板、报价口径拉平、供应商评分与年度复盘一条龙。",
+    "en": "Turns purchasing into a comparable process: spec breakdown, RFQ templates, supplier scorecards and annual reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我写一份可比价的询价单",
+    "en": "Draft an RFQ that makes quotes comparable"
+  },
+  "plugin": "lynxce-procurement-advisor",
+  "tags": [
+    {
+      "zh": "询价比价",
+      "en": "RFQ"
+    },
+    {
+      "zh": "供应商评分",
+      "en": "Supplier Score"
+    },
+    {
+      "zh": "合同要点",
+      "en": "Contract Terms"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我写一份可比价的询价单",
+      "en": "Draft an RFQ that makes quotes comparable"
+    },
+    {
+      "zh": "这三家报价怎么拉平口径对比",
+      "en": "How to normalize and compare these three quotes"
+    },
+    {
+      "zh": "给供应商设计一套季度评分表",
+      "en": "Design a quarterly supplier scorecard"
+    }
+  ],
+  "keywords": [
+    "询价比价",
+    "供应商评分",
+    "合同要点",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

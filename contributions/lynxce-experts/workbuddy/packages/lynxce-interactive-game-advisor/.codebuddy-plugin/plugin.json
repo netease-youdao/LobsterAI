@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-interactive-game-advisor",
+  "version": "1.0.3",
+  "description": "Judge daily games and red packets: convert time to cost, redpacket thresholds and expiry, team assist privacy cost, stop rule.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-interactive-game-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-interactive-game"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-interactive-game-advisor",
+  "displayName": {
+    "zh": "互动游戏与签到红包时间价值顾问",
+    "en": "Interactive Game and Check-in Time Value Advisor"
+  },
+  "profession": {
+    "zh": "11.11 互动游戏与签到红包时间价值顾问",
+    "en": "11.11 Interactive Game and Check-in Time Value Advisor"
+  },
+  "displayDescription": {
+    "zh": "互动游戏红包值不值：每天花的时间折算成钱、红包门槛与有效期、组队助力的隐私骚扰成本、止损判断。",
+    "en": "Judge daily games and red packets: convert time to cost, redpacket thresholds and expiry, team assist privacy cost, stop rule."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我每天花时间种树领水值不值",
+    "en": "Is spending time on the tree-planting game worth it"
+  },
+  "plugin": "lynxce-interactive-game-advisor",
+  "tags": [
+    {
+      "zh": "时间成本核算",
+      "en": "Time Cost"
+    },
+    {
+      "zh": "红包净收益",
+      "en": "Net Return"
+    },
+    {
+      "zh": "止损建议",
+      "en": "Stop-loss"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我每天花时间种树领水值不值",
+      "en": "Is spending time on the tree-planting game worth it"
+    },
+    {
+      "zh": "组队助力要不要一直找朋友帮忙",
+      "en": "Should I keep asking friends for team assist help"
+    },
+    {
+      "zh": "这个红包门槛我够得着吗",
+      "en": "Can I reach this red packet threshold"
+    }
+  ],
+  "keywords": [
+    "时间成本核算",
+    "红包净收益",
+    "止损建议",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

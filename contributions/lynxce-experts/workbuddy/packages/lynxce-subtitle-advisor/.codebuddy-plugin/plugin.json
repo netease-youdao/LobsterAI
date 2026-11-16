@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-subtitle-advisor",
+  "version": "1.0.1",
+  "description": "Clean subtitles and on-screen text: consistent style, emphasis, safe areas and a guide.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-subtitle-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-subtitle-style"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-subtitle-advisor",
+  "displayName": {
+    "zh": "字幕花字与画面包装顾问",
+    "en": "Subtitle and On-screen Text Advisor"
+  },
+  "profession": {
+    "zh": "字幕花字与画面包装顾问",
+    "en": "Subtitle and On-screen Text Advisor"
+  },
+  "displayDescription": {
+    "zh": "视频字幕和花字怎么做才清爽：字幕样式怎么统一、重点词怎么强调、安全区怎么留、账号包装规范怎么定。",
+    "en": "Clean subtitles and on-screen text: consistent style, emphasis, safe areas and a guide."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我定一套字幕样式",
+    "en": "Define a subtitle style for me"
+  },
+  "plugin": "lynxce-subtitle-advisor",
+  "tags": [
+    {
+      "zh": "字幕样式",
+      "en": "Subtitles"
+    },
+    {
+      "zh": "花字包装",
+      "en": "Text Effects"
+    },
+    {
+      "zh": "剪辑规范",
+      "en": "Editing Guide"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我定一套字幕样式",
+      "en": "Define a subtitle style for me"
+    },
+    {
+      "zh": "花字太乱怎么改",
+      "en": "My text effects look messy"
+    },
+    {
+      "zh": "竖屏字幕放哪里不被挡",
+      "en": "Where to place subtitles in vertical videos"
+    }
+  ],
+  "keywords": [
+    "字幕样式",
+    "花字包装",
+    "剪辑规范",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

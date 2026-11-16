@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-label-filing-advisor",
+  "version": "1.0.0",
+  "description": "Plan filing codes, label templates, tape cost per label and a supplies purchase list.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-label-filing-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-label-filing"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-label-filing-advisor",
+  "displayName": {
+    "zh": "文件归档标签助理",
+    "en": "Filing Code and Label Assistant"
+  },
+  "profession": {
+    "zh": "标签机与文件归档办公采购顾问",
+    "en": "Label Printer and Filing Procurement Advisor"
+  },
+  "displayDescription": {
+    "zh": "文件归档怎么做：定档案编号规则与标签模板，按标签带长度算单张成本，出归档编号表与耗材采购单。",
+    "en": "Plan filing codes, label templates, tape cost per label and a supplies purchase list."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "合同和凭证的档案编号怎么定",
+    "en": "How to number contracts and vouchers for filing"
+  },
+  "plugin": "lynxce-label-filing-advisor",
+  "tags": [
+    {
+      "zh": "编号规则",
+      "en": "Filing Codes"
+    },
+    {
+      "zh": "标签模板",
+      "en": "Label Templates"
+    },
+    {
+      "zh": "耗材核算",
+      "en": "Tape Cost"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "合同和凭证的档案编号怎么定",
+      "en": "How to number contracts and vouchers for filing"
+    },
+    {
+      "zh": "一卷 8 米标签带能打多少张",
+      "en": "How many labels one 8 meter tape roll prints"
+    },
+    {
+      "zh": "长期档案用热敏纸标签可以吗",
+      "en": "Are thermal paper labels fine for long term files"
+    }
+  ],
+  "keywords": [
+    "编号规则",
+    "标签模板",
+    "耗材核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

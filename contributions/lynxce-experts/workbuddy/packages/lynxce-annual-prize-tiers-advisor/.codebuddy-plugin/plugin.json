@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-annual-prize-tiers-advisor",
+  "version": "1.0.0",
+  "description": "Party prizes: winning rate, tier budgets, reserve, prize list and sign off sheet.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-annual-prize-tiers-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-annual-prize-tiers"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-annual-prize-tiers-advisor",
+  "displayName": {
+    "zh": "年会奖品分档助理",
+    "en": "Annual Party Prize Tier Assistant"
+  },
+  "profession": {
+    "zh": "年会抽奖奖品分档采购助理",
+    "en": "Annual Party Prize Tiering and Purchase Assistant"
+  },
+  "displayDescription": {
+    "zh": "年会奖品怎么分档：按总预算与中奖率定份数与金额占比，留机动预算，产出奖品清单与发放签收表。",
+    "en": "Party prizes: winning rate, tier budgets, reserve, prize list and sign off sheet."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "120 人年会 2 万预算怎么分档",
+    "en": "How to tier a 20000 yuan budget for 120 people"
+  },
+  "plugin": "lynxce-annual-prize-tiers-advisor",
+  "tags": [
+    {
+      "zh": "中奖率",
+      "en": "Winning Rate"
+    },
+    {
+      "zh": "分档预算",
+      "en": "Tier Budget"
+    },
+    {
+      "zh": "发放签收",
+      "en": "Prize Sign Off"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "120 人年会 2 万预算怎么分档",
+      "en": "How to tier a 20000 yuan budget for 120 people"
+    },
+    {
+      "zh": "年会奖品机动预算留多少合适",
+      "en": "How much reserve to keep for party prizes"
+    },
+    {
+      "zh": "帮我做奖品清单和发放签收表",
+      "en": "Make a prize list and distribution sign off sheet"
+    }
+  ],
+  "keywords": [
+    "中奖率",
+    "分档预算",
+    "发放签收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

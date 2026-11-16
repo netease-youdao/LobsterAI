@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-snack-restock-advisor",
+  "version": "1.0.0",
+  "description": "Restock office snacks by budget per head, votes, usage rate and shelf life rotation.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-snack-restock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-snack-restock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-snack-restock-advisor",
+  "displayName": {
+    "zh": "零食柜补货助理",
+    "en": "Office Snack Restock Assistant"
+  },
+  "profession": {
+    "zh": "办公室零食柜补货采购助理",
+    "en": "Office Snack Cabinet Restock Assistant"
+  },
+  "displayDescription": {
+    "zh": "零食柜怎么补：按人均预算定量、投票与消耗率排口味、先进先出管保质期，出补货单与库存表。",
+    "en": "Restock office snacks by budget per head, votes, usage rate and shelf life rotation."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "12 人团队零食柜每月补多少",
+    "en": "How much to restock a snack cabinet for 12 people"
+  },
+  "plugin": "lynxce-office-snack-restock-advisor",
+  "tags": [
+    {
+      "zh": "人均预算",
+      "en": "Budget per Head"
+    },
+    {
+      "zh": "口味投票",
+      "en": "Flavor Voting"
+    },
+    {
+      "zh": "保质期轮换",
+      "en": "Shelf Life Rotation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "12 人团队零食柜每月补多少",
+      "en": "How much to restock a snack cabinet for 12 people"
+    },
+    {
+      "zh": "投票高但没人吃的零食要下架吗",
+      "en": "Should a popular vote snack nobody eats be dropped"
+    },
+    {
+      "zh": "帮我做零食柜库存表和补货单",
+      "en": "Build a snack inventory sheet and restock order"
+    }
+  ],
+  "keywords": [
+    "人均预算",
+    "口味投票",
+    "保质期轮换",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

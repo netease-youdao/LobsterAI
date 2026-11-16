@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-dog-food-advisor",
+  "version": "1.0.1",
+  "description": "Pick and stock dog food: daily ration by weight and age, opened shelf life cap, price per kilogram, transition.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-dog-food-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-dog-food"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-dog-food-advisor",
+  "displayName": {
+    "zh": "狗粮主粮选购与囤货量核算顾问",
+    "en": "Dog Food Picker and Stock-up Calculator Advisor"
+  },
+  "profession": {
+    "zh": "11.11 狗粮主粮选购与囤货量核算顾问",
+    "en": "11.11 Dog Food Picker and Stock-up Calculator Advisor"
+  },
+  "displayDescription": {
+    "zh": "狗粮怎么囤：按体重月龄算日粮与囤货量、核开封后保质期、比每公斤单价、按过渡期换粮。",
+    "en": "Pick and stock dog food: daily ration by weight and age, opened shelf life cap, price per kilogram, transition."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "10 公斤的狗大促囤多少狗粮合适",
+    "en": "How much dog food to stock for a 10 kilogram dog"
+  },
+  "plugin": "lynxce-dog-food-advisor",
+  "tags": [
+    {
+      "zh": "日粮囤货",
+      "en": "Daily Ration and Stock"
+    },
+    {
+      "zh": "开封期限",
+      "en": "Opened Shelf Life"
+    },
+    {
+      "zh": "每公斤单价",
+      "en": "Price per Kilogram"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "10 公斤的狗大促囤多少狗粮合适",
+      "en": "How much dog food to stock for a 10 kilogram dog"
+    },
+    {
+      "zh": "大袋狗粮便宜但吃不完怎么算",
+      "en": "Is a big bag worth it if it can not be finished in time"
+    },
+    {
+      "zh": "换狗粮要怎么过渡",
+      "en": "How to transition to a new dog food"
+    }
+  ],
+  "keywords": [
+    "日粮囤货",
+    "开封期限",
+    "每公斤单价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

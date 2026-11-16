@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-phone-gimbal-advisor",
+  "version": "1.0.0",
+  "description": "Pick phone gimbals: scene, payload, clamp width, battery, folded size and remote.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-phone-gimbal-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-phone-gimbal"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-phone-gimbal-advisor",
+  "displayName": {
+    "zh": "手机稳定器选购顾问",
+    "en": "Phone Gimbal and Selfie Stick Advisor"
+  },
+  "profession": {
+    "zh": "11.11 手机稳定器与自拍杆选购顾问",
+    "en": "11.11 Phone Gimbal and Selfie Stick Advisor"
+  },
+  "displayDescription": {
+    "zh": "稳定器怎么挑：按场景定三轴或自拍杆、核手机重量与夹宽、看续航与折叠体积、比补光与遥控。",
+    "en": "Pick phone gimbals: scene, payload, clamp width, battery, folded size and remote."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "旅行拍 vlog 要买三轴稳定器吗",
+    "en": "Do I need a three axis gimbal for travel vlogs"
+  },
+  "plugin": "lynxce-phone-gimbal-advisor",
+  "tags": [
+    {
+      "zh": "拍摄场景",
+      "en": "Shooting Scene"
+    },
+    {
+      "zh": "承重夹宽",
+      "en": "Payload and Clamp"
+    },
+    {
+      "zh": "续航体积",
+      "en": "Battery and Size"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "旅行拍 vlog 要买三轴稳定器吗",
+      "en": "Do I need a three axis gimbal for travel vlogs"
+    },
+    {
+      "zh": "手机加壳会不会超过稳定器承重",
+      "en": "Will a phone case push a gimbal past its payload"
+    },
+    {
+      "zh": "自拍杆三脚架伸多长才稳",
+      "en": "How far a tripod selfie stick can extend steadily"
+    }
+  ],
+  "keywords": [
+    "拍摄场景",
+    "承重夹宽",
+    "续航体积",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

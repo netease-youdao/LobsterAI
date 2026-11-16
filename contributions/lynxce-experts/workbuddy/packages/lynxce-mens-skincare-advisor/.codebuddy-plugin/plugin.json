@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-mens-skincare-advisor",
+  "version": "1.0.1",
+  "description": "Pick mens skincare sets: match oily, dry or combo skin, per-item set price, post-shave care, fewer steps.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-mens-skincare-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-mens-skincare"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-mens-skincare-advisor",
+  "displayName": {
+    "zh": "男士护肤套装选购顾问",
+    "en": "Mens Skincare Set Advisor"
+  },
+  "profession": {
+    "zh": "11.11 男士护肤套装选购顾问",
+    "en": "11.11 Mens Skincare Set Advisor"
+  },
+  "displayDescription": {
+    "zh": "男士护肤套装怎么选：按油干混合肤质选品、套装拆单价、补剃须后护理、精简到常用步骤。",
+    "en": "Pick mens skincare sets: match oily, dry or combo skin, per-item set price, post-shave care, fewer steps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "油皮男生该选哪类护肤套装",
+    "en": "Which skincare set suits an oily skinned man"
+  },
+  "plugin": "lynxce-mens-skincare-advisor",
+  "tags": [
+    {
+      "zh": "肤质选品",
+      "en": "Skin Type Match"
+    },
+    {
+      "zh": "套装拆单价",
+      "en": "Set Price Breakdown"
+    },
+    {
+      "zh": "剃须后护理",
+      "en": "Post-shave Care"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "油皮男生该选哪类护肤套装",
+      "en": "Which skincare set suits an oily skinned man"
+    },
+    {
+      "zh": "这个男士套装拆开算比单买划算吗",
+      "en": "Is this mens set cheaper than buying items alone"
+    },
+    {
+      "zh": "每天刮胡子后该涂什么",
+      "en": "What should I apply after shaving every day"
+    }
+  ],
+  "keywords": [
+    "肤质选品",
+    "套装拆单价",
+    "剃须后护理",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-sole-proprietor-income-tax-advisor",
+  "version": "1.0.0",
+  "description": "Getihu tax basis check, business income prepayment and annual return, calendar and ledger.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-sole-proprietor-income-tax-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-sole-proprietor-income-tax"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-sole-proprietor-income-tax-advisor",
+  "displayName": {
+    "zh": "个体户报税助理",
+    "en": "Sole Proprietor Tax Filing Assistant"
+  },
+  "profession": {
+    "zh": "个体工商户经营所得申报助理",
+    "en": "Sole Proprietor Business Income Filing Assistant"
+  },
+  "displayDescription": {
+    "zh": "个体户报税不踩坑：分清查账与核定征收，算经营所得预缴与汇算，整理凭证，产出申报日历与台账。",
+    "en": "Getihu tax basis check, business income prepayment and annual return, calendar and ledger."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我是个体户，经营所得年度汇算要补多少",
+    "en": "I run a getihu, how much do I owe in the annual return"
+  },
+  "plugin": "lynxce-sole-proprietor-income-tax-advisor",
+  "tags": [
+    {
+      "zh": "经营所得汇算",
+      "en": "Business Income Return"
+    },
+    {
+      "zh": "征收方式判断",
+      "en": "Tax Basis Check"
+    },
+    {
+      "zh": "收支台账",
+      "en": "Income Expense Ledger"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我是个体户，经营所得年度汇算要补多少",
+      "en": "I run a getihu, how much do I owe in the annual return"
+    },
+    {
+      "zh": "查账征收和核定征收有什么区别",
+      "en": "What is the difference between actual books and assessed taxation"
+    },
+    {
+      "zh": "帮我排一张个体户全年申报日历",
+      "en": "Build a full year filing calendar for my getihu"
+    }
+  ],
+  "keywords": [
+    "经营所得汇算",
+    "征收方式判断",
+    "收支台账",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

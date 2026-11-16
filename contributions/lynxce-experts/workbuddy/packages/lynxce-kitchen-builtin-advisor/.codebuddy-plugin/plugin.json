@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-kitchen-builtin-advisor",
+  "version": "1.0.1",
+  "description": "Choose built-in kitchen appliances: cutouts, hood airflow and pressure, dishwasher size and hookups, install costs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-kitchen-builtin-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-kitchen-builtin"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-kitchen-builtin-advisor",
+  "displayName": {
+    "zh": "嵌入式烟灶与洗碗机顾问",
+    "en": "Built-in Hood, Hob and Dishwasher Advisor"
+  },
+  "profession": {
+    "zh": "11.11 嵌入式烟灶与洗碗机顾问",
+    "en": "11.11 Built-in Hood, Hob and Dishwasher Advisor"
+  },
+  "displayDescription": {
+    "zh": "嵌入式烟灶洗碗机怎么选：橱柜开孔嵌入尺寸、烟机风量风压、洗碗机套数水电位、安装辅材费。",
+    "en": "Choose built-in kitchen appliances: cutouts, hood airflow and pressure, dishwasher size and hookups, install costs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家厨房该选多大风量的烟机",
+    "en": "What hood airflow does my kitchen need"
+  },
+  "plugin": "lynxce-kitchen-builtin-advisor",
+  "tags": [
+    {
+      "zh": "嵌入尺寸",
+      "en": "Cutout Fit"
+    },
+    {
+      "zh": "风量风压",
+      "en": "Airflow and Pressure"
+    },
+    {
+      "zh": "水电位核对",
+      "en": "Hookup Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家厨房该选多大风量的烟机",
+      "en": "What hood airflow does my kitchen need"
+    },
+    {
+      "zh": "洗碗机柜位这个尺寸能装哪些款",
+      "en": "Which dishwashers fit my cabinet space"
+    },
+    {
+      "zh": "烟灶洗碗机安装要另外花多少钱",
+      "en": "What extra installation costs should I expect"
+    }
+  ],
+  "keywords": [
+    "嵌入尺寸",
+    "风量风压",
+    "水电位核对",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

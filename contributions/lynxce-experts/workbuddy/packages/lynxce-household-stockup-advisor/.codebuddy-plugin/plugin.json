@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-household-stockup-advisor",
+  "version": "1.0.1",
+  "description": "Stock up on household supplies: compare unified unit prices, size quantity by usage, cap by space and shelf life.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-household-stockup-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-household-stockup"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-household-stockup-advisor",
+  "displayName": {
+    "zh": "日用清洁品囤货与单价核算顾问",
+    "en": "Household Supplies Stock-Up and Unit Price Advisor"
+  },
+  "profession": {
+    "zh": "11.11 日用清洁品囤货与单价核算顾问",
+    "en": "11.11 Household Supplies Stock-Up and Unit Price Advisor"
+  },
+  "displayDescription": {
+    "zh": "日用清洁品大促怎么囤：按统一单价比较、月消耗量推算囤货量、按存放空间与保质期定上限。",
+    "en": "Stock up on household supplies: compare unified unit prices, size quantity by usage, cap by space and shelf life."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这几款纸巾哪款单价更低",
+    "en": "Which of these tissues has the lower unit price"
+  },
+  "plugin": "lynxce-household-stockup-advisor",
+  "tags": [
+    {
+      "zh": "统一单价",
+      "en": "Unit Price"
+    },
+    {
+      "zh": "囤货量推算",
+      "en": "Stock Quantity"
+    },
+    {
+      "zh": "保质期上限",
+      "en": "Shelf Life Cap"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这几款纸巾哪款单价更低",
+      "en": "Which of these tissues has the lower unit price"
+    },
+    {
+      "zh": "洗衣液按每次用量怎么比",
+      "en": "How to compare detergents by cost per wash"
+    },
+    {
+      "zh": "我家日用品这次该囤多少",
+      "en": "How much household supplies should I stock up"
+    }
+  ],
+  "keywords": [
+    "统一单价",
+    "囤货量推算",
+    "保质期上限",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

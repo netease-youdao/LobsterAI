@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-delivery-appointment-conflict-b44-advisor",
+  "version": "1.0.0",
+  "description": "Prepare evidence based review drafts using user supplied records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-delivery-appointment-conflict-b44-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-delivery-appointment-conflict-b44",
+    "./skills/lynxce-delivery-dock-intersection-b44",
+    "./skills/lynxce-delivery-rebooking-confirmation-b44"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-delivery-appointment-conflict-b44-advisor",
+  "displayName": {
+    "zh": "交货预约冲突顾问",
+    "en": "Delivery Appointment Conflict Advisor"
+  },
+  "profession": {
+    "zh": "交货预约冲突顾问",
+    "en": "Delivery Appointment Conflict Advisor"
+  },
+  "displayDescription": {
+    "zh": "帮助物流协调员核对交货预约与卸货占用，识别时窗冲突和改约依赖，交付冲突表、候选窗口及确认清单。",
+    "en": "Prepare evidence based review drafts using user supplied records."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我提供原始记录，请生成交货预约时窗冲突核对",
+    "en": "Prepare the main task table from my records"
+  },
+  "plugin": "lynxce-delivery-appointment-conflict-b44-advisor",
+  "tags": [
+    {
+      "zh": "物流交货",
+      "en": "Industry"
+    },
+    {
+      "zh": "交货预约时窗冲突核对",
+      "en": "Task"
+    },
+    {
+      "zh": "证据复核",
+      "en": "Evidence Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我提供原始记录，请生成交货预约时窗冲突核对",
+      "en": "Prepare the main task table from my records"
+    },
+    {
+      "zh": "记录缺失或互相矛盾，请列最少补证与暂缓项",
+      "en": "List missing evidence and blocked decisions"
+    },
+    {
+      "zh": "收到补充记录，请按原对象更新专项附件",
+      "en": "Update affected objects and the two task attachments"
+    }
+  ],
+  "keywords": [
+    "物流交货",
+    "交货预约时窗冲突核对",
+    "证据复核"
+  ]
+}

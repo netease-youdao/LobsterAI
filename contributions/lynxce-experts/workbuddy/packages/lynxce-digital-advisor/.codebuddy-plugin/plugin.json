@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-digital-advisor",
+  "version": "1.0.4",
+  "description": "Translate needs into specs before buying: which parameters matter, model suffixes, price cycles and real final price.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-digital-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-digital-buying"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-digital-advisor",
+  "displayName": {
+    "zh": "数码产品选购与比价顾问",
+    "en": "Consumer Electronics Buying Advisor"
+  },
+  "profession": {
+    "zh": "数码产品选购与比价顾问",
+    "en": "Consumer Electronics Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "把数码需求翻译成参数再买：关键规格怎么比、型号后缀怎么读、降价周期与到手价怎么算。",
+    "en": "Translate needs into specs before buying: which parameters matter, model suffixes, price cycles and real final price."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这两台手机我该选哪个",
+    "en": "Which of these two phones should I pick"
+  },
+  "plugin": "lynxce-digital-advisor",
+  "tags": [
+    {
+      "zh": "数码选购",
+      "en": "Gadgets"
+    },
+    {
+      "zh": "参数对照",
+      "en": "Specs"
+    },
+    {
+      "zh": "到手价",
+      "en": "Final Price"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这两台手机我该选哪个",
+      "en": "Which of these two phones should I pick"
+    },
+    {
+      "zh": "这个价格现在值得买吗",
+      "en": "Is this a good price to buy right now"
+    },
+    {
+      "zh": "帮我看看这份笔记本参数",
+      "en": "Review these laptop specs for me"
+    }
+  ],
+  "keywords": [
+    "数码选购",
+    "参数对照",
+    "到手价",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

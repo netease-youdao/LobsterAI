@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-vi-office-advisor",
+  "version": "1.0.2",
+  "description": "Turn a brand manual and department collateral samples into a misuse log, one-page quick reference, versioned templates and print sign-off.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-vi-office-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-vi-office"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-vi-office-advisor",
+  "displayName": {
+    "zh": "VI物料规范顾问",
+    "en": "Brand Identity Standards Advisor"
+  },
+  "profession": {
+    "zh": "品牌VI与办公物料使用规范顾问｜灵策智算",
+    "en": "Brand VI and Office Collateral Standards Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据品牌手册与各部门物料样本，交付错误用法问题单、一页速查规范、模板版本目录和送印审核单。",
+    "en": "Turn a brand manual and department collateral samples into a misuse log, one-page quick reference, versioned templates and print sign-off."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "01-ProductDesign",
+  "defaultInitPrompt": {
+    "zh": "根据品牌手册和各部门物料样本生成问题单与一页速查规范",
+    "en": "Audit department samples against our brand manual into a misuse log and quick reference"
+  },
+  "plugin": "lynxce-vi-office-advisor",
+  "tags": [
+    {
+      "zh": "物料清点",
+      "en": "Collateral Audit"
+    },
+    {
+      "zh": "速查规范",
+      "en": "Quick Reference"
+    },
+    {
+      "zh": "送印审核",
+      "en": "Print Sign-off"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据品牌手册和各部门物料样本生成问题单与一页速查规范",
+      "en": "Audit department samples against our brand manual into a misuse log and quick reference"
+    },
+    {
+      "zh": "复核这份易拉宝送印稿的尺寸出血分辨率和标志比例",
+      "en": "Review this banner print file for size bleed resolution and logo proportion"
+    },
+    {
+      "zh": "只有标志文件没有品牌手册时先给速查规范草稿和待确认项",
+      "en": "With only a logo file draft a quick reference and open questions"
+    }
+  ],
+  "keywords": [
+    "物料清点",
+    "速查规范",
+    "送印审核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

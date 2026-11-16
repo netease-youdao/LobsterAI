@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-breast-pump-advisor",
+  "version": "1.0.0",
+  "description": "Pick breast pumps: electric or manual, single or double, suction levels, flange fit, parts cost.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-breast-pump-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-breast-pump"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-breast-pump-advisor",
+  "displayName": {
+    "zh": "吸奶器选购顾问",
+    "en": "Breast Pump Advisor"
+  },
+  "profession": {
+    "zh": "11.11 吸奶器选购顾问",
+    "en": "11.11 Breast Pump Selection Advisor"
+  },
+  "displayDescription": {
+    "zh": "吸奶器怎么挑：按每天吸奶次数选电动手动与单双边、读吸力档位、量喇叭罩口径、核防回流与配件成本。",
+    "en": "Pick breast pumps: electric or manual, single or double, suction levels, flange fit, parts cost."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "上班背奶选电动双边还是手动",
+    "en": "Electric double or manual pump for working moms"
+  },
+  "plugin": "lynxce-breast-pump-advisor",
+  "tags": [
+    {
+      "zh": "单双边选择",
+      "en": "Single or Double"
+    },
+    {
+      "zh": "吸力档位",
+      "en": "Suction Levels"
+    },
+    {
+      "zh": "喇叭罩口径",
+      "en": "Flange Size"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "上班背奶选电动双边还是手动",
+      "en": "Electric double or manual pump for working moms"
+    },
+    {
+      "zh": "吸奶器吸力档位怎么看",
+      "en": "How to read breast pump suction levels"
+    },
+    {
+      "zh": "喇叭罩口径怎么选",
+      "en": "How to choose the right flange size"
+    }
+  ],
+  "keywords": [
+    "单双边选择",
+    "吸力档位",
+    "喇叭罩口径",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

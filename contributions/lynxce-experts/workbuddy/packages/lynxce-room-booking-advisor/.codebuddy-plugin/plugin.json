@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-room-booking-advisor",
+  "version": "1.0.1",
+  "description": "Draft room booking rules, conflict options and usage reviews using capacity, equipment, buffers and occupancy evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-room-booking-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-room-booking"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-room-booking-advisor",
+  "displayName": {
+    "zh": "会议室管理顾问",
+    "en": "Meeting Room Advisor"
+  },
+  "profession": {
+    "zh": "会议室与公共资源预约管理顾问｜灵策智算",
+    "en": "Meeting Room and Shared Resource Booking Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据会议室容量设备与预约记录生成资源规则冲突协调表和使用复盘核对缓冲时段释放依据及实际占用口径",
+    "en": "Draft room booking rules, conflict options and usage reviews using capacity, equipment, buffers and occupancy evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请根据房间清单交付容量设备与预约规则表",
+    "en": "Build room constraints and booking rules from this inventory"
+  },
+  "plugin": "lynxce-room-booking-advisor",
+  "tags": [
+    {
+      "zh": "预约规则",
+      "en": "Booking Rules"
+    },
+    {
+      "zh": "时段冲突",
+      "en": "Time Conflicts"
+    },
+    {
+      "zh": "使用复盘",
+      "en": "Usage Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请根据房间清单交付容量设备与预约规则表",
+      "en": "Build room constraints and booking rules from this inventory"
+    },
+    {
+      "zh": "请检查这些预约的缓冲时间冲突并给两套调整方案",
+      "en": "Check booking buffer conflicts and propose two alternatives"
+    },
+    {
+      "zh": "请根据预约和实用记录交付使用率复盘表",
+      "en": "Calculate booking and occupancy metrics from these records"
+    }
+  ],
+  "keywords": [
+    "预约规则",
+    "时段冲突",
+    "使用复盘"
+  ],
+  "needEncrypt": true
+}

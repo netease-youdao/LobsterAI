@@ -1,0 +1,1062 @@
+{
+  "rule": {
+    "scope": "Local expert packages identified by .codebuddy-plugin/plugin.json agents/expertType only; standalone skill packages excluded. No remote API calls, no credentials or .secrets read, no original packages changed.",
+    "gateDetection": "Agent, bundled SKILL.md and scripts searched for paid_gate/source-only/unlock authorization indicators; needEncrypt is separately recorded and not treated as a gate. MCP configurations flagged as external dependencies without exposing configuration values.",
+    "selection": "Stable slug from manifest name; prefer highest semantic version; resolve equal version with agent/manifest modification time; equivalent extracted delivery files preferred. Alternatives retained.",
+    "branding": "Metadata brand checks only; no visual logo verification.",
+    "platformStatus": "Local registry hints below are historical local records, not live platform acceptance."
+  },
+  "sourceConflictCount": 27,
+  "omittedNonDeliverableFiles": [
+    "lynxce-branching-story-script-b45/scripts/lynxce-branching-story-script-b45/round7/__pycache__/gfm_tables.cpython-314.pyc",
+    "lynxce-essay-rubric-anchor-b45/scripts/lynxce-essay-rubric-anchor-b45/round7/__pycache__/gfm_tables.cpython-314.pyc",
+    "lynxce-project-learning-taskpack-b45/scripts/lynxce-project-learning-taskpack-b45/round9/__pycache__/gfm_tables.cpython-314.pyc",
+    "lynxce-quality-cavity-offset-compare-b45/scripts/lynxce-quality-cavity-offset-compare-b45/round7/__pycache__/gfm_tables.cpython-314.pyc"
+  ],
+  "conflicts": [
+    {
+      "id": "lynxce-cg3d-advisor",
+      "selected": {
+        "revision": "paid_all1013/part13/packages/lynxce-cg3d-advisor",
+        "agentSha256": "571e5989cf5e6db7d39f7214b30e3070869b2a75ebe3938d5b9aeece2df32ade",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part13/zips/lynxce-cg3d-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "571e5989cf5e6db7d39f7214b30e3070869b2a75ebe3938d5b9aeece2df32ade",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-cg3d-advisor",
+          "version": "1.0.1",
+          "agentSha256": "5379a8a52bc96d7a73034aa16c6b1e6ef773e9e03dfc961627791480fc3e156e",
+          "updatedAt": "2026-09-08T07:53:32.788837+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-cg3d-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "5379a8a52bc96d7a73034aa16c6b1e6ef773e9e03dfc961627791480fc3e156e",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-cg3d-advisor",
+          "version": "1.0.0",
+          "agentSha256": "640c02d0c7bca28c6368a4fbee168f6e991441d4e98f341732b8707b85d4ab9a",
+          "updatedAt": "2026-09-08T06:51:53.662550+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-cg3d-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "640c02d0c7bca28c6368a4fbee168f6e991441d4e98f341732b8707b85d4ab9a",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-commerce-kit-stock-quota-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-commerce-kit-stock-quota-b45",
+        "agentSha256": "ad7f2d4707cb478168ed4c5c18f69335c10130ef37eae651a83868c36cd8db0c",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round4-build/packages/lynxce-commerce-kit-stock-quota-b45",
+          "version": "1.0.0",
+          "agentSha256": "ad7f2d4707cb478168ed4c5c18f69335c10130ef37eae651a83868c36cd8db0c",
+          "updatedAt": "2026-10-21T16:28:29.211266+00:00"
+        },
+        {
+          "revision": "out45/revisions/round3-build/packages/lynxce-commerce-kit-stock-quota-b45",
+          "version": "1.0.0",
+          "agentSha256": "00b2ea0d890f94df59543b1e28156fb1da170818ff6ec065f8d20b9e68a4465b",
+          "updatedAt": "2026-10-21T15:34:19.400109+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-build/zips/lynxce-commerce-kit-stock-quota-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "ad7f2d4707cb478168ed4c5c18f69335c10130ef37eae651a83868c36cd8db0c",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round3-build/zips/lynxce-commerce-kit-stock-quota-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "00b2ea0d890f94df59543b1e28156fb1da170818ff6ec065f8d20b9e68a4465b",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-commerce-kit-stock-quota-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "ad7f2d4707cb478168ed4c5c18f69335c10130ef37eae651a83868c36cd8db0c",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-commerce-support-backlog-cover-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-commerce-support-backlog-cover-b45",
+        "agentSha256": "ac9f49784842fa1b24c0a5fffedb536b3dc50150c9a04078c679965daeac78bb",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/audit/presentation-baseline/lynxce-commerce-support-backlog-cover-b45.zip",
+          "version": "1.0.1",
+          "agentSha256": "370c722186a67cd5d3fcccacc87302594f9a464d2b84a1e99fab809dc77725ef",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-commerce-support-backlog-cover-b45.zip",
+          "version": "1.0.1",
+          "agentSha256": "ac9f49784842fa1b24c0a5fffedb536b3dc50150c9a04078c679965daeac78bb",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-community-event-reset-schedule-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-community-event-reset-schedule-b45",
+        "agentSha256": "fc19dfc95ff6efa5fb76bb7e9cd4b049c58aa38de7caabc6bb612daecef38bde",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round5-operations-build/packages/lynxce-community-event-reset-schedule-b45",
+          "version": "1.0.0",
+          "agentSha256": "fc19dfc95ff6efa5fb76bb7e9cd4b049c58aa38de7caabc6bb612daecef38bde",
+          "updatedAt": "2026-10-21T17:33:38.066929+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/packages/lynxce-community-event-reset-schedule-b45",
+          "version": "1.0.0",
+          "agentSha256": "fd4dc385baf0971333bb10e3092a14f971a0e486cc2e601f712aa75d4d332794",
+          "updatedAt": "2026-10-21T17:01:48.170711+00:00"
+        },
+        {
+          "revision": "out45/revisions/round5-operations-build/zips/lynxce-community-event-reset-schedule-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "fc19dfc95ff6efa5fb76bb7e9cd4b049c58aa38de7caabc6bb612daecef38bde",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/zips/lynxce-community-event-reset-schedule-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "fd4dc385baf0971333bb10e3092a14f971a0e486cc2e601f712aa75d4d332794",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-community-event-reset-schedule-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "fc19dfc95ff6efa5fb76bb7e9cd4b049c58aa38de7caabc6bb612daecef38bde",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-dataviz-advisor",
+      "selected": {
+        "revision": "paid_top1011/part8/src/lynxce-dataviz-advisor",
+        "agentSha256": "f0bbdbfd3b79f196b3524719a26c04cef08f2658e0bd86d347f81c36c101fa72",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_top1011/part8/zips/lynxce-dataviz-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "f0bbdbfd3b79f196b3524719a26c04cef08f2658e0bd86d347f81c36c101fa72",
+          "updatedAt": "2026-10-13T00:39:40+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-dataviz-advisor",
+          "version": "1.0.1",
+          "agentSha256": "577de113a73945c4494fede7676bcb9a864aa5ba2e41ed2e44190acc76b24f87",
+          "updatedAt": "2026-09-08T07:53:32.803476+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-dataviz-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "577de113a73945c4494fede7676bcb9a864aa5ba2e41ed2e44190acc76b24f87",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-dataviz-advisor",
+          "version": "1.0.0",
+          "agentSha256": "b2ce2cd21d148aa02bb69e7d90ff282ddc027ccd27671f1a29d3d36c6291dd65",
+          "updatedAt": "2026-09-08T06:51:53.678258+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-dataviz-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "b2ce2cd21d148aa02bb69e7d90ff282ddc027ccd27671f1a29d3d36c6291dd65",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-declutter-advisor",
+      "selected": {
+        "revision": "paid_all1013/part10/packages/lynxce-declutter-advisor",
+        "agentSha256": "a376689e5b5d86da773c7ca626e5fffcc971e2d66b004b06baafc23e17f4b770",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part10/zips/lynxce-declutter-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "a376689e5b5d86da773c7ca626e5fffcc971e2d66b004b06baafc23e17f4b770",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-declutter-advisor",
+          "version": "1.0.1",
+          "agentSha256": "81a883f95b5439e2df824b636b483c83f471076a9cfb9b86b90f5e2b82593d7c",
+          "updatedAt": "2026-09-08T07:53:32.808194+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-declutter-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "81a883f95b5439e2df824b636b483c83f471076a9cfb9b86b90f5e2b82593d7c",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-declutter-advisor",
+          "version": "1.0.0",
+          "agentSha256": "47dfc7ad236a92484e7cfca6e52dae80ee4b8359dc08fec0713fca7353556040",
+          "updatedAt": "2026-09-08T06:51:53.682801+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-declutter-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "47dfc7ad236a92484e7cfca6e52dae80ee4b8359dc08fec0713fca7353556040",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-drone-advisor",
+      "selected": {
+        "revision": "paid_all1013/part13/packages/lynxce-drone-advisor",
+        "agentSha256": "274bdf0ca0d6f8bbfbd22a7388265b36967d8d8eb8a9254b051754128531465c",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part13/zips/lynxce-drone-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "274bdf0ca0d6f8bbfbd22a7388265b36967d8d8eb8a9254b051754128531465c",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-drone-advisor",
+          "version": "1.0.1",
+          "agentSha256": "e695effb7088fab54b079499ef02ee1b5b9d34aaf8b5e58712efa4b2f2a71124",
+          "updatedAt": "2026-09-08T07:53:32.783687+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-drone-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "e695effb7088fab54b079499ef02ee1b5b9d34aaf8b5e58712efa4b2f2a71124",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-drone-advisor",
+          "version": "1.0.0",
+          "agentSha256": "ca581db9dd657018535feed041b2ad0a946e28b71404384b5a721e0299569a87",
+          "updatedAt": "2026-09-08T06:51:53.657133+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-drone-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "ca581db9dd657018535feed041b2ad0a946e28b71404384b5a721e0299569a87",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-essay-rubric-anchor-b45",
+      "selected": {
+        "revision": "out45/revisions/round7-essay-build/packages/lynxce-essay-rubric-anchor-b45",
+        "agentSha256": "39110ab5145a58d8fcee99c78f8ffd57343a4193b465da80c30f42a07abbd42a",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round7-education-build/packages/lynxce-essay-rubric-anchor-b45",
+          "version": "1.0.0",
+          "agentSha256": "39110ab5145a58d8fcee99c78f8ffd57343a4193b465da80c30f42a07abbd42a",
+          "updatedAt": "2026-10-21T18:12:08.430575+00:00"
+        },
+        {
+          "revision": "out45/revisions/round6-education-build/packages/lynxce-essay-rubric-anchor-b45",
+          "version": "1.0.0",
+          "agentSha256": "2e225d80f66d350954f16ffaee2ae83565c755b7bd9df4fa5d7c564bb693d15d",
+          "updatedAt": "2026-10-21T18:00:09.682961+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-service-build/packages/lynxce-essay-rubric-anchor-b45",
+          "version": "1.0.0",
+          "agentSha256": "0bbc97c0e51ae54f10c76d2fb5c4b655675235ca28e02ea248cbe42f0280a0a4",
+          "updatedAt": "2026-10-21T17:14:54.159569+00:00"
+        },
+        {
+          "revision": "out45/revisions/round7-essay-build/zips/lynxce-essay-rubric-anchor-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "39110ab5145a58d8fcee99c78f8ffd57343a4193b465da80c30f42a07abbd42a",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round7-education-build/zips/lynxce-essay-rubric-anchor-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "39110ab5145a58d8fcee99c78f8ffd57343a4193b465da80c30f42a07abbd42a",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round6-education-build/zips/lynxce-essay-rubric-anchor-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "2e225d80f66d350954f16ffaee2ae83565c755b7bd9df4fa5d7c564bb693d15d",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-service-build/zips/lynxce-essay-rubric-anchor-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "0bbc97c0e51ae54f10c76d2fb5c4b655675235ca28e02ea248cbe42f0280a0a4",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-exhibition-advisor",
+      "selected": {
+        "revision": "paid_top1011/part10/src/lynxce-exhibition-advisor",
+        "agentSha256": "3429c0b7f724e469c3f2b4381d96157f94116a0127544f7509488bc195d87110",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_top1011/part10/zips/lynxce-exhibition-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "3429c0b7f724e469c3f2b4381d96157f94116a0127544f7509488bc195d87110",
+          "updatedAt": "2026-10-13T00:35:50+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-exhibition-advisor",
+          "version": "1.0.1",
+          "agentSha256": "05ced9e1468fdf56c9fdf4d45859559313bbdf3aa232f82f97e10cb862641707",
+          "updatedAt": "2026-09-08T07:53:32.741917+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-exhibition-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "05ced9e1468fdf56c9fdf4d45859559313bbdf3aa232f82f97e10cb862641707",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-exhibition-advisor",
+          "version": "1.0.0",
+          "agentSha256": "c7fffb43107f3bd36fd7dc3c94d6bb2bae0b290f86b443b8bf976ee2ab1ae078",
+          "updatedAt": "2026-09-08T06:51:53.610895+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-exhibition-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "c7fffb43107f3bd36fd7dc3c94d6bb2bae0b290f86b443b8bf976ee2ab1ae078",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-facilitation-advisor",
+      "selected": {
+        "revision": "paid_all1013/part13/packages/lynxce-facilitation-advisor",
+        "agentSha256": "9457f8d509ae01b67ca2735bedc5c1c337c43817ec66d413417034803d0fe372",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part13/zips/lynxce-facilitation-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "9457f8d509ae01b67ca2735bedc5c1c337c43817ec66d413417034803d0fe372",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-facilitation-advisor",
+          "version": "1.0.1",
+          "agentSha256": "d72fa3655cbd8466bedfc0394df783295fda0f7c883b58f7de6a5ffc6aee0d4c",
+          "updatedAt": "2026-09-08T07:53:32.757050+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-facilitation-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "d72fa3655cbd8466bedfc0394df783295fda0f7c883b58f7de6a5ffc6aee0d4c",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-facilitation-advisor",
+          "version": "1.0.0",
+          "agentSha256": "c458dbe40dda262baaa067875e4816db87eacfb8f6e7457be932481b85fdb875",
+          "updatedAt": "2026-09-08T06:51:53.627506+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-facilitation-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "c458dbe40dda262baaa067875e4816db87eacfb8f6e7457be932481b85fdb875",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-franchise-advisor",
+      "selected": {
+        "revision": "paid_all1013/part13/packages/lynxce-franchise-advisor",
+        "agentSha256": "c3abca777a68c03319a122bf2654ef95ede304ce3b7000cc73fb61a6f0c890f9",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part13/zips/lynxce-franchise-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "c3abca777a68c03319a122bf2654ef95ede304ce3b7000cc73fb61a6f0c890f9",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-franchise-advisor",
+          "version": "1.0.1",
+          "agentSha256": "9c74c1a8d26991e5d0f43fbe4b5e385fd0164119dec4f287b99b15b7717dc02c",
+          "updatedAt": "2026-09-08T07:53:32.747041+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-franchise-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "9c74c1a8d26991e5d0f43fbe4b5e385fd0164119dec4f287b99b15b7717dc02c",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-franchise-advisor",
+          "version": "1.0.0",
+          "agentSha256": "05a28e387599ff42a3ad3449fc2d9d2acdbafe50d39ead07f60dd47551e3747b",
+          "updatedAt": "2026-09-08T06:51:53.616824+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-franchise-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "05a28e387599ff42a3ad3449fc2d9d2acdbafe50d39ead07f60dd47551e3747b",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-illustration-advisor",
+      "selected": {
+        "revision": "paid_top1011/part12/src/lynxce-illustration-advisor",
+        "agentSha256": "0374da204bbe4d1ddf64a9176d2ede42d5826c1acdc2534313abb0feb143b539",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_top1011/part12/zips/lynxce-illustration-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "0374da204bbe4d1ddf64a9176d2ede42d5826c1acdc2534313abb0feb143b539",
+          "updatedAt": "2026-10-13T00:39:40+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-illustration-advisor",
+          "version": "1.0.1",
+          "agentSha256": "7c8b3f169397a4db20c183926ac48930ffb8d82a0afadcd3eb831a16e616c317",
+          "updatedAt": "2026-09-08T07:53:32.778486+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-illustration-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "7c8b3f169397a4db20c183926ac48930ffb8d82a0afadcd3eb831a16e616c317",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-illustration-advisor",
+          "version": "1.0.0",
+          "agentSha256": "1162552b9d324aa71d62902096346d147281e740bf9b962c3d578ad64d283414",
+          "updatedAt": "2026-09-08T06:51:53.652207+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-illustration-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "1162552b9d324aa71d62902096346d147281e740bf9b962c3d578ad64d283414",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-inbound-dock-appointment-schedule-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-inbound-dock-appointment-schedule-b45",
+        "agentSha256": "e09e47baccafd60ad784d353a7068884faee182872e5b681e9722f31cf7807d6",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round5-operations-build/packages/lynxce-inbound-dock-appointment-schedule-b45",
+          "version": "1.0.0",
+          "agentSha256": "e09e47baccafd60ad784d353a7068884faee182872e5b681e9722f31cf7807d6",
+          "updatedAt": "2026-10-21T17:33:36.990733+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/packages/lynxce-inbound-dock-appointment-schedule-b45",
+          "version": "1.0.0",
+          "agentSha256": "0ced9f2487adea2780ba3d82b219a494842be0f75885524e5230c877489051dc",
+          "updatedAt": "2026-10-21T17:01:46.651354+00:00"
+        },
+        {
+          "revision": "out45/revisions/round5-operations-build/zips/lynxce-inbound-dock-appointment-schedule-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "e09e47baccafd60ad784d353a7068884faee182872e5b681e9722f31cf7807d6",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/zips/lynxce-inbound-dock-appointment-schedule-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "0ced9f2487adea2780ba3d82b219a494842be0f75885524e5230c877489051dc",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-inbound-dock-appointment-schedule-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "e09e47baccafd60ad784d353a7068884faee182872e5b681e9722f31cf7807d6",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-iot-advisor",
+      "selected": {
+        "revision": "paid_top1011/part6/src/lynxce-iot-advisor",
+        "agentSha256": "565d9b1e701bdce254a0040a6710330d0809a067b4b022c1a7aed283bb906572",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_top1011/part6/zips/lynxce-iot-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "565d9b1e701bdce254a0040a6710330d0809a067b4b022c1a7aed283bb906572",
+          "updatedAt": "2026-10-13T00:35:48+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-iot-advisor",
+          "version": "1.0.1",
+          "agentSha256": "f141d2f78e642491d534b71fc34674842a6c00d244fee3a49858c38bc044c36d",
+          "updatedAt": "2026-09-08T07:53:32.798416+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-iot-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "f141d2f78e642491d534b71fc34674842a6c00d244fee3a49858c38bc044c36d",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-iot-advisor",
+          "version": "1.0.0",
+          "agentSha256": "1ea781259c43e6711e967e3741ff0c9a4321d06546f8fd8df2eb92c813a72e7b",
+          "updatedAt": "2026-09-08T06:51:53.673179+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-iot-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "1ea781259c43e6711e967e3741ff0c9a4321d06546f8fd8df2eb92c813a72e7b",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-legacy-function-refactor-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-legacy-function-refactor-b45",
+        "agentSha256": "eeb92950d12f245bacc66f126f811135e5c2cd39df2138b5d1356d413bdd29c6",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/audit/presentation-baseline/lynxce-legacy-function-refactor-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "17cbcea59e3b23ff4d670e8ffa43bf1ea9be3361c9d64aac5ff231d31c8edfc6",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-legacy-function-refactor-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "eeb92950d12f245bacc66f126f811135e5c2cd39df2138b5d1356d413bdd29c6",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-leveldesign-advisor",
+      "selected": {
+        "revision": "paid_all1013/part13/packages/lynxce-leveldesign-advisor",
+        "agentSha256": "8dc4073c01808e1865e2f8c32913ee7714f36877b55120a876715dae785f0218",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part13/zips/lynxce-leveldesign-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "8dc4073c01808e1865e2f8c32913ee7714f36877b55120a876715dae785f0218",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-leveldesign-advisor",
+          "version": "1.0.1",
+          "agentSha256": "212dedda1bad6581d80bd91abaad1c851d8f11e9472cb27f4f36487c9393fbbe",
+          "updatedAt": "2026-09-08T07:53:32.768070+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-leveldesign-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "212dedda1bad6581d80bd91abaad1c851d8f11e9472cb27f4f36487c9393fbbe",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-leveldesign-advisor",
+          "version": "1.0.0",
+          "agentSha256": "4451ef94dac8c23a553c1df2c229870d4d38045f28e725b1de2607080fdaad56",
+          "updatedAt": "2026-09-08T06:51:53.639004+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-leveldesign-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "4451ef94dac8c23a553c1df2c229870d4d38045f28e725b1de2607080fdaad56",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-opensource-advisor",
+      "selected": {
+        "revision": "paid_all1013/part13/packages/lynxce-opensource-advisor",
+        "agentSha256": "fd842cb132d461bf00460344293f2501825b7e33e93e6cafec8bbe800fb0a49b",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part13/zips/lynxce-opensource-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "fd842cb132d461bf00460344293f2501825b7e33e93e6cafec8bbe800fb0a49b",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-opensource-advisor",
+          "version": "1.0.1",
+          "agentSha256": "c3fce5625101168be146c3d5174daacec1c79a7df1dd2e52fa735dc5acb681fc",
+          "updatedAt": "2026-09-08T07:53:32.794006+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-opensource-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "c3fce5625101168be146c3d5174daacec1c79a7df1dd2e52fa735dc5acb681fc",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-opensource-advisor",
+          "version": "1.0.0",
+          "agentSha256": "b173547d854709ed84837db745133cc50e0f1b9a2569c367b854533f25d76b97",
+          "updatedAt": "2026-09-08T06:51:53.668175+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-opensource-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "b173547d854709ed84837db745133cc50e0f1b9a2569c367b854533f25d76b97",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-plants-advisor",
+      "selected": {
+        "revision": "paid_all1013/part10/packages/lynxce-plants-advisor",
+        "agentSha256": "59730f438881f4f21d3a5e19e099534073e0f4a07c39d8dc255c8df6d25d267d",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_all1013/part10/zips/lynxce-plants-advisor-v1.0.1.zip",
+          "version": "1.0.1",
+          "agentSha256": "59730f438881f4f21d3a5e19e099534073e0f4a07c39d8dc255c8df6d25d267d",
+          "updatedAt": "2026-10-13T16:00:00+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-plants-advisor",
+          "version": "1.0.1",
+          "agentSha256": "0a2a919a29f3ae9e0148a555a33641505a7e1b7ccedecc4b19794a6831147ee8",
+          "updatedAt": "2026-09-08T07:53:32.818287+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-plants-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "0a2a919a29f3ae9e0148a555a33641505a7e1b7ccedecc4b19794a6831147ee8",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-plants-advisor",
+          "version": "1.0.0",
+          "agentSha256": "3363f5189cc78ab34610281dfe2a33c1cb33f36d6bb9d066e5b4b600b4012279",
+          "updatedAt": "2026-09-08T06:51:53.693601+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-plants-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "3363f5189cc78ab34610281dfe2a33c1cb33f36d6bb9d066e5b4b600b4012279",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-project-learning-taskpack-b45",
+      "selected": {
+        "revision": "out45/revisions/round9-project-build/packages/lynxce-project-learning-taskpack-b45",
+        "agentSha256": "394c3e25f6df2eb17d50e1f6418e5a0929d9a83db38cc8261f4b8c1d55eced74",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round7-education-build/packages/lynxce-project-learning-taskpack-b45",
+          "version": "1.0.0",
+          "agentSha256": "8e5ac8714e11ee2ebc4bdca1acdc330feafa3518cde823e0a2e725e6785d52fb",
+          "updatedAt": "2026-10-21T18:12:08.565182+00:00"
+        },
+        {
+          "revision": "out45/revisions/round6-education-build/packages/lynxce-project-learning-taskpack-b45",
+          "version": "1.0.0",
+          "agentSha256": "f9e28cae5ab02a1d8e15f8b14e000ed8015ad251a97ebdff9b9cfa5cc8429f60",
+          "updatedAt": "2026-10-21T18:00:09.859458+00:00"
+        },
+        {
+          "revision": "out45/revisions/round5-specialist-build/packages/lynxce-project-learning-taskpack-b45",
+          "version": "1.0.0",
+          "agentSha256": "2769c8ec3a74023bad0c29d897da1049e09c9ff4dab209ede372009fca92769a",
+          "updatedAt": "2026-10-21T17:39:52.429777+00:00"
+        },
+        {
+          "revision": "out45/revisions/round9-project-build/zips/lynxce-project-learning-taskpack-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "394c3e25f6df2eb17d50e1f6418e5a0929d9a83db38cc8261f4b8c1d55eced74",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round7-education-build/zips/lynxce-project-learning-taskpack-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "8e5ac8714e11ee2ebc4bdca1acdc330feafa3518cde823e0a2e725e6785d52fb",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round6-education-build/zips/lynxce-project-learning-taskpack-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "f9e28cae5ab02a1d8e15f8b14e000ed8015ad251a97ebdff9b9cfa5cc8429f60",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round5-specialist-build/zips/lynxce-project-learning-taskpack-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "2769c8ec3a74023bad0c29d897da1049e09c9ff4dab209ede372009fca92769a",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-property-waste-bin-clearance-plan-b45",
+      "selected": {
+        "revision": "out45/revisions/round7-business-build/packages/lynxce-property-waste-bin-clearance-plan-b45",
+        "agentSha256": "bc25c673238ebaf27878511277dbf2a91abe38146b73104de9a5bc513e2b4b33",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round5-operations-build/packages/lynxce-property-waste-bin-clearance-plan-b45",
+          "version": "1.0.0",
+          "agentSha256": "318918248f6de4446870f1e3b37b1a5111f2deb8feceb4a217985d771f8604da",
+          "updatedAt": "2026-10-21T17:33:37.738455+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/packages/lynxce-property-waste-bin-clearance-plan-b45",
+          "version": "1.0.0",
+          "agentSha256": "c778274183791125a76e665d7be793a151c073418850f3004868dd36bb3c403a",
+          "updatedAt": "2026-10-21T17:01:47.209407+00:00"
+        },
+        {
+          "revision": "out45/revisions/round7-business-build/zips/lynxce-property-waste-bin-clearance-plan-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "bc25c673238ebaf27878511277dbf2a91abe38146b73104de9a5bc513e2b4b33",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round5-operations-build/zips/lynxce-property-waste-bin-clearance-plan-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "318918248f6de4446870f1e3b37b1a5111f2deb8feceb4a217985d771f8604da",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/zips/lynxce-property-waste-bin-clearance-plan-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "c778274183791125a76e665d7be793a151c073418850f3004868dd36bb3c403a",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-property-wayfinding-copy-design-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-property-wayfinding-copy-design-b45",
+        "agentSha256": "79d822691961d8608f0bc9fd05e381c525fbc5a2bd02e9db3a41304179072968",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/audit/presentation-baseline/lynxce-property-wayfinding-copy-design-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "fde68c4e5cd0d56df5013fbad5f1ee57ae351ac42f3aaec7aca13927700e9cff",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-property-wayfinding-copy-design-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "79d822691961d8608f0bc9fd05e381c525fbc5a2bd02e9db3a41304179072968",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-quality-gauge-repeat-range-b45",
+      "selected": {
+        "revision": "out45/revisions/round7-source-story-build/packages/lynxce-quality-gauge-repeat-range-b45",
+        "agentSha256": "90328d8cca1ed8dfc97f818edf42f394dc478799648f0754862b433a077e20ac",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round5-specialist-build/packages/lynxce-quality-gauge-repeat-range-b45",
+          "version": "1.0.1",
+          "agentSha256": "8fdf381f1823299981de15f527a8cddb17a887b1bd5fa9776505797204a330c6",
+          "updatedAt": "2026-10-21T17:39:51.750239+00:00"
+        },
+        {
+          "revision": "out45/revisions/round7-source-story-build/zips/lynxce-quality-gauge-repeat-range-b45.zip",
+          "version": "1.0.1",
+          "agentSha256": "90328d8cca1ed8dfc97f818edf42f394dc478799648f0754862b433a077e20ac",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round5-specialist-build/zips/lynxce-quality-gauge-repeat-range-b45.zip",
+          "version": "1.0.1",
+          "agentSha256": "8fdf381f1823299981de15f527a8cddb17a887b1bd5fa9776505797204a330c6",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/packages/lynxce-quality-gauge-repeat-range-b45",
+          "version": "1.0.0",
+          "agentSha256": "398547dae7519f47dace67085792a0f72604b059160eb9e0136ade78eac6bac8",
+          "updatedAt": "2026-10-21T16:47:38.489717+00:00"
+        },
+        {
+          "revision": "out45/audit/presentation-baseline/lynxce-quality-gauge-repeat-range-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "badb79fc60254eb75e963f55c861f430dfbd0f2ca2f905384395df6044ac80d6",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-quality-gauge-repeat-range-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "398547dae7519f47dace67085792a0f72604b059160eb9e0136ade78eac6bac8",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-restaurant-service-roleplay-coach-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-restaurant-service-roleplay-coach-b45",
+        "agentSha256": "533e4a828339978e6e2756beba859803433bf1c02cdf203027ba98b5903c64e5",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/audit/presentation-baseline/lynxce-restaurant-service-roleplay-coach-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "f20f5fd305d973fc816c0a0df53e89a4946ccb70543e09cd44ec64c2d485895e",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-restaurant-service-roleplay-coach-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "533e4a828339978e6e2756beba859803433bf1c02cdf203027ba98b5903c64e5",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-restaurant-table-queue-seating-b45",
+      "selected": {
+        "revision": "out45/packages/lynxce-restaurant-table-queue-seating-b45",
+        "agentSha256": "5ad0057a6c5fcf9a88f62dd0523a72893996dfe18cbc42785e14d59b7d82ffbe",
+        "version": "1.0.0"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round5-operations-build/packages/lynxce-restaurant-table-queue-seating-b45",
+          "version": "1.0.0",
+          "agentSha256": "5ad0057a6c5fcf9a88f62dd0523a72893996dfe18cbc42785e14d59b7d82ffbe",
+          "updatedAt": "2026-10-21T17:33:37.382746+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/packages/lynxce-restaurant-table-queue-seating-b45",
+          "version": "1.0.0",
+          "agentSha256": "d2cf96f18dab8dd3a74ef36f7c440a1e10ce4db64e71f3d3a74271a4f4aa1b90",
+          "updatedAt": "2026-10-21T17:01:46.980426+00:00"
+        },
+        {
+          "revision": "out45/revisions/round5-operations-build/zips/lynxce-restaurant-table-queue-seating-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "5ad0057a6c5fcf9a88f62dd0523a72893996dfe18cbc42785e14d59b7d82ffbe",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round4-rest-build/zips/lynxce-restaurant-table-queue-seating-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "d2cf96f18dab8dd3a74ef36f7c440a1e10ce4db64e71f3d3a74271a4f4aa1b90",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-restaurant-table-queue-seating-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "5ad0057a6c5fcf9a88f62dd0523a72893996dfe18cbc42785e14d59b7d82ffbe",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-styling-advisor",
+      "selected": {
+        "revision": "paid_top1011/part7/src/lynxce-styling-advisor",
+        "agentSha256": "189cabcfe430a302bdc381c044b4a8cb93547d6f2ed5642f90f6b4da6183977d",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_top1011/part7/zips/lynxce-styling-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "189cabcfe430a302bdc381c044b4a8cb93547d6f2ed5642f90f6b4da6183977d",
+          "updatedAt": "2026-10-13T00:35:48+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-styling-advisor",
+          "version": "1.0.1",
+          "agentSha256": "6f975acbd977b7ab7be0e1681a417176f2bdf33b6c54f4ae0d697b1305b248ba",
+          "updatedAt": "2026-09-08T07:53:32.813822+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-styling-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "6f975acbd977b7ab7be0e1681a417176f2bdf33b6c54f4ae0d697b1305b248ba",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-styling-advisor",
+          "version": "1.0.0",
+          "agentSha256": "ec281819ee35d0cba412937b355dccb50bc9629e9172489b95d53617e66da6bc",
+          "updatedAt": "2026-09-08T06:51:53.688116+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-styling-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "ec281819ee35d0cba412937b355dccb50bc9629e9172489b95d53617e66da6bc",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-tabletop-advisor",
+      "selected": {
+        "revision": "paid_top1011/part9/src/lynxce-tabletop-advisor",
+        "agentSha256": "d637b2e9191a26e42d03ea2ea3d4e43381f71d18ea031030260b3abc2d00ba73",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "paid_top1011/part9/zips/lynxce-tabletop-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "d637b2e9191a26e42d03ea2ea3d4e43381f71d18ea031030260b3abc2d00ba73",
+          "updatedAt": "2026-10-13T00:35:48+00:00"
+        },
+        {
+          "revision": "out10v101/experts/lynxce-tabletop-advisor",
+          "version": "1.0.1",
+          "agentSha256": "fac0ab5c53d27c009b2ccea43098268bd98ed1aac7450deba421bec3772e04e4",
+          "updatedAt": "2026-09-08T07:53:32.762223+00:00"
+        },
+        {
+          "revision": "out10v101/zips/lynxce-tabletop-advisor.zip",
+          "version": "1.0.1",
+          "agentSha256": "fac0ab5c53d27c009b2ccea43098268bd98ed1aac7450deba421bec3772e04e4",
+          "updatedAt": "2026-09-08T07:53:32+00:00"
+        },
+        {
+          "revision": "out10/experts/lynxce-tabletop-advisor",
+          "version": "1.0.0",
+          "agentSha256": "ee1c2281b6b85c667a028fe30fd3904b23f365221c196c06cd6c6576f83f115f",
+          "updatedAt": "2026-09-08T06:51:53.632636+00:00"
+        },
+        {
+          "revision": "out10/zips/lynxce-tabletop-advisor.zip",
+          "version": "1.0.0",
+          "agentSha256": "ee1c2281b6b85c667a028fe30fd3904b23f365221c196c06cd6c6576f83f115f",
+          "updatedAt": "2026-09-08T06:51:52+00:00"
+        }
+      ]
+    },
+    {
+      "id": "lynxce-trade-mixed-carton-layout-b45",
+      "selected": {
+        "revision": "out45/revisions/round7-carton-build/packages/lynxce-trade-mixed-carton-layout-b45",
+        "agentSha256": "0bbeb3a6604c5027be5d4736209ec125fb627949733ad6fdeba41586b3e73a9b",
+        "version": "1.0.1"
+      },
+      "alternatives": [
+        {
+          "revision": "out45/revisions/round6-packing-service-build/packages/lynxce-trade-mixed-carton-layout-b45",
+          "version": "1.0.1",
+          "agentSha256": "4f7e6749df83db3976de83df3862849ba45597251961a789ac7bfb5d543862f7",
+          "updatedAt": "2026-10-21T17:55:59.930177+00:00"
+        },
+        {
+          "revision": "out45/revisions/round6-packing-service-build/zips/lynxce-trade-mixed-carton-layout-b45.zip",
+          "version": "1.0.1",
+          "agentSha256": "4f7e6749df83db3976de83df3862849ba45597251961a789ac7bfb5d543862f7",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/revisions/round7-carton-build/zips/lynxce-trade-mixed-carton-layout-b45.zip",
+          "version": "1.0.1",
+          "agentSha256": "0bbeb3a6604c5027be5d4736209ec125fb627949733ad6fdeba41586b3e73a9b",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/packages/lynxce-trade-mixed-carton-layout-b45",
+          "version": "1.0.0",
+          "agentSha256": "ddcf45bf7467e26bb4dd9781de4d44bf4f2103e7d37c534758f6606c6ccbcb88",
+          "updatedAt": "2026-10-21T16:47:38.369020+00:00"
+        },
+        {
+          "revision": "out45/audit/presentation-baseline/lynxce-trade-mixed-carton-layout-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "8b57fdfa5d4cab1710914f9e4ce136f3aaf146817c008c7c69ef9ad9853c96cc",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        },
+        {
+          "revision": "out45/zips/lynxce-trade-mixed-carton-layout-b45.zip",
+          "version": "1.0.0",
+          "agentSha256": "ddcf45bf7467e26bb4dd9781de4d44bf4f2103e7d37c534758f6606c6ccbcb88",
+          "updatedAt": "2025-12-31T16:00:00+00:00"
+        }
+      ]
+    }
+  ]
+}

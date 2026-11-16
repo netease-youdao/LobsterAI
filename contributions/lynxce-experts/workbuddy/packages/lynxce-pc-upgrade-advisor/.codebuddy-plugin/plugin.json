@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-pc-upgrade-advisor",
+  "version": "1.0.1",
+  "description": "Upgrade an old PC: check slots and ports, RAM generation and speed, SATA or NVMe SSD, upgrade vs new.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pc-upgrade-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pc-upgrade"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pc-upgrade-advisor",
+  "displayName": {
+    "zh": "旧电脑内存固态升级核算顾问",
+    "en": "Old PC RAM and SSD Upgrade Advisor"
+  },
+  "profession": {
+    "zh": "11.11 旧电脑内存固态升级核算顾问",
+    "en": "11.11 Old PC RAM and SSD Upgrade Advisor"
+  },
+  "displayDescription": {
+    "zh": "旧电脑升级怎么算：先查主板插槽与接口、内存代际与频率、固态选SATA或NVMe、升级与换新成本对比。",
+    "en": "Upgrade an old PC: check slots and ports, RAM generation and speed, SATA or NVMe SSD, upgrade vs new."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我的旧电脑还值得加内存换固态吗",
+    "en": "Is my old computer worth a RAM and SSD upgrade"
+  },
+  "plugin": "lynxce-pc-upgrade-advisor",
+  "tags": [
+    {
+      "zh": "插槽接口",
+      "en": "Slots and Ports"
+    },
+    {
+      "zh": "内存固态",
+      "en": "RAM and SSD"
+    },
+    {
+      "zh": "升级换新",
+      "en": "Upgrade or Replace"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我的旧电脑还值得加内存换固态吗",
+      "en": "Is my old computer worth a RAM and SSD upgrade"
+    },
+    {
+      "zh": "怎么查主板支持什么内存和固态",
+      "en": "How do I check which RAM and SSD my motherboard supports"
+    },
+    {
+      "zh": "升级花多少钱就该直接换新",
+      "en": "At what upgrade cost should I buy a new PC instead"
+    }
+  ],
+  "keywords": [
+    "插槽接口",
+    "内存固态",
+    "升级换新",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

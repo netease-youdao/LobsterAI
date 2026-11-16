@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-douyin-expert",
+  "version": "1.0.1",
+  "description": "Develop shootable short-video storyboards and review retention from user-provided materials.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-douyin-expert.md"
+  ],
+  "skills": [
+    "./skills/lynxce-douyin-script",
+    "./skills/lynxce-video-retention-review",
+    "./skills/lynxce-content-evidence-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-douyin-expert",
+  "displayName": {
+    "zh": "抖音运营专家",
+    "en": "Douyin Operator"
+  },
+  "profession": {
+    "zh": "短视频脚本与直播运营顾问",
+    "en": "Short-Video Script & Live Commerce Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据用户素材编制短视频分镜与直播衔接方案核对时长证据和留存口径形成可拍脚本及可复核改版记录",
+    "en": "Develop shootable short-video storyboards and review retention from user-provided materials."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "用现有素材编写可拍摄的30秒分镜脚本",
+    "en": "Write a filmable 30-second storyboard from supplied footage notes"
+  },
+  "plugin": "lynxce-douyin-expert",
+  "tags": [
+    {
+      "zh": "短视频分镜",
+      "en": "Video storyboard"
+    },
+    {
+      "zh": "留存复盘",
+      "en": "Retention review"
+    },
+    {
+      "zh": "补拍清单",
+      "en": "Reshoot checklist"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "用现有素材编写可拍摄的30秒分镜脚本",
+      "en": "Write a filmable 30-second storyboard from supplied footage notes"
+    },
+    {
+      "zh": "根据我给的留存数据提出局部改版方案",
+      "en": "Propose targeted revisions from my retention data"
+    },
+    {
+      "zh": "检查脚本和素材缺口，输出补拍清单与替代方案",
+      "en": "Check script and footage gaps and produce a reshoot checklist"
+    }
+  ],
+  "keywords": [
+    "短视频脚本",
+    "直播话术",
+    "热点追踪",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

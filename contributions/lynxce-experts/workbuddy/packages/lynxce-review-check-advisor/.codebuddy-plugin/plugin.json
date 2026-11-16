@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-review-check-advisor",
+  "version": "1.0.2",
+  "description": "Judge review credibility: praise timing, templated text, photo checks, credibility score and issues to verify.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-review-check-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-review-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-review-check-advisor",
+  "displayName": {
+    "zh": "商品评价与晒单可信度甄别顾问",
+    "en": "Review and Buyer Photo Credibility Advisor"
+  },
+  "profession": {
+    "zh": "11.11 商品评价与晒单可信度甄别顾问",
+    "en": "11.11 Review and Buyer Photo Credibility Advisor"
+  },
+  "displayDescription": {
+    "zh": "大促商品评价怎么看：集中好评时间、模板化文字、晒图与规格核对，输出可信度打分与待核实问题。",
+    "en": "Judge review credibility: praise timing, templated text, photo checks, credibility score and issues to verify."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "这个商品的好评靠谱吗",
+    "en": "Are the good reviews of this item reliable"
+  },
+  "plugin": "lynxce-review-check-advisor",
+  "tags": [
+    {
+      "zh": "可信度打分",
+      "en": "Credibility Score"
+    },
+    {
+      "zh": "晒图核对",
+      "en": "Photo Check"
+    },
+    {
+      "zh": "差评归纳",
+      "en": "Complaint Summary"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这个商品的好评靠谱吗",
+      "en": "Are the good reviews of this item reliable"
+    },
+    {
+      "zh": "帮我从差评里找出主要问题",
+      "en": "Find the main issues in the negative reviews"
+    },
+    {
+      "zh": "晒图和我要买的规格一样吗",
+      "en": "Do the buyer photos match the spec I want"
+    }
+  ],
+  "keywords": [
+    "可信度打分",
+    "晒图核对",
+    "差评归纳",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

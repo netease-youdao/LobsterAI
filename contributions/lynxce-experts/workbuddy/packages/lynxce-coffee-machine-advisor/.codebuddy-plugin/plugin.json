@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-coffee-machine-advisor",
+  "version": "1.0.1",
+  "description": "Pick coffee machines: pod, semi or fully automatic, cost per cup, three-year total, descaling upkeep.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-coffee-machine-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-coffee-machine"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-coffee-machine-advisor",
+  "displayName": {
+    "zh": "咖啡机选购与耗材年成本核算顾问",
+    "en": "Coffee Machine and Consumables Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 咖啡机选购与耗材年成本核算顾问",
+    "en": "11.11 Coffee Machine and Consumables Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "咖啡机怎么挑：选胶囊半自动或全自动、算每杯耗材成本、比三年总成本、核除垢滤芯与清洗维护。",
+    "en": "Pick coffee machines: pod, semi or fully automatic, cost per cup, three-year total, descaling upkeep."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "每天两杯胶囊机和全自动三年哪个更省",
+    "en": "Pod or fully automatic for two cups a day over three years"
+  },
+  "plugin": "lynxce-coffee-machine-advisor",
+  "tags": [
+    {
+      "zh": "每杯成本",
+      "en": "Cost per Cup"
+    },
+    {
+      "zh": "三年总成本",
+      "en": "Three-year Cost"
+    },
+    {
+      "zh": "除垢滤芯",
+      "en": "Descaling and Filter"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "每天两杯胶囊机和全自动三年哪个更省",
+      "en": "Pod or fully automatic for two cups a day over three years"
+    },
+    {
+      "zh": "咖啡豆一杯到底花多少钱",
+      "en": "How much does one cup cost from beans"
+    },
+    {
+      "zh": "半自动咖啡机还要另外买磨豆机吗",
+      "en": "Do I need a separate grinder for a semi-automatic machine"
+    }
+  ],
+  "keywords": [
+    "每杯成本",
+    "三年总成本",
+    "除垢滤芯",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

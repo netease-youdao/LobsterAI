@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-water-heater-advisor",
+  "version": "1.0.1",
+  "description": "Size a water heater: electric vs gas vs heat pump, capacity by household, annual energy cost, installation and safety red lines.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-water-heater-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-water-heater"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-water-heater-advisor",
+  "displayName": {
+    "zh": "热水器选购与能耗核算顾问",
+    "en": "Water Heater Sizing and Energy Cost Advisor"
+  },
+  "profession": {
+    "zh": "11.11 热水器选购与能耗核算顾问",
+    "en": "11.11 Water Heater Sizing and Energy Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "热水器怎么选不踩坑：电燃气空气能怎么比、按人口算升数、年用能费用估算、安装条件与安全红线。",
+    "en": "Size a water heater: electric vs gas vs heat pump, capacity by household, annual energy cost, installation and safety red lines."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "三口之家热水器要多大",
+    "en": "What size water heater does a family of three need"
+  },
+  "plugin": "lynxce-water-heater-advisor",
+  "tags": [
+    {
+      "zh": "容量升数",
+      "en": "Capacity Sizing"
+    },
+    {
+      "zh": "年用能费用",
+      "en": "Annual Energy Cost"
+    },
+    {
+      "zh": "安装安全",
+      "en": "Installation Safety"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "三口之家热水器要多大",
+      "en": "What size water heater does a family of three need"
+    },
+    {
+      "zh": "燃气和电热水器哪个费用低",
+      "en": "Is a gas or electric water heater cheaper to run"
+    },
+    {
+      "zh": "热水器能装在卫生间吗",
+      "en": "Can a water heater be installed in the bathroom"
+    }
+  ],
+  "keywords": [
+    "容量升数",
+    "年用能费用",
+    "安装安全",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

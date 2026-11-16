@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-store-check-advisor",
+  "version": "1.0.2",
+  "description": "Compare the same item across stores: align specs, identify store type and credentials, check warranty and price gaps.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-store-check-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-store-check"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-store-check-advisor",
+  "displayName": {
+    "zh": "同款比价与店铺资质识别顾问",
+    "en": "Same-Item Price and Store Credential Advisor"
+  },
+  "profession": {
+    "zh": "11.11 同款比价与店铺资质识别顾问",
+    "en": "11.11 Same-Item Price and Store Credential Advisor"
+  },
+  "displayDescription": {
+    "zh": "同款跨平台怎么比：型号版本配置逐项对齐、店铺类型与资质识别、保修主体核对、价差是否合理。",
+    "en": "Compare the same item across stores: align specs, identify store type and credentials, check warranty and price gaps."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "同一款商品两家差几百块能买便宜的吗",
+    "en": "Two stores differ by hundreds for the same item, is the cheap one OK"
+  },
+  "plugin": "lynxce-store-check-advisor",
+  "tags": [
+    {
+      "zh": "同款对齐",
+      "en": "Spec Alignment"
+    },
+    {
+      "zh": "店铺资质",
+      "en": "Store Credentials"
+    },
+    {
+      "zh": "价差判断",
+      "en": "Price Gap Check"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "同一款商品两家差几百块能买便宜的吗",
+      "en": "Two stores differ by hundreds for the same item, is the cheap one OK"
+    },
+    {
+      "zh": "怎么看一家店是不是官方授权",
+      "en": "How do I tell whether a store is officially authorised"
+    },
+    {
+      "zh": "帮我确认这几家卖的是不是同一款",
+      "en": "Check whether these stores sell the exact same item"
+    }
+  ],
+  "keywords": [
+    "同款对齐",
+    "店铺资质",
+    "价差判断",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

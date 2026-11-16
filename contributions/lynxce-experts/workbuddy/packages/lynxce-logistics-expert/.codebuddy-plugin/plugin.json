@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-logistics-expert",
+  "version": "1.0.0",
+  "description": "Logistics dispatch expert for order allocation, route planning, SLA estimation and exception handling",
+  "author": {
+    "name": "灵策智算 LynxceAI",
+    "email": "contact@lynxce.cn"
+  },
+  "agents": [
+    "./agents/lynxce-logistics-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-logistics-expert",
+  "displayName": {
+    "zh": "物流调度专家",
+    "en": "Logistics Dispatcher"
+  },
+  "profession": {
+    "zh": "运力调度与时效管理顾问",
+    "en": "Capacity Dispatch & SLA Advisor"
+  },
+  "displayDescription": {
+    "en": "Logistics dispatch support: order allocation, route planning, SLA estimation, exception dispatch and carrier coordination.",
+    "zh": "物流调度支持，负责订单分配、线路编排、时效评估、异常件调度与承运资源协调，应对突发爆仓。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "帮我把这批订单分配给合适的车队",
+    "en": "Allocate these orders to the right fleets"
+  },
+  "plugin": "lynxce-logistics-expert",
+  "tags": [
+    {
+      "zh": "订单调度",
+      "en": "Dispatch"
+    },
+    {
+      "zh": "线路编排",
+      "en": "Routing"
+    },
+    {
+      "zh": "时效管理",
+      "en": "SLA"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把这批订单分配给合适的车队",
+      "en": "Allocate these orders to the right fleets"
+    },
+    {
+      "zh": "这条线路的时效怎么优化",
+      "en": "How can we improve the SLA on this route"
+    },
+    {
+      "zh": "突发爆仓了，给我一套调度方案",
+      "en": "We are over capacity, give me a dispatch plan"
+    }
+  ],
+  "homepage": "https://ai.lynxce.cn",
+  "keywords": [
+    "订单调度",
+    "线路编排",
+    "时效管理",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

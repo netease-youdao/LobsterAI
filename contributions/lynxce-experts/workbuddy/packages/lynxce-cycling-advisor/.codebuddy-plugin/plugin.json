@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-cycling-advisor",
+  "version": "1.0.4",
+  "description": "Get cycling right in one pass: frame sizing, component tiers, safety items and consumables.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cycling-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-cycling-kit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cycling-advisor",
+  "displayName": {
+    "zh": "骑行整车与装备选购顾问",
+    "en": "Cycling Gear Buying Advisor"
+  },
+  "profession": {
+    "zh": "骑行整车与装备选购顾问",
+    "en": "Cycling Gear Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "骑行一次配齐不返工：车架尺寸怎么定、套件等级怎么选、安全件与耗材应该先买哪几样都写清。",
+    "en": "Get cycling right in one pass: frame sizing, component tiers, safety items and consumables."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "通勤该选什么车型",
+    "en": "Which bike type suits commuting"
+  },
+  "plugin": "lynxce-cycling-advisor",
+  "tags": [
+    {
+      "zh": "骑行装备",
+      "en": "Cycling"
+    },
+    {
+      "zh": "车架尺寸",
+      "en": "Fit"
+    },
+    {
+      "zh": "预算表",
+      "en": "Budget"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "通勤该选什么车型",
+      "en": "Which bike type suits commuting"
+    },
+    {
+      "zh": "我这个身高选多大车架",
+      "en": "What frame size fits my height"
+    },
+    {
+      "zh": "帮我列一份骑行预算表",
+      "en": "Draft my cycling budget"
+    }
+  ],
+  "keywords": [
+    "骑行装备",
+    "车架尺寸",
+    "预算表",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

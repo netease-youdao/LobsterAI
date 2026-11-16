@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-driving-advisor",
+  "version": "1.0.4",
+  "description": "Pick a driving school: package contents, hidden fees and contract checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-driving-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-driving-cost"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-driving-advisor",
+  "displayName": {
+    "zh": "驾校报名与学车费用顾问",
+    "en": "Driving School and Cost Advisor"
+  },
+  "profession": {
+    "zh": "驾校报名与学车费用顾问",
+    "en": "Driving School and Cost Advisor"
+  },
+  "displayDescription": {
+    "zh": "报驾校怎么不被坑：套餐含哪些、隐性费用藏在哪、合同要盯住哪几条、时间怎么倒着排。",
+    "en": "Pick a driving school: package contents, hidden fees and contract checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "这家驾校报价合理吗",
+    "en": "Is this driving school price reasonable"
+  },
+  "plugin": "lynxce-driving-advisor",
+  "tags": [
+    {
+      "zh": "学车报名",
+      "en": "Driving School"
+    },
+    {
+      "zh": "费用拆解",
+      "en": "Cost Breakdown"
+    },
+    {
+      "zh": "合同要点",
+      "en": "Contract"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "这家驾校报价合理吗",
+      "en": "Is this driving school price reasonable"
+    },
+    {
+      "zh": "学车总共要花多少",
+      "en": "What is the total cost of getting a licence"
+    },
+    {
+      "zh": "合同要重点看哪几条",
+      "en": "Which contract clauses matter most"
+    }
+  ],
+  "keywords": [
+    "学车报名",
+    "费用拆解",
+    "合同要点",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

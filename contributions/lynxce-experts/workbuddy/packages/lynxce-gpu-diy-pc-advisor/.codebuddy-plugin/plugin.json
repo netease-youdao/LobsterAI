@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-gpu-diy-pc-advisor",
+  "version": "1.0.1",
+  "description": "Plan GPU and DIY builds: card tier by workload, PSU headroom, case and cooling fit, budget split, parts vs prebuilt.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-gpu-diy-pc-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-gpu-diy-pc"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-gpu-diy-pc-advisor",
+  "displayName": {
+    "zh": "显卡与DIY装机顾问",
+    "en": "Graphics Card and DIY PC Build Advisor"
+  },
+  "profession": {
+    "zh": "11.11 显卡与 DIY 装机配置核算顾问",
+    "en": "11.11 Graphics Card and DIY PC Build Advisor"
+  },
+  "displayDescription": {
+    "zh": "显卡与装机怎么配：按用途定显卡档位、算电源功率余量、核机箱长度与散热、分整机预算、比单件与整机。",
+    "en": "Plan GPU and DIY builds: card tier by workload, PSU headroom, case and cooling fit, budget split, parts vs prebuilt."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "2K 玩大型游戏显卡要多大显存",
+    "en": "How much VRAM does 2K gaming need"
+  },
+  "plugin": "lynxce-gpu-diy-pc-advisor",
+  "tags": [
+    {
+      "zh": "显卡档位",
+      "en": "GPU Tier"
+    },
+    {
+      "zh": "电源余量",
+      "en": "PSU Headroom"
+    },
+    {
+      "zh": "单件 vs 整机",
+      "en": "Parts vs Prebuilt"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "2K 玩大型游戏显卡要多大显存",
+      "en": "How much VRAM does 2K gaming need"
+    },
+    {
+      "zh": "旧的 550 瓦电源带得动这张显卡吗",
+      "en": "Can my old 550 watt power supply run this graphics card"
+    },
+    {
+      "zh": "8000 元预算自己装还是买整机",
+      "en": "Build it myself or buy a prebuilt on an 8000 yuan budget"
+    }
+  ],
+  "keywords": [
+    "显卡档位",
+    "电源余量",
+    "单件 vs 整机",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

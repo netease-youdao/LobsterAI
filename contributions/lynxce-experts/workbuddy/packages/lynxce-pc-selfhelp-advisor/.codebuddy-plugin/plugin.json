@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-pc-selfhelp-advisor",
+  "version": "1.0.2",
+  "description": "Review supplied records and deliver traceable tables, worked calculations and plans for human execution.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-pc-selfhelp-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-pc-selfhelp"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-pc-selfhelp-advisor",
+  "displayName": {
+    "zh": "电脑故障自查顾问",
+    "en": "Office PC Incident Triage Advisor"
+  },
+  "profession": {
+    "zh": "办公电脑与网络故障自助排查顾问",
+    "en": "Office PC Incident Triage Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据故障提示、影响范围和已试步骤，交付分流判断、观察卡、会前备选及IT报修底稿，不代操作设备。",
+    "en": "Review supplied records and deliver traceable tables, worked calculations and plans for human execution."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "根据错误提示和影响范围，生成事实与待核假设表",
+    "en": "Create the first deliverable from my records"
+  },
+  "plugin": "lynxce-pc-selfhelp-advisor",
+  "tags": [
+    {
+      "zh": "材料核对",
+      "en": "Record Review"
+    },
+    {
+      "zh": "交付模板",
+      "en": "Templates"
+    },
+    {
+      "zh": "变更复算",
+      "en": "Change Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据错误提示和影响范围，生成事实与待核假设表",
+      "en": "Create the first deliverable from my records"
+    },
+    {
+      "zh": "开会前投屏失败，按剩余时间安排观察、备选与报修",
+      "en": "Review exceptions and evidence gaps"
+    },
+    {
+      "zh": "把我已经尝试的步骤整理成清楚的IT报修底稿",
+      "en": "Recalculate and draft the next plan"
+    }
+  ],
+  "keywords": [
+    "办公电脑与网络故障自助排查顾问",
+    "交付模板",
+    "证据核对",
+    "灵策智算"
+  ],
+  "needEncrypt": true
+}

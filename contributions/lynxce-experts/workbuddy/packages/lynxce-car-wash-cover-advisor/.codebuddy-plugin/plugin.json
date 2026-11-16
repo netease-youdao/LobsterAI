@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-car-wash-cover-advisor",
+  "version": "1.0.1",
+  "description": "Build a car wash kit: shampoo, coating and towels, DIY vs shop yearly cost, car cover size by model, material.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-car-wash-cover-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-car-wash-cover"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-car-wash-cover-advisor",
+  "displayName": {
+    "zh": "洗车用品与车衣选购核算顾问",
+    "en": "Car Wash Supplies and Car Cover Advisor"
+  },
+  "profession": {
+    "zh": "11.11 洗车用品与车衣选购核算顾问",
+    "en": "11.11 Car Wash Supplies and Car Cover Advisor"
+  },
+  "displayDescription": {
+    "zh": "洗车用品怎么配：按洗车液镀膜毛巾配组合、比自洗与店洗年成本、按车型尺寸核车衣、看材质季节。",
+    "en": "Build a car wash kit: shampoo, coating and towels, DIY vs shop yearly cost, car cover size by model, material."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "自己洗车一年比洗车店省多少",
+    "en": "How much does washing at home save over a car wash shop yearly"
+  },
+  "plugin": "lynxce-car-wash-cover-advisor",
+  "tags": [
+    {
+      "zh": "自洗年成本",
+      "en": "DIY Wash Cost"
+    },
+    {
+      "zh": "稀释比",
+      "en": "Dilution Ratio"
+    },
+    {
+      "zh": "车衣尺寸",
+      "en": "Car Cover Size"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "自己洗车一年比洗车店省多少",
+      "en": "How much does washing at home save over a car wash shop yearly"
+    },
+    {
+      "zh": "洗车液 1 比 400 稀释一次用多少",
+      "en": "How much shampoo per wash at a 1 to 400 dilution"
+    },
+    {
+      "zh": "这件车衣我的车型盖得住吗",
+      "en": "Will this car cover fit my car model"
+    }
+  ],
+  "keywords": [
+    "自洗年成本",
+    "稀释比",
+    "车衣尺寸",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

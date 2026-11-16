@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-uidesign-advisor",
+  "version": "1.0.1",
+  "description": "Review design tokens, interaction states and responsive layouts against provided evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-uidesign-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-ui-review",
+    "./skills/lynxce-uidesign-advisor-review",
+    "./skills/lynxce-uidesign-advisor-delivery"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-uidesign-advisor",
+  "displayName": {
+    "zh": "UI 规范顾问",
+    "en": "UI System Advisor"
+  },
+  "profession": {
+    "zh": "UI 设计规范与界面走查顾问",
+    "en": "UI Design System & Review Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料完成规范token整理、六态交互核对与响应式走查，交付证据清单、异常决策和可复算样例。",
+    "en": "Review design tokens, interaction states and responsive layouts against provided evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "01-ProductDesign",
+  "defaultInitPrompt": {
+    "zh": "帮我定一套间距和字阶规范",
+    "en": "Define a spacing and type scale for me"
+  },
+  "plugin": "lynxce-uidesign-advisor",
+  "tags": [
+    {
+      "zh": "设计规范",
+      "en": "Design System"
+    },
+    {
+      "zh": "界面走查",
+      "en": "UI Review"
+    },
+    {
+      "zh": "无障碍",
+      "en": "Accessibility"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我定一套间距和字阶规范",
+      "en": "Define a spacing and type scale for me"
+    },
+    {
+      "zh": "这个页面还原度不高,帮我列走查项",
+      "en": "This page deviates from the design — list the review items"
+    },
+    {
+      "zh": "对比度和点击区域最低要求是什么",
+      "en": "What are the minimum contrast and tap target requirements"
+    }
+  ],
+  "keywords": [
+    "设计规范",
+    "界面走查",
+    "无障碍",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

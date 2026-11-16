@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-content-antitheft-advisor",
+  "version": "1.0.2",
+  "description": "Plan watermarks, proof archives, repost self-check logs, evidence capture lists and complaint tracking for your own content.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-content-antitheft-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-content-antitheft"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-content-antitheft-advisor",
+  "displayName": {
+    "zh": "原创保护取证顾问",
+    "en": "Anti-repost Protection Advisor"
+  },
+  "profession": {
+    "zh": "原创内容保护与维权取证顾问｜灵策智算",
+    "en": "Original Content Protection and Evidence Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据作品与疑似搬运情况制定水印留痕方案，整理自查台账、取证录屏清单与投诉跟进表，侵权认定交律师判断。",
+    "en": "Plan watermarks, proof archives, repost self-check logs, evidence capture lists and complaint tracking for your own content."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的作品和被搬运情况生成取证清单与投诉跟进表",
+    "en": "Build an evidence checklist and complaint tracker for my reposted work"
+  },
+  "plugin": "lynxce-content-antitheft-advisor",
+  "tags": [
+    {
+      "zh": "留痕归档",
+      "en": "Proof Archive"
+    },
+    {
+      "zh": "取证清单",
+      "en": "Evidence Checklist"
+    },
+    {
+      "zh": "投诉跟进",
+      "en": "Complaint Tracking"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的作品和被搬运情况生成取证清单与投诉跟进表",
+      "en": "Build an evidence checklist and complaint tracker for my reposted work"
+    },
+    {
+      "zh": "复核我已整理的证据材料是否齐全以及时间是否一致",
+      "en": "Review my collected evidence for completeness and time consistency"
+    },
+    {
+      "zh": "还没找到搬运页面时先给水印归档和自查方案",
+      "en": "Give a watermark, archive and self-check plan before any repost is found"
+    }
+  ],
+  "keywords": [
+    "留痕归档",
+    "取证清单",
+    "投诉跟进",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

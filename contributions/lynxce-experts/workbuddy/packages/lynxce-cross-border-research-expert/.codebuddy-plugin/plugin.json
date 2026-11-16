@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-cross-border-research-expert",
+  "version": "1.0.1",
+  "description": "Compare overseas product samples, price bands and contribution scenarios from supplied evidence.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-cross-border-research-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-cross-border-research-expert",
+  "displayName": {
+    "zh": "跨境选品分析师",
+    "en": "Cross-border Product Researcher"
+  },
+  "profession": {
+    "zh": "海外市场与选品调研顾问",
+    "en": "Overseas Market & Sourcing Advisor"
+  },
+  "displayDescription": {
+    "zh": "基于用户提供的市场样本与费用材料分析海外选品比较价格带和贡献测算列明证据缺口及后续人工验证路径",
+    "en": "Compare overseas product samples, price bands and contribution scenarios from supplied evidence."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "14-WorldWise",
+  "defaultInitPrompt": {
+    "zh": "清洗我提供的市场样本并比较同口径价格带",
+    "en": "Clean my supplied market samples and compare equivalent price bands"
+  },
+  "plugin": "lynxce-cross-border-research-expert",
+  "tags": [
+    {
+      "zh": "样本清洗",
+      "en": "Sample cleaning"
+    },
+    {
+      "zh": "单位贡献",
+      "en": "Unit contribution"
+    },
+    {
+      "zh": "验证排序",
+      "en": "Validation priority"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "清洗我提供的市场样本并比较同口径价格带",
+      "en": "Clean my supplied market samples and compare equivalent price bands"
+    },
+    {
+      "zh": "用这些成本和报价测算单位贡献，列出未确认费用",
+      "en": "Calculate unit contribution from supplied costs and prices with missing fees"
+    },
+    {
+      "zh": "比较这些候选方案，排出下一步人工验证顺序",
+      "en": "Compare my candidates and prioritize manual validation"
+    }
+  ],
+  "keywords": [
+    "海外选品",
+    "价格带分析",
+    "风险初筛",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "skills": [
+    "./skills/lynxce-market-sample-review",
+    "./skills/lynxce-cross-border-unit-economics",
+    "./skills/lynxce-product-evidence-screen"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-financial-report-expert",
+  "version": "1.0.2",
+  "description": "Cross-check supplied statements and notes, compute cash-quality ratios, and list sourced, graded queries for CPA review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-financial-report-expert.md"
+  ],
+  "skills": [
+    "./skills/lynxce-financial-report"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-financial-report-expert",
+  "displayName": {
+    "zh": "财报勾稽核对顾问",
+    "en": "Financial Report Analyst"
+  },
+  "profession": {
+    "zh": "财务报表与利润质量分析师",
+    "en": "Financial Statement & Earnings Quality Analyst"
+  },
+  "displayDescription": {
+    "zh": "根据用户提供的三张报表与附注做勾稽核对，计算收现比和净现比等指标，输出注明出处的分级疑点清单。",
+    "en": "Cross-check supplied statements and notes, compute cash-quality ratios, and list sourced, graded queries for CPA review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "根据这份年报三张表做勾稽核对和利润质量指标表",
+    "en": "Tie out the three statements and build earnings-quality ratios"
+  },
+  "plugin": "lynxce-financial-report-expert",
+  "tags": [
+    {
+      "zh": "三表勾稽",
+      "en": "Statement Tie-out"
+    },
+    {
+      "zh": "利润质量",
+      "en": "Earnings Quality"
+    },
+    {
+      "zh": "疑点清单",
+      "en": "Query List"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这份年报三张表做勾稽核对和利润质量指标表",
+      "en": "Tie out the three statements and build earnings-quality ratios"
+    },
+    {
+      "zh": "复核这份财报分析稿的公式出处和措辞边界",
+      "en": "Review this report analysis for formulas sources and wording limits"
+    },
+    {
+      "zh": "只有利润表时先给可算指标和待补材料清单",
+      "en": "With only an income statement give computable ratios and a missing list"
+    }
+  ],
+  "keywords": [
+    "三表勾稽",
+    "利润质量",
+    "疑点清单",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-filter-consumables-advisor",
+  "version": "1.0.2",
+  "description": "Stock up on filters and parts: annual usage from official cycles, model matching, original vs compatible, storage limits.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-filter-consumables-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-filter-consumables"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-filter-consumables-advisor",
+  "displayName": {
+    "zh": "滤芯与家电耗材囤货核算顾问",
+    "en": "Filter and Appliance Consumables Stock-Up Advisor"
+  },
+  "profession": {
+    "zh": "11.11 滤芯与家电耗材囤货核算顾问",
+    "en": "11.11 Filter and Appliance Consumables Stock-Up Advisor"
+  },
+  "displayDescription": {
+    "zh": "滤芯耗材大促怎么囤：按官方更换周期算年用量、核对型号参数匹配、原装兼容取舍与存放期限。",
+    "en": "Stock up on filters and parts: annual usage from official cycles, model matching, original vs compatible, storage limits."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我家净水器滤芯一年要囤几支",
+    "en": "How many purifier filters do I need for a year"
+  },
+  "plugin": "lynxce-filter-consumables-advisor",
+  "tags": [
+    {
+      "zh": "更换周期",
+      "en": "Replacement Cycle"
+    },
+    {
+      "zh": "型号匹配",
+      "en": "Model Matching"
+    },
+    {
+      "zh": "年用量核算",
+      "en": "Annual Usage"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我家净水器滤芯一年要囤几支",
+      "en": "How many purifier filters do I need for a year"
+    },
+    {
+      "zh": "兼容滤芯要核对哪些参数",
+      "en": "Which specs should I check on compatible filters"
+    },
+    {
+      "zh": "扫地机耗材这次该买多少",
+      "en": "How many robot vacuum parts should I buy"
+    }
+  ],
+  "keywords": [
+    "更换周期",
+    "型号匹配",
+    "年用量核算",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

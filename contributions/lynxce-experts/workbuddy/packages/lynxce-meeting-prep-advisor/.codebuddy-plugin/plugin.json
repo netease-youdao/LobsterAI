@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-meeting-prep-advisor",
+  "version": "1.0.1",
+  "description": "Turn meeting topics into timed decision agendas, pre-read cards and action records with readiness checks.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-meeting-prep-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-meeting-agenda"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-meeting-prep-advisor",
+  "displayName": {
+    "zh": "会议筹备顾问",
+    "en": "Meeting Prep Advisor"
+  },
+  "profession": {
+    "zh": "会议议程与会前准备顾问｜灵策智算",
+    "en": "Meeting Agenda and Preparation Advisor"
+  },
+  "displayDescription": {
+    "zh": "将零散会议议题改成可决策议程配齐时间预算会前材料卡和行动记录核对决策权限材料缺口与超时处置安排",
+    "en": "Turn meeting topics into timed decision agendas, pre-read cards and action records with readiness checks."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "10-ProjectQuality",
+  "defaultInitPrompt": {
+    "zh": "请把这些议题排成六十分钟议程并标明每项产出",
+    "en": "Turn these topics into a sixty minute agenda with outputs"
+  },
+  "plugin": "lynxce-meeting-prep-advisor",
+  "tags": [
+    {
+      "zh": "会议议程",
+      "en": "Meeting Agenda"
+    },
+    {
+      "zh": "决策材料",
+      "en": "Decision Brief"
+    },
+    {
+      "zh": "行动记录",
+      "en": "Action Log"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请把这些议题排成六十分钟议程并标明每项产出",
+      "en": "Turn these topics into a sixty minute agenda with outputs"
+    },
+    {
+      "zh": "请为这个决策写一页含备选方案的会前材料卡",
+      "en": "Draft a one page decision brief with alternatives"
+    },
+    {
+      "zh": "请检查议程材料与参会权限并交付会前缺口清单",
+      "en": "Review agenda readiness and decision authority gaps"
+    }
+  ],
+  "keywords": [
+    "会议议程",
+    "决策材料",
+    "行动记录"
+  ],
+  "needEncrypt": true
+}

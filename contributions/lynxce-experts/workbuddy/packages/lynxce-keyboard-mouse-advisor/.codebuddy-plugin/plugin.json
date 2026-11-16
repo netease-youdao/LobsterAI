@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-keyboard-mouse-advisor",
+  "version": "1.0.1",
+  "description": "Choose a keyboard and mouse: switches, wired or wireless, layout, DPI and polling rate by use, battery life.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-keyboard-mouse-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-keyboard-mouse"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-keyboard-mouse-advisor",
+  "displayName": {
+    "zh": "键盘鼠标外设选购顾问",
+    "en": "Keyboard and Mouse Buying Advisor"
+  },
+  "profession": {
+    "zh": "11.11 键盘鼠标外设选购顾问",
+    "en": "11.11 Keyboard and Mouse Buying Advisor"
+  },
+  "displayDescription": {
+    "zh": "键盘鼠标怎么选：轴体与薄膜手感、有线2.4G蓝牙连接、配列大小、DPI回报率按用途、续航耗电估算。",
+    "en": "Choose a keyboard and mouse: switches, wired or wireless, layout, DPI and polling rate by use, battery life."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "办公和打游戏该选什么轴的键盘",
+    "en": "Which keyboard switch suits office work and gaming"
+  },
+  "plugin": "lynxce-keyboard-mouse-advisor",
+  "tags": [
+    {
+      "zh": "轴体配列",
+      "en": "Switch and Layout"
+    },
+    {
+      "zh": "连接方式",
+      "en": "Connection Type"
+    },
+    {
+      "zh": "DPI回报率",
+      "en": "DPI and Polling"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "办公和打游戏该选什么轴的键盘",
+      "en": "Which keyboard switch suits office work and gaming"
+    },
+    {
+      "zh": "游戏鼠标需要多高的 DPI 和回报率",
+      "en": "What DPI and polling rate does a gaming mouse need"
+    },
+    {
+      "zh": "无线键鼠用 2.4G 还是蓝牙",
+      "en": "Should my wireless keyboard and mouse use 2.4G or Bluetooth"
+    }
+  ],
+  "keywords": [
+    "轴体配列",
+    "连接方式",
+    "DPI回报率",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

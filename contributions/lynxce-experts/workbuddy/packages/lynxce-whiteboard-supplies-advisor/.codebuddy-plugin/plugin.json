@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-whiteboard-supplies-advisor",
+  "version": "1.0.0",
+  "description": "Restock meeting rooms: marker and sticky note usage, reorder points, restock order, room check.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-whiteboard-supplies-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-whiteboard-supplies"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-whiteboard-supplies-advisor",
+  "displayName": {
+    "zh": "会议室物料补给助理",
+    "en": "Meeting Room Supplies Assistant"
+  },
+  "profession": {
+    "zh": "会议室白板与文具月度补给助理",
+    "en": "Meeting Room Whiteboard and Stationery Restock Assistant"
+  },
+  "displayDescription": {
+    "zh": "会议室物料怎么补：按会议室数与使用频次算白板笔便利贴座签月耗、定补货点与上限，附补货单和巡检表。",
+    "en": "Restock meeting rooms: marker and sticky note usage, reorder points, restock order, room check."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "八间会议室每月要补多少白板笔",
+    "en": "Markers needed monthly for eight rooms"
+  },
+  "plugin": "lynxce-whiteboard-supplies-advisor",
+  "tags": [
+    {
+      "zh": "月耗核算",
+      "en": "Monthly Usage"
+    },
+    {
+      "zh": "补货点",
+      "en": "Reorder Point"
+    },
+    {
+      "zh": "会议室巡检",
+      "en": "Room Inspection"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "八间会议室每月要补多少白板笔",
+      "en": "Markers needed monthly for eight rooms"
+    },
+    {
+      "zh": "会议室物料补货点怎么定",
+      "en": "How to set reorder points for room supplies"
+    },
+    {
+      "zh": "会议室巡检表要查哪些项",
+      "en": "What to check in a meeting room inspection"
+    }
+  ],
+  "keywords": [
+    "月耗核算",
+    "补货点",
+    "会议室巡检",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

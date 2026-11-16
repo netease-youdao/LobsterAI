@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-newuser-offer-advisor",
+  "version": "1.0.2",
+  "description": "Judge new-user offers: purchase limits, coupon stacking, which item to use it on, and why farming with extra accounts breaks rules.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-newuser-offer-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-newuser-offer"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-newuser-offer-advisor",
+  "displayName": {
+    "zh": "新人专享与首单优惠核算顾问",
+    "en": "New User and First Order Offer Advisor"
+  },
+  "profession": {
+    "zh": "11.11 新人专享与首单优惠核算顾问",
+    "en": "11.11 New User and First Order Offer Advisor"
+  },
+  "displayDescription": {
+    "zh": "新人价怎么用最值：限购门槛核对、能否与大促券叠加、花在哪件商品最划算、莫违规注册小号。",
+    "en": "Judge new-user offers: purchase limits, coupon stacking, which item to use it on, and why farming with extra accounts breaks rules."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "新人价能买几件",
+    "en": "How many items can I buy at the new user price"
+  },
+  "plugin": "lynxce-newuser-offer-advisor",
+  "tags": [
+    {
+      "zh": "限购门槛",
+      "en": "Purchase Limit"
+    },
+    {
+      "zh": "叠加规则",
+      "en": "Stacking Rules"
+    },
+    {
+      "zh": "花在哪件最值",
+      "en": "Best Item to Use On"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "新人价能买几件",
+      "en": "How many items can I buy at the new user price"
+    },
+    {
+      "zh": "新人价能不能和大促券一起用",
+      "en": "Can the new user price stack with promotion coupons"
+    },
+    {
+      "zh": "新人价该用在哪个商品上",
+      "en": "Which item should I use the new user price on"
+    }
+  ],
+  "keywords": [
+    "限购门槛",
+    "叠加规则",
+    "花在哪件最值",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

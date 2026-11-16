@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-delivery-incident-timeline-b43-advisor",
+  "version": "1.0.0",
+  "description": "Help warehouse and delivery staff turn supplied records into evidence-based tables, conditional plans and review questions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-delivery-incident-timeline-b43-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-delivery-incident-timeline-b43",
+    "./skills/lynxce-delivery-incident-timeline-b43-int-claim-options",
+    "./skills/lynxce-delivery-incident-timeline-b43-int-promise-version"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-delivery-incident-timeline-b43-advisor",
+  "displayName": {
+    "zh": "配送异常事件协商专家",
+    "en": "Delivery Incident Negotiation Advisor"
+  },
+  "profession": {
+    "zh": "配送延误破损与拒收事件证据协商专家",
+    "en": "Delivery Incident Negotiation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为配送客服整理运单节点、签收凭证和双方诉求，生成异常时间线、可选协商方案与待确认跟踪清单。",
+    "en": "Help warehouse and delivery staff turn supplied records into evidence-based tables, conditional plans and review questions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "请按我提供的资料做配送异常事件时间线与协商资料",
+    "en": "Prepare the initial record-based deliverable"
+  },
+  "plugin": "lynxce-delivery-incident-timeline-b43-advisor",
+  "tags": [
+    {
+      "zh": "仓储物流",
+      "en": "Warehouse and Delivery"
+    },
+    {
+      "zh": "配送异常事件时间",
+      "en": "Record Review"
+    },
+    {
+      "zh": "证据与闭环成果",
+      "en": "Evidence and Closure"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请按我提供的资料做配送异常事件时间线与协商资料",
+      "en": "Prepare the initial record-based deliverable"
+    },
+    {
+      "zh": "关键记录矛盾时怎样核查并保留待确认项",
+      "en": "Review contradictory records and unresolved conditions"
+    },
+    {
+      "zh": "补证后如何更新成果并跟踪人工闭环",
+      "en": "Revise evidence and track human-confirmed closure"
+    }
+  ],
+  "keywords": [
+    "仓储物流",
+    "配送异常事件时间",
+    "证据与闭环成果"
+  ]
+}

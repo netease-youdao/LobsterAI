@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-loan-interest-subsidy-b48",
+  "version": "1.0.0",
+  "description": "Turn actual project records and applicable policies into traceable application drafts and correction notes.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-loan-interest-subsidy-b48.md"
+  ],
+  "skills": [
+    "./skills/lynxce-loan-interest-subsidy-loan-segments",
+    "./skills/lynxce-loan-interest-subsidy-interest-match",
+    "./skills/lynxce-loan-interest-subsidy-subsidy-pack"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-loan-interest-subsidy-b48",
+  "displayName": {
+    "zh": "贴息顾问",
+    "en": "Loan Interest Subsidy Advisor"
+  },
+  "profession": {
+    "zh": "贷款贴息顾问",
+    "en": "Loan Interest Subsidy Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业财务拆分贷款本金、利率、天数与实际付息，核对贴息上限和重复支持，形成测算底稿及申请补正说明。",
+    "en": "Turn actual project records and applicable policies into traceable application drafts and correction notes."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "按本轮贴息通知和银行明细，分段测算并写申请说明。",
+    "en": "Loan Interest Subsidy Advisor"
+  },
+  "plugin": "lynxce-loan-interest-subsidy-b48",
+  "tags": [
+    {
+      "zh": "贷款贴息",
+      "en": "贷款贴息"
+    },
+    {
+      "zh": "付息核对",
+      "en": "付息核对"
+    },
+    {
+      "zh": "分段测算",
+      "en": "分段测算"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "按本轮贴息通知和银行明细，分段测算并写申请说明。",
+      "en": "Loan Interest Subsidy Advisor"
+    },
+    {
+      "zh": "第一段付息9000与6000两版冲突，请重出完整贴息V2稿。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "年分母和实际利率上限不清，请给条件测算与银行核实请求。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "贷款贴息",
+    "付息核对",
+    "分段测算"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-hotel-advisor",
+  "version": "1.0.1",
+  "description": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-hotel-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-hotel-advisor-evidence",
+    "./skills/lynxce-hotel-advisor-planning",
+    "./skills/lynxce-hotel-advisor-review"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-hotel-advisor",
+  "displayName": {
+    "zh": "酒店民宿运营顾问",
+    "en": "Hotel & Homestay Operations Advisor"
+  },
+  "profession": {
+    "zh": "酒店民宿定价与口碑运营顾问",
+    "en": "Hotel & Homestay Pricing and Reputation Advisor"
+  },
+  "displayDescription": {
+    "zh": "依据用户材料整理酒店民宿经营材料分析需求与证据，完善方案分支、异常核对和交付模板，支持逐项复核与迭代。",
+    "en": "Review user-provided materials with evidence, workflows, exception handling, worked examples and reusable templates."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "统一这份间夜和收入资料的统计口径",
+    "en": "Align definitions across my room-night and revenue records"
+  },
+  "plugin": "lynxce-hotel-advisor",
+  "tags": [
+    {
+      "zh": "间夜口径",
+      "en": "Room-night definitions"
+    },
+    {
+      "zh": "报价情景",
+      "en": "Pricing scenarios"
+    },
+    {
+      "zh": "客评回应",
+      "en": "Guest-review responses"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "统一这份间夜和收入资料的统计口径",
+      "en": "Align definitions across my room-night and revenue records"
+    },
+    {
+      "zh": "对比我给的候选报价情景，说明假设与缺项",
+      "en": "Compare supplied pricing scenarios with assumptions and missing inputs"
+    },
+    {
+      "zh": "根据客评事实拟回复并整理改进复盘表",
+      "en": "Draft responses from guest-review facts and prepare an improvement review table"
+    }
+  ],
+  "keywords": [
+    "动态定价",
+    "平台排名",
+    "客评回复",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

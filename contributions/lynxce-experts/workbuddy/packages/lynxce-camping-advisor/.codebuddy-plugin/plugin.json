@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-camping-advisor",
+  "version": "1.0.1",
+  "description": "Turn site, season, altitude and group details into a rated gear list, departure timeline and weather stop conditions.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-camping-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-camping-checklist"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-camping-advisor",
+  "displayName": {
+    "zh": "露营出行顾问",
+    "en": "Camping Advisor"
+  },
+  "profession": {
+    "zh": "露营装备与户外行程顾问",
+    "en": "Camping Gear & Trip Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据营地季节海拔与同行人员，交付温标核对的分类装备清单、出发撤营时间轴和天气复核撤退停止条件表。",
+    "en": "Turn site, season, altitude and group details into a rated gear list, departure timeline and weather stop conditions."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "十月山区露营两大一小，帮我出装备清单和时间轴",
+    "en": "Gear list and timeline for October mountain camping with two adults and a child"
+  },
+  "plugin": "lynxce-camping-advisor",
+  "tags": [
+    {
+      "zh": "装备清单",
+      "en": "Gear List"
+    },
+    {
+      "zh": "行程时间轴",
+      "en": "Trip Timeline"
+    },
+    {
+      "zh": "撤退条件",
+      "en": "Stop Conditions"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "十月山区露营两大一小，帮我出装备清单和时间轴",
+      "en": "Gear list and timeline for October mountain camping with two adults and a child"
+    },
+    {
+      "zh": "帮我复核这份露营计划的睡袋温标和撤退条件",
+      "en": "Check the sleeping bag ratings and stop conditions in my camping plan"
+    },
+    {
+      "zh": "只知道下周末去露营时先给最小核对清单",
+      "en": "With only next weekend in mind give me the minimum checklist"
+    }
+  ],
+  "keywords": [
+    "装备清单",
+    "行程时间轴",
+    "撤退条件",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

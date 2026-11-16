@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-consolidated-branch-income-tax-b52",
+  "version": "1.0.0",
+  "description": "Branch Tax Allocation Advisor evidence worksheets and complete revision drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-consolidated-branch-income-tax-b52.md"
+  ],
+  "skills": [
+    "./skills/lynxce-branch-scope-factors-b52",
+    "./skills/lynxce-branch-tax-allocation-b52",
+    "./skills/lynxce-branch-change-revision-b52"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-consolidated-branch-income-tax-b52",
+  "displayName": {
+    "zh": "分摊顾问",
+    "en": "Branch Tax Allocation Advisor"
+  },
+  "profession": {
+    "zh": "总分机构税务顾问",
+    "en": "Branch Tax Allocation Advisor"
+  },
+  "displayDescription": {
+    "zh": "为跨省经营企业财务核对机构范围和三因素，交付所得税分摊底稿、预缴清缴对账及完整修订说明。",
+    "en": "Branch Tax Allocation Advisor evidence worksheets and complete revision drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "总机构给了本期税额，按三因素出分支分配表。",
+    "en": "Branch Tax Allocation Advisor"
+  },
+  "plugin": "lynxce-consolidated-branch-income-tax-b52",
+  "tags": [
+    {
+      "zh": "总分机构",
+      "en": "总分机构"
+    },
+    {
+      "zh": "所得税分摊",
+      "en": "所得税分摊"
+    },
+    {
+      "zh": "三因素",
+      "en": "三因素"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "总机构给了本期税额，按三因素出分支分配表。",
+      "en": "Branch Tax Allocation Advisor"
+    },
+    {
+      "zh": "首次分配后审计收入变了，本年比例怎样处理？",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "分支新设、撤销与收购分别需要什么证据？",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "总分机构",
+    "所得税分摊",
+    "三因素"
+  ]
+}

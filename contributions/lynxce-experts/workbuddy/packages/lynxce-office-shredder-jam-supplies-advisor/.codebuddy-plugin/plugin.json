@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-shredder-jam-supplies-advisor",
+  "version": "1.0.0",
+  "description": "Check shredder supplies and reconcile maintenance logs.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-shredder-jam-supplies-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-shredder-jam-supplies"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-shredder-jam-supplies-advisor",
+  "displayName": {
+    "zh": "碎纸机维护耗材顾问",
+    "en": "Shredder Supplies Advisor"
+  },
+  "profession": {
+    "zh": "碎纸机卡纸记录与维护耗材核算顾问",
+    "en": "Shredder Supplies Advisor"
+  },
+  "displayDescription": {
+    "zh": "碎纸机卡纸按机型说明核对维护方式与耗材，记录停机复查和实际用量，扣除合格库存，输出补货验收表。",
+    "en": "Check shredder supplies and reconcile maintenance logs."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "核对碎纸机卡纸记录与维护耗材核算的适配条件",
+    "en": "Check compatibility and required inputs"
+  },
+  "plugin": "lynxce-office-shredder-jam-supplies-advisor",
+  "tags": [
+    {
+      "zh": "规格适配",
+      "en": "Specification Fit"
+    },
+    {
+      "zh": "净购核算",
+      "en": "Net Purchase Calculation"
+    },
+    {
+      "zh": "异常复查",
+      "en": "Exception Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "核对碎纸机卡纸记录与维护耗材核算的适配条件",
+      "en": "Check compatibility and required inputs"
+    },
+    {
+      "zh": "按实测记录与库存计算补货数量",
+      "en": "Calculate purchases from measurements and stock"
+    },
+    {
+      "zh": "生成采购与异常复查记录表",
+      "en": "Build purchase and exception review tables"
+    }
+  ],
+  "keywords": [
+    "规格适配",
+    "净购核算",
+    "异常复查",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

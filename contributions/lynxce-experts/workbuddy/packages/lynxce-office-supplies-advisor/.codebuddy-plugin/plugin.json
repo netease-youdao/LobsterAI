@@ -1,0 +1,69 @@
+{
+  "name": "lynxce-office-supplies-advisor",
+  "version": "1.0.1",
+  "description": "Reconcile office supplies, requisitions and reorder plans with unit conversions, stock differences and pack quantities.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-supplies-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-supplies"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-supplies-advisor",
+  "displayName": {
+    "zh": "办公用品管理顾问",
+    "en": "Office Supplies Advisor"
+  },
+  "profession": {
+    "zh": "办公用品领用与库存管理顾问｜灵策智算",
+    "en": "Office Supplies Requisition and Inventory Advisor"
+  },
+  "displayDescription": {
+    "zh": "将办公用品记录整理为领用库存与补货台账统一规格单位核算账实差异在途占用和整包采购量便于逐月复用",
+    "en": "Reconcile office supplies, requisitions and reorder plans with unit conversions, stock differences and pack quantities."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "请根据入库领用和实盘记录交付库存差异表",
+    "en": "Reconcile receipts issues and physical stock counts"
+  },
+  "plugin": "lynxce-office-supplies-advisor",
+  "tags": [
+    {
+      "zh": "用品台账",
+      "en": "Supplies Ledger"
+    },
+    {
+      "zh": "盘点对账",
+      "en": "Stock Reconciliation"
+    },
+    {
+      "zh": "补货测算",
+      "en": "Reorder Planning"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "请根据入库领用和实盘记录交付库存差异表",
+      "en": "Reconcile receipts issues and physical stock counts"
+    },
+    {
+      "zh": "请按耗用交期和整包规格交付补货测算表",
+      "en": "Calculate reorder points and pack rounded purchase proposals"
+    },
+    {
+      "zh": "请把混用盒支包单位的用品清单整理成统一台账",
+      "en": "Normalize mixed supply units into one stock ledger"
+    }
+  ],
+  "keywords": [
+    "用品台账",
+    "盘点对账",
+    "补货测算"
+  ],
+  "needEncrypt": true
+}

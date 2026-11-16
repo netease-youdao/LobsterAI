@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-duet-advisor",
+  "version": "1.0.1",
+  "description": "Score candidate source videos, plan the added value, draft timed duet scripts and log material permissions for review.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-duet-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-duet-play"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-duet-advisor",
+  "displayName": {
+    "zh": "合拍二创顾问",
+    "en": "Duet and Remix Advisor"
+  },
+  "profession": {
+    "zh": "合拍与二创玩法顾问｜灵策智算",
+    "en": "Duet and Remix Content Planning Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据候选原片与评论区材料打分选片，提供补位角度、分秒脚本和素材授权登记表，版权疑问单列交法务判断。",
+    "en": "Score candidate source videos, plan the added value, draft timed duet scripts and log material permissions for review."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "根据这几条候选原片打分并写一条合拍脚本",
+    "en": "Score these source videos and draft a duet script"
+  },
+  "plugin": "lynxce-duet-advisor",
+  "tags": [
+    {
+      "zh": "原片选择",
+      "en": "Source Selection"
+    },
+    {
+      "zh": "二创脚本",
+      "en": "Remix Script"
+    },
+    {
+      "zh": "素材登记",
+      "en": "Material Log"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据这几条候选原片打分并写一条合拍脚本",
+      "en": "Score these source videos and draft a duet script"
+    },
+    {
+      "zh": "复核我的二创脚本引用时长和来源标注",
+      "en": "Review my remix script for clip length and attribution"
+    },
+    {
+      "zh": "只有原片标题先给我一份选题初稿",
+      "en": "Draft a minimal duet plan from the source title only"
+    }
+  ],
+  "keywords": [
+    "原片选择",
+    "二创脚本",
+    "素材登记",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

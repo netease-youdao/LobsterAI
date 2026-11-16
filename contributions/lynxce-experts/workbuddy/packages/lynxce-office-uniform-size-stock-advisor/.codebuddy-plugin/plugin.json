@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-uniform-size-stock-advisor",
+  "version": "1.0.0",
+  "description": "Summarize confirmed uniform sizes, usable stock, purchase gaps and size exchanges.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-uniform-size-stock-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-uniform-size-stock"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-uniform-size-stock-advisor",
+  "displayName": {
+    "zh": "工服尺码备量助理",
+    "en": "Employee Uniform Size Registration and Stock Advisor"
+  },
+  "profession": {
+    "zh": "员工工服尺码登记与备量顾问",
+    "en": "Employee Uniform Size Registration and Stock Advisor"
+  },
+  "displayDescription": {
+    "zh": "按员工确认尺码与工服版型汇总采购备量，区分待试穿和可用库存，核算分码缺口并交付领用换码台账。",
+    "en": "Summarize confirmed uniform sizes, usable stock, purchase gaps and size exchanges."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "每人两套工服如何按尺码汇总",
+    "en": "Summarize two uniforms per employee by size"
+  },
+  "plugin": "lynxce-office-uniform-size-stock-advisor",
+  "tags": [
+    {
+      "zh": "尺码登记",
+      "en": "Size Register"
+    },
+    {
+      "zh": "分码备量",
+      "en": "Size Stock"
+    },
+    {
+      "zh": "领用换码",
+      "en": "Size Exchange"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "每人两套工服如何按尺码汇总",
+      "en": "Summarize two uniforms per employee by size"
+    },
+    {
+      "zh": "分码备量与现有库存怎么抵减",
+      "en": "Calculate size stock buffers and inventory offsets"
+    },
+    {
+      "zh": "未试穿员工和换码记录怎么处理",
+      "en": "Track pending fittings and uniform size exchanges"
+    }
+  ],
+  "keywords": [
+    "尺码登记",
+    "分码备量",
+    "领用换码",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

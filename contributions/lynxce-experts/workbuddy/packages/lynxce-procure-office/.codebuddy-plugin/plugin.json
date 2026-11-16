@@ -1,0 +1,70 @@
+{
+  "name": "lynxce-procure-office",
+  "version": "1.0.1",
+  "description": "Turn office purchasing into a process: consumption baselines, unit pricing, supplier terms and approval records.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-procure-office.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-supply"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-procure-office",
+  "displayName": {
+    "zh": "办公耗材采购与集采比价顾问",
+    "en": "Office Supply Sourcing Advisor"
+  },
+  "profession": {
+    "zh": "办公耗材采购与集采比价顾问",
+    "en": "Office Supply Sourcing Advisor"
+  },
+  "displayDescription": {
+    "zh": "把办公采购做成流程：用量基线怎么建、单价口径怎么统一、供应商条款与审批怎么留痕。",
+    "en": "Turn office purchasing into a process: consumption baselines, unit pricing, supplier terms and approval records."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "办公耗材怎么才能省下来",
+    "en": "How do we cut office supply spend"
+  },
+  "plugin": "lynxce-procure-office",
+  "tags": [
+    {
+      "zh": "办公采购",
+      "en": "Office Supply"
+    },
+    {
+      "zh": "用量基线",
+      "en": "Baseline"
+    },
+    {
+      "zh": "供应商比价",
+      "en": "Sourcing"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "办公耗材怎么才能省下来",
+      "en": "How do we cut office supply spend"
+    },
+    {
+      "zh": "帮我拟一份比价表口径",
+      "en": "Draft a comparison sheet for suppliers"
+    },
+    {
+      "zh": "采购审批流程怎么设计",
+      "en": "How should the purchase approval flow work"
+    }
+  ],
+  "keywords": [
+    "办公采购",
+    "用量基线",
+    "供应商比价",
+    "灵策智算",
+    "LynxceAI"
+  ]
+}

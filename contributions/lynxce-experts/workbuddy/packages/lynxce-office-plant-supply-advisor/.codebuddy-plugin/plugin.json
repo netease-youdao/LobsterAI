@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-plant-supply-advisor",
+  "version": "1.0.0",
+  "description": "Plan plant care consumables by confirmed tasks, pot volumes and reusable stock.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-plant-supply-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-plant-supply"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-plant-supply-advisor",
+  "displayName": {
+    "zh": "绿植耗材补给核算师",
+    "en": "Plant Care Supply Calculator"
+  },
+  "profession": {
+    "zh": "办公室绿植养护耗材补给核算师",
+    "en": "Office Plant Care Replenishment Calculator"
+  },
+  "displayDescription": {
+    "zh": "按绿植盆数与养护任务核算土料及耗材，区分复用工具与一次消耗，扣库存整包补给，留养护记录复核。",
+    "en": "Plan plant care consumables by confirmed tasks, pot volumes and reusable stock."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "保留土团后换盆需要买多少升土",
+    "en": "Calculate repotting soil after retaining root ball volume"
+  },
+  "plugin": "lynxce-office-plant-supply-advisor",
+  "tags": [
+    {
+      "zh": "土料体积",
+      "en": "Soil Volume"
+    },
+    {
+      "zh": "任务补给",
+      "en": "Task Supplies"
+    },
+    {
+      "zh": "实耗复核",
+      "en": "Usage Reconciliation"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "保留土团后换盆需要买多少升土",
+      "en": "Calculate repotting soil after retaining root ball volume"
+    },
+    {
+      "zh": "补土与工具如何分开核算采购量",
+      "en": "Separate topsoil demand from reusable tool purchases"
+    },
+    {
+      "zh": "做绿植耗材整袋补给与实耗复核表",
+      "en": "Build a plant supply order and usage reconciliation sheet"
+    }
+  ],
+  "keywords": [
+    "土料体积",
+    "任务补给",
+    "实耗复核",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

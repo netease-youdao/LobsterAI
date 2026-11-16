@@ -1,0 +1,64 @@
+{
+  "inputStatus": "假设",
+  "condition": "B=50秒的视频口径被确认有效；新增时间按本输入归属",
+  "availableSeconds": 3600,
+  "demand": 60,
+  "actions": [
+    {
+      "id": "A",
+      "seconds": 20,
+      "indivisible": true,
+      "originalStation": 1
+    },
+    {
+      "id": "B",
+      "seconds": 50,
+      "indivisible": true,
+      "originalStation": 1
+    },
+    {
+      "id": "C",
+      "seconds": 25,
+      "indivisible": true,
+      "originalStation": 2
+    },
+    {
+      "id": "D",
+      "seconds": 15,
+      "indivisible": true,
+      "originalStation": 3
+    },
+    {
+      "id": "E",
+      "seconds": 10,
+      "indivisible": true,
+      "originalStation": 3
+    }
+  ],
+  "dependencies": [
+    [
+      "A",
+      "B"
+    ],
+    [
+      "A",
+      "C"
+    ],
+    [
+      "B",
+      "D"
+    ],
+    [
+      "C",
+      "E"
+    ]
+  ],
+  "maxStations": 5,
+  "changes": [
+    {
+      "action": "B",
+      "addedSeconds": 12
+    }
+  ],
+  "allStationsAllowed": true
+}

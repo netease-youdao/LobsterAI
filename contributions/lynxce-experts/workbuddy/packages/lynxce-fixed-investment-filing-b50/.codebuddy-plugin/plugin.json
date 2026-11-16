@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-fixed-investment-filing-b50",
+  "version": "1.0.0",
+  "description": "Prepare traceable enterprise reporting materials, reconcile source records and produce complete correction drafts.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-fixed-investment-filing-b50.md"
+  ],
+  "skills": [
+    "./skills/lynxce-fixed-investment-filing-b50-1",
+    "./skills/lynxce-fixed-investment-filing-b50-2",
+    "./skills/lynxce-fixed-investment-filing-b50-3"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-fixed-investment-filing-b50",
+  "displayName": {
+    "zh": "备案顾问",
+    "en": "Fixed Investment Filing Advisor"
+  },
+  "profession": {
+    "zh": "投资备案顾问",
+    "en": "Fixed Investment Filing Advisor"
+  },
+  "displayDescription": {
+    "zh": "为企业投资经办人梳理备案要素，复核总投资与资金结构，交付项目摘要、资料底稿和完整变化说明。",
+    "en": "Prepare traceable enterprise reporting materials, reconcile source records and produce complete correction drafts."
+  },
+  "avatar": "avatars/expert.png",
+  "needEncrypt": true,
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "把我的项目方案整理成备案信息准备稿。",
+    "en": "Fixed Investment Filing Advisor"
+  },
+  "plugin": "lynxce-fixed-investment-filing-b50",
+  "tags": [
+    {
+      "zh": "投资备案",
+      "en": "投资备案"
+    },
+    {
+      "zh": "项目摘要",
+      "en": "项目摘要"
+    },
+    {
+      "zh": "资金结构",
+      "en": "资金结构"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把我的项目方案整理成备案信息准备稿。",
+      "en": "Fixed Investment Filing Advisor"
+    },
+    {
+      "zh": "核对各项投资和自筹贷款计划是否一致。",
+      "en": "Help me with this workflow scenario."
+    },
+    {
+      "zh": "设备预算两版冲突，请给全表和完整修订稿。",
+      "en": "Help me with this workflow scenario."
+    }
+  ],
+  "keywords": [
+    "投资备案",
+    "项目摘要",
+    "资金结构"
+  ]
+}

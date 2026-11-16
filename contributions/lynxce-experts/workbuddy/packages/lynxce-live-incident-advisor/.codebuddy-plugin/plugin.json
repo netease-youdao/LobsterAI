@@ -1,0 +1,71 @@
+{
+  "name": "lynxce-live-incident-advisor",
+  "version": "1.0.2",
+  "description": "Turn live format, team roles and setup into an incident playbook with risk ratings, response cards, pre-live checks and reviews.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-live-incident-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-live-incident"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-live-incident-advisor",
+  "displayName": {
+    "zh": "直播应急预案顾问",
+    "en": "Live Incident Advisor"
+  },
+  "profession": {
+    "zh": "直播间突发情况应对与预案顾问｜灵策智算",
+    "en": "Live Stream Incident Response Advisor"
+  },
+  "displayDescription": {
+    "zh": "根据直播类型、团队分工与设备网络配置整理应急预案，提供风险分级表、处置卡话术、开播检查单和复盘表。",
+    "en": "Turn live format, team roles and setup into an incident playbook with risk ratings, response cards, pre-live checks and reviews."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "05-MarketingGrowth",
+  "defaultInitPrompt": {
+    "zh": "根据我的直播配置生成风险分级表和处置卡",
+    "en": "Build risk ratings and response cards from my live setup"
+  },
+  "plugin": "lynxce-live-incident-advisor",
+  "tags": [
+    {
+      "zh": "风险分级",
+      "en": "Risk Rating"
+    },
+    {
+      "zh": "处置卡话术",
+      "en": "Response Cards"
+    },
+    {
+      "zh": "事故复盘",
+      "en": "Incident Review"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的直播配置生成风险分级表和处置卡",
+      "en": "Build risk ratings and response cards from my live setup"
+    },
+    {
+      "zh": "帮我复核这份直播应急预案和开播检查单",
+      "en": "Review this live incident playbook and pre-live checklist"
+    },
+    {
+      "zh": "只知道直播类型和时长时先给开播检查单和待确认项",
+      "en": "With only live type and length give a pre-live checklist and open items"
+    }
+  ],
+  "keywords": [
+    "风险分级",
+    "处置卡话术",
+    "事故复盘",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "needEncrypt": true
+}

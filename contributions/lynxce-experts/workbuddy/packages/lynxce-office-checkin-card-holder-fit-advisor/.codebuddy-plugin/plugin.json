@@ -1,0 +1,73 @@
+{
+  "name": "lynxce-office-checkin-card-holder-fit-advisor",
+  "version": "1.0.0",
+  "description": "Plan check-in holder fit, stock gaps and acceptance.",
+  "author": {
+    "name": "灵策智算 LynxceAI"
+  },
+  "agents": [
+    "./agents/lynxce-office-checkin-card-holder-fit-advisor.md"
+  ],
+  "skills": [
+    "./skills/lynxce-office-checkin-card-holder-fit"
+  ],
+  "expertType": "agent",
+  "agentName": "lynxce-office-checkin-card-holder-fit-advisor",
+  "displayName": {
+    "zh": "签到支架采购助理",
+    "en": "Check-in Card Holder Advisor"
+  },
+  "profession": {
+    "zh": "活动签到二维码桌牌支架采购顾问",
+    "en": "Check-in Card Holder Advisor"
+  },
+  "displayDescription": {
+    "zh": "按活动签到桌牌尺寸与摆放条件核对支架规格，计算采购缺口及费用，交付无外链选型验收与复用清单。",
+    "en": "Plan check-in holder fit, stock gaps and acceptance."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "7个缺口按5个一包怎么买",
+    "en": "Plan seven holders sold in packs of five"
+  },
+  "plugin": "lynxce-office-checkin-card-holder-fit-advisor",
+  "tags": [
+    {
+      "zh": "规格核对",
+      "en": "Fit Checks"
+    },
+    {
+      "zh": "采购缺口",
+      "en": "Purchase Gap"
+    },
+    {
+      "zh": "复用验收",
+      "en": "Reuse Checks"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "7个缺口按5个一包怎么买",
+      "en": "Plan seven holders sold in packs of five"
+    },
+    {
+      "zh": "纸卡插不进支架如何验收",
+      "en": "Check a card that does not fit its holder"
+    },
+    {
+      "zh": "签到结束支架如何回收入库",
+      "en": "Track holder returns after an event"
+    }
+  ],
+  "keywords": [
+    "规格核对",
+    "采购缺口",
+    "复用验收",
+    "灵策智算",
+    "LynxceAI"
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}
