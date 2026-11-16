@@ -1,0 +1,274 @@
+diff --git a/src/shared/config-eval.ts b/src/shared/config-eval.ts
+--- a/src/shared/config-eval.ts
++++ b/src/shared/config-eval.ts
+@@ -1,4 +1,5 @@
+ // Config evaluation helpers load dynamic config modules with guarded evaluation.
++import { AsyncLocalStorage } from "node:async_hooks";
+ import fs from "node:fs";
+ import path from "node:path";
+ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+@@ -172,10 +173,32 @@
+ // Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
+ const hasBinaryCache = new Set<string>();
+
++type BinaryLookupBatch = {
++  active: boolean;
++  path?: string;
++  pathExt?: string;
++  missing: Set<string>;
++};
++const binaryLookupBatch = new AsyncLocalStorage<BinaryLookupBatch>();
++
++/** Reuse missing-binary probes within one publication, never across installs/refreshes. */
++export async function withBinaryLookupBatch<T>(run: () => Promise<T>): Promise<T> {
++  const batch: BinaryLookupBatch = { active: true, missing: new Set() };
++  return await binaryLookupBatch.run(batch, async () => {
++    try {
++      return await run();
++    } finally {
++      // Detached descendants can inherit the context; retire their cache too.
++      batch.active = false;
++      batch.missing.clear();
++    }
++  });
++}
++
+ /** Checks PATH for an executable binary, including PATHEXT candidates on Windows. */
+ export function hasBinary(bin: string): boolean {
+   const pathEnv = process.env.PATH ?? "";
+-  const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
++  const pathExt = process.platform === "win32" ? process.env.PATHEXT : "";
+   if (cachedHasBinaryPath !== pathEnv || cachedHasBinaryPathExt !== pathExt) {
+     cachedHasBinaryPath = pathEnv;
+     cachedHasBinaryPathExt = pathExt;
+@@ -183,6 +206,18 @@
+   }
+   if (hasBinaryCache.has(bin)) {
+     return true;
++  }
++
++  const batch = binaryLookupBatch.getStore();
++  if (batch?.active) {
++    if (batch.path !== pathEnv || batch.pathExt !== pathExt) {
++      batch.path = pathEnv;
++      batch.pathExt = pathExt;
++      batch.missing.clear();
++    }
++    if (batch.missing.has(bin)) {
++      return false;
++    }
+   }
+
+   const parts = pathEnv.split(path.delimiter).filter(Boolean);
+@@ -199,5 +234,8 @@
+       }
+     }
+   }
++  if (batch?.active) {
++    batch.missing.add(bin);
++  }
+   return false;
+ }
+diff --git a/src/gateway/server-methods/chat-metadata-runtime.ts b/src/gateway/server-methods/chat-metadata-runtime.ts
+--- a/src/gateway/server-methods/chat-metadata-runtime.ts
++++ b/src/gateway/server-methods/chat-metadata-runtime.ts
+@@ -23,6 +23,7 @@
+ import { pruneMapToMaxSize } from "../../infra/map-size.js";
+ import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
+ import { normalizeAgentId } from "../../routing/session-key.js";
++import { withBinaryLookupBatch } from "../../shared/config-eval.js";
+ import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
+ import type {
+   ChatMetadataReadParams,
+@@ -439,7 +440,7 @@
+         if (current && generationFactsMatch(current.facts, facts)) {
+           return;
+         }
+-        const generation = await buildGeneration(facts, epoch);
++        const generation = await withBinaryLookupBatch(() => buildGeneration(facts, epoch));
+         if (version !== refreshVersion) {
+           return;
+         }
+diff --git a/src/shared/config-eval-batch.test.ts b/src/shared/config-eval-batch.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/shared/config-eval-batch.test.ts
+@@ -0,0 +1,128 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, expect, test, vi } from "vitest";
++import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
++import { hasBinary, withBinaryLookupBatch } from "./config-eval.js";
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  vi.unstubAllEnvs();
++});
++
++test("scoped misses invalidate on PATH and PATHEXT changes", async () => {
++  mockProcessPlatform("win32");
++  vi.stubEnv("PATH", path.join(path.sep, "batch-first"));
++  vi.stubEnv("PATHEXT", ".EXE");
++  const access = vi.spyOn(fs, "accessSync").mockImplementation(() => {
++    throw new Error("missing");
++  });
++  await withBinaryLookupBatch(async () => {
++    expect(hasBinary("batch-path-fixture")).toBe(false);
++    expect(hasBinary("batch-path-fixture")).toBe(false);
++    expect(access).toHaveBeenCalledTimes(2);
++    vi.stubEnv("PATH", path.join(path.sep, "batch-second"));
++    expect(hasBinary("batch-path-fixture")).toBe(false);
++    expect(access).toHaveBeenCalledTimes(4);
++    vi.stubEnv("PATHEXT", ".CMD");
++    expect(hasBinary("batch-path-fixture")).toBe(false);
++    expect(access).toHaveBeenCalledTimes(6);
++  });
++});
++
++test("a nested publication owns a fresh probe batch", async () => {
++  mockProcessPlatform("linux");
++  vi.stubEnv("PATH", path.join(path.sep, "batch-nested"));
++  let installed = false;
++  vi.spyOn(fs, "accessSync").mockImplementation(() => {
++    if (!installed) {
++      throw new Error("missing");
++    }
++  });
++  await withBinaryLookupBatch(async () => {
++    expect(hasBinary("batch-nested-fixture")).toBe(false);
++    installed = true;
++    await withBinaryLookupBatch(async () => {
++      expect(hasBinary("batch-nested-fixture")).toBe(true);
++    });
++  });
++});
++
++test.each([false, true])(
++  "detached work cannot retain misses after batch settlement (failure: %s)",
++  async (fail) => {
++    mockProcessPlatform("linux");
++    vi.stubEnv("PATH", path.join(path.sep, `batch-retired-${fail}`));
++    let installed = false;
++    vi.spyOn(fs, "accessSync").mockImplementation(() => {
++      if (!installed) {
++        throw new Error("missing");
++      }
++    });
++    let release!: () => void;
++    const gate = new Promise<void>((resolve) => {
++      release = resolve;
++    });
++    let descendant!: Promise<boolean>;
++    const run = withBinaryLookupBatch(async () => {
++      expect(hasBinary(`batch-retired-${fail}`)).toBe(false);
++      descendant = gate.then(() => hasBinary(`batch-retired-${fail}`));
++      if (fail) {
++        throw new Error("publication failed");
++      }
++    });
++    if (fail) {
++      await expect(run).rejects.toThrow("publication failed");
++    } else {
++      await run;
++    }
++    installed = true;
++    release();
++    expect(await descendant).toBe(true);
++  },
++);
++
++test("concurrent batches do not share missing results", async () => {
++  mockProcessPlatform("linux");
++  vi.stubEnv("PATH", path.join(path.sep, "batch-concurrent"));
++  let installed = false;
++  vi.spyOn(fs, "accessSync").mockImplementation(() => {
++    if (!installed) {
++      throw new Error("missing");
++    }
++  });
++  let release!: () => void;
++  const gate = new Promise<void>((resolve) => {
++    release = resolve;
++  });
++  const first = withBinaryLookupBatch(async () => {
++    expect(hasBinary("batch-concurrent-fixture")).toBe(false);
++    await gate;
++  });
++  installed = true;
++  await withBinaryLookupBatch(async () => {
++    expect(hasBinary("batch-concurrent-fixture")).toBe(true);
++  });
++  release();
++  await first;
++});
++
++test.each([false, true])(
++  "distinguishes unset and empty PATHEXT in a batch (empty first: %s)",
++  async (emptyFirst) => {
++    mockProcessPlatform("win32");
++    const binDir = path.join(path.sep, `batch-extensions-${emptyFirst}`);
++    const bin = `batch-extensions-${emptyFirst}`;
++    vi.stubEnv("PATH", binDir);
++    vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
++      if (String(candidate) !== path.join(binDir, `${bin}.CMD`)) {
++        throw new Error("missing");
++      }
++    });
++    await withBinaryLookupBatch(async () => {
++      vi.stubEnv("PATHEXT", emptyFirst ? "" : undefined);
++      expect(hasBinary(bin)).toBe(!emptyFirst);
++      vi.stubEnv("PATHEXT", emptyFirst ? undefined : "");
++      expect(hasBinary(bin)).toBe(emptyFirst);
++    });
++  },
++);
+diff --git a/src/gateway/server-methods/chat-metadata-binary-batch.test.ts b/src/gateway/server-methods/chat-metadata-binary-batch.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/gateway/server-methods/chat-metadata-binary-batch.test.ts
+@@ -0,0 +1,45 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, expect, test, vi } from "vitest";
++import { hasBinary } from "../../shared/config-eval.js";
++import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
++import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  vi.unstubAllEnvs();
++});
++
++test("one metadata publication probes a missing dependency once for all agents, then sees an install", async () => {
++  mockProcessPlatform("win32");
++  const binDir = path.join(path.sep, "metadata-batch-tools");
++  vi.stubEnv("PATH", binDir);
++  vi.stubEnv("PATHEXT", ".EXE;.CMD");
++  let installed = false;
++  const access = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
++    if (installed && String(candidate) === path.join(binDir, "metadata-fixture.CMD")) {
++      return;
++    }
++    throw new Error("missing executable");
++  });
++  const harness = createChatMetadataHarness({
++    agents: { list: [{ id: "main", default: true }, { id: "reviewer" }, { id: "writer" }] },
++  });
++  harness.buildCommands.mockImplementation(async () => {
++    await Promise.resolve();
++    return { commands: hasBinary("metadata-fixture") ? [{ name: "installed" }] : [] };
++  });
++  await harness.runtime.refresh();
++  expect(harness.buildCommands).toHaveBeenCalledTimes(3);
++  expect(access).toHaveBeenCalledTimes(3);
++  expect((await harness.runtime.read({ agentId: "main" })).commands).toEqual([]);
++
++  installed = true;
++  harness.setSkillsVersion(2);
++  harness.runtime.invalidate();
++  await harness.runtime.refresh();
++  expect((await harness.runtime.read({ agentId: "reviewer" })).commands).toEqual([
++    { name: "installed" },
++  ]);
++  expect(access).toHaveBeenCalledTimes(6);
++});

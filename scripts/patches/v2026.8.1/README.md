@@ -1,5 +1,22 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Batch missing executable checks during chat metadata refresh
+
+`openclaw-chat-metadata-binary-batch.patch` avoids repeating the same missing
+skill-dependency PATH scan for every agent in a chat metadata generation.
+Repeated synchronous checks delay the hot reload after agent deletion,
+particularly on Windows. A publication-scoped cache shares misses across
+the generation, expires on success or failure (including inherited asynchronous
+work), and invalidates on PATH/PATHEXT changes. Independent refreshes and normal
+skill installation checks still discover newly installed tools immediately.
+Unset and empty PATHEXT remain distinct, matching Windows extension resolution.
+
+This internal metadata refresh has no LobsterAI adapter hook. Rebuild the
+runtime after applying the patch. Remove it when upstream deduplicates these
+checks without retaining stale misses between generations. Regression coverage
+lives in `chat-metadata-binary-batch.test.ts` and `config-eval-batch.test.ts`;
+run those alongside `chat-metadata-runtime.test.ts` and `config-eval.test.ts`.
+
 ## Skip deleted agents during automatic session maintenance
 
 `openclaw-deleted-agent-session-scan.patch` fixes gateway startup and plugin
