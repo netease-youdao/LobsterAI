@@ -4643,6 +4643,10 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(agentsMd).toContain('NOT user authorization to generate or spend credits');
     expect(agentsMd).toContain('## Local Time');
     expect(agentsMd).toContain('"Local time:" line');
+    // The in-app browser is shared, so a task that "ends the browser session"
+    // must not stop it under other sessions or close their signed-in tabs.
+    expect(agentsMd).toContain('Never call `action="stop"` on it');
+    expect(agentsMd).toContain('close only tabs you opened in this run');
   });
 
   test('writes one Office editing section and slims pristine template sections around user content', async () => {
@@ -4928,6 +4932,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const inAppConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(inAppConfig.browser).toMatchObject({
       defaultProfile: BrowserRuntimeProfile.InApp,
+      tabCleanup: { enabled: false },
       profiles: {
         [BrowserRuntimeProfile.InApp]: {
           driver: 'existing-session',
@@ -4960,6 +4965,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       defaultProfile: BrowserRuntimeProfile.Managed,
       headless: false,
     });
+    expect(fallbackConfig.browser.tabCleanup).toBeUndefined();
 
     browserDisplayMode = BrowserDisplayMode.External;
     const leaveInAppResult = inAppSync.sync('browser-web-access-leave-in-app');

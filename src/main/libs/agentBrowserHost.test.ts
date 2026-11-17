@@ -115,6 +115,10 @@ import {
   CHROME_USER_AGENT_URL_PATTERNS,
   toChromeUserAgent,
 } from './agentBrowserHost';
+import {
+  AGENT_BROWSER_MAX_PAGES,
+  AGENT_BROWSER_RECLAIM_MIN_IDLE_MS,
+} from './agentBrowserPageRetention';
 
 const ELECTRON_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) LobsterAI/2026.10.19 Chrome/150.0.7871.250 Electron/43.5.0 Safari/537.36';
@@ -1052,5 +1056,60 @@ describe('AgentBrowserHost browsing without a visible panel', () => {
     expect(electronMocks.webContentsInstances[1].loadURL).toHaveBeenLastCalledWith(
       'https://www.bing.com/search?q=lobster%20ai',
     );
+  });
+});
+
+describe('AgentBrowserHost background page limit', () => {
+  const openAgentPage = (host: AgentBrowserHost, index: number) => host.handleToolRequest({
+    tool: BrowserMcpTool.NewPage,
+    args: { url: `https://example.com/${index}` },
+  });
+
+  test('closes idle pages the user never saw once too many are open', async () => {
+    vi.useFakeTimers();
+    try {
+      const mainWindow = {
+        isVisible: () => true,
+        isDestroyed: () => false,
+        getContentBounds: () => ({ x: 0, y: 0, width: 1000, height: 700 }),
+        contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      };
+      const host = createHost({ getMainWindow: () => mainWindow as unknown as Electron.BrowserWindow });
+      await openAgentPage(host, 1);
+      // The user saw page 1 in the panel, e.g. to sign in by hand.
+      host.setView({ visible: true });
+      host.setView({ visible: false });
+      for (let index = 2; index <= AGENT_BROWSER_MAX_PAGES; index += 1) {
+        await openAgentPage(host, index);
+      }
+      vi.advanceTimersByTime(AGENT_BROWSER_RECLAIM_MIN_IDLE_MS / 2);
+      await host.handleToolRequest({
+        tool: BrowserMcpTool.NavigatePage,
+        args: { pageId: 2, url: 'https://example.com/2/next' },
+      });
+      vi.advanceTimersByTime(AGENT_BROWSER_RECLAIM_MIN_IDLE_MS / 2);
+
+      await openAgentPage(host, AGENT_BROWSER_MAX_PAGES + 1);
+
+      const pageIds = host.getState().tabs.map(tab => tab.pageId);
+      expect(pageIds).toHaveLength(AGENT_BROWSER_MAX_PAGES);
+      expect(pageIds).toContain(1);
+      expect(pageIds).toContain(2);
+      expect(pageIds).not.toContain(3);
+      expect(electronMocks.webContentsInstances[2].close).toHaveBeenCalledOnce();
+      expect(host.getState().selectedPageId).toBe(AGENT_BROWSER_MAX_PAGES + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('keeps recently used pages above the limit', async () => {
+    const host = createHost();
+    for (let index = 1; index <= AGENT_BROWSER_MAX_PAGES + 1; index += 1) {
+      await openAgentPage(host, index);
+    }
+
+    expect(host.getState().tabs).toHaveLength(AGENT_BROWSER_MAX_PAGES + 1);
+    expect(electronMocks.webContentsInstances.every(webContents => !webContents.close.mock.calls.length)).toBe(true);
   });
 });
