@@ -48,23 +48,34 @@ Renderer 开发服务器默认运行在 `http://localhost:5175`。
 ## 测试与 Lint
 
 ```bash
-# 生产 renderer bundle
+# 对 renderer、common、shared 代码做类型检查，再构建 renderer、main、preload 的 Vite bundle
 npm run build
 
-# Electron main/preload TypeScript 构建
+# 用 tsc 对 src/main 做类型检查并编译
 npm run compile:electron
+
+# 只对 renderer、common、shared 代码做类型检查，不输出文件
+npx tsc
 
 # CI 使用的 Vitest 入口
 npm test
 
+# 只运行文件名匹配的测试文件
+npm test -- logger
+
 # src 全量 ESLint；可能暴露既有历史 lint debt
 npm run lint
 
-# 对改动过的 TypeScript 文件执行 CI 风格 lint
-npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 <files>
+# CI 实际执行的 lint，作用于你改动过的 TypeScript 文件
+npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 --no-warn-ignored <files>
 ```
 
 CI 只对 PR 中改动过的 TypeScript 文件执行 lint。请确保你改动的每个文件在上面这条命令下没有任何 ESLint 错误和警告；新增逻辑尽量补充同目录下的 `*.test.ts` Vitest 测试。
+
+- `npm run build` 不会对 `src/main` 做类型检查。改动主进程、IPC 或 preload 代码后，还要运行 `npm run compile:electron`。CI 两条都会执行。
+- import 顺序是 error 级别的 lint 规则，可以用 `eslint --fix` 修复。
+- Vitest 运行在 Node 环境中，只收集 `*.test.ts` 文件。没有 DOM，renderer 逻辑请作为纯函数来测，不要渲染组件。
+- 不要对已有文件运行 `npm run format` 或 Prettier。仓库里大部分文件从未用它格式化过，运行后会整文件改写。
 
 ## OpenClaw Runtime
 
@@ -84,7 +95,7 @@ OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
 OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
 ```
 
-需要改变 OpenClaw 内部行为时，优先在 LobsterAI 侧寻找集成点。确实需要打补丁时，请在 `scripts/patches/<openclaw.version>/` 下添加按版本划分的小补丁，而不是在同级源码目录里留下手工修改。
+需要改变 OpenClaw 内部行为时，优先在 LobsterAI 侧寻找集成点。确实需要打补丁时，请在 `scripts/patches/<openclaw.version>/` 下添加按版本划分的小补丁，并在该目录的 `README.md` 中说明，而不是在同级源码目录里留下手工修改。
 
 ## DeepSeek Harness Runtime
 
@@ -216,11 +227,14 @@ npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目�
 | 路径 | 用途 |
 | --- | --- |
 | `src/main/main.ts` | Electron 生命周期、IPC 注册、鉴权、日志、runtime 启动和服务装配 |
+| `src/main/ipcHandlers/` | 按领域划分的 IPC handler；新增 handler 放在这里，不要写进 `main.ts` |
 | `src/main/libs/openclawEngineManager.ts` | OpenClaw 网关进程、运行时状态、端口、日志、重启和修复 |
 | `src/main/libs/openclawConfigSync.ts` | 将 LobsterAI 的 provider、model、agent、IM 绑定、skills、MCP 和工作区指令渲染为 OpenClaw 配置 |
 | `src/main/libs/agentEngine/openclawRuntimeAdapter.ts` | 将 OpenClaw 网关事件翻译为 Cowork 流式事件 |
 | `src/main/coworkStore.ts` | Cowork 会话、消息、配置、Agents、记忆元数据和 SQLite CRUD |
+| `src/main/skills/skillManager.ts` | 技能同步、安装/升级、安全扫描和启用状态 |
 | `src/main/office/` | Word、Excel、PowerPoint 原生编辑器：文件存储、Agent 工具桥和 MCP 服务 |
+| `src/main/libs/dsh*.ts` | DeepSeek Harness runtime：安装、进程启动和配置同步，独立于 Cowork 的 agent runtime |
 | `src/renderer/components/cowork/` | 主 Cowork UI、输入框、会话详情、权限、思考/工具展示、媒体和语音输入 |
 | `src/renderer/components/artifacts/` | 产物面板、预览卡片和渲染器 |
 | `src/renderer/components/agent/` | Agent 创建和设置 UI |
@@ -229,15 +243,23 @@ npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目�
 | `src/renderer/components/scheduledTasks/` | 定时任务列表、表单、详情、运行历史和模板 |
 | `src/renderer/services/i18n.ts` | Renderer i18n 字典和 `t()` helper |
 | `src/shared/` | 主进程和渲染进程共用的常量与类型 |
+| `src/common/` | 两个进程都会编译进去的小型纯函数工具 |
+| `src/scheduledTask/` | 定时任务模型与策略；实际执行走 OpenClaw cron |
 | `SKILLs/` | LobsterAI 内置技能 |
+| `openclaw-extensions/` | 本地 OpenClaw 插件 |
+| `scripts/` | runtime 构建、补丁和打包脚本 |
+| `specs/` | 按功能、重构和缺陷修复划分的设计文档，用中文撰写 |
+| `tests/` | 打包、runtime 和集成测试 |
 
-更完整的架构说明以及本仓库对编码 Agent 的约定，见 [`AGENTS.md`](AGENTS.md)。
+本仓库对编码 Agent 的约定见 [`AGENTS.md`](AGENTS.md)。更细的说明放在对应代码旁边：[`src/main/AGENTS.md`](src/main/AGENTS.md) 涵盖主进程、IPC、SQLite 表以及数据和日志位置；[`src/renderer/AGENTS.md`](src/renderer/AGENTS.md) 涵盖 renderer、产物和 i18n 字典；[`scripts/AGENTS.md`](scripts/AGENTS.md) 涵盖 runtime 构建、补丁机制和打包。
 
 ## 提交改动
 
-- 从 `main` 拉分支，命名形如 `feat/...` 或 `fix/...`。
-- 提交信息使用英文并遵循 [Conventional Commits](https://www.conventionalcommits.org/)，例如 `fix(sqlite): prevent duplicate session insert on retry`。
+- 从当前的 `release/<日期>` 分支（远端最新的那个）拉分支，命名形如 `feat/...` 或 `fix/...`，PR 也提到这个分支，不要提到 `main`。release 分支在发版时合入 `main`。没有进行中的 release 分支时（最新的那个已发版并合入 `main`），从 `main` 拉分支，PR 也提到 `main`。
+- 提交信息使用英文并遵循 [Conventional Commits](https://www.conventionalcommits.org/)，例如 `fix(sqlite): prevent duplicate session insert on retry`。`commit-msg` hook 会运行 commitlint：标题和正文的每一行都不超过 100 个字符，subject 以小写字母开头。
+- 新增的库放进 `devDependencies`（`npm install -D`）。主进程和 renderer 代码都由 Vite 打包，`dependencies` 只留给在 bundle 之外加载的模块；`tests/electronBuilderAppFiles.test.ts` 逐个列出了它们及原因。
 - 不要硬编码用户可见文案：使用 `t('key')`，并同时补充 `zh` 和 `en` 翻译。
 - IPC 通道名、状态值等判别用字符串，请使用共享的 `as const` 常量对象，不要写裸字符串。
+- 新增的 IPC handler 放在 `src/main/ipcHandlers/<领域>/`，不要写进 `main.ts`，具体步骤见 [`src/main/AGENTS.md`](src/main/AGENTS.md)。
 - 保持改动聚焦，不要在大型历史文件里顺手重构或做格式化调整。
 - 按 PR 模板填写：简要说明、关联 issue、UI 改动截图，以及 IPC、存储、runtime、窗口等 Electron 相关改动的说明。
