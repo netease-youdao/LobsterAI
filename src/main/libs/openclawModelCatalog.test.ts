@@ -136,6 +136,36 @@ describe('with a fake OpenClaw runtime', () => {
     test('fills catalog gaps from the built-in table', () => {
       expect(resolveOpenClawCatalogModelMaxTokens(OpenClawProviderId.VolcenginePlan, 'glm-5.3')).toBe(128_000);
     });
+
+    test('indexes sync provider catalog builders without calling async ones', async () => {
+      // Mirrors OpenClaw's Hugging Face builder: async, takes a key string, and
+      // rejects when handed process.env.
+      const extensionDir = path.join(fakeAppPath, ...RUNTIME_SEGMENTS, 'third-party-extensions', 'fixture');
+      writeManifest(extensionDir, {
+        id: 'fixture',
+        providers: ['fixture-sync', 'fixture-async', 'fixture-thenable'],
+      });
+      fs.writeFileSync(path.join(extensionDir, 'provider-catalog.js'), [
+        'module.exports.buildFixtureSyncProvider = () => ({ models: [{ id: "sync-model", maxTokens: 4321 }] });',
+        'module.exports.buildFixtureAsyncProvider = async (key) => {',
+        '  globalThis.__fixtureAsyncBuilderCalled = true;',
+        '  return { models: [{ id: key.trim(), maxTokens: 1 }] };',
+        '};',
+        'module.exports.buildFixtureThenableProvider = () => Promise.reject(new Error("discovery failed"));',
+      ].join('\n'));
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+      process.on('unhandledRejection', onUnhandledRejection);
+      try {
+        expect(resolveOpenClawCatalogModelMaxTokens('fixture-sync', 'sync-model')).toBe(4321);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(unhandledRejections).toEqual([]);
+        expect((globalThis as { __fixtureAsyncBuilderCalled?: boolean }).__fixtureAsyncBuilderCalled)
+          .toBeUndefined();
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection);
+      }
+    });
   });
 
   describe('buildProviderSelection max tokens', () => {

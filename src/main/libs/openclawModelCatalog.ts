@@ -36,6 +36,9 @@ let cachedCatalogIndex: OpenClawCatalogIndex | null | undefined;
 const isPositiveNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
+const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
+  typeof (value as { then?: unknown } | null | undefined)?.then === 'function';
+
 const normalizeLookupPart = (value: string): string => value.trim().toLowerCase();
 
 const compactLookupPart = (value: string): string =>
@@ -264,14 +267,23 @@ const indexProviderCatalogBuilders = (
     const matchedProviderIds = selectProviderIdsForBuilder(exportName, providerIds);
     if (matchedProviderIds.length === 0) continue;
 
-    let providerConfig: OpenClawCatalogProvider | undefined;
+    // Async builders (e.g. Hugging Face live discovery) take other arguments
+    // and cannot feed this synchronous index; calling them only risks network
+    // work and unhandled rejections.
+    if (exported.constructor.name === 'AsyncFunction') continue;
+
+    let providerConfig: unknown;
     try {
-      providerConfig = exported(process.env) as OpenClawCatalogProvider;
+      providerConfig = exported(process.env);
     } catch {
       continue;
     }
+    if (isPromiseLike(providerConfig)) {
+      Promise.resolve(providerConfig).catch((): void => {});
+      continue;
+    }
     for (const providerId of matchedProviderIds) {
-      indexProviderModels(index, providerId, providerConfig);
+      indexProviderModels(index, providerId, providerConfig as OpenClawCatalogProvider | undefined);
     }
   }
 };
