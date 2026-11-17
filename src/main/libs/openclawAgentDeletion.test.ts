@@ -46,8 +46,37 @@ test('waits for earlier config writes and explicitly deletes the runtime identit
   expect(await pending).toBe(true);
   expect(request.mock.calls.map(([method]) => method)).toEqual([OpenClawAgentRpcMethod.List, OpenClawAgentRpcMethod.Delete]);
   expect(request).toHaveBeenLastCalledWith(OpenClawAgentRpcMethod.Delete,
-    { agentId: expertId, deleteFiles: false }, { timeoutMs: 30_000 });
+    { agentId: expertId, deleteFiles: false }, { timeoutMs: 60_000 });
   expect(request.mock.invocationCallOrder.at(-1)).toBeLessThan(commitLocalDeletion.mock.invocationCallOrder[0]);
+});
+
+test('waits for a slow roster hot reload without reporting failure or committing early', async () => {
+  vi.useFakeTimers();
+  try {
+    const { input, request, commitLocalDeletion } = setup();
+    const client: OpenClawConfigRpcClient = {
+      request: async <T>(method: string, _params?: unknown, options?: { timeoutMs?: number | null }): Promise<T> => {
+        if (method !== OpenClawAgentRpcMethod.Delete) return await request(method) as T;
+        return await new Promise<T>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Request timed out')), options?.timeoutMs ?? 30_000);
+          setTimeout(() => {
+            clearTimeout(timeout);
+            resolve({ ok: true, agentId: expertId } as T);
+          }, 45_000);
+        });
+      },
+    };
+    input.ensureRpcClient = async () => client;
+    const pending = deleteOpenClawAgent(input);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(commitLocalDeletion).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await pending).toBe(true);
+    expect(commitLocalDeletion).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledExactlyOnceWith(OpenClawAgentRpcMethod.List);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('a rejected gateway deletion preserves local data for retry', async () => {

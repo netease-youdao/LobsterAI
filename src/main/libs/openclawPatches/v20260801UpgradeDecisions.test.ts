@@ -18,6 +18,7 @@ const RETAINED_PATCHES = [
   'openclaw-browser-blocked-hostnames.patch',
   'openclaw-browser-cdp-dispatch-rejection.patch',
   'openclaw-browser-navigation-error-containment.patch',
+  'openclaw-chat-metadata-binary-batch.patch',
   'openclaw-chat-send-cwd-decoupling.patch',
   'openclaw-chrome-mcp-process-recovery.patch',
   'openclaw-chrome-mcp-windows-native-snapshot.patch',

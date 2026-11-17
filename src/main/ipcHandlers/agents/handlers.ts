@@ -147,6 +147,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
         notifyAgentsChanged(event.sender);
         return { success: true, agent };
       } catch (error) {
+        console.error('[Agents] Failed to create agent:', error);
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to create agent',
