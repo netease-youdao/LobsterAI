@@ -10,6 +10,8 @@ import {
   parseLocalFileThumbnailFit,
 } from '../shared/artifactPreview/localFileThumbnail';
 
+// Only media files, which is all the app displays through this scheme (conversation images, media
+// artifacts, the image editor). Any other type is refused, documents included.
 const LOCAL_FILE_MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -26,11 +28,15 @@ const LOCAL_FILE_MIME_BY_EXT: Record<string, string> = {
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
-  '.pdf': 'application/pdf',
-  '.txt': 'text/plain; charset=utf-8',
-  '.md': 'text/markdown; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
 };
+
+// The scheme serves files from anywhere on disk, and a page with its origin could fetch every one
+// of them. A served file can still be framed or opened as a page (an SVG runs script that way), so
+// `sandbox` gives it an opaque origin with scripts off. <img>, <video> and <audio> ignore it.
+const LOCAL_FILE_SECURITY_HEADERS = {
+  'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+  'X-Content-Type-Options': 'nosniff',
+} as const;
 
 export type ByteRange = {
   start: number;
@@ -69,8 +75,23 @@ export function getLocalFileProtocolPath(requestUrl: string): string {
   return filePath;
 }
 
-export function getLocalFileMimeType(filePath: string): string {
-  return LOCAL_FILE_MIME_BY_EXT[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+/** The served type for a file, or null when the scheme does not serve that kind of file. */
+export function getLocalFileMimeType(filePath: string): string | null {
+  return LOCAL_FILE_MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? null;
+}
+
+/**
+ * The absolute path on a local disk that a request names, or null. On Windows only drive-letter
+ * paths pass: UNC (`\\host\share`, `//host/share`) and device (`\\?\`, `\\.\`) paths would make
+ * the main process open a network share, sending the user's credentials to it.
+ */
+export function resolveServableLocalPath(filePath: string): string | null {
+  if (!filePath || filePath.includes('\0')) return null;
+  if (process.platform === 'win32') {
+    const resolved = path.win32.resolve(filePath);
+    return /^[A-Za-z]:\\/.test(resolved) ? resolved : null;
+  }
+  return filePath.startsWith('/') ? path.posix.resolve(filePath) : null;
 }
 
 function parseSingleByteRange(rangeText: string, fileSize: number): ByteRange | null {
@@ -127,8 +148,8 @@ export function parseByteRange(rangeHeader: string | null, fileSize: number): By
 function buildLocalFileBaseHeaders(filePath: string, size: number, mimeType: string): Record<string, string> {
   const filename = encodeURIComponent(path.basename(filePath));
   return {
+    ...LOCAL_FILE_SECURITY_HEADERS,
     'Accept-Ranges': 'bytes',
-    'Access-Control-Allow-Origin': '*',
     'Cache-Control': 'no-store',
     'Content-Disposition': `inline; filename*=UTF-8''${filename}`,
     'Content-Length': String(size),
@@ -167,7 +188,11 @@ export async function createLocalFileProtocolResponse(
   options?: LocalFileProtocolOptions,
 ): Promise<Response> {
   try {
-    const sourcePath = getLocalFileProtocolPath(request.url);
+    const sourcePath = resolveServableLocalPath(getLocalFileProtocolPath(request.url));
+    if (!sourcePath || !getLocalFileMimeType(sourcePath)) {
+      console.warn('[ArtifactPreview] refused local file request: not a served media file on a local disk');
+      return new Response('Forbidden', { status: 403 });
+    }
     const sourceStat = await fs.promises.stat(sourcePath);
     if (!sourceStat.isFile()) {
       return new Response('Not found', { status: 404 });
@@ -175,6 +200,9 @@ export async function createLocalFileProtocolResponse(
     const { filePath, stat } = await resolveThumbnailFile(request.url, sourcePath, sourceStat, options);
 
     const mimeType = getLocalFileMimeType(filePath);
+    if (!mimeType) {
+      return new Response('Forbidden', { status: 403 });
+    }
     const baseHeaders = buildLocalFileBaseHeaders(filePath, stat.size, mimeType);
     const rangeHeader = request.headers.get('range');
     const range = parseByteRange(rangeHeader, stat.size);
