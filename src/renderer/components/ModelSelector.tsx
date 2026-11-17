@@ -443,6 +443,14 @@ export function supportsConfigurableModelThinkingProtocol(
     && supportsLobsterAIRequestOptionsV1(model.requestCapabilities);
 }
 
+// Same default as Admin and Portal when the server tag has no color.
+const MODEL_CUSTOM_TAG_DEFAULT_COLOR = '#F97316';
+
+const modelCustomTagStyle = (color?: string): React.CSSProperties => {
+  const tagColor = color ?? MODEL_CUSTOM_TAG_DEFAULT_COLOR;
+  return { color: tagColor, backgroundColor: `${tagColor}1A` };
+};
+
 /** Whether hovering a row opens the detail card (which also shows the full name). */
 export function hasModelHoverDetails(
   model: Pick<
@@ -1328,6 +1336,18 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] leading-none text-red-600 dark:text-red-400" title={i18nService.t('modelLimitedFreeBadge')}>
               <GiftIcon className="h-3 w-3 shrink-0" strokeWidth={1.8} aria-hidden="true" />
               <span className="truncate">{i18nService.t('modelLimitedFreeBadge')}</span>
+            </span>
+          )}
+          {!model.presetId && model.customTag && (
+            <span
+              className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] leading-none"
+              style={modelCustomTagStyle(model.customTag.color)}
+              title={model.customTag.text}
+            >
+              {model.customTag.iconUrl && (
+                <img src={model.customTag.iconUrl} alt="" className="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
+              )}
+              <span className="truncate">{model.customTag.text}</span>
             </span>
           )}
           {model.subscriptionPriority && (

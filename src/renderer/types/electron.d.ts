@@ -2190,6 +2190,7 @@ interface IElectronAPI {
         limitedFreeStartAt?: string | null;
         limitedFreeEndAt?: string | null;
         subscriptionPriority?: boolean;
+        customTag?: unknown;
         busy?: boolean;
         moreModel?: boolean;
         accessible?: boolean;
