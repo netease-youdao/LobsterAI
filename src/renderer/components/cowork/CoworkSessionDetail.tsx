@@ -153,6 +153,7 @@ import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
 import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
 import { type ToastEventDetail } from '../Toast';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
 import { type ArtifactTabActionTarget, artifactTabMenuActions } from './artifactTabActions';
@@ -6327,7 +6328,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         {/* Left side: Toggle buttons (when collapsed) + Title */}
         <div className="flex h-full flex-1 items-center gap-2 min-w-0">
           {isSidebarCollapsed && !isWindows && (
-            <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
+            <div className={`non-draggable flex items-center gap-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
               <button
                 type="button"
                 onClick={onToggleSidebar}

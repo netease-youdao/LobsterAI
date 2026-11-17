@@ -58,6 +58,7 @@ import {
   openStartupCreditCampaign,
   useStartupCreditCampaignEntry,
 } from '../startupCreditCampaignBridge';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import { CoworkUiEvent } from './constants';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import CoworkSessionDetail from './CoworkSessionDetail';
@@ -824,7 +825,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     <div className="draggable relative z-10 flex h-12 items-center justify-between px-4 shrink-0">
       <div className="non-draggable h-8 flex items-center">
         {isSidebarCollapsed && !isWindows && (
-          <div className={`flex items-center gap-1 mr-2 ${isMac ? 'pl-[68px]' : ''}`}>
+          <div className={`flex items-center gap-1 mr-2 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
             <button
               type="button"
               onClick={onToggleSidebar}

@@ -19,6 +19,7 @@ import ImageExampleDialog from '../imageCreation/ImageExampleDialog';
 import ImageExampleGallery from '../imageCreation/ImageExampleGallery';
 import { useImageCreationCatalog } from '../imageCreation/useImageCreationCatalog';
 import { useScrollAffordance } from '../imageCreation/useScrollAffordance';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import { expertText, filterExperts } from './catalog';
 import ExpertFeaturedScenarios from './ExpertFeaturedScenarios';
 import { useExpertImpressions } from './useExpertImpressions';
@@ -194,7 +195,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
     <div ref={rootRef} data-skin-management-page="true" className="relative z-10 flex h-full min-w-0 flex-1 flex-col bg-background">
       <div className="draggable flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
         {isSidebarCollapsed && window.electron.platform !== 'win32' && (
-          <div className={`non-draggable flex items-center gap-1 ${window.electron.platform === 'darwin' ? 'pl-[68px]' : ''}`}>
+          <div className={`non-draggable flex items-center gap-1 ${window.electron.platform === 'darwin' ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
             <button type="button" aria-label={t('expertExpandSidebar')} onClick={onToggleSidebar} className="flex h-8 w-8 items-center justify-center rounded-lg text-secondary hover:bg-surface-raised"><SidebarToggleIcon className="h-4 w-4" isCollapsed /></button>
             <button type="button" aria-label={t('newChat')} onClick={onNewChat} className="flex h-8 w-8 items-center justify-center rounded-lg text-secondary hover:bg-surface-raised"><ComposeIcon className="h-4 w-4" /></button>
             {updateBadge}

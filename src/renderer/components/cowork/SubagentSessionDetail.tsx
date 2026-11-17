@@ -8,6 +8,7 @@ import type { CoworkMessage, SubagentSessionSummary } from '../../types/cowork';
 import { getSubagentDisplayName } from '../../utils/subagentDisplay';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import ConversationTurnsView from './ConversationTurnsView';
 
 interface SubagentSessionDetailProps {
@@ -103,7 +104,7 @@ const SubagentSessionDetail: React.FC<SubagentSessionDetailProps> = ({ subagent,
       <div className="draggable flex h-12 items-center gap-3 border-b border-border px-4 bg-background shrink-0">
         <div className="non-draggable flex items-center gap-2">
           {isSidebarCollapsed && !isWindows && (
-            <div className={`flex items-center gap-1 mr-1 ${isMac ? 'pl-[68px]' : ''}`}>
+            <div className={`flex items-center gap-1 mr-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
               <button
                 type="button"
                 onClick={onToggleSidebar}

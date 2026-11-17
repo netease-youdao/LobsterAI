@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
 import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
@@ -12,7 +12,7 @@ import type { AgentModelSelectionMode } from '../shared/agent/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
 import type { AgentModelSelection } from '../shared/agent/modelSelection';
 import type { UsageContext } from '../shared/analytics/usage';
-import { AppIpcChannel, WindowIpcChannel } from '../shared/app/constants';
+import { AppIpcChannel, WindowIpcChannel, type WindowZoomChangedPayload } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
@@ -175,6 +175,11 @@ import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
+
+// Every page starts at 100%. Setting the zoom from the page also makes it a per-window zoom (see
+// installMainWindowZoom): Chromium then neither saves it across restarts nor shares it with other windows
+// of the same origin, which all windows are in development.
+webFrame.setZoomFactor(1);
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -430,6 +435,11 @@ contextBridge.exposeInMainWorld('electron', {
     isFullscreen: () => ipcRenderer.invoke(WindowIpcChannel.IsFullscreen),
     showSystemMenu: (position: { x: number; y: number }) =>
       ipcRenderer.send('window:showSystemMenu', position),
+    onZoomChanged: (callback: (payload: WindowZoomChangedPayload) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: WindowZoomChangedPayload) => callback(payload);
+      ipcRenderer.on(WindowIpcChannel.ZoomChanged, handler);
+      return () => ipcRenderer.removeListener(WindowIpcChannel.ZoomChanged, handler);
+    },
     onStateChanged: (
       callback: (state: {
         isMaximized: boolean;

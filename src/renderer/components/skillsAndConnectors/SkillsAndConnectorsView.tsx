@@ -13,6 +13,7 @@ import { McpManager } from '../mcp';
 import { reportMcpAction } from '../mcp/analytics';
 import { SkillsManager } from '../skills';
 import { reportSkillAction } from '../skills/analytics';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import {
   SKILLS_CONNECTORS_SECTION_LABEL_KEYS,
   SKILLS_CONNECTORS_SECTION_ORDER,
@@ -82,7 +83,7 @@ const SkillsAndConnectorsView: React.FC<SkillsAndConnectorsViewProps> = ({
     >
       <div className="draggable flex h-12 items-center px-4 border-b border-border shrink-0">
         {isSidebarCollapsed && !isWindows && (
-          <div className={`non-draggable mr-3 flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
+          <div className={`non-draggable mr-3 flex items-center gap-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
             <button
               type="button"
               onClick={onToggleSidebar}

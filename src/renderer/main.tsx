@@ -6,6 +6,7 @@ import { Provider } from 'react-redux';
 
 import App from './App';
 import EngineRepairOverlay from './components/cowork/EngineRepairOverlay';
+import WindowZoomIndicator from './components/window/WindowZoomIndicator';
 import { store } from './store';
 
 const rootElement = document.getElementById('root');
@@ -19,6 +20,7 @@ try {
       <Provider store={store}>
         <App />
         <EngineRepairOverlay />
+        <WindowZoomIndicator />
       </Provider>
     </React.StrictMode>
   );
