@@ -26,6 +26,7 @@ vi.mock('./coworkUtil', () => ({
   getSkillsRoot: () => '/skills',
 }));
 vi.mock('./openaiCodexAuth', () => ({ getCodexHomeDir: () => '/codex' }));
+vi.mock('./fakeIpNetwork', () => ({ refreshFakeIpNetworkState: async () => undefined }));
 vi.mock('./systemProxy', () => ({
   isSystemProxyEnabled: () => false,
   resolveSystemProxyUrlForTargets: async () => ({ proxyUrl: null, targetUrl: null }),

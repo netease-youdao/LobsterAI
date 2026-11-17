@@ -25,6 +25,8 @@ interface TooltipProps {
   maxWidth?: string;
   disabled?: boolean;
   multiline?: boolean;
+  // Replaces the default border, background and text colour of the bubble.
+  bubbleClassName?: string;
 }
 
 const Tooltip: React.FC<TooltipProps> = ({
@@ -37,6 +39,7 @@ const Tooltip: React.FC<TooltipProps> = ({
   maxWidth = '18rem',
   disabled = false,
   multiline = false,
+  bubbleClassName = 'border border-border bg-surface-overlay text-foreground',
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -117,8 +120,8 @@ const Tooltip: React.FC<TooltipProps> = ({
           id={tooltipId}
           role="tooltip"
           style={{ maxWidth }}
-          className={`absolute z-[100] pointer-events-none rounded-md border border-border
-            bg-surface-overlay px-2 py-1 text-[11px] leading-4 text-foreground shadow-lg
+          className={`absolute z-[100] pointer-events-none rounded-md ${bubbleClassName}
+            px-2 py-1 text-[11px] leading-4 shadow-lg
             ${multiline ? 'w-max whitespace-pre-wrap break-words text-left' : 'whitespace-nowrap'}
             backdrop-blur-sm ${positionClassName} ${alignClassName}`}
         >

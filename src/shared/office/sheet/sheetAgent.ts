@@ -85,6 +85,7 @@ export const SHEET_AGENT_TOOL_DEFINITIONS = [
       'add_sheet {name, position?}; rename_sheet {sheet, name}; delete_sheet {sheet}; move_sheet {sheet, position} with position 1 for the first tab;',
       'hide_sheet {sheet}; show_sheet {sheet}; freeze {sheet?, rows?, columns?} keeps that many top rows / left columns in view (0 unfreezes); set_tab_color {sheet, color: #RRGGBB or null}.',
       'Edits run in order, so addresses in later edits refer to the workbook after the earlier edits.',
+      'The reply lists the written cells with their recalculated values, read back from the open workbook as excel_read reports them, and whether the file saved. excel_read reads that same open workbook, so the reply is already the check: when the user asks you to verify the values, report from it instead of calling excel_read again.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -136,11 +137,12 @@ export const SHEET_AGENT_TOOL_DEFINITIONS = [
   },
 ] as const;
 
-/** Guidance for the managed AGENTS.md section: prefer live edits over rewriting the file. */
-export const SHEET_AGENT_PROMPT = [
-  '## Editing Existing Spreadsheets',
-  '',
-  `- When the user wants to change an existing \`.xlsx\` and \`${SheetAgentTool.Read}\` / \`${SheetAgentTool.Edit}\` are available, use them instead of rewriting the file with scripts: edits appear live in LobsterAI's editor, keep charts, styles and other content, recalculate formulas, and can be undone as one step.`,
-  '- They also insert and delete rows and columns, add, rename, move, hide and delete sheets, and freeze panes; formulas, charts, names, conditional formats, data validation, links, notes and tables follow the moved cells like in Excel.',
-  '- Use file-based tools only for what those tools cannot do (building charts or pivot tables), when the workbook is reported as read-only or an edit is refused, or to create a new workbook.',
-].join('\n');
+/** What the managed AGENTS.md section says about these tools; the shared rules are in `buildOfficeAgentPrompt`. */
+export const SHEET_AGENT_GUIDANCE = {
+  readTool: SheetAgentTool.Read,
+  editTool: SheetAgentTool.Edit,
+  keeps: 'keeps charts and styles, recalculates formulas',
+  replyShows: 'recalculated cells',
+  scope: 'They also insert and delete rows and columns, add, rename, move, hide and delete sheets, and freeze panes; formulas, charts, names, conditional formats, data validation, links, notes and tables follow the moved cells like in Excel.',
+  fileBasedFor: 'building charts or pivot tables',
+} as const;

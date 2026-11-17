@@ -51,6 +51,11 @@ export interface MainLogUrlContext {
   userId: string;
 }
 
+export interface MainLogReportSnapshot {
+  context: MainLogUrlContext;
+  eventId: string;
+}
+
 const logCommons = {
   _npid: LogReporterProduct.LobsterAI,
   _ncat: LogReporterCategory.Actions,
@@ -71,13 +76,14 @@ const getErrorName = (error: unknown): string => {
 export const buildMainLogUrl = (
   params: MainLogEventParams,
   context: MainLogUrlContext,
+  eventId: string = getTrimmedString(params.eventId) || randomUUID(),
 ): string => {
   const url = new URL(LogReporterEndpoint.YoudaoAnalyzer);
   const logParams: Record<string, LogParamValue> = {
     ...params,
     ...logCommons,
     app_version: context.appVersion,
-    eventId: getTrimmedString(params.eventId) || randomUUID(),
+    eventId,
     environment: context.environment ?? 'production',
     os_platform: context.platform,
     os_arch: context.arch,
@@ -109,7 +115,7 @@ export class MainLogReporter {
     this.options = options;
   }
 
-  async report(params: MainLogEventParams): Promise<boolean> {
+  async report(params: MainLogEventParams, snapshot?: MainLogReportSnapshot): Promise<boolean> {
     if (!this.isUsageAnalyticsEnabled()) {
       console.debug(`[MainLogReporter] skipped event ${params.action} because usage analytics is disabled`);
       return false;
@@ -132,7 +138,7 @@ export class MainLogReporter {
 
     this.activeRequestCount += 1;
     try {
-      const context = this.buildContext();
+      const context = snapshot?.context ?? this.buildContext();
       const requestTimeoutMs = this.getRequestTimeoutMs();
       const abortController = new AbortController();
       const timeout = setTimeout(() => abortController.abort(), requestTimeoutMs);
@@ -140,7 +146,7 @@ export class MainLogReporter {
       let response: MainLogReporterResponse;
       try {
         response = await this.options.fetch(
-          buildMainLogUrl(params, context),
+          buildMainLogUrl(params, context, snapshot?.eventId),
           abortController.signal,
         );
       } finally {
@@ -162,6 +168,7 @@ export class MainLogReporter {
 
   /** Capture once outside hot paths; frozen-event callers never reread a later account. */
   captureContext(): MainLogUrlContext | null {
+    if (!this.isUsageAnalyticsEnabled()) return null;
     try { return Object.freeze(this.buildContext()); } catch { return null; }
   }
 

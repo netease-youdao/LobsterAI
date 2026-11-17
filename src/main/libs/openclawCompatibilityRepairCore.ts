@@ -11,7 +11,10 @@ import {
 } from '../../shared/openclawEngine/repair';
 import { isMissingUnaliasedPluginPath, isPreviousManagedPluginPath } from './openclawPluginRepairPaths';
 import { assertOwnedRepairPath } from './openclawRepairPaths';
-import { isRegenerableSnapshotPath } from './openclawRepairSnapshotPaths';
+import { resolveSnapshotSkipReason, SnapshotSkipReason } from './openclawRepairSnapshotPaths';
+import {
+  copySnapshotFile, measureSnapshotSource, type RepairProgressReporter, SnapshotProgress,
+} from './openclawRepairSnapshotProgress';
 
 export { assertOwnedRepairPath } from './openclawRepairPaths';
 
@@ -39,6 +42,8 @@ export interface CompatibilityRepairOwners {
   writeInstallRecords: (records: Record<string, RepairInstallRecord>, config: Config) => void;
   validatePlugin: (id: string, root: string) => Promise<void>;
   acceptBundledPlugin: (id: string, config: Config) => Promise<void>;
+  /** Receives snapshot progress; the bundled entry prints it for the app's wait policy. */
+  reportProgress?: RepairProgressReporter;
 }
 export interface CompatibilityRepairOptions {
   stateDir: string;
@@ -63,21 +68,34 @@ function checkDatabase(db: DatabaseSync): void {
   }
 }
 
-async function backupDatabase(filePath: string, options: CompatibilityRepairOptions, report: OpenClawCompatibilityRepairReport): Promise<void> {
+async function backupDatabase(
+  filePath: string, options: CompatibilityRepairOptions, report: OpenClawCompatibilityRepairReport,
+  onBytes?: (bytes: number) => void,
+): Promise<void> {
   assertOwnedRepairPath(options.stateDir, filePath);
   const destination = path.join(options.backupDir, 'original', path.relative(options.stateDir, filePath));
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
   // Recovery reuses the complete pre-Doctor snapshot from this repair run.
   if (fs.existsSync(destination)) return;
+  let reportedBytes = 0;
+  const advance = (bytes: number) => {
+    if (onBytes && bytes > reportedBytes) onBytes(bytes - reportedBytes);
+    reportedBytes = Math.max(reportedBytes, bytes);
+  };
   const db = new DatabaseSync(filePath, { readOnly: true });
   try {
+    const pageSize = Number(db.prepare('PRAGMA page_size').get()?.page_size) || 0;
     // SQLite's online backup includes committed WAL pages. Copying only the
     // .sqlite file loses data even after the gateway process has stopped.
-    await backup(db, destination);
+    await backup(db, destination, {
+      progress: ({ totalPages, remainingPages }) => advance((totalPages - remainingPages) * pageSize),
+    });
   } finally {
     db.close();
   }
   fs.chmodSync(destination, 0o600);
+  // The last backup step completes without a progress callback.
+  advance(fs.statSync(destination).size);
   report.backups.push(destination);
 }
 
@@ -131,13 +149,37 @@ export async function repairOrphanMemoryVectors(
   report.changes.push(`Removed ${orphanIds.length} orphan vectors from ${filePath}; memory text was retained.`);
 }
 
-async function snapshotState(options: CompatibilityRepairOptions, report: OpenClawCompatibilityRepairReport): Promise<void> {
+async function snapshotState(
+  options: CompatibilityRepairOptions, report: OpenClawCompatibilityRepairReport, reportProgress?: RepairProgressReporter,
+): Promise<void> {
   const snapshotRoot = path.join(options.backupDir, 'original');
   if (fs.existsSync(snapshotRoot)) throw new Error('Repair snapshot already exists; start a new repair run.');
+  // A large profile on slow storage copies for many minutes. Measure first and
+  // report progress, so the app waits for a copy that advances and still stops
+  // one that does not.
+  const progress = new SnapshotProgress(OpenClawRepairPhase.Snapshot, reportProgress);
+  progress.start();
+  try {
+    const totals = await measureSnapshotSource(options.stateDir, progress);
+    progress.plan(totals);
+    report.changes.push(`Snapshot measured ${totals.files} files (${Math.round(totals.bytes / (1024 * 1024))} MiB) to copy.`);
+    await copySnapshot(options, report, snapshotRoot, progress);
+    progress.flush();
+  } finally {
+    progress.stop();
+  }
+}
+
+async function copySnapshot(
+  options: CompatibilityRepairOptions, report: OpenClawCompatibilityRepairReport,
+  snapshotRoot: string, progress: SnapshotProgress,
+): Promise<void> {
+  const addBytes = (bytes: number) => progress.add(0, bytes);
   const pluginSkillsRoot = path.join(options.stateDir, OPENCLAW_PLUGIN_SKILLS_DIRECTORY);
+  const skippedSessionImportArchivePaths: string[] = [];
   const manifest: OpenClawRepairSnapshotManifest = {
-    version: 1, generatedPluginSkillLinks: [], skippedRegenerablePaths: [],
-    restoreInstructions: 'Generated plugin skill links are recorded without copying their targets. After restoring, run the bundled openclaw skills list or start an agent session to rebuild them from current plugin metadata. Paths in skippedRegenerablePaths are caches (V8 compile cache, Chromium HTTP/GPU/Service Worker caches) that were not copied; OpenClaw and its browser rebuild them on demand.',
+    version: 1, generatedPluginSkillLinks: [], skippedRegenerablePaths: [], skippedSessionImportArchivePaths,
+    restoreInstructions: 'Generated plugin skill links are recorded without copying their targets. After restoring, run the bundled openclaw skills list or start an agent session to rebuild them from current plugin metadata. Paths in skippedRegenerablePaths are caches (V8 compile cache, Chromium HTTP/GPU/Service Worker caches) that were not copied; OpenClaw and its browser rebuild them on demand. Paths in skippedSessionImportArchivePaths hold legacy transcripts OpenClaw had already imported into the agent databases copied here; repair only adds new files to them, so they were left in place. Restore by copying this snapshot over the state directory, not by replacing it, so those archives are kept.',
   };
   async function visit(directory: string): Promise<void> {
     const destination = path.join(snapshotRoot, path.relative(options.stateDir, directory));
@@ -146,8 +188,10 @@ async function snapshotState(options: CompatibilityRepairOptions, report: OpenCl
       const source = path.join(directory, entry.name);
       const target = path.join(destination, entry.name);
       const relative = path.relative(options.stateDir, source);
-      if (isRegenerableSnapshotPath(relative)) {
-        manifest.skippedRegenerablePaths.push(relative);
+      const skipReason = resolveSnapshotSkipReason(relative, entry.isDirectory());
+      if (skipReason) {
+        (skipReason === SnapshotSkipReason.Regenerable ? manifest.skippedRegenerablePaths : skippedSessionImportArchivePaths)
+          .push(relative);
         continue;
       }
       try {
@@ -160,6 +204,7 @@ async function snapshotState(options: CompatibilityRepairOptions, report: OpenCl
           // and recreating a dangling link on Windows requires extra privileges.
           if (directory === pluginSkillsRoot) {
             manifest.generatedPluginSkillLinks.push({ path: relative, target: fs.readlinkSync(source) });
+            progress.add(1, 0);
             continue;
           }
           // Preserve links as links; never walk into another profile or project.
@@ -172,16 +217,23 @@ async function snapshotState(options: CompatibilityRepairOptions, report: OpenCl
             }
           }
           fs.symlinkSync(fs.readlinkSync(source), target, linkType);
+          progress.add(1, 0);
         } else if (entry.isDirectory()) {
           await visit(source);
         } else if (entry.isFile()) {
-          if (/\.sqlite-(?:wal|shm|journal)$/.test(entry.name) && fs.existsSync(source.replace(/-(?:wal|shm|journal)$/, ''))) continue;
-          if (entry.name.endsWith('.sqlite') && fs.statSync(source).size > 0) {
-            await backupDatabase(source, options, report);
-          } else {
-            fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
-            fs.chmodSync(target, 0o600 | (fs.statSync(source).mode & 0o100));
+          if (/\.sqlite-(?:wal|shm|journal)$/.test(entry.name) && fs.existsSync(source.replace(/-(?:wal|shm|journal)$/, ''))) {
+            // Its committed pages are copied by the database's online backup.
+            progress.add(1, 0);
+            continue;
           }
+          const stat = fs.statSync(source);
+          if (entry.name.endsWith('.sqlite') && stat.size > 0) {
+            await backupDatabase(source, options, report, addBytes);
+          } else {
+            await copySnapshotFile(source, target, stat.size, addBytes);
+            fs.chmodSync(target, 0o600 | (stat.mode & 0o100));
+          }
+          progress.add(1, 0);
         }
       } catch (error) {
         report.failurePath ??= source;
@@ -198,6 +250,9 @@ async function snapshotState(options: CompatibilityRepairOptions, report: OpenCl
   }
   if (manifest.skippedRegenerablePaths.length) {
     report.changes.push(`Skipped ${manifest.skippedRegenerablePaths.length} regenerable cache directories (compile and browser caches); see ${OPENCLAW_REPAIR_SNAPSHOT_MANIFEST}.`);
+  }
+  if (skippedSessionImportArchivePaths.length) {
+    report.changes.push(`Left ${skippedSessionImportArchivePaths.length} session import archives in place (transcripts already imported into the copied agent databases); see ${OPENCLAW_REPAIR_SNAPSHOT_MANIFEST}.`);
   }
   report.changes.push('Created a consistent snapshot of OpenClaw state before Doctor repair.');
 }
@@ -281,7 +336,7 @@ export async function repairOpenClawCompatibility(options: CompatibilityRepairOp
   const report: OpenClawCompatibilityRepairReport = { phase: options.phase, success: false, changes: [], backups: [] };
   try {
     await owners.withLock(async () => {
-      if (options.phase === OpenClawRepairPhase.Snapshot) await snapshotState(options, report);
+      if (options.phase === OpenClawRepairPhase.Snapshot) await snapshotState(options, report, owners.reportProgress);
       else if (options.phase === OpenClawRepairPhase.Recovery) await recoverMemory(options, report, owners);
       else await repairPlugins(options, report, owners);
     });

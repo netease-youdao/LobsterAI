@@ -203,11 +203,7 @@ export const removeAgentSidebarAgentTaskPreviews = (
   return next;
 };
 
-export const useAgentSidebarState = ({
-  includeActivityTasks = false,
-}: {
-  includeActivityTasks?: boolean;
-} = {}) => {
+export const useAgentSidebarState = () => {
   const dispatch = useDispatch();
   const agents = useSelector((state: RootState) => state.agent.agents);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
@@ -730,15 +726,12 @@ export const useAgentSidebarState = ({
 
   const {
     agentNodes,
-    activityAgentNodes,
     hasUnreadCompletedTasks,
   } = useMemo<{
     agentNodes: AgentSidebarAgentNode[];
-    activityAgentNodes: AgentSidebarAgentNode[];
     hasUnreadCompletedTasks: boolean;
   }>(() => {
     const visibleNodes: AgentSidebarAgentNode[] = [];
-    const activityNodes: AgentSidebarAgentNode[] = [];
     let hasUnreadCompletedTasks = false;
 
     sortedEnabledAgents.forEach((agent) => {
@@ -761,10 +754,7 @@ export const useAgentSidebarState = ({
         hasUnreadCompletedTasks = true;
       }
       const visibleTaskPreviews = sortedTaskPreviews.slice(0, visibleTaskLimit);
-      const taskPreviewsToMap = includeActivityTasks
-        ? sortedTaskPreviews
-        : visibleTaskPreviews;
-      const tasks = taskPreviewsToMap.map((session) => {
+      const tasks = visibleTaskPreviews.map((session) => {
         return toAgentSidebarTaskNode(
           session,
           currentSessionId,
@@ -772,7 +762,7 @@ export const useAgentSidebarState = ({
           pendingPermissionSessionIdSet,
         );
       });
-      const node = {
+      visibleNodes.push({
         ...agent,
         isExpanded: expandedAgentIdSet.has(agent.id),
         isTaskListExpanded,
@@ -781,19 +771,11 @@ export const useAgentSidebarState = ({
         isLoadingTasks: loadingAgentIdSet.has(agent.id),
         hasLoadError: failedAgentIdSet.has(agent.id),
         tasks,
-      };
-      if (includeActivityTasks) {
-        activityNodes.push(node);
-      }
-      visibleNodes.push({
-        ...node,
-        tasks: includeActivityTasks ? tasks.slice(0, visibleTaskLimit) : tasks,
       });
     });
 
     return {
       agentNodes: visibleNodes,
-      activityAgentNodes: activityNodes,
       hasUnreadCompletedTasks,
     };
   }, [
@@ -803,7 +785,6 @@ export const useAgentSidebarState = ({
     expandedTaskListAgentIdSet,
     failedAgentIdSet,
     hasMoreTasksByAgentId,
-    includeActivityTasks,
     loadingAgentIdSet,
     pendingPermissionSessionIdSet,
     sortedEnabledAgents,
@@ -813,7 +794,6 @@ export const useAgentSidebarState = ({
 
   return {
     agentNodes,
-    activityAgentNodes,
     hasUnreadCompletedTasks,
     expandedTaskListAgentIdSet,
     patchTaskPreview,

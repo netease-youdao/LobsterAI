@@ -4,6 +4,7 @@ import {
   appendCallbackReturnTo,
   appendLoginParams,
   startAuthLocalCallback,
+  stopAuthLocalCallback,
 } from './authLocalCallbackServer';
 
 describe('appendLoginParams', () => {
@@ -56,6 +57,24 @@ describe('appendCallbackReturnTo', () => {
 });
 
 describe('startAuthLocalCallback', () => {
+  test('cancel closes a server that is still starting and a retry receives a fresh link', async () => {
+    const codes: string[] = [];
+    const starting = startAuthLocalCallback({ onCode: code => codes.push(code) });
+    const cancelling = stopAuthLocalCallback();
+    const original = await starting;
+    await cancelling;
+    await expect(fetch(`${original.redirectUri}?code=late&state=${original.state}`)).rejects.toThrow();
+    const retry = await startAuthLocalCallback({ onCode: code => codes.push(code) });
+    try {
+      expect(retry.state).not.toBe(original.state);
+      const response = await fetch(`${retry.redirectUri}?code=new&state=${retry.state}`);
+      expect(response.status).toBe(200);
+      expect(codes).toEqual(['new']);
+    } finally {
+      await retry.close();
+    }
+  });
+
   test('starts on 127.0.0.1 with a dynamic callback port', async () => {
     const callback = await startAuthLocalCallback({ onCode: () => {} });
 

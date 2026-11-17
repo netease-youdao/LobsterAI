@@ -78,7 +78,7 @@ it('wires the real desktop IPC through its actor-aware service when every option
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf8');
   const initializers = source.slice(source.indexOf('  const initializeSessionExecutionCore ='), source.indexOf('  registerOwnershipHandlers'));
   const submissionsStart = source.indexOf('  const submitStart =');
-  const submissionsEnd = source.indexOf('  ipcMain.handle(CoworkIpcChannel.SubmitBtw,', submissionsStart);
+  const submissionsEnd = source.indexOf('  const messageEditDeps =', submissionsStart);
   expect(submissionsStart).toBeGreaterThan(-1);
   expect(submissionsEnd).toBeGreaterThan(submissionsStart);
   const submissions = source.slice(submissionsStart, submissionsEnd);

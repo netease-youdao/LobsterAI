@@ -5,19 +5,23 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { expect, test, vi } from 'vitest';
 
+import { buildGoalSettingMessageMetadata } from '../common/goalCommandDisplay';
+import { buildCoworkImageAttachmentPreviews } from '../shared/cowork/imageAttachments';
 import { sameOwner } from './remote/canonical';
 
 // Execute the actual IPC handler with inert model/runtime boundaries.
 const sourcePath = fileURLToPath(new URL('./main.ts', import.meta.url));
 const source = ts.createSourceFile(sourcePath, fs.readFileSync(sourcePath, 'utf8'), ts.ScriptTarget.Latest, true);
 let initializer: ts.Expression | undefined;
+let metadataBuilder: ts.FunctionDeclaration | undefined;
 function find(node: ts.Node): void {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'startCoworkSession') initializer = node.initializer;
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'buildCoworkUserSelectionMetadata') metadataBuilder = node;
   ts.forEachChild(node, find);
 }
 find(source);
-if (!initializer) throw new Error('startCoworkSession handler missing');
-const compiled = ts.transpileModule(`globalThis.start = ${initializer.getText(source)};`, {
+if (!initializer || !metadataBuilder) throw new Error('startCoworkSession handler or metadata builder missing');
+const compiled = ts.transpileModule(`${metadataBuilder.getText(source)}\nglobalThis.start = ${initializer.getText(source)};`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 
@@ -40,7 +44,7 @@ function fixture() {
   };
   const runtime = { startSession: vi.fn().mockResolvedValue(undefined) };
   const context = {
-    console: { log: vi.fn(), warn: vi.fn() }, Date, Error,
+    console: { log: vi.fn(), warn: vi.fn(), error: vi.fn() }, Date, Error,
     start: undefined as unknown as (options: Record<string, unknown>) => Promise<Record<string, any>>,
     execution: { owner } as { owner: typeof owner; preparedSessionId?: string; runId?: string; commandId?: string },
     ownershipAccountEpoch: 1, authAccountGeneration: 1,
@@ -52,15 +56,19 @@ function fixture() {
     ensureOpenClawRunningForCowork: vi.fn().mockResolvedValue({ phase: 'running' }),
     getEngineNotReadyResponse: () => ({ success: false, code: 'ENGINE_NOT_READY', error: 'Engine unavailable' }),
     getCoworkStore: () => store, mergeCoworkSystemPrompt: () => '', containsPlanModePrompt: () => false,
+    checkTaskWorkingDirectory: () => ({ ok: true }),
     resolveSessionWorkingDirectory: () => '/work', resolveTaskWorkingDirectory: () => '/work',
+    resolveCoworkRunModelRef: () => 'model', resolveCoworkTurnModelRef: () => 'model',
     validateCoworkImageAttachmentsForRuntime: () => ({ ok: true }), stripNullChars: (text: string) => text.replace(/\0/g, ''),
     buildSessionTitleFromInput: () => 'Task', t: (key: string) => key,
     normalizeSelectedTextSnippetsForIpc: () => [], normalizeBrowserAnnotationBatches: (value: unknown) => value ?? [],
     mediaDefaults: { turn: async () => undefined }, normalizeMediaSelectionState: () => undefined,
     getCurrentRemoteOwner: () => owner, sameOwner,
+    modelContextWindows: { restoreForSession: vi.fn() },
+    getCoworkImageOriginals: () => ({ retain: (_id: string, images: unknown) => images }),
+    userContextWindowSelection: () => null, getServerModelMetadata: () => null, getServerApiBaseUrl: () => "https://test.invalid",
     currentRemoteExecution: () => context.execution,
-    buildCoworkImageAttachmentPreviews: () => undefined,
-    buildCoworkUserSelectionMetadata: (input: { browserAnnotations: unknown }) => ({ browserAnnotations: input.browserAnnotations }),
+    buildCoworkImageAttachmentPreviews, buildGoalSettingMessageMetadata,
     imageEditMessageMetadata: () => ({}),
     modelPresetSelection: { choose: vi.fn().mockRejectedValue(new Error('sensitive upstream detail /internal/path')) },
     getSkinRuntimeController: () => ({ prepareTurn: () => ({}) }), cachedMediaGenerationEntitled: false,
@@ -73,6 +81,37 @@ function fixture() {
   vm.runInNewContext(compiled, context);
   return { context, store, remote, runtime, session, start: () => context.start({ prompt: 'Original\0 input', modelPresetId: 'balanced', browserAnnotations: [{ text: 'Selected comment' }] }) };
 }
+
+test.each([false, true])('starts a plain-text task with absent selection metadata (mobile=%s)', async mobile => {
+  const f = fixture();
+  if (mobile) {
+    Object.assign(f.context.execution, { preparedSessionId: f.session.id, runId: 'run', commandId: 'mobile-command' });
+    f.remote.beginRun();
+    f.remote.beginRun.mockClear();
+  }
+  const result = await f.context.start({ prompt: 'Find documents created this week', modelOverride: 'model' });
+  expect(result).toMatchObject({ success: true, session: { id: f.session.id } });
+  expect(f.store.addMessage).toHaveBeenCalledWith(f.session.id, expect.objectContaining({
+    content: 'Find documents created this week',
+    metadata: expect.objectContaining({ remoteRunId: 'run', remoteCommandId: mobile ? 'mobile-command' : undefined }),
+  }), expect.any(Number));
+  expect(f.runtime.startSession).toHaveBeenCalledOnce();
+  expect(f.remote.markRunDispatched).toHaveBeenCalledOnce();
+  expect(f.remote.beginRun).toHaveBeenCalledTimes(mobile ? 0 : 1);
+});
+
+test('preserves image previews and selection metadata after retaining the original image', async () => {
+  const f = fixture();
+  const image = { name: 'image.png', mimeType: 'image/png', base64Data: 'aGVsbG8=' };
+  const retained = { ...image, retainedOriginalPath: '/private/image-original.png' };
+  f.context.getCoworkImageOriginals = () => ({ retain: () => [retained] });
+  const result = await f.context.start({ prompt: 'Describe this image', activeSkillIds: ['vision'], imageAttachments: [image] });
+  expect(result.success).toBe(true);
+  expect(f.store.addMessage).toHaveBeenCalledWith(f.session.id, expect.objectContaining({ metadata: expect.objectContaining({
+    skillIds: ['vision'], imageAttachmentPreviews: buildCoworkImageAttachmentPreviews([retained]),
+  }) }), expect.any(Number));
+  expect(f.runtime.startSession).toHaveBeenCalledWith(f.session.id, 'Describe this image', expect.objectContaining({ imageAttachments: [retained] }));
+});
 
 test('preset admission failure returns the retained local session with failure semantics and sanitized input', async () => {
   const f = fixture();

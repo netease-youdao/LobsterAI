@@ -25,6 +25,7 @@ import {
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
+  type WebSearchPageHandler,
 } from '../libs/mcpBridgeServer';
 import { applyNodeSystemCaDefault } from '../libs/nodeSystemCaEnv';
 import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
@@ -134,6 +135,7 @@ export class McpRuntime {
     | null = null;
   private decisionToolHandler: DecisionToolHandler | null = null;
   private agentSettingsToolHandler: AgentSettingsToolHandler | null = null;
+  private webSearchPageHandler: WebSearchPageHandler | null = null;
   private readonly editorToolHandlers = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
   constructor(private readonly deps: McpRuntimeDeps) {
@@ -188,6 +190,14 @@ export class McpRuntime {
     this.bridgeServer?.onAgentSettingsTool(handler);
   }
   getAgentSettingsCallbackUrl(): string | null { return this.bridgeServer?.agentSettingsCallbackUrl ?? null; }
+  setWebSearchPageHandler(handler: WebSearchPageHandler): void {
+    this.webSearchPageHandler = handler;
+    this.bridgeServer?.onWebSearchPage(handler);
+  }
+
+  getWebSearchCallbackUrl(): string | null {
+    return this.bridgeServer?.webSearchCallbackUrl ?? null;
+  }
 
   setDecisionToolHandler(handler: DecisionToolHandler): void {
     this.decisionToolHandler = handler;
@@ -362,6 +372,9 @@ export class McpRuntime {
 
     if (this.browserToolHandler) {
       this.bridgeServer.onBrowserTool(this.browserToolHandler);
+    }
+    if (this.webSearchPageHandler) {
+      this.bridgeServer.onWebSearchPage(this.webSearchPageHandler);
     }
     for (const [route, { editorName, handler }] of this.editorToolHandlers) {
       this.bridgeServer.onEditorTool(route, editorName, handler);

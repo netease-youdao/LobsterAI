@@ -12,6 +12,7 @@ interface QuickActionBarProps {
   actions: LocalizedQuickAction[];
   selectedActionId?: string | null;
   onActionSelect: (actionId: string) => void;
+  children?: React.ReactNode;
 }
 
 // 图标映射
@@ -24,8 +25,8 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   AcademicCapIcon,
 };
 
-const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedActionId, onActionSelect }) => {
-  if (actions.length === 0) {
+const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedActionId, onActionSelect, children }) => {
+  if (actions.length === 0 && !children) {
     return null;
   }
 
@@ -58,6 +59,7 @@ const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedAction
           </button>
         );
       })}
+      {children}
     </div>
   );
 };

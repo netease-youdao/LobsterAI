@@ -1,4 +1,4 @@
-import { ArrowUpRightIcon, CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, ChevronRightIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { ExpertUiEvent } from '@shared/agent/presets';
 import { UsageEntry, UsageStage } from '@shared/analytics/usage';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -10,8 +10,8 @@ import type { RootState } from '../../store';
 import { getAgentDisplayName, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
 import { PROMPT_MENU_ROW_CLASS, PROMPT_SUBMENU_POSITION_CLASS, type PromptMenuItemControl, PromptSubmenuSide } from '../common/promptSubmenu';
-import ExpertIcon from '../icons/ExpertIcon';
 import SearchIcon from '../icons/SearchIcon';
+import SidebarExpertIcon from '../icons/SidebarExpertIcon';
 
 interface ExpertPickerMenuItemProps {
   disabled?: boolean;
@@ -69,7 +69,7 @@ const ExpertPickerMenuItem: React.FC<ExpertPickerMenuItemProps> = ({ disabled, m
           }
         }}
         className={`${PROMPT_MENU_ROW_CLASS} ${menuItem.open ? 'bg-surface-raised' : 'hover:bg-surface-raised'}`}>
-        <ExpertIcon className="h-5 w-5 shrink-0 text-secondary" />
+        <SidebarExpertIcon className="h-5 w-5 shrink-0 text-secondary" />
         <span className="min-w-0 flex-1 truncate">{t('expertSummonMenu')}</span><ChevronRightIcon className="h-4 w-4 shrink-0 text-secondary" />
       </button>
       {menuItem.open && (
@@ -98,10 +98,17 @@ const ExpertPickerMenuItem: React.FC<ExpertPickerMenuItemProps> = ({ disabled, m
               </button>
             ))}
           </div>
-          <div className="shrink-0 border-t border-border p-1.5">
+          <div className="shrink-0 border-t border-border px-2 py-1.5">
             <button type="button" role="menuitem" onClick={() => { onExplore(); window.dispatchEvent(new Event(ExpertUiEvent.OpenPlaza)); }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] leading-5 text-secondary transition-colors hover:bg-surface-raised hover:text-foreground">
-              <ArrowUpRightIcon className="h-4 w-4 shrink-0" />{t('expertExploreMore')}
+              className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface-raised focus:bg-surface-raised focus:outline-none">
+              <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md border border-dashed border-border text-secondary transition-colors group-hover:border-primary/60 group-hover:text-primary group-focus:border-primary/60 group-focus:text-primary">
+                <PlusIcon className="h-3.5 w-3.5" strokeWidth={2} />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-foreground">{t('expertExploreMore')}</span>
+              <span className="flex shrink-0 items-center gap-0.5 text-[12px] leading-4 text-secondary transition-colors group-hover:text-foreground group-focus:text-foreground">
+                {t('expertPlaza')}
+                <ChevronRightIcon className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 group-focus:translate-x-0.5" />
+              </span>
             </button>
           </div>
         </div>

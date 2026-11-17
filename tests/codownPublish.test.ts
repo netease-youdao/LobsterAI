@@ -39,7 +39,7 @@ function command(name: string, args: string[]) {
 
 function writeArtifacts(output: string, releaseIdentity = identity) {
   for (const artifact of artifactPlan(releaseIdentity)) {
-    const file = path.join(output, artifact.source);
+    const file = path.join(output, artifact.source || `fixture${artifact.extension}`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `fixture:${artifact.name}`);
   }
@@ -48,7 +48,7 @@ function writeArtifacts(output: string, releaseIdentity = identity) {
 async function snapshot(root = temporary()) {
   const output = path.join(root, 'output');
   writeArtifacts(output);
-  const manifestPath = await stageManifest(root, output, identity, baseUrl);
+  const manifestPath = await stageManifest(root, output, identity, baseUrl, ticketUrl);
   return { root, output, manifestPath };
 }
 
@@ -100,15 +100,33 @@ describe('codown release configuration and artifacts', () => {
     expect(() => artifactPlan({ ...identity, target: ReleaseTarget.MacX64, silent: true })).toThrow();
   });
 
+  test.each([
+    { target: ReleaseTarget.MacArm64, silent: false, names: ['lobsterai-2026.9.14-arm64.dmg'] },
+    { target: ReleaseTarget.WinWeb, silent: true, names: ['lobsterai-2026.9.14-silent.exe', 'lobsterai-2026.9.14-web-silent.exe', 'lobsterai-2026.9.14-silent.nsis.7z'] },
+    { target: ReleaseTarget.LinuxX64, silent: false, names: ['lobsterai-2026.9.14-x64.AppImage', 'lobsterai-2026.9.14-amd64.deb'] },
+  ])('records final download and manual deployment URLs for $target', async ({ target, silent, names }) => {
+    const root = temporary();
+    const output = path.join(root, 'output');
+    const releaseIdentity = { ...identity, target, silent, keyfrom: 'dict-bind' };
+    writeArtifacts(output, releaseIdentity);
+    const manifestPath = await stageManifest(root, output, releaseIdentity, `${baseUrl}///`, ticketUrl);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    expect(manifest).toMatchObject({ schemaVersion: 1, ...releaseIdentity, publicBaseUrl: baseUrl, deploymentTicketUrl: ticketUrl });
+    expect(manifest.artifacts.map(({ name, downloadUrl }: { name: string; downloadUrl: string }) => ({ name, downloadUrl }))).toEqual(
+      names.map(name => ({ name, downloadUrl: `${baseUrl}/dict-bind/${name}` })),
+    );
+    await expect(readManifest(manifestPath)).resolves.toEqual(manifest);
+  });
+
   test('freezes only this build and rejects changed or incomplete snapshots', async () => {
     const root = temporary();
     const output = path.join(root, 'output');
     writeArtifacts(output);
     fs.writeFileSync(path.join(output, 'old-installer.exe'), 'unrelated');
-    const manifestPath = await stageManifest(root, output, identity, baseUrl);
+    const manifestPath = await stageManifest(root, output, identity, baseUrl, ticketUrl);
     expect(fs.readdirSync(path.dirname(manifestPath))).not.toContain('old-installer.exe');
     expect(await readManifest(manifestPath)).toMatchObject(identity);
-    await expect(stageManifest(root, output, identity, baseUrl)).rejects.toThrow('snapshot already exists');
+    await expect(stageManifest(root, output, identity, baseUrl, ticketUrl)).rejects.toThrow('snapshot already exists');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     manifest.artifacts.pop();
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
@@ -242,7 +260,26 @@ describe.skipIf(!hasSvn)('codown real SVN integration', () => {
     expect(log.mock.calls.flat().join('\n')).toContain(`Manual deployment: ${ticketUrl}`);
     expect(log.mock.calls.flat().join('\n')).toContain('No ticket has been created');
     expect(JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), 'svn-receipt.json'), 'utf8')).revision).toBe('1');
-    expect(command('svn', ['list', `${config.svnUrl}/${identity.keyfrom}`])).not.toContain('receipt');
+    const remoteFiles = command('svn', ['list', `${config.svnUrl}/${identity.keyfrom}`]);
+    expect(remoteFiles).not.toContain('receipt');
+    expect(remoteFiles).not.toContain('manifest');
+  });
+
+  test('still publishes and verifies older manifests without follow-up URLs', async () => {
+    const { manifestPath, config } = await fixture();
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    delete manifest.deploymentTicketUrl;
+    for (const artifact of manifest.artifacts) delete artifact.downloadUrl;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect((await publishManifest(manifestPath, config)).uploaded).toHaveLength(3);
+    const fetchImpl = vi.fn(async (url: string) => new Response(fs.readFileSync(path.join(path.dirname(manifestPath), path.basename(new URL(url).pathname)))));
+    await verifyManifest(manifestPath, { fetchImpl });
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      `${baseUrl}/${identity.keyfrom}/lobsterai-2026.9.14.exe`,
+      `${baseUrl}/${identity.keyfrom}/lobsterai-2026.9.14-web.exe`,
+      `${baseUrl}/${identity.keyfrom}/lobsterai-2026.9.14.nsis.7z`,
+    ]);
   });
 });
 
@@ -284,13 +321,19 @@ describe('codown build orchestration and online verification', () => {
     const publish = vi.fn().mockRejectedValue(new Error('network unavailable'));
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(release(root, plan, { publicBaseUrl: baseUrl }, {}, {
+    await expect(release(root, plan, { publicBaseUrl: baseUrl, ticketUrl }, {}, {
       preflight: vi.fn(), build, verifySignatures: vi.fn(), publish,
     })).rejects.toThrow('network unavailable');
     expect(build).toHaveBeenCalledTimes(1);
     expect(build.mock.calls[0][0]).toEqual(['run', 'dist:win:web', '--', '--keyfrom', identity.keyfrom, '--codown']);
     const manifestPath = path.join(manifestDirectory(root, identity), 'manifest.json');
-    expect((await readManifest(manifestPath)).artifacts).toHaveLength(3);
+    const manifest = await readManifest(manifestPath);
+    expect(manifest.deploymentTicketUrl).toBe(ticketUrl);
+    expect(manifest.artifacts.map((artifact: { downloadUrl: string }) => artifact.downloadUrl)).toEqual([
+      `${baseUrl}/${identity.keyfrom}/lobsterai-2026.9.14.exe`,
+      `${baseUrl}/${identity.keyfrom}/lobsterai-2026.9.14-web.exe`,
+      `${baseUrl}/${identity.keyfrom}/lobsterai-2026.9.14.nsis.7z`,
+    ]);
     expect(fs.readdirSync(path.join(root, '.work'))).toEqual([]);
   });
 
@@ -314,6 +357,8 @@ describe('codown build orchestration and online verification', () => {
     const fetchImpl = vi.fn(async (url: string) => new Response(fs.readFileSync(path.join(path.dirname(manifestPath), path.basename(new URL(url).pathname)))));
     await verifyManifest(manifestPath, { fetchImpl });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(manifest.artifacts.map((artifact: { downloadUrl: string }) => artifact.downloadUrl));
     expect(log.mock.calls.flat().join('\n')).toContain('All downloads match');
     await expect(verifyManifest(manifestPath, { fetchImpl: async () => new Response('wrong') })).rejects.toThrow('checksum mismatch');
     await expect(verifyManifest(manifestPath, { fetchImpl: async () => new Response('', { status: 404 }) })).rejects.toThrow('manual deployment first');

@@ -1,5 +1,6 @@
 export const ExpertUiEvent = {
   OpenPlaza: 'experts:open-plaza',
+  Preparing: 'experts:preparing',
 } as const;
 
 export const ExpertCatalogSchemaVersion = 1;

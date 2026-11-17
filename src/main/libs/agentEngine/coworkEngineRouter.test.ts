@@ -96,6 +96,22 @@ describe('CoworkEngineRouter', () => {
     expect(listener).toHaveBeenCalledWith('session-1', true);
   });
 
+  test('preserves the stopped turn identity when forwarding the stop event', () => {
+    const openclawRuntime = createRuntimeMock();
+    const router = new CoworkEngineRouter({ getCurrentEngine: () => 'openclaw', openclawRuntime });
+    const stopped = vi.fn();
+    const completed = vi.fn();
+    const turn = { userMessageId: 'user-1', traceId: '4bf92f3577b34da6a3ce929d0e0e4736', runIds: ['run-1'] };
+    router.on('sessionStopped', stopped);
+    router.on('complete', completed);
+
+    (openclawRuntime as CoworkRuntime & { emit: (event: string, ...args: unknown[]) => boolean })
+      .emit('sessionStopped', 'session-1', turn);
+
+    expect(stopped).toHaveBeenCalledWith('session-1', turn);
+    expect(completed).not.toHaveBeenCalled();
+  });
+
   test('delegates BTW requests and forwards only the BTW result event', async () => {
     const openclawRuntime = createRuntimeMock();
     const router = new CoworkEngineRouter({

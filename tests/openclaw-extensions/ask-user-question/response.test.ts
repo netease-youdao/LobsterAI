@@ -64,9 +64,9 @@ describe('AskUserQuestion response handling', () => {
     const settled = vi.fn();
     const result = createTool().execute('call-a', input).then(value => { settled(value); return value; });
 
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(settled).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     await expect(result).resolves.toEqual({
       content: [{ type: 'text', text: expect.stringContaining('timed out without a user response') }],

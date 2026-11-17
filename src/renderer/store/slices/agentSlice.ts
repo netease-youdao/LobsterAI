@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { AgentId } from '@shared/agent';
+import type { AgentModelSelectionMode } from '@shared/agent/constants';
 import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
 
 import { resetAccountSessionData } from '../accountSessionBoundary';
@@ -11,6 +12,7 @@ interface AgentSummary {
   icon: string;
   iconCustomized?: boolean;
   model: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   enabled: boolean;

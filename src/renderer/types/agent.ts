@@ -1,4 +1,4 @@
-import type { AgentSource } from '@shared/agent/constants';
+import type { AgentModelSelectionMode, AgentSource } from '@shared/agent/constants';
 import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
 
 export type { AgentSource } from '@shared/agent/constants';
@@ -10,6 +10,7 @@ export interface Agent {
   systemPrompt: string;
   identity: string;
   model: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel: ModelThinkingLevel | '';
   workingDirectory: string;
   icon: string;
@@ -51,6 +52,7 @@ export interface UpdateAgentRequest {
   systemPrompt?: string;
   identity?: string;
   model?: string;
+  modelSelectionMode?: AgentModelSelectionMode;
   thinkingLevel?: ModelThinkingLevel | '';
   workingDirectory?: string;
   icon?: string;

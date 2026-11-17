@@ -91,6 +91,7 @@ export function dismissCompanionPanelOnBlur(win: BrowserWindow, dismiss: () => v
 export function createCompanionWindow(env: CompanionWindowEnvironment, options: CompanionWindowOptions): BrowserWindow {
   const isSelection = options.surface === DesktopCompanionSurface.Selection;
   const isScreenshot = options.surface === DesktopCompanionSurface.Screenshot;
+  const isMenu = options.surface === DesktopCompanionSurface.Menu;
   const win = new BrowserWindow({
     ...options.bounds,
     title: env.title,
@@ -122,10 +123,10 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
       webSecurity: true,
       navigateOnDragDrop: false,
       spellcheck: false,
-      // Reopening waits for a freshly painted composer frame while the window is hidden. The selection
+      // Reopening waits for a freshly painted composer or menu frame while the window is hidden. The selection
       // toolbar and the stage are placed by the size their renderer measures in an animation frame,
       // which a hidden, throttled page never runs: they would open at the default size, then jump.
-      ...(options.surface === DesktopCompanionSurface.Panel || isSelection || options.surface === DesktopCompanionSurface.Stage
+      ...(options.surface === DesktopCompanionSurface.Panel || isSelection || options.surface === DesktopCompanionSurface.Stage || isMenu
         ? { backgroundThrottling: false } : {}),
       ...(options.surface === DesktopCompanionSurface.LanguageTools ? { autoplayPolicy: 'no-user-gesture-required' as const } : {}),
     },
@@ -137,10 +138,10 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
     // above the real taskbar and both the preview and crop coordinates are wrong.
     win.setBounds(options.bounds);
   }
-  // The selection toolbar sits above menus of the app it is attached to.
-  win.setAlwaysOnTop(true, isScreenshot ? 'screen-saver' : isSelection ? 'pop-up-menu' : 'floating');
+  // The selection toolbar sits above menus of the app it is attached to; the orb's menu above the other cards.
+  win.setAlwaysOnTop(true, isScreenshot ? 'screen-saver' : isSelection || isMenu ? 'pop-up-menu' : 'floating');
   if (process.platform === 'darwin') {
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: isSelection || isScreenshot, skipTransformProcessType: true });
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: isSelection || isScreenshot || isMenu, skipTransformProcessType: true });
   }
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());

@@ -144,8 +144,10 @@ export function buildDshSpawnEnv(options: DshSpawnEnvOptions): Record<string, st
 
 // `--no-open`: since 0.1.5, `dsh web` hands its URL to the default browser
 // unless told not to, and the workbench window is the only UI we want.
-export function buildDshWebArgs(entryPath: string, port: number): string[] {
-  return [entryPath, 'web', '--port', String(port), '--no-open'];
+export function buildDshWebArgs(entryPath: string, port: number, observationPatchPath?: string | null): string[] {
+  // Launcher flags must precede the first app flag (--port). DSH passes every
+  // argument after that boundary to the web app, which does not know --patch.
+  return [entryPath, 'web', ...(observationPatchPath ? ['--patch', observationPatchPath] : []), '--port', String(port), '--no-open'];
 }
 
 // Reads the pnpm entry script from the bundled package's own manifest, so a

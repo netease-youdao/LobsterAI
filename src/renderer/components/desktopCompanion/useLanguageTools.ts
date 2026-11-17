@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
-  LanguageTool, LanguageToolCode, LanguageToolEventType, type LanguageToolInput, type LanguageToolQuotas,
+  LanguageTool, LanguageToolCode, LanguageToolEventType, type LanguageToolFailure, type LanguageToolInput, type LanguageToolQuotas,
   type LanguageToolRequest, SpeechCommand, SpeechStatus, TranslationTarget,
 } from '../../../shared/desktopCompanion/languageTools';
 import { companionTranslationTarget } from '../../../shared/desktopCompanion/selectionActions';
@@ -19,6 +19,7 @@ export function useLanguageTools() {
   const [translationKey, setTranslationKey] = useState('');
   const [error, setError] = useState<number | null>(null);
   const [errorTool, setErrorTool] = useState<LanguageTool | null>(null);
+  const [errorDetail, setErrorDetail] = useState<LanguageToolFailure | null>(null);
   const [quota, setQuota] = useState<LanguageToolQuotas | null>(null);
   const [playback, setPlayback] = useState<SpeechPlayback>(EMPTY_PLAYBACK);
   const [speechText, setSpeechText] = useState('');
@@ -60,6 +61,7 @@ export function useLanguageTools() {
     if (!text.trim()) return;
     setError(null);
     setErrorTool(null);
+    setErrorDetail(null);
     const request: LanguageToolRequest = { requestId: crypto.randomUUID(), tool, text, targetLanguage: language };
     const isTranslation = tool === LanguageTool.Translate;
     if (isTranslation) {
@@ -105,7 +107,8 @@ export function useLanguageTools() {
       stopSpeech();
       setTranslation('');
       setInput(next);
-      const language = companionTranslationTarget(next.text) === 'en' ? TranslationTarget.English : TranslationTarget.Chinese;
+      const language = next.targetLanguage
+        ?? (companionTranslationTarget(next.text) === 'en' ? TranslationTarget.English : TranslationTarget.Chinese);
       setTarget(language);
       start(next.tool, next.text, language);
       refreshQuota(next.tool);
@@ -124,6 +127,8 @@ export function useLanguageTools() {
       } else if (event.type === LanguageToolEventType.Error) {
         setError(event.code);
         setErrorTool(isSpeech ? LanguageTool.Tts : LanguageTool.Translate);
+        setErrorDetail({ reason: event.reason, quota: event.quota });
+        if (event.quota) updateQuota(isSpeech ? LanguageTool.Tts : LanguageTool.Translate, event.quota);
         if (isTranslation) { translationId.current = null; setTranslating(false); }
         if (isSpeech) { speechId.current = null; queue.finish(); }
         refreshQuota(isSpeech ? LanguageTool.Tts : LanguageTool.Translate);
@@ -141,7 +146,7 @@ export function useLanguageTools() {
     });
     const offReset = api.onLanguageToolsReset(() => {
       stopSpeech(); stopTranslation(); setInput(null); setTranslation(''); setSpeechText(''); setQuota(null);
-      setError(null); setErrorTool(null); inputId.current = undefined;
+      setError(null); setErrorTool(null); setErrorDetail(null); inputId.current = undefined;
       invalidateQuota();
     });
     return () => {
@@ -170,7 +175,7 @@ export function useLanguageTools() {
   };
 
   return {
-    input, target, translation, translating, translationKey, translate, stopTranslation, error, errorTool, retry, quota,
+    input, target, translation, translating, translationKey, translate, stopTranslation, error, errorTool, errorDetail, retry, quota,
     playback, speechText, segmentTotal, rate, changeRate, togglePlayback, stopSpeech,
   };
 }

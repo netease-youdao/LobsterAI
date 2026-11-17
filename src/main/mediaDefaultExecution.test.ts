@@ -19,6 +19,18 @@ test('video defaults fill missing settings; explicit settings remain visible in 
   expect(applyMediaDefaultParameters({ durationSeconds: 10 }, video, MediaType.Video).durationSeconds).toBe(10);
 });
 
+test('an explicit image format overrides defaults regardless of alias spelling', () => {
+  const image = { ...defaults(), params: { output_format: 'png' } };
+  expect(applyMediaDefaultParameters({ outputFormat: 'jpeg' }, image, MediaType.Image))
+    .toEqual({ output_format: 'jpeg', n: 1, count: 1, sequential_image_generation: 'disabled' });
+  expect(applyMediaDefaultParameters({ output_format: 'jpeg' }, { ...image, params: { outputFormat: 'png' } }, MediaType.Image).output_format)
+    .toBe('jpeg');
+  expect(applyMediaDefaultParameters({ outputFormat: 'jpeg' }, undefined, MediaType.Image)).toEqual({ output_format: 'jpeg' });
+  expect(applyMediaDefaultParameters({ outputFormat: 'png', output_format: 'jpeg' }, image, MediaType.Image).output_format)
+    .toBe('jpeg');
+  expect(image.params).toEqual({ output_format: 'png' });
+});
+
 test('a root and its descendants share a single automatic image allowance', () => {
   const budget = new MediaDefaultImageBudget();
   const rootSnapshot = defaults();

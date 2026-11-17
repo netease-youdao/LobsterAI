@@ -19,6 +19,8 @@ export type CoworkImageAttachmentPayload = {
   base64Data: string;
   sizeBytes?: number;
   localPath?: string;
+  /** App-private copy of an original that has no file of its own, such as a pasted image. */
+  retainedOriginalPath?: string;
   previewMimeType?: string;
   previewBase64Data?: string;
   role?: CoworkImageAttachmentRole;
@@ -31,6 +33,7 @@ export type CoworkImageAttachmentPreview = {
   originalMimeType: string;
   originalSizeBytes: number;
   localPath?: string;
+  retainedOriginalPath?: string;
   isPreview: true;
   role?: CoworkImageAttachmentRole;
 };
@@ -103,6 +106,7 @@ export function buildCoworkImageAttachmentPreview(
       originalMimeType: attachment.mimeType,
       originalSizeBytes: sizeValidation.sizeBytes,
       ...(attachment.localPath ? { localPath: attachment.localPath } : {}),
+      ...(attachment.retainedOriginalPath ? { retainedOriginalPath: attachment.retainedOriginalPath } : {}),
       ...(attachment.role ? { role: attachment.role } : {}),
       isPreview: true,
     };
@@ -116,6 +120,7 @@ export function buildCoworkImageAttachmentPreview(
       originalMimeType: attachment.mimeType,
       originalSizeBytes: sizeValidation.sizeBytes,
       ...(attachment.localPath ? { localPath: attachment.localPath } : {}),
+      ...(attachment.retainedOriginalPath ? { retainedOriginalPath: attachment.retainedOriginalPath } : {}),
       ...(attachment.role ? { role: attachment.role } : {}),
       isPreview: true,
     };
@@ -132,4 +137,13 @@ export function buildCoworkImageAttachmentPreviews(
     .filter((preview): preview is CoworkImageAttachmentPreview => Boolean(preview));
 
   return previews?.length ? previews : undefined;
+}
+
+/**
+ * Small images are stored whole instead of as a thumbnail, so the stored bytes
+ * are the original that was sent.
+ */
+export function isStoredOriginalImagePreview(preview: CoworkImageAttachmentPreview): boolean {
+  return preview.mimeType === preview.originalMimeType
+    && estimateBase64DecodedBytes(preview.base64Data) === preview.originalSizeBytes;
 }

@@ -172,6 +172,37 @@ describe('custom provider OpenAI API mode', () => {
   });
 });
 
+describe('model capability overrides', () => {
+  const withOverrides = (): ProvidersConfig => {
+    const source = providers();
+    source[ProviderName.OpenAI] = {
+      ...source[ProviderName.OpenAI],
+      models: [{ id: 'test-model', name: 'Test model', supportsImage: true, capabilityOverrides: { image: true } }],
+    };
+    return source;
+  };
+
+  test('exports overrides and restores them on import', async () => {
+    const json = await buildProvidersExport(withOverrides());
+    expect(JSON.parse(json).providers[ProviderName.OpenAI].models[0].capabilityOverrides).toEqual({ image: true });
+    const restored = await importProviders(parseProvidersImport(json), {});
+    expect(restored[ProviderName.OpenAI].models?.[0].capabilityOverrides).toEqual({ image: true });
+  });
+
+  test('omits the field when unset so older strict importers still accept the file', async () => {
+    const json = await buildProvidersExport(providers());
+    expect(JSON.parse(json).providers[ProviderName.OpenAI].models[0]).not.toHaveProperty('capabilityOverrides');
+  });
+
+  test('rejects unknown override keys and non-boolean values', async () => {
+    for (const capabilityOverrides of [{ video: true }, { image: 'yes' }, ['image']]) {
+      const file = JSON.parse(await buildProvidersExport(withOverrides()));
+      file.providers[ProviderName.OpenAI].models[0].capabilityOverrides = capabilityOverrides;
+      expect(() => parseProvidersImport(JSON.stringify(file))).toThrow();
+    }
+  });
+});
+
 describe('v3 admission and authenticated import', () => {
   test('wrong passwords, including the old public password, cannot import a new file', async () => {
     const json = await buildProvidersExport(providers(), { includeApiKeys: true, password: PASSWORD });

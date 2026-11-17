@@ -22,6 +22,8 @@ interface ResultHost {
   beforeOpen(): void;
   openMain(sessionId: string): void;
   isCapturing(): boolean;
+  /** The orb's menu holds key focus for a moment and hands it back. */
+  isContextMenuOpen(): boolean;
   publish(): void;
 }
 
@@ -151,7 +153,8 @@ export class CompanionResultsController {
       const win = this.host.createWindow();
       this.window = win;
       win.once('ready-to-show', () => { if (this.visible && !win.isDestroyed()) this.reveal(win); });
-      dismissCompanionPanelOnBlur(win, () => { if (!this.pinned && !this.host.isCapturing()) this.hide(); }, () => this.focusOnShow);
+      dismissCompanionPanelOnBlur(win, () => { if (!this.pinned && !this.host.isCapturing()) this.hide(); },
+        () => this.focusOnShow && !this.host.isContextMenuOpen());
       win.on('will-move', () => { this.moved = true; this.pinned = true; this.host.publish(); });
       // A native hide notification can arrive after a rapid reopen.
       win.on('hide', () => { if (!win.isVisible()) this.hide(); });

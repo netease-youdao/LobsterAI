@@ -1,0 +1,559 @@
+diff --git a/src/gateway/managed-image-attachments.ts b/src/gateway/managed-image-attachments.ts
+--- a/src/gateway/managed-image-attachments.ts
++++ b/src/gateway/managed-image-attachments.ts
+@@ -71,6 +71,7 @@
+   readManagedImageRecord,
+   type ManagedImageRecord,
+ } from "./managed-image-record-store.js";
++import { isManagedMediaCleanupBlockedByAgentDeletion } from "./managed-outgoing-gc-lifecycle.js";
+ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+ import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+ import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
+@@ -785,6 +786,19 @@
+       continue;
+     }
+ 
++    const isDeletionBlocked = () =>
++      isManagedMediaCleanupBlockedByAgentDeletion({
++        agentId: resolveManagedSessionOwnerAgentId(record.sessionKey, record.agentId),
++        sessionKey: record.sessionKey,
++        stateDir,
++        cache: sessionStoreTargetsReadCache,
++      });
++    // Deleted agents retain their records (including cleanup claims) so orphan reaping
++    // also preserves their bytes. Missing session rows do not authorize cleanup.
++    if (isDeletionBlocked()) {
++      retainedCount += 1;
++      continue;
++    }
+     let shouldDelete = entry.cleanupPending;
+     if (
+       !entry.cleanupPending &&
+@@ -793,15 +807,25 @@
+     ) {
+       shouldDelete = true;
+     } else if (!entry.cleanupPending && record.messageId) {
+-      const transcriptMatch = await recordMatchesTranscriptMessage(
+-        record,
+-        transcriptAttachmentIndexCache,
+-        sessionStoreAvailabilityCache,
+-        sessionStoreTargetsReadCache,
+-        stateDir,
+-      );
+-      // Session-store unavailability is not proof that durable chat history no longer owns media.
+-      shouldDelete = transcriptMatch === "missing";
++      try {
++        const transcriptMatch = await recordMatchesTranscriptMessage(
++          record,
++          transcriptAttachmentIndexCache,
++          sessionStoreAvailabilityCache,
++          sessionStoreTargetsReadCache,
++          stateDir,
++        );
++        // Session-store unavailability is not proof that durable chat history no longer owns media.
++        shouldDelete = transcriptMatch === "missing";
++      } catch (error) {
++        // History reads acquire a writer lease. Only a newly observed deletion
++        // makes that failure a retained record; unrelated failures still surface.
++        if (!isDeletionBlocked()) {
++          throw error;
++        }
++        retainedCount += 1;
++        continue;
++      }
+     } else if (!entry.cleanupPending) {
+       const createdAtMs = Date.parse(record.createdAt);
+       const otherwiseDeletable =
+@@ -819,7 +843,7 @@
+       }
+     }
+ 
+-    if (shouldDelete) {
++    if (shouldDelete && !isDeletionBlocked()) {
+       const deleted = await deleteManagedImageRecordArtifacts(
+         record,
+         stateDir,
+diff --git a/src/gateway/managed-outgoing-gc-lifecycle.ts b/src/gateway/managed-outgoing-gc-lifecycle.ts
+new file mode 100644
+--- /dev/null
++++ b/src/gateway/managed-outgoing-gc-lifecycle.ts
+@@ -0,0 +1,78 @@
++import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
++import { getRuntimeConfig } from "../config/config.js";
++import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
++import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
++import {
++  resolvePersistedSessionStoreOwner,
++  resolvePersistedSessionStoreOwnerForKey,
++} from "../config/sessions/session-store-owner.js";
++import {
++  resolveExistingAgentSessionStoreTargetsReadOnlyResult,
++  type SessionStoreTargetsReadCache,
++} from "../config/sessions/targets-read-availability.js";
++import { isPathInside } from "../infra/path-guards.js";
++import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
++import { listAgentDeletionJournalEntriesReadOnly } from "../state/agent-deletion-journal.js";
++import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
++
++/** Deletion fences maintenance, including media whose session row was already purged. */
++export function isManagedMediaCleanupBlockedByAgentDeletion(params: {
++  agentId: string | undefined;
++  sessionKey: string;
++  stateDir: string;
++  cache: SessionStoreTargetsReadCache;
++}): boolean {
++  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
++  // Refresh at each decision: deletion can begin during an awaited history or queue read.
++  const deletions = listAgentDeletionJournalEntriesReadOnly({ env });
++  if (deletions.length === 0) {
++    return false;
++  }
++  const cfg = getRuntimeConfig();
++  const keyOwner = resolvePersistedSessionStoreOwnerForKey(cfg, params.sessionKey);
++  const agentId =
++    params.agentId ??
++    (keyOwner.kind !== "none"
++      ? keyOwner.agentId
++      : tryResolveSessionCompatibilityOwnerAgentId(cfg, params.sessionKey));
++  if (!agentId) {
++    return false;
++  }
++  if (deletions.some((entry) => entry.agentId === agentId)) {
++    return true;
++  }
++  const discovery = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, agentId, {
++    env,
++    cache: params.cache,
++  });
++  const storePaths = new Set([
++    resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
++    ...(discovery.available ? discovery.targets.map((target) => target.storePath) : []),
++  ]);
++  const persistedOwner = resolvePersistedSessionStoreOwner(cfg);
++  const defaultAgentId = persistedOwner.kind === "none" ? agentId : persistedOwner.agentId;
++  // Match the writer's physical owner and unfinished path fences without claiming its lease.
++  const pendingFences = deletions
++    .filter((entry) => !entry.cleanupCompleted)
++    .flatMap((entry) =>
++      [entry.agentDir, entry.workspaceDir, entry.sessionsDir].concat(
++        entry.databasePaths,
++        entry.cleanupPaths.map((cleanup) => cleanup.canonicalPath),
++      ),
++    )
++    .map((pathname) => normalizeAgentDirRegistryPath(pathname, env));
++  return [...storePaths].some((storePath) => {
++    const target = resolveSqliteTargetFromSessionStorePath(storePath, {
++      agentId,
++      defaultAgentId,
++      env,
++    });
++    if (deletions.some((entry) => entry.agentId === target.agentId)) {
++      return true;
++    }
++    return resolveSqliteDatabaseFilePaths(target.path).some((pathname) => {
++      const canonical = normalizeAgentDirRegistryPath(pathname, env);
++      return pendingFences.some((fence) => canonical === fence || isPathInside(fence, canonical));
++    });
++  });
++}
+diff --git a/src/gateway/managed-outgoing-gc-deleted-agents.test.ts b/src/gateway/managed-outgoing-gc-deleted-agents.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/gateway/managed-outgoing-gc-deleted-agents.test.ts
+@@ -0,0 +1,306 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
++import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
++import {
++  persistSessionTranscriptTurn,
++  upsertSessionEntryCore,
++} from "../config/sessions/session-accessor.js";
++import {
++  resolveSqliteReadScope,
++  toDatabaseOptions,
++} from "../config/sessions/session-accessor.sqlite-scope.js";
++import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
++import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
++import {
++  closeOpenClawAgentDatabasesForTest,
++  openOpenClawAgentDatabase,
++} from "../state/openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
++import { withEnvAsync } from "../test-utils/env.js";
++import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
++import {
++  claimManagedImageRecordCleanupIfCurrent,
++  insertManagedImageRecord,
++  listManagedImageRecordEntries,
++  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
++  readManagedImageRecord,
++  type ManagedImageRecord,
++} from "./managed-image-record-store.js";
++import * as transcriptReaders from "./session-transcript-readers.js";
++
++let stateDir: string;
++
++beforeEach(() => {
++  stateDir = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "gc-deleted-agents-"));
++  setRuntimeConfigSnapshot({ agents: { ownership: "explicit", entries: { main: {} } } });
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  clearRuntimeConfigSnapshot();
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++  fs.rmSync(stateDir, { recursive: true, force: true });
++});
++
++function seedRecord(
++  agentId: string,
++  suffix: string,
++  messageId: string | null = "msg-1",
++  legacyGlobal = false,
++) {
++  const attachmentId = `${agentId}-${suffix}`;
++  const mediaId = `${attachmentId}.png`;
++  const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
++  fs.mkdirSync(path.dirname(originalPath), { recursive: true });
++  fs.writeFileSync(originalPath, "retained-image");
++  const record: ManagedImageRecord = {
++    attachmentId,
++    ...(legacyGlobal ? {} : { agentId }),
++    sessionKey: legacyGlobal ? "global" : `agent:${agentId}:main`,
++    messageId,
++    createdAt: new Date(0).toISOString(),
++    alt: "Retained image",
++    original: {
++      mediaRoot: path.join(stateDir, "media"),
++      mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
++      mediaId,
++      contentType: "image/png",
++      width: 1,
++      height: 1,
++      sizeBytes: "retained-image".length,
++      filename: mediaId,
++    },
++  };
++  insertManagedImageRecord(record, stateDir);
++  return { record: readManagedImageRecord(attachmentId, stateDir)!, originalPath };
++}
++
++async function seedHistory(agentId: string, storePath?: string) {
++  const scope = {
++    agentId,
++    sessionKey: `agent:${agentId}:main`,
++    sessionId: `${agentId}-session`,
++    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
++    ...(storePath ? { storePath } : {}),
++  };
++  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
++  await persistSessionTranscriptTurn(scope, {
++    messages: [{ eventId: "msg-1", message: { role: "assistant", content: "Retained history" } }],
++    touchSessionEntry: false,
++  });
++  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
++  await waitForSessionTranscriptIndexReconcile(options);
++  return openOpenClawAgentDatabase(options).path;
++}
++
++function deleteAgent(agentId: string, completed = true, deleteFiles = false) {
++  const deletion = beginAgentDeletion(
++    {
++      agentId,
++      agentDir: path.join(stateDir, "agents", agentId, "agent"),
++      sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
++      workspaceDir: path.join(stateDir, `workspace-${agentId}`),
++      deleteFiles,
++    },
++    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
++  );
++  if (completed) {
++    deletion.commit();
++    deletion.finish();
++  }
++}
++
++function expectRetained(fixture: ReturnType<typeof seedRecord>) {
++  expect(
++    listManagedImageRecordEntries({ stateDir }).find(
++      ({ record }) => record.attachmentId === fixture.record.attachmentId,
++    )?.record,
++  ).toEqual(fixture.record);
++  expect(fs.readFileSync(fixture.originalPath, "utf8")).toBe("retained-image");
++}
++
++describe("managed outgoing media GC agent deletion lifecycle", () => {
++  it.each([false, true])(
++    "cold-starts with retained deleted history and still cleans live orphans (completed: %s)",
++    async (completed) => {
++      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++        const databasePath = await seedHistory("retired");
++        const retained = seedRecord("retired", "history");
++        openOpenClawAgentDatabase({ agentId: "main" });
++        const orphan = seedRecord("main", "orphan");
++        closeOpenClawAgentDatabasesForTest();
++        deleteAgent("retired", completed);
++        closeOpenClawStateDatabaseForTest();
++        const databaseBytes = fs.readFileSync(databasePath);
++
++        expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toEqual({
++          deletedRecordCount: 1,
++          deletedFileCount: 1,
++          retainedCount: 1,
++        });
++
++        expectRetained(retained);
++        expect(fs.readFileSync(databasePath)).toEqual(databaseBytes);
++        expect(readManagedImageRecord(orphan.record.attachmentId, stateDir)).toBeNull();
++        expect(fs.existsSync(orphan.originalPath)).toBe(false);
++        expect(readAgentDeletionJournal("retired")).toMatchObject({
++          cleanupCompleted: completed,
++          deleteFiles: false,
++        });
++      });
++    },
++  );
++
++  it.each([
++    { completed: false, deleteFiles: false },
++    { completed: true, deleteFiles: false },
++    { completed: false, deleteFiles: true },
++    { completed: true, deleteFiles: true },
++  ])(
++    "retains purged, transient and claimed records under $completed/$deleteFiles deletion",
++    async ({ completed, deleteFiles }) => {
++      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++        openOpenClawAgentDatabase({ agentId: "retired" });
++        const retained = [
++          seedRecord("retired", "purged-session"),
++          seedRecord("retired", "transient", null),
++          seedRecord("retired", "cleanup-pending"),
++        ];
++        expect(claimManagedImageRecordCleanupIfCurrent(retained[2].record, stateDir)).toBe(true);
++        deleteAgent("retired", completed, deleteFiles);
++        const entries = listManagedImageRecordEntries({ stateDir });
++
++        for (const forceDeleteSessionRecords of [false, true]) {
++          expect(
++            await cleanupManagedOutgoingMediaRecords({ stateDir, forceDeleteSessionRecords }),
++          ).toEqual({
++            deletedRecordCount: 0,
++            deletedFileCount: 0,
++            retainedCount: 3,
++          });
++          retained.forEach(expectRetained);
++          expect(listManagedImageRecordEntries({ stateDir })).toEqual(entries);
++        }
++      });
++    },
++  );
++
++  it.each(["main", "retired"])(
++    "protects a shared store when its %s owner is deleted",
++    async (deletedId) => {
++      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++        const storePath = path.join(stateDir, "shared.sqlite");
++        setRuntimeConfigSnapshot({
++          agents: { ownership: "explicit", entries: { main: {}, retired: {} } },
++          session: { store: storePath },
++        });
++        await seedHistory("main", storePath);
++        await seedHistory("retired", storePath);
++        const retained = seedRecord("retired", "shared");
++        closeOpenClawAgentDatabasesForTest();
++        deleteAgent(deletedId);
++
++        const result = await cleanupManagedOutgoingMediaRecords({ stateDir });
++
++        expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
++        expectRetained(retained);
++      });
++    },
++  );
++
++  it("retains legacy global media owned by a retired fixed-store agent", async () => {
++    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++      setRuntimeConfigSnapshot({
++        agents: {
++          ownership: "explicit",
++          entries: { main: {} },
++          defaults: { sessionStore: { agentId: "retired" } },
++        },
++        session: { store: path.join(stateDir, "shared.sqlite") },
++      });
++      const retained = [
++        seedRecord("retired", "legacy-transient", null, true),
++        seedRecord("retired", "legacy-claimed", "msg-1", true),
++      ];
++      expect(claimManagedImageRecordCleanupIfCurrent(retained[1].record, stateDir)).toBe(true);
++      deleteAgent("retired");
++      const entries = listManagedImageRecordEntries({ stateDir });
++
++      const result = await cleanupManagedOutgoingMediaRecords({ stateDir });
++
++      expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 2 });
++      expect(listManagedImageRecordEntries({ stateDir })).toEqual(entries);
++      retained.forEach(expectRetained);
++    });
++  });
++
++  it("retains a live owner's media while a pending deletion fences its database path", async () => {
++    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++      const storePath = path.join(stateDir, "workspace-retired", "shared.sqlite");
++      setRuntimeConfigSnapshot({
++        agents: { ownership: "explicit", entries: { main: {} } },
++        session: { store: storePath },
++      });
++      await seedHistory("main", storePath);
++      const retained = seedRecord("main", "pending-path");
++      closeOpenClawAgentDatabasesForTest();
++      deleteAgent("retired", false);
++
++      const result = await cleanupManagedOutgoingMediaRecords({ stateDir });
++
++      expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
++      expectRetained(retained);
++    });
++  });
++
++  it("rechecks deletion after asynchronous transient eligibility work", async () => {
++    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++      const retained = seedRecord("retired", "transient", null);
++
++      const result = await cleanupManagedOutgoingMediaRecords({
++        stateDir,
++        hasActiveSessionRun: () => {
++          deleteAgent("retired");
++          return false;
++        },
++      });
++
++      expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
++      expectRetained(retained);
++    });
++  });
++
++  it.each([false, true])(
++    "only handles a history read failure when deletion began during the read (%s)",
++    async (beginDeletion) => {
++      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
++        await seedHistory("retired");
++        const retained = seedRecord("retired", "read-race");
++        const failure = new Error("History reader rejected");
++        vi.spyOn(transcriptReaders, "readSessionMessagesWithSourceAsync").mockImplementationOnce(
++          async () => {
++            if (beginDeletion) {
++              deleteAgent("retired");
++            }
++            throw failure;
++          },
++        );
++
++        const cleanup = cleanupManagedOutgoingMediaRecords({ stateDir });
++        if (beginDeletion) {
++          await expect(cleanup).resolves.toEqual({
++            deletedRecordCount: 0,
++            deletedFileCount: 0,
++            retainedCount: 1,
++          });
++        } else {
++          await expect(cleanup).rejects.toBe(failure);
++        }
++        expectRetained(retained);
++      });
++    },
++  );
++});
+diff --git a/src/state/agent-deletion-journal.ts b/src/state/agent-deletion-journal.ts
+--- a/src/state/agent-deletion-journal.ts
++++ b/src/state/agent-deletion-journal.ts
+@@ -103,6 +103,45 @@
+     ).rows.map((row) => normalizeAgentId(row.agent_id));
+   }, options);
+   return new Set(ids ?? []);
++}
++
++/** Read retained identities and pending path fences without opening a writer or migrating state. */
++export function listAgentDeletionJournalEntriesReadOnly(
++  options: OpenClawStateDatabaseOptions = {},
++): AgentDeletionJournalEntry[] {
++  return (
++    withExistingOpenClawStateDatabaseReadOnly(({ db: database, path: pathname }) => {
++      const journal = database
++        .prepare("SELECT type FROM sqlite_master WHERE name = 'agent_deletion_journal'")
++        .get() as { type?: unknown } | undefined;
++      if (!journal) {
++        return [];
++      }
++      if (journal.type !== "table") {
++        throw new Error(
++          `OpenClaw state database ${pathname} has an invalid agent deletion journal.`,
++        );
++      }
++      const db = getNodeSqliteKysely<AgentDeletionDatabase>(database);
++      return executeSqliteQuerySync(
++        database,
++        db
++          .selectFrom("agent_deletion_journal")
++          .select([
++            "agent_id",
++            "operation_id",
++            "agent_dir",
++            "workspace_dir",
++            "sessions_dir",
++            "database_paths_json",
++            "cleanup_paths_json",
++            "created_at",
++            "cleanup_completed",
++            "delete_files",
++          ]),
++      ).rows.map(fromRow);
++    }, options) ?? []
++  );
+ }
+ 
+ export function prepareAgentDeletionPathFence(
+diff --git a/src/state/agent-deletion-journal.discovery.test.ts b/src/state/agent-deletion-journal.discovery.test.ts
+--- a/src/state/agent-deletion-journal.discovery.test.ts
++++ b/src/state/agent-deletion-journal.discovery.test.ts
+@@ -3,7 +3,10 @@
+ import { describe, expect, it } from "vitest";
+ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+ import { withTempDir } from "../test-utils/temp-dir.js";
+-import { listAgentDeletionIds } from "./agent-deletion-journal.js";
++import {
++  listAgentDeletionIds,
++  listAgentDeletionJournalEntriesReadOnly,
++} from "./agent-deletion-journal.js";
+ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+ 
+ describe("read-only deletion discovery", () => {
+@@ -11,6 +14,9 @@
+     await withTempDir("openclaw-deletion-discovery-", async (root) => {
+       const stateDir = path.join(root, "absent");
+       expect(listAgentDeletionIds({ env: { OPENCLAW_STATE_DIR: stateDir } })).toEqual(new Set());
++      expect(
++        listAgentDeletionJournalEntriesReadOnly({ env: { OPENCLAW_STATE_DIR: stateDir } }),
++      ).toEqual([]);
+       expect(fs.existsSync(stateDir)).toBe(false);
+     });
+   });
+@@ -26,6 +32,7 @@
+       const original = fs.readFileSync(databasePath);
+ 
+       expect(listAgentDeletionIds({ env })).toEqual(new Set());
++      expect(listAgentDeletionJournalEntriesReadOnly({ env })).toEqual([]);
+       expect(fs.readFileSync(databasePath)).toEqual(original);
+     });
+   });
+@@ -44,6 +51,7 @@
+       const original = fs.readFileSync(databasePath);
+ 
+       expect(() => listAgentDeletionIds({ env })).toThrow();
++      expect(() => listAgentDeletionJournalEntriesReadOnly({ env })).toThrow();
+       expect(fs.readFileSync(databasePath)).toEqual(original);
+     });
+   });

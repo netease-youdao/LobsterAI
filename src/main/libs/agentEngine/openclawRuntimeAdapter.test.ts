@@ -86,6 +86,7 @@ import {
 } from './openclawRuntimeAdapter';
 import { SubagentYield } from './subagent/yield';
 import { CoworkRuntimeDiagnosticEvent } from './types';
+import { OPENCLAW_BOOTSTRAP_MAX_CHARS } from './workspaceDeliveredInstructions';
 
 // Most tests provide only the store methods needed for their scenario. Supply
 // the durable approval store and local ownership contract shared by all turns.
@@ -3845,6 +3846,7 @@ function createRunTurnAdapter(options: {
       sessionKey: 'agent:main:lobsterai:session-1',
       source: options.sessionModelOverride ? 'sessionOverride' : 'agentModel',
       confirmedAt: Date.now(),
+      contextWindowFingerprint: adapter.sessionContextWindowFingerprint(session.id, options.cachedModel),
     });
   }
 
@@ -4495,7 +4497,7 @@ test('system prompt injection keeps AGENTS.md sections when OpenClaw would trunc
   const defaultSystemPrompt = '# Style\n- Keep replies concise and direct.';
   const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
   await withAgentsMdStateDir(
-    `${'Long user notes. '.repeat(1_500)}\n\n## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
+    `${'Long user notes. '.repeat(Math.ceil(OPENCLAW_BOOTSTRAP_MAX_CHARS / 'Long user notes. '.length) + 100)}\n\n## System Prompt\n\n${defaultSystemPrompt}\n\n${scheduledTaskPrompt}`,
     async (stateDir) => {
       const { adapter, requests } = createRunTurnAdapter({ stateDir, defaultSystemPrompt });
 
@@ -4656,6 +4658,7 @@ test('continueSession patches a session override before chat.send even when the 
   expect(requests[0].params).toEqual({
     key: 'agent:main:lobsterai:session-1',
     model,
+    contextWindow: null,
     reasoningLevel: 'stream',
   });
 });
@@ -5718,12 +5721,25 @@ test('stopSession finalizes streamed assistant metadata with the active model', 
   const sessionKey = `agent:main:lobsterai:${session.id}`;
   const turn = createActiveTurn(session.id, sessionKey, 'run-stop');
   turn.model = model;
+  turn.userMessageId = 'msg-1';
+  turn.llmTraceId = '4bf92f3577b34da6a3ce929d0e0e4736';
   turn.assistantMessageId = 'msg-2';
   turn.currentAssistantSegmentText = 'partial answer';
   adapter.activeTurns.set(session.id, turn);
 
+  const stoppedSpy = vi.fn(() => {
+    expect(adapter.isSessionActive(session.id)).toBe(false);
+    expect(adapter.getTurnRunIds(session.id)).toEqual([]);
+  });
+  const completedSpy = vi.fn();
+  adapter.on('sessionStopped', stoppedSpy);
+  adapter.on('complete', completedSpy);
   adapter.stopSession(session.id);
 
+  expect(stoppedSpy).toHaveBeenCalledWith(session.id, {
+    userMessageId: 'msg-1', traceId: turn.llmTraceId, runIds: ['run-stop'], startedAt: turn.startedAtMs,
+  });
+  expect(completedSpy).not.toHaveBeenCalled();
   const assistantMessage = session.messages.find((message) => message.id === 'msg-2');
   expect(assistantMessage?.content).toBe('partial answer');
   expect(assistantMessage?.metadata).toMatchObject({
@@ -8346,6 +8362,38 @@ test('chat final completion is canceled when tool work continues after final', a
   } finally {
     vi.useRealTimers();
   }
+});
+
+test('renders the deferred tool, not the Tool Search plumbing that ran it', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'edit the sheet', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const runId = 'run-tool-search';
+  session.status = 'running';
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, runId));
+
+  let seq = 1;
+  const emitTool = (data: Record<string, unknown>) => {
+    adapter.handleAgentEvent({ runId, sessionKey, stream: 'tool', data }, seq++);
+  };
+  emitTool({ toolCallId: 'call-search', phase: 'start', name: 'tool_search', args: { query: 'excel edit' } });
+  emitTool({ toolCallId: 'call-search', phase: 'result', name: 'tool_search', result: { content: [] } });
+  emitTool({ toolCallId: 'call-describe', phase: 'start', name: 'tool_describe', args: { id: 'excel_edit' } });
+  emitTool({ toolCallId: 'call-run', phase: 'start', name: 'tool_call', args: { id: 'lobster-excel__excel_edit' } });
+  // OpenClaw runs the deferred tool as a nested call with its own events.
+  emitTool({
+    toolCallId: 'tool_search_code:call-run:lobster-excel__excel_edit:1',
+    phase: 'start',
+    name: 'lobster-excel__excel_edit',
+    args: { path: '/tmp/budget.xlsx' },
+  });
+  emitTool({ toolCallId: 'call-run', phase: 'result', name: 'tool_call', result: { content: [] } });
+
+  const toolUses = session.messages.filter((message) => message.type === 'tool_use');
+  expect(toolUses.map((message) => message.metadata?.toolName)).toEqual(['lobster-excel__excel_edit']);
+  expect(session.messages.some((message) => message.metadata?.toolUseId === 'call-run')).toBe(false);
 });
 
 test('tool-use chat final keeps the session running until tool work arrives', async () => {
@@ -12884,7 +12932,7 @@ test('account transition cancels turn preparation without waiting for its model 
   adapter.prepareForAccountTransition();
   await cancelled;
   expect(session.status).toBe('idle');
-  expect(onStopped).toHaveBeenCalledExactlyOnceWith(session.id);
+  expect(onStopped).toHaveBeenCalledExactlyOnceWith(session.id, undefined);
   releaseFirstModelPatch();
   await Promise.resolve();
   await Promise.resolve();

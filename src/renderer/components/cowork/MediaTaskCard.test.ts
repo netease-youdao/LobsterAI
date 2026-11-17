@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, test, vi } from 'vitest';
 
-import { MediaBillingStatus, MediaDeliveryStatus, MediaTaskPhase, MediaTaskStatus } from '../../../shared/media/constants';
+import { MediaBillingStatus, MediaDeliveryStatus, MediaTaskPhase, MediaTaskStatus, MediaTaskWarning } from '../../../shared/media/constants';
 import MediaTaskCard, { isMediaTaskSettled, mediaTaskAspectRatio } from './MediaTaskCard';
 
 vi.mock('../../services/i18n', () => ({ i18nService: { t: (key: string) => key } }));
@@ -56,6 +56,18 @@ describe('media task placeholder', () => {
     expect(isMediaTaskSettled(details)).toBe(true);
     const html = renderToStaticMarkup(createElement(MediaTaskCard, { details }));
     expect(html).toContain('mediaImageSavedToRecovery');
+    expect(html).not.toContain('aria-busy');
+  });
+
+  test('incomplete layers warn without reopening the settled task or claiming a refund', () => {
+    const details = { taskId: 617, status: MediaTaskStatus.Succeeded, deliveryStatus: MediaDeliveryStatus.Saved,
+      billingStatus: MediaBillingStatus.Settled, warnings: [MediaTaskWarning.LayerDecompositionIncomplete] };
+    expect(isMediaTaskSettled(details)).toBe(true);
+    const html = renderToStaticMarkup(createElement(MediaTaskCard, { details }));
+    expect(html).toContain('mediaLayerDecompositionWarning');
+    expect(html).toContain('text-amber-500');
+    expect(html).not.toContain('mediaTaskSaved');
+    expect(html).not.toContain('mediaTaskRefunded');
     expect(html).not.toContain('aria-busy');
   });
 });

@@ -118,6 +118,58 @@ describe('setServerModels / clearServerModels', () => {
     expect(state.defaultSelectedModel).toEqual(lockedServerModel);
   });
 
+  test('setServerModels drops the logged-out catalog placeholder for the first accessible model after login', () => {
+    const publicCatalogModel: Model = {
+      id: 'deepseek-flash',
+      name: 'DeepSeek-V4.1-Flash',
+      providerKey: 'lobsterai-server',
+      isServerModel: true,
+      accessible: false,
+    };
+    const fastPreset: Model = {
+      id: 'yd-fast',
+      presetId: ModelPresetId.Balanced,
+      name: 'Fast',
+      providerKey: 'lobsterai-server',
+      isServerModel: true,
+      accessible: true,
+    };
+    let state = makeState({
+      availableModels: [],
+      defaultSelectedModel: modelA,
+      selectedModelByAgent: {},
+    });
+
+    // Logged out: the public catalog is all locked, so its first entry is only displayed.
+    state = modelReducer(state, setServerModels([publicCatalogModel]));
+    expect(state.defaultSelectedModel).toEqual(publicCatalogModel);
+
+    // Logged in: the same model id is now accessible, but the user never chose it.
+    state = modelReducer(state, setServerModels([fastPreset, { ...publicCatalogModel, accessible: true }]));
+
+    expect(state.defaultSelectedModel).toEqual(fastPreset);
+    expect(selectAgentSelectedModel(state, 'main', '')).toEqual(fastPreset);
+  });
+
+  test('setServerModels keeps an accessible default model when the catalog refreshes', () => {
+    const fastPreset: Model = {
+      id: 'yd-fast',
+      presetId: ModelPresetId.Balanced,
+      name: 'Fast',
+      providerKey: 'lobsterai-server',
+      isServerModel: true,
+    };
+    let state = makeState({
+      availableModels: [fastPreset, serverModel],
+      defaultSelectedModel: serverModel,
+      selectedModelByAgent: {},
+    });
+
+    state = modelReducer(state, setServerModels([fastPreset, { ...serverModel, name: 'Server Model (Updated)' }]));
+
+    expect(state.defaultSelectedModel.name).toBe('Server Model (Updated)');
+  });
+
   test('setAvailableModels clears fallback custom models while preserving locked server models', () => {
     let state = makeState({
       availableModels: [lockedServerModel, modelA],

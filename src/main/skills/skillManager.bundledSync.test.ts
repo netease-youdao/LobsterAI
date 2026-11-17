@@ -78,6 +78,34 @@ test('a fresh install syncs current skills without restoring stale retired bundl
   expect(saveState).not.toHaveBeenCalled();
 });
 
+test('a skill dropped from the bundle without retirement stays installed as a deletable user skill', async () => {
+  // An older app version bundled "legacy-skill" and copied it into user data.
+  writeSkill(userRoot, 'legacy-skill');
+  writeSkill(bundledRoot, 'weather');
+  writeConfig(bundledRoot, { weather: { enabled: true, order: 210 } });
+  writeConfig(userRoot, { 'legacy-skill': { enabled: true, order: 50 }, weather: { enabled: true, order: 210 } });
+  state = { 'legacy-skill': { enabled: false } };
+
+  // The copy must survive every launch, not only the first one after the upgrade.
+  for (let launch = 0; launch < 2; launch += 1) {
+    manager.syncBundledSkillsToUserData();
+    manager.recoverInterruptedUpgrades();
+  }
+
+  expect(manager.listSkills().map(skill => [skill.id, skill.isBuiltIn, skill.enabled])).toEqual([
+    ['legacy-skill', false, false],
+    ['weather', true, true],
+  ]);
+  expect(readConfig().defaults).toHaveProperty('legacy-skill');
+  expect(saveState).not.toHaveBeenCalled();
+
+  // Deleting restarts the directory watcher, whose handles would outlive the fixture.
+  vi.spyOn(manager, 'startWatching').mockImplementation(() => {});
+  await expect(manager.deleteSkill('weather')).rejects.toThrow('Built-in skills cannot be deleted');
+  expect((await manager.deleteSkill('legacy-skill')).map(skill => skill.id)).toEqual(['weather']);
+  expect(fs.existsSync(path.join(userRoot, 'legacy-skill'))).toBe(false);
+});
+
 test('upgrades remove retired copies, defaults and state while preserving other skills and preferences', () => {
   const retiredDefaults = Object.fromEntries([...RETIRED_BUNDLED_SKILL_IDS].map(id => [id, { enabled: true, order: 222 }]));
   for (const id of RETIRED_BUNDLED_SKILL_IDS) writeSkill(userRoot, id);

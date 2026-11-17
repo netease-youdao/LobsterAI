@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   OPENCLAW_PLUGIN_SKILLS_DIRECTORY, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST,
-  OpenClawRepairPhase, OpenClawRepairPluginSource,
+  OpenClawRepairPhase, OpenClawRepairPluginSource, type OpenClawRepairProgress, OpenClawRepairProgressStage,
 } from '../../shared/openclawEngine/repair';
 import {
   assertOwnedRepairPath, type CompatibilityRepairOptions, type CompatibilityRepairOwners,
@@ -161,6 +161,55 @@ test('snapshot skips regenerable caches but keeps browser site data and the file
   expect(report.changes).toContainEqual(expect.stringContaining(`Skipped ${skipped.length} regenerable cache directories`));
   const recovery = await repairOpenClawCompatibility({ ...options, phase: OpenClawRepairPhase.Recovery }, owners());
   expect(recovery, recovery.error).toMatchObject({ success: true });
+});
+
+test('snapshot leaves already-imported transcript archives in place, copies the agent databases, and reports measured progress', async () => {
+  const options = fixture();
+  const write = (relative: string, content: string) => {
+    const file = path.join(options.stateDir, ...relative.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+    return file;
+  };
+  const agentDb = path.join(options.stateDir, 'agents', 'main', 'agent', 'openclaw-agent.sqlite');
+  fs.mkdirSync(path.dirname(agentDb), { recursive: true });
+  const db = new DatabaseSync(agentDb);
+  db.exec("CREATE TABLE transcript_events (text TEXT); INSERT INTO transcript_events VALUES ('imported history')");
+  db.close();
+  const kept = ['agents/main/sessions/sessions.json', 'agents/main/sessions/live.jsonl', 'session-sqlite-migration-runs/run-1.json'];
+  for (const file of kept) write(file, file);
+  const archives = ['agents/main/session-sqlite-import-archive', 'session-sqlite-import-archive'];
+  const archived = archives.map(archive => write(`${archive}/history.jsonl.imported-1`, 'already imported'));
+  const reports: OpenClawRepairProgress[] = [];
+
+  const report = await repairOpenClawCompatibility(options, { ...owners(), reportProgress: value => reports.push(value) });
+  expect(report, report.error).toMatchObject({ success: true });
+  const original = path.join(options.backupDir, 'original');
+  for (const archive of archives) expect(fs.existsSync(path.join(original, ...archive.split('/')))).toBe(false);
+  for (const file of archived) expect(fs.readFileSync(file, 'utf8')).toBe('already imported');
+  for (const file of kept) expect(fs.readFileSync(path.join(original, ...file.split('/')), 'utf8')).toBe(file);
+  const saved = new DatabaseSync(path.join(original, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'), { readOnly: true });
+  try { expect(saved.prepare('SELECT text FROM transcript_events').get()?.text).toBe('imported history'); } finally { saved.close(); }
+  const manifest = JSON.parse(fs.readFileSync(path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST), 'utf8'));
+  expect([...manifest.skippedSessionImportArchivePaths].sort()).toEqual(archives.map(item => path.join(...item.split('/'))).sort());
+  expect(manifest.restoreInstructions).toContain('skippedSessionImportArchivePaths');
+  expect(report.changes).toContainEqual(expect.stringContaining('Left 2 session import archives in place'));
+
+  // config, agent database and the three kept files; the archives are not counted.
+  const totals = { totalFiles: 5, totalBytes: fs.statSync(agentDb).size + 2 + kept.reduce((sum, file) => sum + file.length, 0) };
+  const copy = reports.filter(value => value.stage === OpenClawRepairProgressStage.Copy);
+  expect(copy[0]).toEqual({ phase: OpenClawRepairPhase.Snapshot, stage: OpenClawRepairProgressStage.Copy, files: 0, bytes: 0, ...totals });
+  expect(copy.at(-1)).toMatchObject({ files: 5, bytes: totals.totalBytes, ...totals });
+});
+
+test('a linked session import archive still cannot be snapshotted', async () => {
+  const options = fixture();
+  const link = path.join(options.stateDir, 'agents', 'main', 'session-sqlite-import-archive');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(path.join(path.dirname(options.stateDir), 'elsewhere'), link, 'junction');
+  const report = await repairOpenClawCompatibility(options, owners());
+  expect(report).toMatchObject({ success: false, failurePath: link });
+  expect(fs.existsSync(path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST))).toBe(false);
 });
 
 test('failed ownership or backup cannot run later repairs and remains diagnosable', async () => {

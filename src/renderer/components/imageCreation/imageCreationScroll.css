@@ -1,0 +1,76 @@
+/* Keep a native, draggable scrollbar with a quiet 4px thumb and a 10px hit area.
+   Its gutter never changes between idle, hover and keyboard interaction. */
+.image-creation-scrollbar {
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.image-creation-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.image-creation-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 10px;
+}
+
+.image-creation-scrollbar::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: transparent;
+  background-clip: padding-box;
+}
+
+.image-creation-scrollbar:hover::-webkit-scrollbar-thumb,
+.image-creation-scrollbar:focus-visible::-webkit-scrollbar-thumb,
+.image-creation-scrollbar[data-scrolling]::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--lobster-scroll-thumb) 70%, transparent);
+}
+
+.image-creation-scrollbar::-webkit-scrollbar-thumb:hover,
+.image-creation-scrollbar::-webkit-scrollbar-thumb:active {
+  background-color: var(--lobster-scroll-thumb-hover);
+}
+
+.image-creation-detail-scroll[data-more-content="true"] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent);
+}
+
+.image-creation-prompt-fade {
+  pointer-events: none;
+  position: absolute;
+  right: 12px;
+  left: 1px;
+  height: 28px;
+  opacity: 1;
+  transition: opacity 120ms ease;
+}
+
+.image-creation-prompt-fade-top {
+  top: 1px;
+  border-radius: 12px 0 0 0;
+  background: linear-gradient(to bottom, var(--lobster-background), transparent);
+}
+
+.image-creation-prompt-fade-bottom {
+  bottom: 1px;
+  border-radius: 0 0 0 12px;
+  background: linear-gradient(to top, var(--lobster-background), transparent);
+}
+
+/* Text and the caret must remain fully visible while selecting or editing. */
+.image-creation-prompt-scroll:focus-within .image-creation-prompt-fade {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-creation-prompt-fade { transition: none; }
+}
+
+@media (forced-colors: active) {
+  .image-creation-scrollbar::-webkit-scrollbar-thumb { background-color: ButtonText; }
+  .image-creation-detail-scroll[data-more-content="true"] { mask-image: none; }
+  .image-creation-prompt-fade { display: none; }
+}

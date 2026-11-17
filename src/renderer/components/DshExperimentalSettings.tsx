@@ -26,6 +26,7 @@ interface DshInstallView {
 }
 
 interface DshEngineStateView {
+  dshInstanceId?: string;
   phase: string;
   version: string | null;
   errorCode: string | null;
@@ -152,7 +153,8 @@ export const DshExperimentalSettings: React.FC = () => {
     const phaseBefore = await readEnginePhase(engineState.phase);
     try {
       await window.electron.dsh.openWorkbench();
-      reportDshOpenWorkbench({ phaseBefore, result: DshAnalyticsResult.Success });
+      const stateAfter = await readEngineState();
+      reportDshOpenWorkbench({ phaseBefore, result: DshAnalyticsResult.Success, dshInstanceId: stateAfter?.dshInstanceId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setOpenError(localizeOpenError(message));

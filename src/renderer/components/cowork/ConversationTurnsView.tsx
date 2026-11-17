@@ -16,10 +16,12 @@ import {
   buildConversationTurns,
   buildDisplayItems,
 } from './messageDisplayUtils';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import UserMessageItem from './UserMessageItem';
 
 export interface ConversationTurnsViewProps {
   messages: CoworkMessage[];
+  scrollContainerRef: React.RefObject<HTMLElement | null>;
   isStreaming?: boolean;
   skills?: Skill[];
   marketplaceKits?: MarketplaceKit[];
@@ -47,6 +49,7 @@ const EMPTY_ARTIFACTS: Artifact[] = [];
 
 const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
   messages,
+  scrollContainerRef,
   isStreaming = false,
   skills = EMPTY_SKILLS,
   marketplaceKits = EMPTY_KITS,
@@ -88,7 +91,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
       {turns.map((turn, index) => {
         const isLastTurn = index === turns.length - 1;
         const showActivityIndicator = isStreaming && isLastTurn;
-        const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator;
+        const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator || Boolean(getConversationTurnUsage(turn));
         const alwaysRender = index >= turns.length - 3;
 
         // Compute per-turn artifacts
@@ -108,7 +111,8 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
         );
 
         const turnContent = (
-          <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
+          <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}
+            scrollContainerRef={scrollContainerRef} lastMessageId={Array.from(turnMessageIds).pop() ?? turn.userMessage?.id}>
             {turn.userMessage && (
               <div data-export-role="user-message" className={isLastTurn ? 'animate-message-in' : undefined}>
                 <UserMessageItem

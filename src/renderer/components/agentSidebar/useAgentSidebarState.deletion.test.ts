@@ -122,7 +122,7 @@ const render = () => {
     hooks.begin();
     // Deliberate invocation through the deterministic React dispatcher above.
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    controller = useAgentSidebarState({ includeActivityTasks: true });
+    controller = useAgentSidebarState();
     if (!hooks.effects()) return;
   }
   throw new Error('Hook render did not settle');
@@ -132,7 +132,7 @@ const settle = async () => {
 };
 const emit = (payload?: CoworkSessionsChangedPayload) => listeners.forEach(listener => listener(payload));
 const visible = (agentId = 'main') => controller.agentNodes.find(agent => agent.id === agentId)?.tasks.map(item => item.id);
-const activity = () => controller.activityAgentNodes.flatMap(agent => agent.tasks.map(item => item.id));
+const activity = () => controller.agentNodes.flatMap(agent => agent.tasks.map(item => item.id));
 
 beforeEach(() => {
   hooks.reset(); listeners.clear(); vi.clearAllMocks();

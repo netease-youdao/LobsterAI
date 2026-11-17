@@ -29,7 +29,7 @@ describe('orb placement', () => {
     expect(result.x).toBeGreaterThanOrEqual(-1920);
   });
 
-  test('ignores malformed saved positions and starts in the lower right', () => {
+  test('ignores malformed saved positions and starts near the right edge', () => {
     const result = resolveCompanionBounds({ x: 'left', y: Number.NaN }, workArea);
     expect(result).toEqual(resolveCompanionBounds(null, workArea));
     expect(result.x + result.width).toBeLessThan(0);

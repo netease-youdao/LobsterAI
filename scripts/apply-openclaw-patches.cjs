@@ -1040,6 +1040,53 @@ const v20260801StrongPatchValidators = {
       snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
     },
   ],
+  'openclaw-tool-call-result-projection.patch': [
+    {
+      file: 'src/agents/tool-search.ts',
+      snippets: [
+        '{ tool: { id: callResult.tool.id, name: callResult.tool.name }, result: textOnlyResult },',
+        'function splitToolCallResultImages(result: AgentToolResult<unknown>)',
+      ],
+    },
+    {
+      file: 'src/agents/tool-search.mcp-error.test.ts',
+      snippets: [
+        'The model sees only the tool identity; details keep the full catalog entry.',
+        'returns native image blocks from a deferred MCP tool behind the untrusted wrapper',
+      ],
+    },
+  ],
+  'openclaw-tool-search-direct-tools.patch': [
+    {
+      file: 'src/agents/tool-search-config.ts',
+      snippets: ['function readDirectToolNames(value: unknown)', '...readDirectToolNames(raw.direct),'],
+    },
+    {
+      file: 'src/agents/tool-search-catalog.ts',
+      snippets: [
+        'export function createOperatorPinnedToolMatcher(',
+        'if (params.minDeferredChars && deferredChars < params.minDeferredChars) {',
+      ],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.ts',
+      snippets: ['operatorDirectToolNames: toolSearchConfig.directToolNames,'],
+    },
+    {
+      file: 'src/config/zod-schema.agent-runtime.ts',
+      snippets: [
+        'direct: z.array(z.string()).optional(),',
+        'minDeferredChars: z.number().int().nonnegative().optional(),',
+      ],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.test.ts',
+      snippets: [
+        'does not pin a duplicated name, so a lookalike cannot take its place',
+        'skips compaction when the deferred schemas fall below minDeferredChars',
+      ],
+    },
+  ],
   'openclaw-tool-payload-transcript-fidelity.patch': [
     {
       file: 'src/agents/transcript-redact.ts',
@@ -1413,8 +1460,10 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/auto-reply/reply/memory-flush.ts',
       snippets: [
-        'function resolveSelectedContextWindowTokens(',
-        'const selectedTokens = resolveSelectedContextWindowTokens(params);',
+        // openclaw-user-context-window-selection.patch replaces this resolver;
+        // validate the final source after both patches have been applied.
+        'function resolveConfiguredContextWindowProfile(',
+        'const profile = resolveConfiguredContextWindowProfile(params);',
       ],
     },
     {
@@ -1519,6 +1568,26 @@ v20260801StrongPatchValidators['zz-openclaw-plan-completion-check.patch'] = [
   {
     file: 'src/agents/tools/progress-card-tool.ts',
     snippets: ['options.onPlanSaved?.('],
+  },
+];
+
+v20260801StrongPatchValidators['zzzz-openclaw-bootstrap-prefix-cache.patch'] = [
+  {
+    file: 'src/shared/google-turn-ordering.ts',
+    snippets: ['timestamp: first.timestamp,'],
+    forbiddenSnippets: ['Date.now()'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts',
+    snippets: ['keeps reconstructed bootstrap messages byte-identical across runs'],
+  },
+  {
+    file: 'src/config/sessions/session-accessor.sqlite-bounded-context.test.ts',
+    snippets: ['keeps bootstrap stable across reopens after a long turn is byte-truncated'],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-memory.test.ts',
+    snippets: ['keeps bootstrap stable on bounded fallback after a compaction %s failure'],
   },
 ];
 
@@ -1742,12 +1811,101 @@ v20260801StrongPatchValidators['zz-openclaw-windows-process-start-native.patch']
     ],
   },
 ];
+v20260801StrongPatchValidators['openclaw-chrome-mcp-windows-native-snapshot.patch'] = [
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-windows-processes.ts',
+    snippets: [
+      'function loadNativeProcessTableReader(): ChromeMcpWindowsProcessTableReader | null {',
+      '"intptr_t __stdcall CreateToolhelp32Snapshot(uint32_t flags, uint32_t processId)"',
+      'export function listChromeMcpWindowsProcessesNative(): ChromeMcpProcessSnapshot[] | undefined {',
+    ],
+  },
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-process.ts',
+    snippets: [
+      'const CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS = 10_000;',
+      'timeoutMs: windows ? CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS : 2_000,',
+    ],
+    orderedSnippets: [
+      'const windows = platform === "win32";',
+      'const nativeSnapshots = listChromeMcpWindowsProcessesNative();',
+      'windows ? "powershell.exe" : "ps",',
+    ],
+  },
+];
 v20260801StrongPatchValidators['zz-openclaw-dreaming-cleanup-only-when-enabled.patch'] = [
   {
     file: 'extensions/memory-core/src/dreaming.ts',
     snippets: [
       'const isStartupDreamingEnabled = (startupCfg: OpenClawConfig): boolean => {',
       'if (isStartupDreamingEnabled(startupConfig)) {',
+    ],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-deleted-agent-session-scan.patch'] = [
+  {
+    file: 'src/state/agent-deletion-journal.ts',
+    snippets: [
+      'export function listAgentDeletionIds(',
+      'const ids = withExistingOpenClawStateDatabaseReadOnly(',
+    ],
+  },
+  {
+    file: 'src/config/sessions/targets.ts',
+    snippets: [
+      'const deletedAgentIds = listAgentDeletionIds({ env });',
+      'return !owner || !deletedAgentIds.has(normalizeAgentId(owner));',
+    ],
+  },
+  {
+    file: 'src/gateway/session-startup-migration.test.ts',
+    snippets: ['cold-starts with retained deleted agents and still repairs live session history'],
+  },
+  {
+    file: 'src/config/sessions/targets-discovery.test.ts',
+    snippets: [
+      'excludes retained deleted stores (cleanup completed: %s) until identity recreation',
+      'preserves live shared-store maintenance when %s is deleted',
+    ],
+  },
+  {
+    file: 'src/state/agent-deletion-journal.discovery.test.ts',
+    snippets: ['does not migrate an existing database without a deletion journal'],
+  },
+  {
+    file: 'src/plugins/host-hook-cleanup.session-store.test.ts',
+    snippets: ['cleans live plugin state without opening retained deleted agent databases'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-managed-media-deleted-agent-gc.patch'] = [
+  {
+    file: 'src/state/agent-deletion-journal.ts',
+    snippets: ['export function listAgentDeletionJournalEntriesReadOnly('],
+  },
+  {
+    file: 'src/gateway/managed-outgoing-gc-lifecycle.ts',
+    snippets: [
+      'const deletions = listAgentDeletionJournalEntriesReadOnly({ env });',
+      'const keyOwner = resolvePersistedSessionStoreOwnerForKey(cfg, params.sessionKey);',
+      'const pendingFences = deletions',
+    ],
+  },
+  {
+    file: 'src/gateway/managed-image-attachments.ts',
+    snippets: [
+      'isManagedMediaCleanupBlockedByAgentDeletion({',
+      'if (shouldDelete && !isDeletionBlocked()) {',
+      'if (!isDeletionBlocked()) {',
+    ],
+  },
+  {
+    file: 'src/gateway/managed-outgoing-gc-deleted-agents.test.ts',
+    snippets: [
+      'cold-starts with retained deleted history and still cleans live orphans',
+      'retains legacy global media owned by a retired fixed-store agent',
+      'rechecks deletion after asynchronous transient eligibility work',
     ],
   },
 ];

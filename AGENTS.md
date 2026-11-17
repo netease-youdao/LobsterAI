@@ -535,3 +535,8 @@ storage, runtime, windowing, or OpenClaw config/restart behavior.
 - For oversized files, propose a scoped extraction plan before doing structural
   refactors.
 - If a file has unrelated user changes, work around them and do not revert them.
+- Desktop companion (floating orb) surfaces on macOS are nonactivating `panel`
+  windows so they show over other apps' full-screen Spaces. Native
+  `Menu.popup()` menus do not show there, which is why the orb's right-click
+  menu is drawn in its own panel (`src/main/desktopCompanion/companionContextMenu.ts`).
+  Do not add native popup menus to companion surfaces on macOS.

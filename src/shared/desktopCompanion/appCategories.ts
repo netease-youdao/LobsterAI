@@ -135,6 +135,9 @@ const WINDOWS_APPS: Record<string, CompanionAppCategory> = {
   'opera.exe': C.Browser,
   'vivaldi.exe': C.Browser,
   'arc.exe': C.Browser,
+  // Edge's embedded runtime: new Outlook, Teams and other WebView2 apps draw their pages in its
+  // windows, so the selection hook may name it instead of the app. Listed so analytics can name it.
+  'msedgewebview2.exe': C.Other,
   'wechat.exe': C.Chat,
   'weixin.exe': C.Chat,
   'wxwork.exe': C.Chat,
@@ -152,6 +155,7 @@ const WINDOWS_APPS: Record<string, CompanionAppCategory> = {
   'totalcmd64.exe': C.Files,
   'acrobat.exe': C.Pdf,
   'acrord32.exe': C.Pdf,
+  'wpspdf.exe': C.Pdf,
   'foxitpdfreader.exe': C.Pdf,
   'foxitphantompdf.exe': C.Pdf,
   'foxitpdfeditor.exe': C.Pdf,
@@ -187,6 +191,14 @@ export function normalizeCompanionAppId(appId: string): string {
   return parts[parts.length - 1] ?? trimmed;
 }
 
+/** The normalized id when the app is in the built-in lists above, otherwise null. */
+export function knownCompanionAppId(appId: string | null | undefined): string | null {
+  if (!appId) return null;
+  const id = normalizeCompanionAppId(appId);
+  const has = (apps: Record<string, CompanionAppCategory>) => Object.prototype.hasOwnProperty.call(apps, id);
+  return has(MAC_APPS) || has(WINDOWS_APPS) ? id : null;
+}
+
 export function categorizeCompanionApp(appId: string | null | undefined): CompanionAppCategory {
   if (!appId) return C.Other;
   const id = normalizeCompanionAppId(appId);
@@ -211,6 +223,17 @@ export const DEFAULT_SELECTION_EXCLUDED_APPS: readonly string[] = [
   'com.microsoft.rdc.osx.beta',
   'mstsc.exe',
 ];
+
+/**
+ * Windows apps whose selected text UI Automation and IAccessible do not return, read instead by a
+ * simulated copy. selection-hook saves and restores every clipboard format around the copy and only
+ * copies when the pointer is the text I-beam, but it still runs on each selection there, so the list
+ * holds only apps that need it: WPS Office, whose combined window runs every document type in wps.exe.
+ *
+ * selection-hook matches these names as substrings of the executable name. WPS Spreadsheets on its own
+ * (et.exe) is left out: "et.exe" would also match any program whose name ends in it, such as telnet.exe.
+ */
+export const SELECTION_CLIPBOARD_APPS: readonly string[] = ['wps.exe', 'wpp.exe', 'wpspdf.exe'];
 
 export function isCompanionSelectionBlocked(appId: string, excluded: readonly string[]): boolean {
   const id = normalizeCompanionAppId(appId);

@@ -18,6 +18,23 @@ export interface OfficeToolDefinition {
   readonly inputSchema: object;
 }
 
+/**
+ * What the managed AGENTS.md section says about one editor's tools. The rules every editor shares
+ * are written once by `buildOfficeAgentPrompt`; a format adds only what differs.
+ */
+export interface OfficeAgentGuidance {
+  readonly readTool: string;
+  readonly editTool: string;
+  /** What an edit preserves besides the content it did not touch, e.g. `keeps styles`. */
+  readonly keeps: string;
+  /** What an edit reply reads back, as a plural noun, e.g. `paragraphs`. */
+  readonly replyShows: string;
+  /** What else the tools can change, as full sentences. */
+  readonly scope?: string;
+  /** What still takes file-based tools. */
+  readonly fileBasedFor?: string;
+}
+
 /** What every process knows about one editor; each layer adds its own parts in its format table. */
 export interface OfficeEditorSpec {
   readonly id: OfficeEditorId;
@@ -32,6 +49,6 @@ export interface OfficeEditorSpec {
     readonly tools: readonly OfficeToolDefinition[];
     readonly timeoutMs: number;
     /** Guidance for the managed AGENTS.md section, when the tool descriptions are not enough. */
-    readonly prompt?: string;
+    readonly guidance?: OfficeAgentGuidance;
   };
 }

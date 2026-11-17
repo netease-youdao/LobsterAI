@@ -573,6 +573,15 @@ export class AgentBrowserHost {
     return this.getState();
   }
 
+  /** Session, proxy readiness and URL policy for hidden pages that must behave like in-app pages. */
+  getBackgroundPageContext(): { session: Session; whenReady: () => Promise<void>; isAllowedUrl: (url: string) => boolean } {
+    return {
+      session: this.browserSession,
+      whenReady: () => this.proxyReady,
+      isAllowedUrl: url => this.isAllowedUrl(url),
+    };
+  }
+
   async handleToolRequest(request: BrowserToolRequest): Promise<BrowserToolResponse> {
     const config = normalizeBrowserWebAccessConfig(this.deps.getBrowserConfig());
     if (config.displayMode !== BrowserDisplayMode.InApp) {

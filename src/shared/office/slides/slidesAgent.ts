@@ -83,6 +83,7 @@ export const SLIDES_AGENT_TOOL_DEFINITIONS = [
       'add_slide {after?, layout?, title?, body?} adds a slide after slide `after` (default: at the end) with a layout named as in ppt_read (default: the layout of that slide) and fills its title and body placeholders;',
       'duplicate_slide {slide}; delete_slide {slide}; move_slide {slide, position}; set_notes {slide, text} replaces the speaker notes.',
       'Edits run in order, so slide numbers in later edits refer to the presentation after the earlier edits.',
+      'The reply lists the changed shapes with their new text, read back from the open presentation after the change, and whether the file saved. ppt_read reads that same open presentation, so the reply is already the check: when the user asks you to verify or confirm the change, report from it instead of calling ppt_read again.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -136,11 +137,12 @@ export const SLIDES_AGENT_TOOL_DEFINITIONS = [
   },
 ] as const;
 
-/** Guidance for the managed AGENTS.md section: prefer live edits over rewriting the file. */
-export const SLIDES_AGENT_PROMPT = [
-  '## Editing Existing Presentations',
-  '',
-  `- When the user wants to change an existing \`.pptx\` and \`${SlidesAgentTool.Read}\` / \`${SlidesAgentTool.Edit}\` are available, use them instead of rewriting the file with scripts: edits appear live in LobsterAI's editor, keep the theme, layouts, animations and other content, and can be undone as one step.`,
-  '- They change text and its formatting, table cells, shape positions and sizes, add text boxes, add, duplicate, move and delete slides, and write speaker notes.',
-  '- Use file-based tools only for what those tools cannot do (pictures, charts, new designs), when the presentation is reported as read-only or an edit is refused, or to create a new presentation.',
-].join('\n');
+/** What the managed AGENTS.md section says about these tools; the shared rules are in `buildOfficeAgentPrompt`. */
+export const SLIDES_AGENT_GUIDANCE = {
+  readTool: SlidesAgentTool.Read,
+  editTool: SlidesAgentTool.Edit,
+  keeps: 'keeps the theme, layouts and animations',
+  replyShows: 'shape texts',
+  scope: 'They change text and its formatting, table cells, shape positions and sizes, add text boxes, add, duplicate, move and delete slides, and write speaker notes.',
+  fileBasedFor: 'pictures, charts, new designs',
+} as const;

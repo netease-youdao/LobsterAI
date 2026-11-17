@@ -151,7 +151,7 @@ test('clamps a cascaded popover inside the viewport when neither side fits', () 
   })).toEqual({ left: 62, side: CascadeSide.Right });
 });
 
-test('overlays the hover card instead of flipping a third panel into the dropdown', () => {
+test('opens a third panel beside the card when the outward side has no room', () => {
   expect(resolveNestedCascadePlacement({
     anchorLeft: 572,
     anchorRight: 792,
@@ -159,9 +159,8 @@ test('overlays the hover card instead of flipping a third panel into the dropdow
     viewportWidth: 800,
     preferredSide: CascadeSide.Right,
   })).toEqual({
-    left: 572,
-    side: CascadeSide.Right,
-    overlaysAnchor: true,
+    left: 362,
+    side: CascadeSide.Left,
   });
 });
 
@@ -175,7 +174,6 @@ test('keeps a third panel cascading outward when the viewport has room', () => {
   })).toEqual({
     left: 740,
     side: CascadeSide.Right,
-    overlaysAnchor: false,
   });
 });
 

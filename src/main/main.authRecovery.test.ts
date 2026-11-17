@@ -9,6 +9,7 @@ import { AuthIpcChannel, AuthSessionChangeReason, AuthSessionStatus } from '../s
 import { EnterpriseAccountMode, EnterpriseAccountRequestHeader, EnterpriseAccountStoreKey, EnterpriseApiErrorCode } from '../shared/enterpriseAccount/constants';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
 import { buildEnterpriseAccountRequestHeaders, clearEnterpriseAccountContext, fetchEnterpriseAccountContext, getPersistedEnterpriseAccountContext, normalizeEnterpriseAccountContext, persistEnterpriseAccountContext, readAccountMode } from './enterpriseAccount/context';
+import { AuthLoginAttempt } from './libs/authLoginAttempt';
 import { resolveAuthSessionStatusFromError } from './libs/authSessionManager';
 import { OpenClawAccountRecovery } from './libs/openclawAccountRecovery';
 import { isAuthExchangeIntentCurrent, isAuthStateSnapshotCurrent } from './mediaAccountIsolation';
@@ -98,7 +99,8 @@ function fixture() {
     captureEnterpriseAuthSessionSnapshot: () => null,
     getServerApiBaseUrl: vi.fn(() => 'https://test.invalid'), fetchWithAuth, net: { fetch: exchangeFetch },
     activateLowCreditPurchaseOffer: purchase, withKeyfromBody: vi.fn((value: unknown) => value),
-    AbortController, setTimeout, clearTimeout,
+    AbortController, AbortSignal, setTimeout, clearTimeout,
+    authLoginAttempt: new AuthLoginAttempt(), messageSpeechController: null,
     handleEnterpriseAccountContextMismatch: () => false, handleEnterpriseMembershipRevocation: () => false,
     getAllServerModelMetadata: () => [...models], clearServerModelMetadata: () => { models = []; },
     updateServerModelMetadata: (value: unknown[]) => { models = [...value]; },

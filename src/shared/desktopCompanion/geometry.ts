@@ -39,12 +39,12 @@ export function companionDragGrabOffset(grab: unknown, size: CompanionSize): Com
   };
 }
 
-/** Restores the orb at its saved spot, or the lower-right corner of the work area. */
+/** Restores the orb at its saved spot, or vertically centered near the right edge of the work area. */
 export function resolveCompanionBounds(position: unknown, workArea: CompanionRect, size: CompanionSize = DesktopCompanionSize.Orb): CompanionRect {
   return clampCompanionBounds({
     ...size,
     x: isPoint(position) ? position.x : workArea.x + workArea.width - size.width - DesktopCompanionSize.Margin,
-    y: isPoint(position) ? position.y : workArea.y + workArea.height - size.height - DesktopCompanionSize.Margin * 4,
+    y: isPoint(position) ? position.y : workArea.y + (workArea.height - size.height) / 2,
   }, workArea);
 }
 

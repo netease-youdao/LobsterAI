@@ -1,0 +1,124 @@
+diff --git a/node_modules/selection-hook/src/windows/core/engine.cc b/node_modules/selection-hook/src/windows/core/engine.cc
+index 130b529..387a51d 100644
+--- a/node_modules/selection-hook/src/windows/core/engine.cc
++++ b/node_modules/selection-hook/src/windows/core/engine.cc
+@@ -16,6 +16,7 @@
+ #include <cassert>
+ #include <cmath>
+ #include <mutex>
++#include <utility>
+ #include <vector>
+ 
+ #include "../lib/clipboard.h"
+@@ -84,6 +85,46 @@ void RemoveObjectReplacementChars(std::wstring &text)
+ 
+     text.swap(cleaned);
+ }
++
++// UIA text rectangles at least this tall, in 96 DPI pixels, are taken for provider output
++// that is not a text line (an element's bounds, for example).
++constexpr double kMaxTextRectLogicalHeight = 100.0;
++
++/**
++ * Effective DPI scale of the monitor nearest a screen point, as the calling process sees it.
++ *
++ * UIA reports rectangles in the same coordinate space GetDpiForMonitor describes for the
++ * caller: physical pixels and the monitor's DPI for a per-monitor aware host such as
++ * Electron, 96 DPI values for an unaware one. Size limits meant in 96 DPI pixels are
++ * multiplied by this. At 200% scaling a 66 CSS px heading line is about 170 physical
++ * pixels tall, which a fixed 100 px limit rejected.
++ *
++ * @param[in] x Screen x coordinate of the point.
++ * @param[in] y Screen y coordinate of the point.
++ * @return The scale, 1.0 for 96 DPI; 1.0 when it cannot be read (GetDpiForMonitor needs
++ *         Windows 8.1, and shcore.dll is loaded from System32 only).
++ */
++double MonitorScaleAt(LONG x, LONG y)
++{
++    // MONITOR_DPI_TYPE MDT_EFFECTIVE_DPI from ShellScalingApi.h; resolved at run time so the
++    // module keeps loading on Windows 7.
++    constexpr int effectiveDpi = 0;
++    using GetDpiForMonitorFn = HRESULT(WINAPI *)(HMONITOR, int, UINT *, UINT *);
++    static const GetDpiForMonitorFn getDpiForMonitor = []() -> GetDpiForMonitorFn {
++        HMODULE shcore = LoadLibraryExW(L"shcore.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
++        return shcore ? reinterpret_cast<GetDpiForMonitorFn>(GetProcAddress(shcore, "GetDpiForMonitor")) : nullptr;
++    }();
++    if (!getDpiForMonitor)
++        return 1.0;
++
++    const POINT point = {x, y};
++    HMONITOR monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
++    UINT dpiX = 0;
++    UINT dpiY = 0;
++    if (!monitor || FAILED(getDpiForMonitor(monitor, effectiveDpi, &dpiX, &dpiY)) || dpiY == 0)
++        return 1.0;
++    return dpiY / 96.0;
++}
+ }  // namespace
+ 
+ SelectionEngine::SelectionEngine(IUIAutomation *automation) : automation_(automation)
+@@ -377,6 +418,11 @@ bool SelectionEngine::TryGetTextViaTextPattern(IUIAutomationElement *element, Te
+             {
+                 // Providers may return multiple ranges; keep the first non-empty range
+                 // with usable screen coordinates, matching the historical behavior.
++                // When no range has usable coordinates, keep the first non-empty text
++                // without them (posLevel None) instead of losing the selection: callers
++                // then place their UI by the mouse. Text whose line rectangles all fail
++                // the size check, such as a large heading, used to yield no selection.
++                std::wstring textWithoutPosition;
+                 for (int i = 0; i < count && !result && !IsStopping(); i++)
+                 {
+                     IUIAutomationTextRange *range = nullptr;
+@@ -392,12 +438,22 @@ bool SelectionEngine::TryGetTextViaTextPattern(IUIAutomationElement *element, Te
+                             selectionInfo.text.assign(text, SysStringLen(text));
+                             RemoveObjectReplacementChars(selectionInfo.text);
+                             if (!selectionInfo.text.empty())
++                            {
+                                 result = SetTextRangeCoordinates(range, selectionInfo);
++                                if (!result && textWithoutPosition.empty())
++                                    textWithoutPosition = selectionInfo.text;
++                            }
+                             SysFreeString(text);
+                         }
+                         range->Release();
+                     }
+                 }
++                if (!result && !textWithoutPosition.empty() && !IsStopping())
++                {
++                    selectionInfo.text = std::move(textWithoutPosition);
++                    selectionInfo.posLevel = SelectionPositionLevel::None;
++                    result = true;
++                }
+             }
+             ranges->Release();
+         }
+@@ -567,10 +623,19 @@ bool SelectionEngine::SetTextRangeCoordinates(IUIAutomationTextRange *range, Tex
+     int lastValid = -1;
+     // Ignore near-zero-width artifacts and implausibly tall provider rectangles. These
+     // thresholds are historical compatibility behavior, not general layout validation.
++    // The height limit is in 96 DPI pixels: UIA reports physical pixels, so it scales
++    // with the monitor under the rectangle (see MonitorScaleAt).
++    const auto isUsable = [rects](int index) {
++        const double maxHeight =
++            kMaxTextRectLogicalHeight *
++            MonitorScaleAt(static_cast<LONG>(rects[index] + rects[index + 2] / 2),
++                           static_cast<LONG>(rects[index + 1] + rects[index + 3] / 2));
++        return rects[index + 2] > 1.0 && rects[index + 3] < maxHeight;
++    };
+     for (int i = 0; i < rectCount; i++)
+     {
+         const int index = i * 4;
+-        if (rects[index + 2] > 1.0 && rects[index + 3] < 100.0)
++        if (isUsable(index))
+         {
+             firstValid = index;
+             break;
+@@ -579,7 +644,7 @@ bool SelectionEngine::SetTextRangeCoordinates(IUIAutomationTextRange *range, Tex
+     for (int i = rectCount - 1; i >= 0; i--)
+     {
+         const int index = i * 4;
+-        if (rects[index + 2] > 1.0 && rects[index + 3] < 100.0)
++        if (isUsable(index))
+         {
+             lastValid = index;
+             break;

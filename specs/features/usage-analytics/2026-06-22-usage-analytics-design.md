@@ -125,6 +125,33 @@ export const LogReporterActionPrefix = {
   - `providerModelCount`：number，Renderer 初始化阶段加载到的用户自配模型数量，用于观察本地模型配置覆盖情况。
   - `hasLoggedInUser`：boolean，启动完成时本地 Redux 登录态中是否存在用户 `yid`。该字段只表示启动时登录态快照，不替代通用参数 `is_logged_in`。
 
+##### Windows 卸载事件 `lobsterai_app_uninstalled`（2026-11-13 新增）
+
+- 触发时机：Windows NSIS 卸载器完成文件和注册表清理后。应用主程序或 `app.asar` 任一仍存在时跳过；仅打开或取消卸载不会发送。
+- 升级排除：`--updated` 的旧版本清理、覆盖安装以及目录重命名升级均不计作卸载。静默卸载 `/S` 属于有效卸载。
+- 上报沿用有道 Analyzer、`_npid=wisdom`、`_ncat=actions`，事件名为 `lobsterai_app_uninstalled`。
+
+| 字段 | 含义 |
+| --- | --- |
+| `uuid` | 复用 SQLite 中的 `installation_uuid`，可与启动、活跃事件关联；不等于用户账号 ID |
+| `app_version` | 实际执行卸载的安装包版本，由卸载器提供；更新后未启动也不会误用旧快照版本 |
+| `uts` | 卸载完成时的 Unix 毫秒时间戳，不使用最后启动时间 |
+| `eventId` | 本次卸载事件 UUID，用于日志去重 |
+| `os_platform`、`os_arch`、`language` | 平台（`win32`）、客户端架构、语言 |
+| `firstKeyfrom`、`latestKeyfrom`、`keyfrom` | 原有首次/最近渠道归因 |
+| `is_logged_in`、`log_Usid`、`user_id` | 最近同步的登录状态和账号 ID；退出登录会清除账号信息 |
+| `environment` | 原有环境口径；生产统计应筛选 `production` |
+| `uninstall_source` | 固定 `nsis` |
+| `silent` | 是否为静默卸载 |
+
+统计建议：筛选上述事件及 `environment=production`，将 `uts` 转换为 `Asia/Shanghai` 自然日，按 `eventId` 去重后统计每天卸载次数；同时按 `uuid` 去重统计卸载安装标识数。版本分布按 `app_version` 分组，明细保留 `uuid`、版本、时间和渠道。同一个 UUID 卸载重装后再次卸载可产生多次事件，两项指标不要混用。
+
+实现位于 `src/main/libs/uninstallAnalytics.ts` 和 `scripts/nsis-uninstall-analytics.nsh`。正式 Windows 客户端启动后，在用户数据目录保存 UTF-16 INI 基础信息快照，并在账号、UUID、渠道及使用统计设置变化时同步；关闭使用统计会删除快照。安装目录仅用于本地校验，不上传。快照不含会话内容、凭据或完整配置。卸载器在删除用户数据前读取快照，因此 `--delete-app-data` 也可上报；发送后删除快照。开发运行不覆盖正式客户端的快照。
+
+**覆盖范围：仅 Windows 标准 NSIS 卸载（完整安装包和 Web 安装包共用）。** 安装了包含此功能的版本并至少运行一次后才具备关联 UUID 的快照；已安装旧版本无法补报历史卸载。安装后从未运行、手动删除文件、关闭使用统计、跨 Windows 账号执行卸载且找不到对应快照，以及离线/网络失败，均可能没有事件。当前不覆盖 macOS、Linux（包括 deb 和 AppImage）。这项指标是“成功收到的 Windows 卸载上报量”，不是全平台完整卸载总量。
+
+HTTPS 连接与接收分别设为 3 秒超时，不显示网络 UI，不做后台驻留或离线补报，失败不改变卸载结果。上线前需要在 Windows 实机验收普通卸载、`/S`、取消、`--updated`、`--delete-app-data`、关闭使用统计和断网场景，并在 Analyzer 查询对应事件。
+
 #### 2.4.3 `lobsterai_skill_enabled`
 
 - 状态：已实现。

@@ -6,10 +6,9 @@ import {
   usesLobsterAIServerQuota,
 } from '../../features/enterpriseAccount/modelQuotaGate';
 import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
+import { resolveNewTaskModelSelection } from '../../services/newTaskModelSelection';
 import type { RootState } from '../../store';
 import { selectCoworkConfig } from '../../store/selectors/coworkSelectors';
-import { toOpenClawModelRef } from '../../utils/openclawModelRef';
-import { resolveAgentStartModel, resolveModelThinkingLevel, useAgentSelectedModel } from './agentModelSelection';
 
 /**
  * What a new session started from a home composer runs with: the current
@@ -21,14 +20,11 @@ export function useHomeStartContext() {
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const agents = useSelector((state: RootState) => state.agent.agents);
-  const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const modelState = useSelector((state: RootState) => state.model);
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
-  const selectedModel = useAgentSelectedModel(currentAgentId, currentAgent?.model ?? '');
-  const startModel = useMemo(() => resolveAgentStartModel({
-    agentModel: currentAgent?.model ?? '',
-    availableModels,
-    selectedModel,
-  }), [availableModels, currentAgent?.model, selectedModel]);
+  const modelSelection = useMemo(() => resolveNewTaskModelSelection(modelState, currentAgentId, currentAgent),
+    [modelState, currentAgentId, currentAgent]);
+  const { selectedModel } = modelSelection;
   const quotaReason = enterpriseAccountContext?.quotaStatus.available === false
     ? enterpriseAccountContext.quotaStatus.reason
     : null;
@@ -37,18 +33,9 @@ export function useHomeStartContext() {
     currentAgentId,
     currentAgent,
     workingDirectory: currentAgent?.workingDirectory?.trim() || config.workingDirectory || '',
-    selectedModel,
-    // Presets are resolved to concrete models when the session starts.
-    selectedModelRef: selectedModel && !selectedModel.presetId ? toOpenClawModelRef(selectedModel) : '',
-    startModel,
+    ...modelSelection,
     usesServerQuota: usesLobsterAIServerQuota(selectedModel),
     quotaReason,
     blockingQuotaReason: resolveBlockingEnterpriseQuotaReason(quotaReason, selectedModel),
-    thinkingLevel: selectedModel?.presetId && !selectedModel.presetThinkingLevel
-      ? undefined
-      : resolveModelThinkingLevel(
-        selectedModel,
-        selectedModel?.presetId ? selectedModel.presetThinkingLevel : currentAgent?.thinkingLevel,
-      ),
   };
 }

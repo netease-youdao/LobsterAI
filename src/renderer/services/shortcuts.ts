@@ -209,3 +209,23 @@ export const getShortcutConflictSignature = (
     meta ? 'meta' : '',
   ].join('|');
 };
+
+const MAC_MODIFIER_GLYPHS: Record<string, string> = {
+  Cmd: '⌘',
+  Ctrl: '⌃',
+  Option: '⌥',
+  Shift: '⇧',
+};
+
+// Compact form for tooltips: "⌘K" on macOS, "Ctrl+K" elsewhere.
+export const formatShortcutHint = (
+  shortcut?: string,
+  options: ShortcutPlatformOptions = {},
+): string => {
+  const display = formatShortcutForDisplay(shortcut, options);
+  if (!options.isMac || !display) return display;
+  return display
+    .split('+')
+    .map(token => MAC_MODIFIER_GLYPHS[token] ?? token)
+    .join('');
+};

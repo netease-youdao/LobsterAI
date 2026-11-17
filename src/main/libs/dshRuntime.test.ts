@@ -171,6 +171,12 @@ describe('spawn argument helpers', () => {
     expect(buildDshWebArgs('/rt/lib/bin.js', 31163)).toEqual(['/rt/lib/bin.js', 'web', '--port', '31163', '--no-open']);
   });
 
+  test('places the optional observation overlay before the CLI app-argument boundary', () => {
+    expect(buildDshWebArgs('/rt/lib/bin.js', 31163, '/private/observer.json')).toEqual([
+      '/rt/lib/bin.js', 'web', '--patch', '/private/observer.json', '--port', '31163', '--no-open',
+    ]);
+  });
+
   test('exec argv carries the loader internals flag', () => {
     expect(DSH_NODE_EXEC_ARGV).toContain('--expose-internals');
   });

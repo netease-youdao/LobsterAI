@@ -19,11 +19,18 @@ import {
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
   CoworkOnboardingMessageKind,
+  CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
 import { normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
+import type {
+  CoworkMessageEditRequest,
+  CoworkMessageEditResult,
+  CoworkMessageVersionSwitchRequest,
+} from '../../shared/cowork/messageEdit';
 import type { CoworkMessageRailIndexItem } from '../../shared/cowork/rail';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
+import type { CoworkSessionFilterQuery } from '../../shared/cowork/sessionFilter';
 import {
   type CoworkSteerRequest,
   CoworkSteerStatus,
@@ -34,6 +41,7 @@ import { OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/const
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import { store } from '../store';
 import { sameAccountContext } from '../store/accountSessionBoundary';
+import { clearSessionArtifacts } from '../store/slices/artifactSlice';
 import {
   addMessage,
   addPendingSteer,
@@ -48,6 +56,7 @@ import {
   dequeuePendingPermission,
   enqueuePendingPermission,
   finishSessionNavigation as finishSessionNavigationAction,
+  invalidateEditedHistory,
   markCompactionNotified,
   openBtwThread,
   prependMessages,
@@ -87,6 +96,7 @@ import type {
   CoworkMemoryStats,
   CoworkPermissionResult,
   CoworkSession,
+  CoworkSessionContentSearchResult,
   CoworkSessionListResult,
   CoworkStartOptions,
   CoworkUserMemoryEntry,
@@ -120,6 +130,17 @@ interface LoadMessageWindowAroundIndexOptions {
 const classifyError = (error: string): string => {
   const key = classifyErrorKey(error);
   return key ? i18nService.t(key) : error;
+};
+
+const resolveSessionRequestErrorMessage = (
+  error: string,
+  code: string | undefined,
+  engineStatus: OpenClawEngineStatus | undefined,
+): string => {
+  if (code === 'ENGINE_NOT_READY') return resolveEngineNotReadyMessage(engineStatus);
+  // Main already localized this message; classifying it would hide the folder path.
+  if (code === CoworkSessionErrorCode.WorkingDirectoryUnavailable) return error;
+  return classifyError(error);
 };
 
 const normalizeErrorText = (text: string): string => text.trim();
@@ -582,7 +603,7 @@ class CoworkService {
           'debug',
           `processed sessions change; active=${currentId ?? 'none'}; changed=${changeScope}; reloadActive=${shouldReloadCurrent}.`,
         );
-        if (currentId && shouldReloadCurrent) {
+        if (currentId && shouldReloadCurrent && !this.messageEditSessions.has(currentId)) {
           void this.loadSession(currentId, { preserveLoadedRange: true }).catch((error: unknown) => {
             this.logDiagnostic(
               'error',
@@ -1078,6 +1099,34 @@ class CoworkService {
     }
   }
 
+  async listFilteredSessions(query: CoworkSessionFilterQuery): Promise<CoworkSessionListResult> {
+    try {
+      const result = await accountBoundRequest(async () => window.electron?.cowork?.listFilteredSessions(query));
+      return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    } catch (error) {
+      console.warn('[CoworkSidebarFilter] filtered session request failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to list filtered sessions',
+      };
+    }
+  }
+
+  async searchSessionContent(query: string, limit?: number): Promise<CoworkSessionContentSearchResult> {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return { success: true, results: [] };
+    try {
+      const result = await accountBoundRequest(async () => window.electron?.cowork?.searchSessionContent({ query: trimmedQuery, limit }));
+      return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    } catch (error) {
+      console.warn('[CoworkSearch] session content search failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to search session content',
+      };
+    }
+  }
+
   async loadMoreSessions(): Promise<boolean> {
     const state = store.getState().cowork;
     if (!state.hasMoreSessions) return false;
@@ -1165,9 +1214,7 @@ class CoworkService {
 
     // Show a user-visible error when session start fails
     if (result.error) {
-      const errorContent = result.code === 'ENGINE_NOT_READY'
-        ? resolveEngineNotReadyMessage(result.engineStatus)
-        : classifyError(result.error);
+      const errorContent = resolveSessionRequestErrorMessage(result.error, result.code, result.engineStatus);
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
     }
 
@@ -1242,10 +1289,11 @@ class CoworkService {
         }
       }
       // Show a user-visible error message in the session
-      if (result.error) {
-        const errorContent = result.code === 'ENGINE_NOT_READY'
-          ? resolveEngineNotReadyMessage(result.engineStatus)
-          : classifyError(result.error);
+      const errorContent = result.error
+        ? resolveSessionRequestErrorMessage(result.error, result.code, result.engineStatus)
+        : '';
+      // An unclassified error already appears verbatim in the "continue failed" message above.
+      if (errorContent && (result.code === 'ENGINE_NOT_READY' || errorContent !== result.error)) {
         store.dispatch(addMessage({
           sessionId: options.sessionId,
           message: {
@@ -1733,6 +1781,82 @@ class CoworkService {
     return false;
   }
 
+  private readonly messageEditSessions = new Set<string>();
+
+  private async runMessageEdit(
+    sessionId: string,
+    action: () => Promise<CoworkMessageEditResult>,
+    options: { keepLoadedRange?: boolean } = {},
+  ): Promise<CoworkMessageEditResult> {
+    const account = store.getState().auth;
+    const accountIsCurrent = () => sameAccountContext(account, store.getState().auth);
+    this.messageEditSessions.add(sessionId);
+    // Fence already-running page refreshes before replacing the history projection.
+    this.latestLoadSessionRequestId += 1;
+    this.messageWindowRequestGeneration += 1;
+    try {
+      const result = await accountBoundRequest(action);
+      if (result.success || result.pending) {
+        this.queuedFollowUpCoordinator.clearSession(sessionId);
+        let invalidated = false;
+        const invalidate = (railIndex?: CoworkMessageRailIndexItem[]) => {
+          if (invalidated || !accountIsCurrent()) return;
+          invalidated = true;
+          store.dispatch(invalidateEditedHistory(sessionId));
+          store.dispatch(clearSessionArtifacts(sessionId));
+          if (railIndex) store.dispatch(setMessageRailIndex({ sessionId, items: railIndex }));
+        };
+        const isCurrent = store.getState().cowork.currentSessionId === sessionId;
+        if (isCurrent && options.keepLoadedRange) {
+          // The view stays on screen while it is replaced: fetch everything first, then swap the
+          // derived state and the messages together so no half-updated frame is painted.
+          const railIndex = await window.electron.cowork.getSessionMessageRailIndex?.(sessionId)
+            .then(rail => rail.success ? rail.items : undefined)
+            .catch((): undefined => undefined);
+          if (!accountIsCurrent()) throw new Error(i18nService.t('accountSessionChanged'));
+          await this.loadSession(sessionId, {
+            isCurrent: accountIsCurrent,
+            preserveLoadedRange: true, historyReplaced: true, beforeApply: () => invalidate(railIndex),
+          });
+          invalidate();
+        } else {
+          invalidate();
+          if (isCurrent) await this.loadSession(sessionId);
+        }
+      }
+      return result;
+    } finally {
+      this.messageEditSessions.delete(sessionId);
+    }
+  }
+
+  async editMessage(request: CoworkMessageEditRequest): Promise<CoworkMessageEditResult> {
+    return this.runMessageEdit(request.sessionId, () => window.electron.cowork.editMessage(request));
+  }
+
+  async recoverMessageEdit(sessionId: string, operationId: string): Promise<CoworkMessageEditResult> {
+    return this.runMessageEdit(sessionId, () => window.electron.cowork.recoverMessageEdit({ sessionId, operationId }));
+  }
+
+  /** Shows another version of an edited message; the conversation after it follows. */
+  async switchMessageVersion(request: CoworkMessageVersionSwitchRequest): Promise<CoworkMessageEditResult> {
+    let result: CoworkMessageEditResult;
+    try {
+      // Reload in place: the reader stays at the switched message instead of jumping to the end.
+      result = await this.runMessageEdit(request.sessionId,
+        () => window.electron.cowork.switchMessageVersion(request), { keepLoadedRange: true });
+    } catch (error) {
+      console.error('[CoworkEdit] version switch request failed:', error);
+      result = { success: false };
+    }
+    if (!result.success) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: result.error ?? i18nService.t('coworkVersionSwitchFailed'),
+      }));
+    }
+    return result;
+  }
+
   async forkSession(options: CoworkForkSessionOptions): Promise<{ session: CoworkSession | null; error?: string }> {
     const cowork = window.electron?.cowork;
     if (!cowork?.forkSession) {
@@ -1845,7 +1969,14 @@ class CoworkService {
 
   async loadSession(
     sessionId: string,
-    options: { preserveLoadedRange?: boolean; isCurrent?: () => boolean } = {},
+    options: {
+      preserveLoadedRange?: boolean;
+      isCurrent?: () => boolean;
+      /** The stored history itself changed, so the in-memory window is never the newer one. */
+      historyReplaced?: boolean;
+      /** Runs in the same tick as the session update, so both land in one render. */
+      beforeApply?: () => void;
+    } = {},
   ): Promise<CoworkSession | null> {
     try {
       const cowork = window.electron?.cowork;
@@ -1889,14 +2020,15 @@ class CoworkService {
                 `failed to preserve loaded history for session ${sessionId}; keeping the existing view.`,
                 error,
               );
-              return previouslyLoadedSession;
+              // A replaced history has no existing view worth keeping; fall back to the latest page.
+              if (!options.historyReplaced) return previouslyLoadedSession;
             }
             if (options.isCurrent?.() === false) return null;
             if (requestId !== this.latestLoadSessionRequestId) {
               this.logDiagnostic('debug', `ignored stale preserved session load result for session ${sessionId}.`);
               return session;
             }
-            if (pageResult.success && pageResult.messages && pageResult.messages.length > 0) {
+            if (pageResult?.success && pageResult.messages && pageResult.messages.length > 0) {
               const returnedOffset = pageResult.offset ?? preservedWindow.offset;
               const returnedEnd = returnedOffset + pageResult.messages.length;
               const latestLoadedSession = store.getState().cowork.currentSession;
@@ -1904,7 +2036,8 @@ class CoworkService {
                 ? latestLoadedSession.messagesOffset + latestLoadedSession.messages.length
                 : 0;
               if (
-                latestLoadedSession?.id === sessionId
+                !options.historyReplaced
+                && latestLoadedSession?.id === sessionId
                 && (
                   latestLoadedSession.messagesOffset < returnedOffset
                   || latestLoadedEnd > returnedEnd
@@ -1928,15 +2061,16 @@ class CoworkService {
                 'debug',
                 `preserved loaded history for session ${sessionId}; returned ${session.messages.length} of ${session.totalMessages} messages from offset ${session.messagesOffset}.`,
               );
-            } else {
+            } else if (!options.historyReplaced) {
               this.logDiagnostic(
                 'warn',
-                `failed to preserve loaded history for session ${sessionId}: ${pageResult.error ?? 'empty result'}; keeping the existing view.`,
+                `failed to preserve loaded history for session ${sessionId}: ${pageResult?.error ?? 'empty result'}; keeping the existing view.`,
               );
               return previouslyLoadedSession;
             }
           }
         }
+        options.beforeApply?.();
         store.dispatch(setCurrentSession(session));
         this.setCurrentSessionStreaming(sessionId, session.status === 'running', 'load_session_completed');
         void this.loadSessionMessageRailIndex(sessionId);
@@ -1960,6 +2094,7 @@ class CoworkService {
   }
 
   async loadSessionMessageRailIndex(sessionId: string): Promise<CoworkMessageRailIndexItem[]> {
+    const editGeneration = this.messageWindowRequestGeneration;
     const cowork = window.electron?.cowork;
     if (!cowork?.getSessionMessageRailIndex) return [];
 
@@ -1971,6 +2106,7 @@ class CoworkService {
     store.dispatch(setMessageRailIndexLoading({ sessionId, loading: true }));
     try {
       const result = await accountBoundRequest(async () => cowork.getSessionMessageRailIndex(sessionId));
+      if (editGeneration !== this.messageWindowRequestGeneration) return [];
       if (result.success && result.items) {
         store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
         this.logDiagnostic(
@@ -2064,7 +2200,8 @@ class CoworkService {
   }
 
   /** Load older messages for the current session (for scroll-up history). */
-  async loadMoreMessages(sessionId: string): Promise<boolean> {
+  async loadMoreMessages(sessionId: string, beforePrepend?: (newOffset: number) => boolean | void): Promise<boolean> {
+    const editGeneration = this.messageWindowRequestGeneration;
     const cowork = window.electron?.cowork;
     if (!cowork?.getSessionMessages) return false;
 
@@ -2080,6 +2217,7 @@ class CoworkService {
     const currentMessageCount = state.currentSession.messages.length;
     const totalMessages = state.currentSession.totalMessages;
     const expectedFirstMessageId = state.currentSession.messages[0]?.id ?? null;
+    const expectedLastMessageId = state.currentSession.messages[currentMessageCount - 1]?.id ?? null;
 
     this.logDiagnostic(
       'info',
@@ -2087,14 +2225,16 @@ class CoworkService {
     );
 
     const result = await accountBoundRequest(async () => cowork.getSessionMessages({ sessionId, limit, offset: newOffset }));
+    if (editGeneration !== this.messageWindowRequestGeneration) return false;
     if (result.success && result.messages && result.messages.length > 0) {
       const latestSession = store.getState().cowork.currentSession;
       const latestFirstMessageId = latestSession?.messages[0]?.id ?? null;
       if (
         latestSession?.id !== sessionId
         || latestSession.messagesOffset !== currentOffset
-        || latestSession.messages.length !== currentMessageCount
+        || latestSession.messages.length < currentMessageCount
         || latestFirstMessageId !== expectedFirstMessageId
+        || (latestSession.messages[currentMessageCount - 1]?.id ?? null) !== expectedLastMessageId
       ) {
         this.logDiagnostic(
           'debug',
@@ -2102,6 +2242,9 @@ class CoworkService {
         );
         return false;
       }
+      // The view may have cancelled its request while another navigation left
+      // the store on an otherwise matching window. Do not commit in that case.
+      if (beforePrepend?.(newOffset) === false) return false;
       store.dispatch(prependMessages({
         sessionId,
         messages: result.messages,
@@ -2126,6 +2269,7 @@ class CoworkService {
 
   /** Load the page immediately after the active message window. */
   async loadNewerMessages(sessionId: string): Promise<boolean> {
+    const editGeneration = this.messageWindowRequestGeneration;
     const cowork = window.electron?.cowork;
     if (!cowork?.getSessionMessages) return false;
 
@@ -2146,6 +2290,7 @@ class CoworkService {
     );
 
     const result = await accountBoundRequest(async () => cowork.getSessionMessages({ sessionId, limit, offset: nextOffset }));
+    if (editGeneration !== this.messageWindowRequestGeneration) return false;
     if (result.success && result.messages && result.messages.length > 0) {
       const latestSession = store.getState().cowork.currentSession;
       const latestLastMessageId = latestSession

@@ -1,4 +1,7 @@
 !include "FileFunc.nsh"
+; Windows makensis splits !include paths only on "\" (it enumerates the parent
+; directory to support wildcards), so a "/" here fails with "could not find".
+!include "${__FILEDIR__}\nsis-uninstall-analytics.nsh"
 
 ; Build-time payload size metadata, generated into build-tar/ by
 ; scripts/electron-builder-hooks.cjs (afterPack) on every Windows packaging
@@ -1865,6 +1868,7 @@ FunctionEnd
     !insertmacro EnsureInstallerAttemptId
     !insertmacro ResolveTrustedPowerShell
     !insertmacro stopLobsterAIProcesses
+    !insertmacro LobsterPrepareUninstallAnalytics
   !endif
 !macroend
 
@@ -3252,4 +3256,5 @@ FunctionEnd
   Pop $1
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_FIREWALL_PROGRAM", t "")i'
   LoopbackFirewallUninstallDone:
+  !insertmacro LobsterReportUninstallAnalytics
 !macroend

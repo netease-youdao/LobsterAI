@@ -21,7 +21,12 @@ export interface ClientBannerSnapshot {
 
 export interface CachedBannerSchedule extends ClientBannerSnapshot {
   savedAtClientMs: number;
+  /** Account the schedule was fetched for; targeted banners must not leak across accounts. */
+  audienceKey?: string;
 }
+
+/** Schedules cached before audience targeting were always fetched without a session. */
+export const GUEST_BANNER_AUDIENCE_KEY = 'guest';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -37,12 +42,17 @@ export const parseUtcDateTime = (value: string | null | undefined): number => {
   return Date.parse(normalized);
 };
 
+const hasRenderableContent = (value: Record<string, unknown>): boolean => (
+  (value.contentType === 'html' && isNonEmptyString(value.htmlContent))
+  || isNonEmptyString(value.imageUrl)
+);
+
 const normalizeBanner = (value: unknown): ClientBanner | null => {
   if (!isRecord(value)
       || typeof value.id !== 'number'
       || !isNonEmptyString(value.activityDescription)
       || !isNonEmptyString(value.linkUrl)
-      || !isNonEmptyString(value.imageUrl)
+      || !hasRenderableContent(value)
       || (value.minClientVersion !== null
         && value.minClientVersion !== undefined
         && typeof value.minClientVersion !== 'string')) {
@@ -89,8 +99,10 @@ export const createCachedBannerSchedule = (
 const normalizeCachedSchedule = (
   value: unknown,
   clientVersion: string,
+  audienceKey: string,
 ): CachedBannerSchedule | null => {
   if (!isRecord(value)
+      || (typeof value.audienceKey === 'string' ? value.audienceKey : GUEST_BANNER_AUDIENCE_KEY) !== audienceKey
       || !isNonEmptyString(value.serverTime)
       || !isNonEmptyString(value.clientVersion)
       || typeof value.savedAtClientMs !== 'number'
@@ -98,7 +110,7 @@ const normalizeCachedSchedule = (
       || (value.nextRefreshAt !== null && typeof value.nextRefreshAt !== 'string')) {
     return null;
   }
-  return createCachedBannerSchedule({
+  const schedule = createCachedBannerSchedule({
     serverTime: value.serverTime,
     nextRefreshAt: value.nextRefreshAt as string | null,
     clientVersion,
@@ -106,6 +118,7 @@ const normalizeCachedSchedule = (
       (banner): banner is ClientBanner => banner !== null,
     ),
   }, value.savedAtClientMs);
+  return schedule ? { ...schedule, audienceKey } : null;
 };
 
 export const isCachedBannerScheduleFresh = (
@@ -180,11 +193,13 @@ export const readCachedBannerSchedule = async (
   placement = SIDEBAR_BANNER_PLACEMENT,
   clientNow = Date.now(),
   clientVersion: string,
+  audienceKey = GUEST_BANNER_AUDIENCE_KEY,
 ): Promise<CachedBannerSchedule | null> => {
   const key = getSidebarBannerScheduleCacheKey(placement);
   const schedule = normalizeCachedSchedule(
     await localStore.getItem<unknown>(key),
     clientVersion,
+    audienceKey,
   );
   if (schedule && isCachedBannerScheduleFresh(schedule, clientNow)) return schedule;
   if (schedule) await localStore.removeItem(key).catch(() => undefined);

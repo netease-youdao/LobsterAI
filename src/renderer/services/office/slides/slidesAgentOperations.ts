@@ -131,6 +131,45 @@ export interface SlidesEditResult {
   focus?: { slide: number; shape?: string };
 }
 
+/** Slides and shapes a ppt_edit reply echoes back; enough to check an edit, small enough to stay cheap. */
+const MAX_EDIT_REPLY_SLIDES = 5;
+const MAX_EDIT_REPLY_SHAPES = 30;
+
+export interface EditedShapes {
+  shapes: { slide: number; shape: string; text?: string; table?: string[][] }[];
+  truncated?: true;
+}
+
+/** The changed slides to read back, as a ppt_read slide list; undefined when nothing changed. */
+export function editedSlideList(changed: SlidesEditResult['changed']): string | undefined {
+  const slides = [...new Set(changed.map(entry => entry.slide))].sort((a, b) => a - b).slice(0, MAX_EDIT_REPLY_SLIDES);
+  return slides.length ? slides.join(',') : undefined;
+}
+
+/**
+ * The text of the shapes an edit changed, as ppt_read reports it, so the agent can check its edit
+ * without reading again. A slide changed as a whole (added, duplicated) lists all its text shapes.
+ */
+export function pickEditedShapes(summary: Partial<SlidesSummary>, changed: SlidesEditResult['changed']): EditedShapes {
+  const wanted = new Map<number, Set<string> | 'all'>();
+  for (const entry of changed) {
+    const current = wanted.get(entry.slide);
+    if (!entry.shape || current === 'all') wanted.set(entry.slide, 'all');
+    else wanted.set(entry.slide, new Set([...(current ?? []), entry.shape]));
+  }
+  const shapes: EditedShapes['shapes'] = [];
+  for (const slide of summary.slides ?? []) {
+    const want = wanted.get(slide.slide);
+    for (const shape of slide.shapes) {
+      if (want !== 'all' && !want?.has(shape.id)) continue;
+      if (!shape.text && !shape.table) continue;
+      if (shapes.length >= MAX_EDIT_REPLY_SHAPES) return { shapes, truncated: true };
+      shapes.push({ slide: slide.slide, shape: shape.id, ...(shape.text ? { text: shape.text } : {}), ...(shape.table ? { table: shape.table } : {}) });
+    }
+  }
+  return wanted.size > MAX_EDIT_REPLY_SLIDES ? { shapes, truncated: true } : { shapes };
+}
+
 const ALIGN: Record<string, typeof SlidesAlign[keyof typeof SlidesAlign]> = {
   [SlidesAlignment.Left]: SlidesAlign.Left, [SlidesAlignment.Center]: SlidesAlign.Center,
   [SlidesAlignment.Right]: SlidesAlign.Right, [SlidesAlignment.Justify]: SlidesAlign.Justify,

@@ -25,6 +25,7 @@ interface Host {
   abortFollowUp(id: number): void;
   /** A screenshot shortcut is waiting for its shot; the card keeps showing when it loses focus to it. */
   isCapturing(): boolean;
+  beforeSpeech?(): void;
 }
 
 /** How often a card that lost focus to a screenshot checks whether the shot is done. */
@@ -35,6 +36,7 @@ export class CompanionLanguageToolsController {
   private window: BrowserWindow | null = null;
   private input: LanguageToolInput | null = null;
   private status: SpeechStatus = SpeechStatus.Idle;
+  private speechRequestId: string | null = null;
   private anchor: CompanionSelectionAnchor | null = null;
   private toolbarBounds: CompanionRect | null = null;
   private size: CompanionSize = { ...DesktopCompanionSize.Answer };
@@ -69,11 +71,20 @@ export class CompanionLanguageToolsController {
       if (request?.tool === LanguageTool.Tts && (!this.input || !this.window?.isVisible())) {
         return { success: false, code: LanguageToolCode.Unavailable };
       }
-      return this.client?.start(request, event => {
+      const result = this.client?.start(request, event => {
         if (this.window && !this.window.isDestroyed()) this.window.webContents.send(LanguageToolsIpc.Event, event);
       }) ?? { success: false, code: LanguageToolCode.Unavailable };
+      if (result.success && request.tool === LanguageTool.Tts) {
+        this.speechRequestId = request.requestId;
+        this.host.beforeSpeech?.();
+      }
+      return result;
     }, true);
-    handle(LanguageToolsIpc.Abort, value => { if (typeof value === 'string') this.client?.abort(value); }, true);
+    handle(LanguageToolsIpc.Abort, value => {
+      if (typeof value !== 'string') return;
+      this.client?.abort(value);
+      if (value === this.speechRequestId) this.speechRequestId = null;
+    }, true);
     handle(LanguageToolsIpc.Quota, value => this.client?.quota(value as LanguageTool) ?? { success: false, code: LanguageToolCode.Unavailable });
     handle(LanguageToolsIpc.SpeechStatus, value => {
       if (!this.input || !this.window?.isVisible() || !Object.values(SpeechStatus).includes(value as SpeechStatus)) return;
@@ -163,14 +174,15 @@ export class CompanionLanguageToolsController {
     const win = this.window;
     if (!pending?.input.text || !win || win.isDestroyed() || !this.anchor) return;
     const { resume, ...input } = pending.input;
-    this.input = { ...input, id: randomUUID(), cardMaxHeight: this.cardHeight - DesktopCompanionSize.SurfacePad * 2, pinned: true };
+    this.input = { ...input, ...(resume?.targetLanguage ? { targetLanguage: resume.targetLanguage } : {}),
+      id: randomUUID(), cardMaxHeight: this.cardHeight - DesktopCompanionSize.SurfacePad * 2, pinned: true };
     this.pinned = true;
     this.moved = pending.moved;
     this.size = this.openingSize(pending.input.tool);
     this.place();
     win.setIgnoreMouseEvents(true, { forward: true });
     // The waiting question goes out once: a renderer that reloads later reads the card without it.
-    win.webContents.send(LanguageToolsIpc.Input, resume ? { ...this.input, resume } : this.input);
+    win.webContents.send(LanguageToolsIpc.Input, resume?.question ? { ...this.input, resume: { question: resume.question } } : this.input);
     // Focus stays with the browser or main window the sign-in ended in.
     win.showInactive();
   }
@@ -217,10 +229,19 @@ export class CompanionLanguageToolsController {
       interactionType: command, tool: LanguageTool.Tts });
     this.window?.webContents.send(LanguageToolsIpc.SpeechCommand, command);
   }
+  stopSpeech(): void {
+    if (!this.speechRequestId && this.status === SpeechStatus.Idle) return;
+    if (this.speechRequestId) this.client?.abort(this.speechRequestId);
+    this.speechRequestId = null;
+    if (this.window && !this.window.isDestroyed()) this.window.webContents.send(LanguageToolsIpc.SpeechCommand, SpeechCommand.Stop);
+    this.status = SpeechStatus.Idle;
+    this.host.publish();
+  }
   reset(): void {
     clearTimeout(this.captureTimer);
     this.captureTimer = undefined;
     this.client?.reset();
+    this.speechRequestId = null;
     if (this.window) this.host.abortFollowUp(this.window.webContents.id);
     this.input = null;
     this.pinned = false;

@@ -1,4 +1,4 @@
-import { AgentSource } from '@shared/agent/constants';
+import { AgentModelSelectionMode, AgentSource } from '@shared/agent/constants';
 import { ExpertFixtureId } from '@shared/agent/expertCatalogFixture';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
@@ -52,7 +52,7 @@ test('expert skill provenance survives draft sync and removal followed by re-sel
   expect(store.getState().cowork.draftInheritedSkillIds.__home__).toBeUndefined();
 });
 
-test('switching an installed expert carries the latest text and preserves draft context', () => {
+test('switching an installed expert carries the latest text and preserves draft context', async () => {
   store.dispatch(setAgents([expert]));
   store.dispatch(setDraftPrompt({ sessionId: '__home__', draft: 'Stale debounced text' }));
   const attachments = [{ name: 'notes.txt', path: '/notes.txt' }];
@@ -62,7 +62,7 @@ test('switching an installed expert carries the latest text and preserves draft 
   store.dispatch(setDraftCollaborationMode({ draftKey: '__home__', mode: CoworkCollaborationMode.Plan }));
   const sessions = store.getState().cowork.sessions;
 
-  expect(switchExpertInDraft(expert.id, 'Latest text, not yet persisted')).toBe(true);
+  expect(await switchExpertInDraft(expert.id, 'Latest text, not yet persisted')).toBe(true);
 
   const state = store.getState();
   expect(state.agent.currentAgentId).toBe(expert.id);
@@ -78,15 +78,15 @@ test('switching an installed expert carries the latest text and preserves draft 
   expect(state.cowork.draftSkillIds.__home__).toEqual(expert.skillIds);
 });
 
-test('a removed or disabled expert cannot change the active draft', () => {
+test('a removed or disabled expert cannot change the active draft', async () => {
   store.dispatch(setAgents([{ ...expert, enabled: false }]));
   const before = store.getState();
-  expect(switchExpertInDraft(expert.id, 'Do not replace')).toBe(false);
-  expect(switchExpertInDraft('missing-expert', 'Do not replace')).toBe(false);
+  expect(await switchExpertInDraft(expert.id, 'Do not replace')).toBe(false);
+  expect(await switchExpertInDraft('missing-expert', 'Do not replace')).toBe(false);
   expect(store.getState()).toBe(before);
 });
 
-test('summoning the current expert again requests a new reveal after the sidebar consumed the first', () => {
+test('summoning the current expert again requests a new reveal after the sidebar consumed the first', async () => {
   store.dispatch(setAgents([expert]));
   openExpertDraft(expert, 'First draft');
   store.dispatch(setSidebarRevealAgentId(null));
@@ -96,7 +96,7 @@ test('summoning the current expert again requests a new reveal after the sidebar
   expect(store.getState().cowork.draftPrompts.__home__).toBe('Another draft');
 
   store.dispatch(setSidebarRevealAgentId(null));
-  expect(switchExpertInDraft(expert.id, 'Keep my draft')).toBe(true);
+  expect(await switchExpertInDraft(expert.id, 'Keep my draft')).toBe(true);
   expect(store.getState().agent.sidebarRevealAgentId).toBe(expert.id);
 });
 
@@ -105,6 +105,43 @@ test('repeated preparation upserts the existing agent instead of duplicating it'
   await agentService.addPreset(expert.presetId);
   expect(store.getState().agent.agents).toHaveLength(1);
   expect(store.getState().agent.agents[0]).toMatchObject({ name: expert.name, model: expert.model, skillIds: ['docx'] });
+});
+
+test('the expert picker prepares inherited models before switching while preserving the current draft', async () => {
+  const inherited = { ...expert, modelSelectionMode: AgentModelSelectionMode.Inherit };
+  store.dispatch(setAgents([inherited]));
+  vi.mocked(window.electron.agents.addPreset).mockResolvedValue({ ...inherited, model: 'lobsterai-server/yd-fast' });
+  expect(await switchExpertInDraft(inherited.id, 'Keep my current text')).toBe(true);
+  expect(window.electron.agents.addPreset).toHaveBeenCalledOnce();
+  expect(store.getState().agent.agents[0].model).toBe('lobsterai-server/yd-fast');
+  expect(store.getState().cowork.draftPrompts.__home__).toBe('Keep my current text');
+});
+
+test('a delayed expert preparation cannot overwrite a draft edited while it was pending', async () => {
+  const inherited = { ...expert, modelSelectionMode: AgentModelSelectionMode.Inherit };
+  store.dispatch(setAgents([inherited]));
+  let finish!: (agent: Agent) => void;
+  vi.mocked(window.electron.agents.addPreset).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const pending = switchExpertInDraft(inherited.id, 'Old input', () => false);
+  store.dispatch(setDraftPrompt({ sessionId: '__home__', draft: 'New input' }));
+  finish(inherited);
+  expect(await pending).toBe(false);
+  expect(store.getState().agent.currentAgentId).toBe('main');
+  expect(store.getState().cowork.draftPrompts.__home__).toBe('New input');
+});
+
+test('a delayed inherited picker selection cannot replace a more recent expert choice', async () => {
+  const inherited = { ...expert, modelSelectionMode: AgentModelSelectionMode.Inherit };
+  const second = { ...expert, id: 'second-expert' };
+  store.dispatch(setAgents([inherited, second]));
+  let finish!: (agent: Agent) => void;
+  vi.mocked(window.electron.agents.addPreset).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const pending = switchExpertInDraft(inherited.id, 'First');
+  expect(await switchExpertInDraft(second.id, 'Second')).toBe(true);
+  finish(inherited);
+  expect(await pending).toBe(false);
+  expect(store.getState().agent.currentAgentId).toBe(second.id);
+  expect(store.getState().cowork.draftPrompts.__home__).toBe('Second');
 });
 
 test('summon opens a clean expert draft without starting or stopping tasks', async () => {

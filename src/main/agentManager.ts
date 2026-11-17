@@ -1,7 +1,8 @@
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 
 import { parseAgentAvatarImageUrl } from '../shared/agent/avatar';
-import { AgentAccessErrorCode, AgentId, AgentOwnerKind, AgentSource } from '../shared/agent/constants';
+import { AgentAccessErrorCode, AgentId, AgentModelSelectionMode, AgentOwnerKind, AgentSource } from '../shared/agent/constants';
+import { usesInheritedAgentModel } from '../shared/agent/modelSelection';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
 import type { ExpertCatalog, PresetAgent } from '../shared/agent/presets';
 import type { RemoteOwner } from '../shared/remote/constants';
@@ -53,7 +54,7 @@ export class AgentManager {
     this.assertSubagentAccess(request.subagentAllowAgentIds, owner);
     return this.store.createAgent({
       ...request,
-      id: randomUUID(),
+      id: request.id || randomUUID(),
       model: request.model?.trim() || defaultModel?.trim() || '',
       workingDirectory: request.workingDirectory?.trim() || '',
     }, owner);
@@ -64,9 +65,24 @@ export class AgentManager {
     const owner = this.captureOwner();
     this.store.assertAgentAccess(agentId, owner);
     this.assertSubagentAccess(updates.subagentAllowAgentIds, owner);
+    if (updates.modelSelectionMode !== undefined
+      && !Object.values(AgentModelSelectionMode).includes(updates.modelSelectionMode)) {
+      throw new Error('Invalid agent model selection mode.');
+    }
+    if (updates.modelSelectionMode === AgentModelSelectionMode.Inherit
+      && (agentId === AgentId.Main || this.store.getVisibleAgent(agentId, owner)?.source !== AgentSource.Preset)) {
+      throw new Error('Only preset experts can inherit a new-task model.');
+    }
     return this.store.updateAgent(agentId, {
       ...updates,
-      ...(updates.workingDirectory !== undefined ? { workingDirectory: updates.workingDirectory.trim() } : {}),
+      // Explicit edits opt out; automatic preset refreshes write to the store
+      // directly so they do not turn an inherited binding into a user choice.
+      ...(updates.modelSelectionMode === undefined
+        && (updates.model !== undefined || updates.thinkingLevel !== undefined)
+        ? { modelSelectionMode: AgentModelSelectionMode.Explicit } : {}),
+      ...(updates.workingDirectory !== undefined
+        ? { workingDirectory: updates.workingDirectory.trim() }
+        : {}),
     }, owner);
   }
 
@@ -119,19 +135,41 @@ export class AgentManager {
     return (await this.getExpertCatalog()).experts;
   }
 
-  async addPresetAgent(presetId: string, defaultModel?: string): Promise<Agent | null> {
+  async addPresetAgent(presetId: string, defaultModel?: string, thinkingLevel: Agent['thinkingLevel'] = ''): Promise<Agent | null> {
     const owner = this.captureOwner();
     // Reuse only this owner's instance, preserving edits and offline availability.
     const findExisting = () => this.installedPresets().find(agent => agent.presetId === presetId);
+    const reuse = (agent: Agent): Agent | null => {
+      const updates: UpdateAgentRequest = {};
+      if (!agent.enabled) updates.enabled = true;
+      if (usesInheritedAgentModel(agent) && defaultModel !== undefined) {
+        const model = defaultModel.trim();
+        if (agent.model !== model) updates.model = model;
+        if (agent.thinkingLevel !== thinkingLevel) updates.thinkingLevel = thinkingLevel;
+      }
+      return Object.keys(updates).length > 0 ? this.updateAgent(agent.id, { ...updates, modelSelectionMode: agent.modelSelectionMode }) : agent;
+    };
     const existing = findExisting();
-    if (existing) return existing.enabled ? existing : this.updateAgent(existing.id, { enabled: true });
+    if (existing) {
+      return reuse(existing);
+    }
 
     const preset = (await this.getAllPresetAgents()).find(item => item.id === presetId);
     this.assertCurrentOwner(owner);
     if (!preset) return null;
     // Concurrent catalog requests may have installed this owner's preset already.
     const createdMeanwhile = findExisting();
-    if (createdMeanwhile) return createdMeanwhile.enabled ? createdMeanwhile : this.updateAgent(createdMeanwhile.id, { enabled: true });
-    return this.createAgent({ ...presetToCreateRequest(preset), workingDirectory: '' }, defaultModel);
+    if (createdMeanwhile) return reuse(createdMeanwhile);
+
+    return this.createAgent({
+      ...presetToCreateRequest(preset),
+      // Historical ownership triggers can keep deleted IDs reserved.
+      // presetId identifies the template; each new instance needs its own ID.
+      id: randomUUID(),
+      model: defaultModel?.trim() || '',
+      modelSelectionMode: AgentModelSelectionMode.Inherit,
+      thinkingLevel,
+      workingDirectory: '',
+    }, defaultModel);
   }
 }

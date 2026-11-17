@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
 import { app, type BrowserWindow, desktopCapturer, ipcMain, type NativeImage, nativeImage, type Rectangle, screen, systemPreferences } from 'electron';
 import fs from 'fs/promises';
@@ -5,9 +6,41 @@ import path from 'path';
 
 import { type DesktopCompanionAttachment, DesktopCompanionSurface } from '../../shared/desktopCompanion/constants';
 import { companionScreenshotCrop, CompanionScreenshotIpc } from '../../shared/desktopCompanion/screenshot';
-import { SystemPermissionStatus } from '../../shared/permissions/constants';
+import { MediaAccessStatus, SystemPermissionStatus } from '../../shared/permissions/constants';
 import { t } from '../i18n';
 import { type CompanionWindowEnvironment, createCompanionWindow } from './companionWindow';
+
+/** macOS has not given LobsterAI Screen Recording; the user has to turn it on in System Settings. */
+export class CompanionScreenPermissionError extends Error {
+  constructor() {
+    super('Screen recording permission denied');
+    this.name = 'CompanionScreenPermissionError';
+  }
+}
+
+/** Only macOS asks; elsewhere capture is always allowed. */
+export function hasCompanionScreenPermission(): boolean {
+  return process.platform !== 'darwin' || systemPreferences.getMediaAccessStatus('screen') === MediaAccessStatus.Granted;
+}
+
+// CGRequestScreenCaptureAccess is missing from JXA's bridge metadata, so bind it by hand.
+const MAC_REQUEST_SCREEN_ACCESS_SCRIPT = `
+ObjC.import('CoreGraphics');
+ObjC.bindFunction('CGRequestScreenCaptureAccess', ['bool', []]);
+$.CGRequestScreenCaptureAccess();`;
+
+/**
+ * Makes macOS prompt once and add LobsterAI to its Screen Recording list, so the user only has to
+ * switch it on there. desktopCapturer refuses without the permission before it asks macOS, so it
+ * never gets the app listed. The script's process counts as LobsterAI, its responsible app. It may
+ * wait on the system prompt, so nothing waits on it.
+ */
+export function requestCompanionScreenAccess(): void {
+  if (process.platform !== 'darwin') return;
+  execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MAC_REQUEST_SCREEN_ACCESS_SCRIPT], { timeout: 60_000 }, error => {
+    if (error) console.debug('[DesktopCompanion] Screen Recording request did not complete:', error.message);
+  });
+}
 
 interface CaptureFrame {
   window: BrowserWindow;
@@ -84,6 +117,9 @@ export class CompanionScreenshotController {
           width: Math.ceil(Math.max(...displays.map(display => display.size.width * display.scaleFactor))),
           height: Math.ceil(Math.max(...displays.map(display => display.size.height * display.scaleFactor))),
         },
+      }).catch((error: unknown) => {
+        // ScreenCaptureKit refuses the list outright ("Failed to get sources.") without the permission.
+        throw hasCompanionScreenPermission() ? error : new CompanionScreenPermissionError();
       });
       const captured = performance.now();
       if (this.disposed || canceled) return null;
@@ -91,7 +127,7 @@ export class CompanionScreenshotController {
       if (process.platform === 'darwin') {
         const permission = systemPreferences.getMediaAccessStatus('screen');
         if (permission === SystemPermissionStatus.Denied || permission === SystemPermissionStatus.Restricted) {
-          throw new Error('Screen recording permission denied');
+          throw new CompanionScreenPermissionError();
         }
       }
       const captures = displays.map(display => {

@@ -33,6 +33,7 @@ export interface AvailableModelPreset {
   presetId: ModelPresetId;
   costMultiplier: number;
   contextWindow?: number | null;
+  contextWindowOptions?: number[] | null;
   accessible: boolean;
   supportsImage: boolean;
   supportsThinking?: boolean;

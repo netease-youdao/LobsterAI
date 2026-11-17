@@ -27,7 +27,7 @@ function fixture(filename = ':memory:') {
   databases.push(db);
   db.exec(`
     CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT DEFAULT '',system_prompt TEXT DEFAULT '',
-      identity TEXT DEFAULT '',model TEXT DEFAULT '',thinking_level TEXT DEFAULT '',working_directory TEXT DEFAULT '',
+      identity TEXT DEFAULT '',model TEXT DEFAULT '',model_selection_mode TEXT NOT NULL DEFAULT 'explicit',thinking_level TEXT DEFAULT '',working_directory TEXT DEFAULT '',
       icon TEXT DEFAULT '',icon_customized INTEGER,skill_ids TEXT DEFAULT '[]',subagent_allow_agent_ids TEXT DEFAULT '[]',enabled INTEGER DEFAULT 1,
       pinned INTEGER DEFAULT 0,pin_order INTEGER,sort_order INTEGER,is_default INTEGER DEFAULT 0,source TEXT DEFAULT 'custom',
       preset_id TEXT DEFAULT '',created_at INTEGER DEFAULT 1,updated_at INTEGER DEFAULT 1);

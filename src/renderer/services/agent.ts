@@ -2,7 +2,11 @@ import {
   AgentId,
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
+  AgentModelSelectionMode,
+  AgentSource,
 } from '@shared/agent';
+import { usesInheritedAgentModel } from '@shared/agent/modelSelection';
+import { ExpertUiEvent } from '@shared/agent/presets';
 
 import { store } from '../store';
 import {
@@ -19,6 +23,7 @@ import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice
 import type { Agent, PresetAgent } from '../types/agent';
 import { accountBoundRequest } from './accountBoundRequest';
 import { i18nService } from './i18n';
+import { captureExpertModelSelection } from './newTaskModelSelection';
 import { resetDraftAnalytics } from './usageAnalytics';
 
 const syncActiveSkillsForCurrentAgent = (agentId: string, skillIds: string[]): void => {
@@ -57,6 +62,7 @@ class AgentService {
           icon: a.icon,
           iconCustomized: a.iconCustomized,
           model: a.model ?? '',
+          modelSelectionMode: a.modelSelectionMode,
           thinkingLevel: a.thinkingLevel ?? '',
           workingDirectory: a.workingDirectory ?? '',
           enabled: a.enabled,
@@ -100,6 +106,7 @@ class AgentService {
           icon: agent.icon,
           iconCustomized: agent.iconCustomized,
           model: agent.model ?? '',
+          modelSelectionMode: agent.modelSelectionMode,
           thinkingLevel: agent.thinkingLevel ?? '',
           workingDirectory: agent.workingDirectory ?? '',
           enabled: agent.enabled,
@@ -127,6 +134,7 @@ class AgentService {
     systemPrompt?: string;
     identity?: string;
     model?: string;
+    modelSelectionMode?: AgentModelSelectionMode;
     thinkingLevel?: Agent['thinkingLevel'];
     workingDirectory?: string;
     icon?: string;
@@ -137,9 +145,11 @@ class AgentService {
     sortOrder?: number | null;
   }): Promise<Agent | null> {
     try {
-      const agent = await accountBoundRequest(async () => window.electron?.agents?.update(id, updates));
+      const effectiveUpdates = updates.modelSelectionMode === AgentModelSelectionMode.Inherit
+        ? { ...updates, ...captureExpertModelSelection(store.getState(), id) } : updates;
+      const agent = await accountBoundRequest(async () => window.electron?.agents?.update(id, effectiveUpdates));
       if (agent) {
-        if (updates.model !== undefined) {
+        if (effectiveUpdates.model !== undefined) {
           // Agent.model is now authoritative for virtual models too.
           const cleared = await accountBoundRequest(() => window.electron.modelPresets.setPreference(id, null));
           if (!cleared.success) throw new Error(cleared.error || i18nService.t('agentSaveFailed'));
@@ -154,6 +164,7 @@ class AgentService {
             icon: agent.icon,
             iconCustomized: agent.iconCustomized,
             model: agent.model ?? '',
+            modelSelectionMode: agent.modelSelectionMode,
             thinkingLevel: agent.thinkingLevel ?? '',
             workingDirectory: agent.workingDirectory ?? '',
             enabled: agent.enabled,
@@ -190,6 +201,7 @@ class AgentService {
         icon: agent.icon,
         iconCustomized: agent.iconCustomized,
         model: agent.model ?? '',
+        modelSelectionMode: agent.modelSelectionMode,
         thinkingLevel: agent.thinkingLevel ?? '',
         workingDirectory: agent.workingDirectory ?? '',
         enabled: agent.enabled,
@@ -272,8 +284,17 @@ class AgentService {
 
   async addPreset(presetId: string): Promise<Agent | null> {
     try {
-      const agent = await accountBoundRequest(async () => window.electron?.agents?.addPreset(presetId));
+      window.dispatchEvent?.(new Event(ExpertUiEvent.Preparing));
+      const state = store.getState();
+      const existing = state.agent.agents.find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
+      const modelSelection = captureExpertModelSelection(state, existing?.id);
+      const agent = await accountBoundRequest(async () => window.electron?.agents?.addPreset(presetId, modelSelection));
       if (agent) {
+        if (usesInheritedAgentModel(agent)) {
+          const cleared = await window.electron.modelPresets?.setPreference(agent.id, null);
+          if (cleared && !cleared.success) throw new Error(cleared.error || i18nService.t('agentSaveFailed'));
+          store.dispatch(clearAgentSelectedModel(agent.id));
+        }
         store.dispatch(addAgent({
           id: agent.id,
           name: agent.name,
@@ -281,6 +302,7 @@ class AgentService {
           icon: agent.icon,
           iconCustomized: agent.iconCustomized,
           model: agent.model ?? '',
+          modelSelectionMode: agent.modelSelectionMode,
           thinkingLevel: agent.thinkingLevel ?? '',
           workingDirectory: agent.workingDirectory ?? '',
           enabled: agent.enabled,
@@ -298,7 +320,7 @@ class AgentService {
       return null;
     } catch (error) {
       console.error('Failed to add preset agent:', error);
-      return null;
+      throw error;
     }
   }
 

@@ -4,6 +4,7 @@
  */
 import {
   isOpenAIApiModeAvailable,
+  type ModelCapabilityOverrides,
   ModelRuntimeProfile,
   ModelRuntimeProfileSource,
   normalizeGeminiApiBaseUrl,
@@ -86,8 +87,13 @@ export const parseMaxOutputTokensInput = (input: string): number | null | undefi
 
 export const resolveModelSupportsImageForProvider = (
   providerName: string,
-  model: { id: string; supportsImage?: boolean },
-): boolean => ProviderRegistry.resolveModelSupportsImage(providerName, model.id, model.supportsImage);
+  model: { id: string; supportsImage?: boolean; capabilityOverrides?: ModelCapabilityOverrides },
+): boolean => ProviderRegistry.resolveModelSupportsImage(
+  providerName,
+  model.id,
+  model.supportsImage,
+  model.capabilityOverrides?.image,
+);
 
 export const getOpenClawProviderIdForConfig = (
   providerName: string,

@@ -2,6 +2,7 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
+import { ComputerUseMcpServerName } from '../../shared/computerUse/constants';
 import { getLanguage } from '../i18n';
 import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { findSystemNodePath } from '../libs/resolveStdioCommand';
@@ -15,11 +16,8 @@ import {
   inspectComputerUseRuntime,
 } from './computerUseRuntime';
 
-export const ComputerUseMcpServerName = {
-  BuiltIn: 'computer-use',
-} as const;
-export type ComputerUseMcpServerName =
-  typeof ComputerUseMcpServerName[keyof typeof ComputerUseMcpServerName];
+// Re-exported for existing importers; the constant lives in shared so config sync can use it.
+export { ComputerUseMcpServerName };
 
 export const ComputerUseMcpEnv = {
   AskUserUrl: 'LOBSTER_COMPUTER_USE_ASKUSER_URL',
@@ -175,7 +173,8 @@ export function resolveComputerUseMcpServer(
 // Platform-neutral MCP bridge between OpenClaw and the platform client module.
 // It is written to userData and run with Node, so keep it plain ESM without
 // template literals (this file embeds it in a String.raw template).
-const COMPUTER_USE_MCP_SERVER_SCRIPT = String.raw`import { existsSync } from 'node:fs';
+const COMPUTER_USE_MCP_SERVER_SCRIPT = String.raw`import { AsyncLocalStorage } from 'node:async_hooks';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -379,10 +378,14 @@ function withoutSelfWindows(windows) {
 }
 
 async function promptForApp(displayName) {
+  const signal = requestSignal.getStore();
   let response;
   try {
     response = await fetch(askUserUrl, {
       method: 'POST',
+      // A cancelled tool call drops this request, and LobsterAI then closes
+      // the approval dialog instead of leaving it up until its own timeout.
+      ...(signal ? { signal } : {}),
       headers: {
         'Content-Type': 'application/json',
         'x-mcp-bridge-secret': bridgeSecret,
@@ -400,6 +403,9 @@ async function promptForApp(displayName) {
       }),
     });
   } catch (error) {
+    if (signal?.aborted) {
+      throw new Error('The approval prompt was withdrawn because the tool call was cancelled.');
+    }
     throw new Error('Computer Use could not show the approval prompt in LobsterAI ('
       + (error instanceof Error ? error.message : String(error))
       + '). Ask the user to make sure LobsterAI is open, then retry.');
@@ -796,8 +802,12 @@ const APPROVAL_TOOL_NAMES = new Set([
   'scroll', 'drag', 'set_value', 'perform_secondary_action', 'wait_for_text',
 ]);
 
+// The running MCP request's abort signal, read by promptForApp; the MCP SDK
+// aborts it when the client cancels the call or it times out.
+const requestSignal = new AsyncLocalStorage();
+
 function registerTool(name, description, inputSchema, handler) {
-  server.registerTool(name, { description, inputSchema }, async (args) => {
+  server.registerTool(name, { description, inputSchema }, (args, extra) => requestSignal.run(extra?.signal, async () => {
     try {
       assertHelperTurnActive();
       const input = args || {};
@@ -815,7 +825,7 @@ function registerTool(name, description, inputSchema, handler) {
       }
       return result;
     }
-  });
+  }));
 }
 
 registerTool('list_windows', 'List open app windows Computer Use can target, front to back. Off-screen (minimized or other Space) windows are marked onScreen:false.', {}, async () => {

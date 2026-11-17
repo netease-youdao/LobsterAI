@@ -77,6 +77,15 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
   const canOpenDetails = !isEnterprise || enterpriseContext !== null;
 
   useEffect(() => {
+    if (!sessionId || turnUsage.status !== CoworkTurnUsageStatus.Pending) return;
+    // Recover a stop interrupted by app exit. The main process coalesces this
+    // with any settlement that is still running in the current app instance.
+    void coworkService.refreshTurnUsage(sessionId, userMessageId).catch((error) => {
+      console.warn('[TurnUsage] Failed to refresh pending usage.', error);
+    });
+  }, [sessionId, userMessageId, turnUsage.traceId, turnUsage.status]);
+
+  useEffect(() => {
     if (!open) return undefined;
     popoverRef.current?.focus({ preventScroll: true });
     const handlePointerDown = (event: PointerEvent) => {
@@ -179,7 +188,7 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
 
   if (chipState === TurnUsageChipState.Pending) {
     return (
-      <span className="inline-flex h-7 items-center gap-1 whitespace-nowrap px-1 text-secondary" role="status">
+      <span className="inline-flex h-7 items-center gap-1 whitespace-nowrap -mx-1 px-1 text-secondary" role="status">
         <CreditsIcon className="h-4 w-4 shrink-0 animate-pulse" />
         <span>{i18nService.t('coworkTurnUsagePending')}</span>
       </span>
@@ -209,7 +218,7 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
         aria-haspopup="dialog"
         aria-controls={open ? popoverId : undefined}
         title={i18nService.t('coworkTurnUsageViewDetails')}
-        className={`inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-lg px-2 [font:inherit] transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+        className={`inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-lg -mx-2 px-2 [font:inherit] transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
           open ? 'bg-surface-raised text-foreground' : 'text-secondary'
         }`}
       >

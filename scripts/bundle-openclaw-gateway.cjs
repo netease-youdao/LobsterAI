@@ -16,7 +16,17 @@
 const fs = require('fs');
 const path = require('path');
 
+const {
+  OPENCLAW_AGENT_DB_BUNDLE_BANNER,
+  createOpenClawAgentDbBundlePlugin,
+  hasOpenClawAgentDbBundlePolicy,
+} = require('./openclaw-agent-db-bundle.cjs');
 const { ensureOpenClawBundleAssets } = require('./openclaw-bundle-assets.cjs');
+const {
+  OpenClawDistPackageScopeSkipReason,
+  OpenClawDistPackageScopeStatus,
+  ensureOpenClawDistPackageScope,
+} = require('./openclaw-dist-package-scope.cjs');
 const { assertOpenClawBundleUsesNativePrivateDirectory } = require('./openclaw-native-private-directory.cjs');
 const { ensureOpenClawWorkerShims } = require('./openclaw-worker-shims.cjs');
 
@@ -66,13 +76,27 @@ function ensureBundleSupportFiles() {
       `[bundle-openclaw-gateway] Skipped ${result.protectedExisting.length} worker shim(s) because existing files are not LobsterAI shims.`,
     );
   }
+
+  const scope = ensureOpenClawDistPackageScope(runtimeDir);
+  if (scope.reason === OpenClawDistPackageScopeSkipReason.ProtectedExisting) {
+    console.warn(
+      '[bundle-openclaw-gateway] Left dist/package.json alone because it is not a LobsterAI file.',
+    );
+  } else if (scope.status !== OpenClawDistPackageScopeStatus.Unchanged
+    && scope.status !== OpenClawDistPackageScopeStatus.Skipped) {
+    console.log(`[bundle-openclaw-gateway] dist/package.json ${scope.status}.`);
+  }
 }
 
-// Skip if bundle is already up-to-date (newer than the entry point).
+// Bundle policy changes must also invalidate an existing runtime bundle.
 if (fs.existsSync(bundleOutPath)) {
   const bundleStat = fs.statSync(bundleOutPath);
-  const entryStat = fs.statSync(entryPath);
-  if (bundleStat.mtimeMs > entryStat.mtimeMs) {
+  const inputMtimeMs = Math.max(...[
+    entryPath,
+    __filename,
+    require.resolve('./openclaw-agent-db-bundle.cjs'),
+  ].map(file => fs.statSync(file).mtimeMs));
+  if (bundleStat.mtimeMs > inputMtimeMs && hasOpenClawAgentDbBundlePolicy(bundleOutPath)) {
     console.log(`[bundle-openclaw-gateway] Bundle is up-to-date, skipping.`);
     try {
       // A cached bundle built from an unpatched dist would still spawn PowerShell.
@@ -139,11 +163,13 @@ esbuild
     format: 'esm',
     outfile: bundleOutPath,
     external: EXTERNAL_PACKAGES,
+    plugins: [createOpenClawAgentDbBundlePlugin(runtimeDir)],
     // Inject createRequire so that esbuild's __require shim works in ESM context.
     // Without this, CJS modules (e.g. @smithy/*) that call require("buffer")
     // fail with "Dynamic require of X is not supported" when loaded via import().
     banner: {
-      js: `import { createRequire as __bundleCreateRequire } from 'node:module';\n` +
+      js: OPENCLAW_AGENT_DB_BUNDLE_BANNER +
+          `import { createRequire as __bundleCreateRequire } from 'node:module';\n` +
           `import { fileURLToPath as __bundleFileURLToPath } from 'node:url';\n` +
           `const require = __bundleCreateRequire(import.meta.url);\n` +
           `const __filename = __bundleFileURLToPath(import.meta.url);\n` +

@@ -27,6 +27,7 @@ import { FeedbackUiEvent } from '../../../../shared/feedback/constants';
 import { AccountConnectionNotice } from '../../../components/AccountConnectionNotice';
 import { getAccountConnectionState } from '../../../components/accountConnectionState';
 import { getAccountMenuDisplayName } from '../../../components/accountMenuState';
+import LogoutConfirmDialog from '../../../components/LogoutConfirmDialog';
 import { authService } from '../../../services/auth';
 import {
   getEnterpriseMemberProfileUrl,
@@ -81,6 +82,8 @@ export const EnterpriseAccountMenu = ({
   });
   const [identities, setIdentities] = useState<EnterpriseAccountIdentity[]>([]);
   const [showEnterpriseFlyout, setShowEnterpriseFlyout] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [enterpriseFlyoutPosition, setEnterpriseFlyoutPosition] = useState<{
     left: number;
     top: number;
@@ -263,11 +266,15 @@ export const EnterpriseAccountMenu = ({
 
   const handleLogout = async () => {
     logEnterpriseAccountDiagnostic('debug', 'logging out from enterprise account menu');
+    setLoggingOut(true);
     try {
       await authService.logout();
       onClose();
     } catch (error) {
       logEnterpriseAccountDiagnostic('warn', 'enterprise account logout failed', error);
+    } finally {
+      setLoggingOut(false);
+      setLogoutConfirmOpen(false);
     }
   };
 
@@ -448,11 +455,18 @@ export const EnterpriseAccountMenu = ({
           <MenuAction
             icon={<ArrowRightStartOnRectangleIcon className={actionIconClassName} />}
             label={i18nService.t('authLogout')}
-            onClick={handleLogout}
+            onClick={() => setLogoutConfirmOpen(true)}
           />
         </div>
       </div>
       {enterpriseFlyout}
+      {logoutConfirmOpen && (
+        <LogoutConfirmDialog
+          isLoggingOut={loggingOut}
+          onCancel={() => setLogoutConfirmOpen(false)}
+          onConfirm={() => void handleLogout()}
+        />
+      )}
     </>
   );
 };

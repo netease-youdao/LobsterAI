@@ -34,6 +34,8 @@ function fixture(ids = ['task']) {
   const context = vm.createContext({
     console: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
     remoteLocalGc: { stop: record('gc-stop') }, remoteInitialization: { dispose: record('initialization-stop') },
+    messageSpeechController: null, webSearchHost: null,
+    app: { getPath: () => '/tmp' }, getWebSearchBridgeFilePath: () => '/tmp/unused', removeWebSearchBridgeFile: vi.fn(),
     remoteSessionCommands: { recovery }, remoteBridge: bridge,
     openClawRuntimeAdapter: { beginShutdown: () => { events.push('gateway-admission-stop'); return ids; }, disconnectGatewayClient: record('gateway-disconnect') },
     coworkEngineRouter: { stopAllSessions: record('local-stop') },

@@ -1,7 +1,8 @@
 import { type AvailableModelPreset, isChatPresetSession, type ModelPresetId, ModelPresetIpc, modelPresetModelId, modelPresetPreferenceKey, parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
 import { type ModelThinkingLevel, OpenClawProviderId, parseModelThinkingConfig, parseModelThinkingLevel } from '../../shared/providers';
+import { selectableContextWindows } from '../../shared/providers/modelContextWindow';
 import { getServerModelMetadata, type ServerModelMetadataInput } from './claudeSettings';
-import { presetContextWindowSelection } from './modelPresetContext';
+import { rememberedContextWindow,sessionContextWindowSelection } from './modelContextWindows';
 import { recordSessionModelChange } from './sessionModelChange';
 
 export type ResolvedPresetModel = ServerModelMetadataInput & { modelId: string; apiFormat: string; accessible?: boolean };
@@ -71,6 +72,7 @@ export function registerModelPresetIpc(dependencies: {
   assertSessionAccess: (sessionId: string) => void;
   patchSession: import('./agentEngine/types').CoworkRuntime['patchSession'];
   ownerAccountKey: () => string | null;
+  contextWindowOwnerKey?: () => string | null;
   ensureModelsReady: () => Promise<unknown>;
   onSelectionCommitted?: (sessionId: string) => void;
   isAccountCurrent: () => () => boolean;
@@ -109,11 +111,16 @@ export function registerModelPresetIpc(dependencies: {
     const modelRef = `${OpenClawProviderId.LobsteraiServer}/${model.modelId}`;
     const config = parseModelThinkingConfig(model.thinkingConfig);
     const thinkingLevel = config?.defaultLevel ?? '';
+    const contextOwner = dependencies.contextWindowOwnerKey?.() ?? null;
+    const contextModel = getServerModelMetadata(model.modelId);
+    const contextWindowOverride = rememberedContextWindow(dependencies.getStore(), contextOwner, model.modelId, presetId,
+      selectableContextWindows(contextModel, presetId));
     if (!initial) {
       const patched = await dependencies.patchSession(sessionId, {
         model: modelRef,
         thinkingLevel: thinkingLevel || null,
-        contextWindow: presetContextWindowSelection(getServerModelMetadata(model.modelId), presetId),
+        contextWindow: sessionContextWindowSelection({ modelPresetId: presetId, contextWindowOverride,
+          contextWindowOwnerKey: contextOwner }, contextModel, contextOwner),
       });
       if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
       dependencies.assertSessionAccess(sessionId);
@@ -122,7 +129,8 @@ export function registerModelPresetIpc(dependencies: {
     if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
     dependencies.assertSessionAccess(sessionId);
     if (selectionRevision.get(sessionId) !== revision) throw new Error(t('modelPresetModelMismatch'));
-    getSessions().updateSession(sessionId, { modelPresetId: presetId, modelOverride: modelRef, thinkingLevel }, { touchUpdatedAt: false });
+    getSessions().updateSession(sessionId, { modelPresetId: presetId, modelOverride: modelRef, thinkingLevel,
+      contextWindowOverride, contextWindowOwnerKey: contextWindowOverride ? contextOwner : null }, { touchUpdatedAt: false });
     dependencies.onSelectionCommitted?.(sessionId);
     const updatedSession = getSessions().getSession(sessionId)!;
     return initial ? updatedSession : recordSessionModelChange(getSessions(), session, updatedSession);

@@ -33,6 +33,7 @@ function fixture() {
       id TEXT PRIMARY KEY, title TEXT NOT NULL, claude_session_id TEXT, scheduled_task_id TEXT,
       status TEXT NOT NULL DEFAULT 'idle', pinned INTEGER NOT NULL DEFAULT 0, pin_order INTEGER,
       cwd TEXT NOT NULL, system_prompt TEXT NOT NULL DEFAULT '', model_override TEXT NOT NULL DEFAULT '', model_preset_id TEXT,
+      context_window_override INTEGER, context_window_owner_key TEXT,
       thinking_level TEXT NOT NULL DEFAULT '', execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT, agent_id TEXT DEFAULT 'main', goal_json TEXT,
       parent_session_id TEXT, forked_from_message_id TEXT, forked_at INTEGER,

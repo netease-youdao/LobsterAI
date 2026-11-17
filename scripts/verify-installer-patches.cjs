@@ -22,7 +22,10 @@ const fs = require('fs');
 const path = require('path');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const CONTRACT_TEST = path.join('tests', 'windowsInstallerContract.test.ts');
+const CONTRACT_TESTS = [
+  path.join('tests', 'windowsInstallerContract.test.ts'),
+  path.join('tests', 'windowsUninstallAnalytics.test.ts'),
+];
 const PATCH_PACKAGE_BIN = path.join(REPO_ROOT, 'node_modules', 'patch-package', 'index.js');
 const VITEST_BIN = path.join(REPO_ROOT, 'node_modules', 'vitest', 'vitest.mjs');
 
@@ -44,7 +47,7 @@ function run(label, script, args) {
 }
 
 for (const [label, file] of [
-  ['installer contract test', path.join(REPO_ROOT, CONTRACT_TEST)],
+  ...CONTRACT_TESTS.map(file => ['installer contract test', path.join(REPO_ROOT, file)]),
   ['patch-package', PATCH_PACKAGE_BIN],
   ['vitest', VITEST_BIN],
 ]) {
@@ -61,7 +64,7 @@ if (run('applying app-builder-lib patches (patch-package --error-on-fail)', PATC
   );
 }
 
-if (run('running Windows installer contract tests', VITEST_BIN, ['run', CONTRACT_TEST]) !== 0) {
+if (run('running Windows installer contract tests', VITEST_BIN, ['run', ...CONTRACT_TESTS]) !== 0) {
   fail(
     'installer contract tests failed: the NSIS templates in node_modules do not match what the ' +
       'installer hardening expects. Do not ship an installer built from this tree.',

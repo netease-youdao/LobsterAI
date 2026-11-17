@@ -72,6 +72,19 @@ test('auth: auth scope maps to model access denied', () => {
   expect(classifyError('providerRuntimeFailureKind=auth_scope')).toBe('coworkErrorModelAccessDenied');
 });
 
+test.each([
+  "EACCES: permission denied, mkdir '/Volumes/Elements'",
+  "Error: EPERM: operation not permitted, open 'C:\\Users\\me\\report.docx'",
+  "ENOENT: no such file or directory, scandir '/Users/me/missing'",
+  "EROFS: read-only file system, open '/Volumes/Backup/out.txt'",
+])('local file system errors keep their own text: %s', (error) => {
+  expect(classifyErrorKey(error)).toBeNull();
+});
+
+test('auth: provider permission denied still maps to model access denied', () => {
+  expect(classifyError('Permission denied: this API key cannot use model gpt-x')).toBe('coworkErrorModelAccessDenied');
+});
+
 // ==================== Billing errors ====================
 
 test('billing: a local inline-key cooldown preserves its actual cause', () => {

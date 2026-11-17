@@ -1357,6 +1357,19 @@ const coworkSlice = createSlice({
       );
     },
 
+    invalidateEditedHistory(state, action: PayloadAction<string>) {
+      const sessionId = action.payload;
+      delete state.detachedTailMessagesBySessionId[sessionId];
+      delete state.messageRailIndexBySessionId[sessionId];
+      delete state.messageRailIndexLoadingBySessionId[sessionId];
+      delete state.contextUsageBySessionId[sessionId];
+      delete state.notifiedCompactionBySessionId[sessionId];
+      delete state.planConfirmations[sessionId];
+      delete state.pendingSteers[sessionId];
+      delete state.rejectedSteers[sessionId];
+      state.pendingPermissions = state.pendingPermissions.filter(permission => permission.sessionId !== sessionId);
+    },
+
     clearPendingPermissions(state) {
       state.pendingPermissions = [];
       state.permissionStates = {};
@@ -1579,6 +1592,7 @@ const coworkSlice = createSlice({
 });
 
 export const {
+  invalidateEditedHistory,
   setCoworkActive,
   setSessions,
   setAgentSessions,

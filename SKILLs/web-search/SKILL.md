@@ -2,7 +2,7 @@
 name: web-search
 description: Real-time web search using Playwright-controlled browser. Use this skill when you need current information, latest documentation, recent news, or any data beyond your knowledge cutoff (January 2025).
 official: true
-version: 1.0.3
+version: 1.0.4
 ---
 
 # Web Search Skill
@@ -43,7 +43,7 @@ Use the web-search skill when you need:
 2. **Bridge Server** - Express HTTP API (auto-started by Electron)
 3. **Playwright Manager** - Browser connection and session management
 4. **Search Engine Layer** - Google primary, Bing fallback
-5. **Chrome Browser** - Visible browser window (all operations transparent)
+5. **Browser** - Inside LobsterAI with the in-app browser mode on, searches run in a hidden page of LobsterAI's own browser and no external window opens. Otherwise a separate visible Chrome window is launched.
 
 ## Basic Usage
 
@@ -362,8 +362,8 @@ The search output is Markdown. Extract:
 
 - **Localhost only** - Bridge Server binds to 127.0.0.1 (no external access)
 - **No network exposure** - Not accessible from other machines
-- **Isolated browser** - Uses separate Chrome profile, won't affect user's main browser
-- **Visible operations** - All browser actions shown in visible window (transparent)
+- **Isolated browser** - Uses LobsterAI's in-app browser session, or a separate Chrome profile in standalone mode; never the user's main browser profile
+- **Visible operations** - In standalone mode all browser actions are shown in a visible Chrome window
 - **No credentials** - Skill never handles passwords or sensitive data
 
 ### Privacy Considerations

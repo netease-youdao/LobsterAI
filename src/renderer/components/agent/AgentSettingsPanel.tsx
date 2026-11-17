@@ -1,10 +1,10 @@
 import { XMarkIcon } from '@heroicons/react/24/outline';
-import { AgentLegacyIdentityCleanupStatus } from '@shared/agent';
+import { AgentLegacyIdentityCleanupStatus, AgentModelSelectionMode, AgentSource } from '@shared/agent';
 import { OwnershipTargetKind } from '@shared/ownership/constants';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import { ProviderName } from '@shared/providers';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
@@ -13,7 +13,8 @@ import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { resolveThinkingLevelForModel } from '../../services/modelThinkingLevelMemory';
-import { RootState } from '../../store';
+import { captureExpertModelSelection } from '../../services/newTaskModelSelection';
+import { type RootState, store } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import type { Agent } from '../../types/agent';
 import type { DingTalkInstanceConfig, DiscordInstanceConfig, FeishuInstanceConfig, IMGatewayConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from '../../types/im';
@@ -94,7 +95,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [identity, setIdentity] = useState('');
   const [userInfo, setUserInfo] = useState('');
   const [icon, setIcon] = useState('');
-  const [model, setModel] = useState<Model | null>(null);
+  const [modelOverride, setModelOverride] = useState<Model | null | undefined>(undefined);
+  const [modelSelectionMode, setModelSelectionMode] = useState<AgentModelSelectionMode>(AgentModelSelectionMode.Explicit);
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
@@ -111,6 +113,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [initialBoundKeys, setInitialBoundKeys] = useState<Set<string>>(new Set());
   const isMainAgent = isDefaultAgentId(agentId);
 
+  const storedModel = useMemo(
+    () => (agent ? resolveOpenClawModelRef(agent.model, availableModels) ?? defaultSelectedModel ?? null : null),
+    [agent, availableModels, defaultSelectedModel],
+  );
+  const storedModelRef = storedModel ? toOpenClawModelRef(storedModel) : '';
+  const model = modelOverride === undefined ? storedModel : modelOverride;
+
   // Snapshot of initial values for dirty detection
   const initialValuesRef = useRef({
     name: '',
@@ -119,7 +128,6 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     identity: '',
     userInfo: '',
     icon: '',
-    model: '',
     workingDirectory: '',
     skillIds: [] as string[],
     subagentAllowAgentIds: [] as string[],
@@ -134,7 +142,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     if (identity !== init.identity) changedFields.push('identity');
     if (userInfo !== init.userInfo) changedFields.push('userInfo');
     if (icon !== init.icon) changedFields.push('icon');
-    if ((model ? toOpenClawModelRef(model) : '') !== init.model) changedFields.push('model');
+    if ((model ? toOpenClawModelRef(model) : '') !== storedModelRef) changedFields.push('model');
+    if (modelSelectionMode !== (agent?.modelSelectionMode ?? AgentModelSelectionMode.Explicit)) changedFields.push('modelSelectionMode');
     if (workingDirectory !== init.workingDirectory) changedFields.push('workingDirectory');
     if (skillIds.length !== init.skillIds.length || skillIds.some((id, i) => id !== init.skillIds[i])) {
       changedFields.push('skillIds');
@@ -156,8 +165,11 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     identity,
     initialBoundKeys,
     model,
+    modelSelectionMode,
+    agent?.modelSelectionMode,
     name,
     skillIds,
+    storedModelRef,
     subagentAllowAgentIds,
     systemPrompt,
     userInfo,
@@ -250,19 +262,14 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       const a = await window.electron?.agents?.get(agentId);
       if (!a || cancelled) return;
 
-      let nextSystemPrompt = a.systemPrompt;
-      let nextIdentity = a.identity;
-      const nextUserInfo = await coworkService.readBootstrapFile('USER.md', { agentId });
+      // The workspace files are what the agent runs with (and may edit itself),
+      // so every agent shows them rather than the stored snapshot.
+      const [nextIdentity, nextSystemPrompt, nextUserInfo] = await Promise.all([
+        coworkService.readBootstrapFile('IDENTITY.md', { agentId }),
+        coworkService.readBootstrapFile('SOUL.md', { agentId }),
+        coworkService.readBootstrapFile('USER.md', { agentId }),
+      ]);
       if (cancelled) return;
-      if (isDefaultAgentId(agentId)) {
-        const [mainIdentity, mainSoul] = await Promise.all([
-          coworkService.readBootstrapFile('IDENTITY.md', { agentId }),
-          coworkService.readBootstrapFile('SOUL.md', { agentId }),
-        ]);
-        if (cancelled) return;
-        nextSystemPrompt = mainSoul;
-        nextIdentity = mainIdentity;
-      }
 
       setAgent(a);
       setName(a.name);
@@ -271,9 +278,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       setIdentity(nextIdentity);
       setUserInfo(nextUserInfo);
       setIcon(a.icon);
-      const resolvedModel = resolveOpenClawModelRef(a.model, availableModels) ?? defaultSelectedModel ?? null;
-      const resolvedModelRef = resolvedModel ? toOpenClawModelRef(resolvedModel) : '';
-      setModel(resolvedModel);
+      setModelOverride(undefined);
+      setModelSelectionMode(a.modelSelectionMode ?? AgentModelSelectionMode.Explicit);
       setWorkingDirectory(a.workingDirectory ?? '');
       setSkillIds(a.skillIds ?? []);
       setSubagentAllowAgentIds(a.subagentAllowAgentIds ?? []);
@@ -284,7 +290,6 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         identity: nextIdentity,
         userInfo: nextUserInfo,
         icon: a.icon,
-        model: resolvedModelRef,
         workingDirectory: a.workingDirectory ?? '',
         skillIds: a.skillIds ?? [],
         subagentAllowAgentIds: a.subagentAllowAgentIds ?? [],
@@ -309,7 +314,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     return () => {
       cancelled = true;
     };
-  }, [agentId, availableModels, defaultSelectedModel]);
+  }, [agentId]);
 
   useEffect(() => {
     if (!agentId) {
@@ -387,8 +392,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
         identity: identity.trim(),
-        model: modelRef,
-        ...(modelRef !== initialValuesRef.current.model
+        ...(!isMainAgent && agent?.source === AgentSource.Preset
+          && (changedFields.includes('modelSelectionMode') || modelOverride !== undefined) ? { modelSelectionMode } : {}),
+        ...(modelOverride !== undefined ? { model: modelRef } : {}),
+        ...(modelOverride !== undefined && modelRef !== storedModelRef
           ? { thinkingLevel: resolveThinkingLevelForModel(model) }
           : {}),
         workingDirectory: workingDirectory.trim(),
@@ -406,27 +413,20 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
         return;
       }
-      const bootstrapWrites = isMainAgent
-        ? [
-            coworkService.writeBootstrapFile('IDENTITY.md', identity, { agentId }),
-            coworkService.writeBootstrapFile('SOUL.md', systemPrompt, { agentId }),
-            coworkService.writeBootstrapFile('USER.md', userInfo, { agentId }),
-          ]
-        : [
-            coworkService.writeBootstrapFile('USER.md', userInfo, { agentId }),
-          ];
-      if (bootstrapWrites.length > 0) {
-        const bootstrapSaved = await Promise.all(bootstrapWrites);
-        if (bootstrapSaved.some((saved) => !saved)) {
-          reportAgentSettingsAction('save_failed', {
-            changedFields,
-            includeConfigDetails: true,
-            isDirty: changedFields.length > 0,
-            result: 'failed',
-          });
-          window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
-          return;
-        }
+      const bootstrapSaved = await Promise.all([
+        coworkService.writeBootstrapFile('IDENTITY.md', identity, { agentId }),
+        coworkService.writeBootstrapFile('SOUL.md', systemPrompt, { agentId }),
+        coworkService.writeBootstrapFile('USER.md', userInfo, { agentId }),
+      ]);
+      if (bootstrapSaved.some((saved) => !saved)) {
+        reportAgentSettingsAction('save_failed', {
+          changedFields,
+          includeConfigDetails: true,
+          isDirty: changedFields.length > 0,
+          result: 'failed',
+        });
+        window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
+        return;
       }
       if (changedFields.includes('identity')) {
         const cleanupResult = await agentService.cleanupLegacyIdentityBlock(agentId);
@@ -889,9 +889,25 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         {/* Footer */}
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-t border-border">
           <OwnershipDetailButton target={{ kind: OwnershipTargetKind.Agent, id: agentId }} />
+          {!isMainAgent && agent?.source === AgentSource.Preset && (
+            <label className="flex w-full cursor-pointer items-center gap-2 text-xs text-secondary" title={i18nService.t('expertInheritModelHint')}>
+              <input type="checkbox" checked={modelSelectionMode === AgentModelSelectionMode.Inherit}
+                onChange={event => {
+                  setModelSelectionMode(event.target.checked ? AgentModelSelectionMode.Inherit : AgentModelSelectionMode.Explicit);
+                  if (event.target.checked) {
+                    setModelOverride(resolveOpenClawModelRef(captureExpertModelSelection(store.getState(), agentId).model, availableModels));
+                  }
+                }}
+                className="h-4 w-4 rounded border-border text-primary focus:ring-primary" />
+              {i18nService.t('expertInheritModel')}
+            </label>
+          )}
           <AgentDetailToolbar
             model={model}
-            onModelChange={setModel}
+            onModelChange={nextModel => {
+              setModelOverride(nextModel);
+              setModelSelectionMode(AgentModelSelectionMode.Explicit);
+            }}
             workingDirectory={workingDirectory}
             onWorkingDirectoryChange={setWorkingDirectory}
           />

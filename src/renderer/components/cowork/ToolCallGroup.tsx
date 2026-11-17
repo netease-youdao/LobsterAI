@@ -7,7 +7,7 @@ import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
 import { ActivityPlanDetail } from './ActivityPlanDetail';
 import { ActivityLiveDetailLine, ActivityStepLine } from './ActivityStepLine';
-import { ActivityEntryVariant, ActivityStepKind } from './constants';
+import { ActivityEntryVariant } from './constants';
 import {
   bucketLength,
   getMessageLineCount,
@@ -15,7 +15,7 @@ import {
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import MediaTaskCard from './MediaTaskCard';
-import { isMediaGenerationToolName, type MediaTaskPresentation } from './mediaTaskPresentation';
+import type { MediaTaskPresentation } from './mediaTaskPresentation';
 import {
   type ConsolidatedItem,
   formatElapsedDuration,
@@ -50,8 +50,10 @@ import { DiffStatsBadge, getToolGroupDiffStats } from './toolDiffStats';
 
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
 
-// Live elapsed time for a running tool call; appears after a short delay so
-// quick calls don't flash a counter.
+// Live elapsed time for a running command, shown only inside its opened
+// detail: the turn's status line owns the one clock that is always ticking,
+// and a second counter on the step line read as a competing total. Appears
+// after a short delay so quick calls don't flash a counter.
 const TOOL_ELAPSED_APPEAR_DELAY_MS = 2000;
 
 const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimestamp }) => {
@@ -96,7 +98,6 @@ const ToolCallGroup: React.FC<{
   const shouldExpandByDefault = isMediaStatusPoll(group) && !mediaTaskPresentation;
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
-  const isMediaTool = isMediaGenerationToolName(rawToolName);
   // Later calls on a task whose card is already shown are progress checks.
   const getMediaCallLabel = (live: boolean): string | null => {
     if (!mediaTaskPresentation || mediaTaskPresentation.showCard) return null;
@@ -280,6 +281,7 @@ const ToolCallGroup: React.FC<{
                 {!toolResult && (
                   <div className="text-muted mt-1.5 italic">
                     {i18nService.t('coworkToolRunning')}
+                    {isRunning && <ToolRunningElapsed startTimestamp={toolUse.timestamp} />}
                   </div>
                 )}
               </div>
@@ -362,9 +364,6 @@ const ToolCallGroup: React.FC<{
     const isRowLive = isLive ?? isRunning;
     const stepKind = getActivityStepKind(stepItem);
     const rowLiveDetail = isRowLive && !isExpanded ? getActivityLiveDetail(stepItem) : null;
-    // A file being written already shows its growing +N/-M count; a timer
-    // beside it says nothing more. Commands keep theirs.
-    const showRunningElapsed = isRunning && !isMediaTool && stepKind !== ActivityStepKind.Edit;
     // Terminal output and diffs carry their own frame; anything else gets one
     // so it does not float loose under the step line.
     const hasOwnFrame = isBashTool || isEditWithDiff;
@@ -377,16 +376,7 @@ const ToolCallGroup: React.FC<{
           hasError={isToolError}
           isExpanded={isExpanded}
           onToggle={handleToggle}
-          trailing={(
-            <>
-              {diffStats && <DiffStatsBadge stats={diffStats} className="text-sm" />}
-              {showRunningElapsed && (
-                <span className="flex-shrink-0 text-xs text-muted">
-                  <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
-                </span>
-              )}
-            </>
-          )}
+          trailing={diffStats && <DiffStatsBadge stats={diffStats} className="text-sm" />}
         />
         {rowLiveDetail && (
           <ActivityLiveDetailLine
@@ -463,9 +453,6 @@ const ToolCallGroup: React.FC<{
                   {i18nService.t(isGenerating ? 'coworkActivityLiveGenerating' : 'coworkToolRunning')}
                 </span>
               )}
-              {!isMediaTool && <span className="flex-shrink-0 whitespace-pre">
-                <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
-              </span>}
             </div>
           )}
         </div>

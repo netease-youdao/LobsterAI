@@ -65,6 +65,7 @@ export const WORD_AGENT_TOOL_DEFINITIONS = [
       'format_paragraph {paragraph, style?, alignment? (left|center|right|justify), lineSpacing?, spaceBefore?, spaceAfter?, firstLineIndent?, leftIndent?} with lengths in points;',
       'insert_table {anchor, position, rows: string[][]}. A newline in text starts a new paragraph.',
       'Style names are the document\'s paragraph style names, e.g. "Normal", "Heading 1", "Title".',
+      'The reply lists every changed paragraph with its new text, read back from the open document after the change, and whether the file saved. word_read reads that same open document, so the reply is already the check: when the user asks you to verify or confirm the change, report from it instead of calling word_read again.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -113,3 +114,11 @@ export const WORD_AGENT_TOOL_DEFINITIONS = [
     },
   },
 ] as const;
+
+/** What the managed AGENTS.md section says about these tools; the shared rules are in `buildOfficeAgentPrompt`. */
+export const WORD_AGENT_GUIDANCE = {
+  readTool: WordAgentTool.Read,
+  editTool: WordAgentTool.Edit,
+  keeps: 'keeps styles',
+  replyShows: 'paragraphs',
+} as const;

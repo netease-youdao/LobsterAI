@@ -176,6 +176,52 @@ svg { flex-shrink: 0; }
 .stage-drop[data-status="failed"] .drop-file { display: none; }
 .stage-drop[data-status="failed"] .drop-hint { flex: 1; color: var(--c-accent-ink); }
 @keyframes drop-appear { from { opacity: 0; } to { opacity: 1; } }
+/*
+ * The hover launcher: actions above, and on the orb's own row a button shaped like an input.
+ * The main process reserves DesktopCompanionSize.Launcher for it: 232px wide plus the shadow margin.
+ */
+.stage-launcher { display: flex; flex-direction: column; gap: 6px; width: 232px; user-select: none; animation: fade-up 0.16s ease-out; }
+.launcher-menu { padding: 5px; background: var(--c-surface); border: 1px solid var(--c-line); border-radius: 14px; box-shadow: var(--c-shadow); }
+.launcher-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; border-radius: 9px;
+  color: var(--c-ink); font-size: 13.5px; text-align: left; transition: background 0.12s;
+}
+.launcher-row:hover, .launcher-row:focus-visible { background: var(--c-surface-2); }
+.launcher-icon { display: inline-flex; flex-shrink: 0; }
+.launcher-row svg, .launcher-ask svg { width: 17px; height: 17px; color: var(--c-ink-2); }
+.launcher-row > span:last-child, .launcher-ask > span:last-child { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.launcher-divider { height: 1px; margin: 4px 8px; background: var(--c-line); }
+.launcher-ask {
+  display: flex; align-items: center; gap: 9px; width: 100%; height: 42px; padding: 0 16px 0 14px;
+  background: var(--c-surface); border: 1px solid var(--c-line-strong); border-radius: 21px; box-shadow: var(--c-shadow);
+  color: var(--c-ink-3); font-size: 13.5px; text-align: left; cursor: text; transition: border-color 0.12s, color 0.12s;
+}
+.launcher-ask:hover, .launcher-ask:focus-visible { border-color: color-mix(in srgb, var(--c-accent) 55%, transparent); color: var(--c-ink-2); }
+
+/* ── Orb menu (macOS) ──────────────────────────────────── */
+
+/*
+ * Themed like the quick panel's menus, from the same app theme tokens (rounded-xl border-border bg-surface
+ * shadow-popover, rows hover:bg-surface-raised), but sized like macOS's native menus. The main process places
+ * the window from CompanionContextMenuSize: 28px items, 9px dividers, 4px padding plus a 1px border.
+ */
+.ctx-surface, .ctx-surface:focus-visible { position: relative; width: 100%; height: 100%; outline: none; user-select: none; cursor: default; }
+.ctx-card {
+  position: absolute; padding: 4px 0; background: var(--lobster-surface); border: 1px solid var(--lobster-border); border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.05); animation: ctx-in 0.12s ease-out;
+}
+.ctx-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 12px;
+  color: var(--lobster-foreground); font-size: 13px; line-height: 18px; text-align: left; white-space: nowrap; cursor: default;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ctx-item[data-active="true"] { background: var(--lobster-surface-raised); }
+.ctx-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ctx-check { width: 14px; height: 14px; display: grid; place-items: center; color: var(--lobster-primary); }
+.ctx-check svg { width: 14px; height: 14px; stroke-width: 2.2; }
+.ctx-chevron { width: 14px; height: 14px; color: var(--lobster-text-secondary); }
+.ctx-divider { height: 1px; margin: 4px 12px; background: var(--lobster-border); }
+@keyframes ctx-in { from { opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

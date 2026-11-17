@@ -109,12 +109,23 @@ export default defineConfig({
             },
           },
         },
-        // package.json waits for all app/preload/worker output files before starting Electron.
+        // package.json starts Electron after all preload and main output files stabilize.
         onstart() {},
       },
       {
         // 预加载脚本入口文件
         entry: 'src/main/preload.ts',
+        vite: {
+          build: {
+            sourcemap: true,
+            outDir: 'dist-electron',
+            minify: false,
+          },
+        },
+        onstart() {},
+      },
+      {
+        entry: 'src/main/appQuitConfirmationPreload.ts',
         vite: {
           build: {
             sourcemap: true,

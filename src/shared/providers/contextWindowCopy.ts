@@ -1,0 +1,26 @@
+export const modelContextWindowTranslations = {
+  zh: {
+    modelContextWindow: '上下文长度',
+    modelContextWindowDefault: '默认',
+    modelContextWindowDefaultValue: '默认（{window}）',
+    modelContextWindowDefaultShort: '默认 · {window}',
+    modelContextWindowReset: '恢复默认',
+    modelContextWindowDefaultMark: '默认',
+    modelContextWindowSliderHint: '拖动吸附到可用长度，松手后生效。也可用方向键调整，按 Enter 确认当前锚点。',
+    modelContextWindowCostHint: '更长的上下文可能消耗更多积分。已压缩的历史不会自动恢复。',
+    modelContextWindowUnavailable: '当前模型不支持所选上下文长度，请刷新后重新选择。',
+    modelContextWindowSaveFailed: '上下文长度保存失败，请重试。',
+  },
+  en: {
+    modelContextWindow: 'Context length',
+    modelContextWindowDefault: 'Default',
+    modelContextWindowDefaultValue: 'Default ({window})',
+    modelContextWindowDefaultShort: 'Default · {window}',
+    modelContextWindowReset: 'Restore default',
+    modelContextWindowDefaultMark: 'Default',
+    modelContextWindowSliderHint: 'Drag to an available length and release to apply. Use arrow keys to adjust, or Enter to confirm the current stop.',
+    modelContextWindowCostHint: 'Longer context may consume more credits. Previously compacted history is not restored.',
+    modelContextWindowUnavailable: 'This context length is unavailable for the current model. Refresh and choose again.',
+    modelContextWindowSaveFailed: 'Could not save the context length. Please try again.',
+  },
+} as const;

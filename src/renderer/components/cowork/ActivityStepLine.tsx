@@ -56,7 +56,7 @@ export const ActivityStepLine: React.FC<{
   hasError?: boolean;
   isExpanded: boolean;
   onToggle: () => void;
-  /** Right after the label: diff stats, a running step's elapsed time. */
+  /** Right after the label: diff stats, a fold arrow. Never a timer; the turn's status line owns that. */
   trailing?: React.ReactNode;
 }> = ({ kind, label, isLive = false, hasError = false, isExpanded, onToggle, trailing }) => {
   const Icon = hasStepIcon(kind) ? STEP_ICONS[kind] : null;

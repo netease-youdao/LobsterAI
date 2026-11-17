@@ -44,8 +44,8 @@ const CoworkConversationSearch: React.FC<CoworkConversationSearchProps> = ({
   const hasQuery = query.trim().length > 0;
   const hasResults = resultCount > 0;
   const shouldShowNavigation = hasQuery && status === ConversationSearchStatus.Ready;
+  // Prefetching history must not briefly expand the empty search before it is ready.
   const shouldShowResultRow = hasQuery
-    || status === ConversationSearchStatus.Loading
     || status === ConversationSearchStatus.Error;
 
   useEffect(() => {
