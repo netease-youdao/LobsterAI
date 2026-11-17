@@ -193,6 +193,12 @@ import {
   reportPromptControlAction,
   reportPromptSubmit,
 } from './promptAnalytics';
+import {
+  collectPromptHistoryEntries,
+  type PromptHistoryBrowse,
+  PromptHistoryDirection,
+  resolvePromptHistoryStep,
+} from './promptHistory';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
@@ -624,6 +630,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const goalInputReturnDraftRef = useRef<string | null>(null);
     const draftStartedAnalyticsRef = useRef(false);
     const inputSourceOverrideRef = useRef<'template' | null>(null);
+    const promptHistoryBrowseRef = useRef<PromptHistoryBrowse | null>(null);
     // handleSubmit is declared later in this component; the ref lets the
     // imperative handle trigger it without depending on declaration order.
     const handleSubmitRef = useRef<((submitMethod?: 'button' | 'keyboard' | 'voice') => Promise<void>) | null>(null);
@@ -2198,6 +2205,39 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           });
           return;
         }
+      }
+    }
+
+    if (
+      (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+      && !isComposing
+      && !event.defaultPrevented
+      && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+      && !mentionPickerOpen && !steerInputActive && !goalInputActive
+      && sessionId && currentSession?.id === sessionId
+    ) {
+      // Up in an empty composer recalls the prompts sent in this session; Down walks back to the draft.
+      const textarea = event.currentTarget;
+      const sessionMessages = currentSession.messages;
+      const step = resolvePromptHistoryStep({
+        direction: event.key === 'ArrowUp' ? PromptHistoryDirection.Older : PromptHistoryDirection.Newer,
+        draftKey,
+        value,
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd,
+        browse: promptHistoryBrowseRef.current,
+        loadEntries: () => collectPromptHistoryEntries(sessionMessages),
+      });
+      if (step) {
+        event.preventDefault();
+        promptHistoryBrowseRef.current = step.browse;
+        setValue(step.value);
+        requestAnimationFrame(() => {
+          const end = step.value.length;
+          textarea.setSelectionRange(end, end);
+          textarea.scrollTop = textarea.scrollHeight;
+        });
+        return;
       }
     }
 

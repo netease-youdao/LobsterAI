@@ -92,6 +92,7 @@ import { installOfficeAgentBridges } from './services/office/officeFormats';
 import { reportOnboardingAction } from './services/onboardingAnalytics';
 import { resolveOpenWithAttachments } from './services/openWith';
 import { scheduledTaskService } from './services/scheduledTask';
+import { getMouseButtonHistoryDirection, sessionNavigationService } from './services/sessionNavigation';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
 import { themeService } from './services/theme';
 import { RootState, store } from './store';
@@ -282,6 +283,9 @@ const App: React.FC = () => {
 
   // The agent's Office tools edit the file open in the artifact panel in place.
   useEffect(() => installOfficeAgentBridges(), []);
+
+  // Back/forward history of viewed sessions, used by swipes and mouse side buttons.
+  useEffect(() => sessionNavigationService.start(), []);
 
   useEffect(() => {
     if (!shouldShowNewUserOnboarding) return;
@@ -1477,6 +1481,28 @@ const App: React.FC = () => {
     showSettings,
     showUpdateModal,
   ]);
+
+  // Mouse side buttons step back/forward through viewed sessions, as in a browser.
+  // This is the Windows counterpart of the swipe for mice; macOS mice report the same buttons.
+  useEffect(() => {
+    const handleMouseUp = (event: MouseEvent) => {
+      const direction = getMouseButtonHistoryDirection(event.button);
+      if (!direction) return;
+      // The app page has no history of its own to step through.
+      event.preventDefault();
+      if (
+        mainView !== MainView.Cowork
+        || showSettings
+        || showFeedback
+        || showUpdateModal
+        || isPermissionModalOpen
+        || isUpdateInteractionBlocked
+      ) return;
+      void sessionNavigationService.navigate(direction);
+    };
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [isPermissionModalOpen, isUpdateInteractionBlocked, mainView, showFeedback, showSettings, showUpdateModal]);
 
   useEffect(() => {
     return () => {

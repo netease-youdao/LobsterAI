@@ -6709,6 +6709,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       <div ref={contentRowRef} className="relative flex-1 flex overflow-hidden">
       <div
         ref={detailRootRef}
+        data-session-swipe-area="true"
         className="relative flex-1 flex flex-col h-full min-w-0"
         style={{ minWidth: isArtifactPanelExpanded ? 0 : COWORK_DETAIL_MIN_WIDTH }}
       >
