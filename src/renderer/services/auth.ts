@@ -43,7 +43,7 @@ import {
   type UserQuota,
 } from '../store/slices/authSlice';
 import { clearMediaAccountState } from '../store/slices/coworkSlice';
-import type { Model } from '../store/slices/modelSlice';
+import type { Model, ModelCustomTag } from '../store/slices/modelSlice';
 import {
   clearServerModels,
   ServerModelLoadStatus,
@@ -96,6 +96,7 @@ export interface PricingCatalogTextModel extends PricingCatalogBaseModel {
   limitedFreeStartAt?: string | null;
   limitedFreeEndAt?: string | null;
   subscriptionPriority?: boolean;
+  customTag?: unknown;
   busy?: boolean;
   supportsImage?: boolean;
   supportsThinking?: boolean;
@@ -149,6 +150,7 @@ export interface AvailableServerModelEntry {
   limitedFreeStartAt?: string | null;
   limitedFreeEndAt?: string | null;
   subscriptionPriority?: boolean;
+  customTag?: unknown;
   busy?: boolean;
 }
 
@@ -161,6 +163,23 @@ const readPositiveNumber = (value: unknown): number | undefined => (
     ? value
     : undefined
 );
+
+const MODEL_CUSTOM_TAG_COLOR = /^#[0-9A-Fa-f]{6}$/;
+
+/** Server-configured tag; anything malformed is dropped rather than rendered. */
+export const parseModelCustomTag = (value: unknown): ModelCustomTag | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const text = readString(raw.text);
+  if (!text) return undefined;
+  const iconUrl = readString(raw.iconUrl);
+  const color = readString(raw.color);
+  return {
+    text,
+    iconUrl: /^https?:\/\//i.test(iconUrl) ? iconUrl : undefined,
+    color: MODEL_CUSTOM_TAG_COLOR.test(color) ? color : undefined,
+  };
+};
 
 type AuthRendererLogLevel = 'debug' | 'info' | 'warn';
 
@@ -259,6 +278,7 @@ export function mapPricingCatalogTextModelsToServerModels(
       limitedFreeStartAt: model.limitedFreeStartAt,
       limitedFreeEndAt: model.limitedFreeEndAt,
       subscriptionPriority: model.subscriptionPriority,
+      customTag: parseModelCustomTag(model.customTag),
       busy: model.busy === true,
       moreModel: model.moreModel === true,
       accessible: false,
@@ -309,6 +329,7 @@ export function mapAvailableServerModelsToModels(
       limitedFreeStartAt: model.limitedFreeStartAt,
       limitedFreeEndAt: model.limitedFreeEndAt,
       subscriptionPriority: model.subscriptionPriority,
+      customTag: parseModelCustomTag(model.customTag),
       busy: model.busy === true,
       moreModel: model.moreModel === true,
       accessible: model.busy !== true && (model.accessible ?? true),

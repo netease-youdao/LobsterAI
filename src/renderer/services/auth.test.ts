@@ -204,6 +204,27 @@ describe('authenticated server model mapping', () => {
 
     expect(model.requestCapabilities).toEqual([LobsterAIRequestCapability.OptionsV1]);
   });
+
+  test('maps the server custom tag and drops malformed parts', () => {
+    const [tagged, malformed, untagged] = mapAvailableServerModelsToModels([
+      {
+        modelId: 'tagged', modelName: 'Tagged', provider: 'LobsterAI', apiFormat: 'openai',
+        customTag: { text: ' 限时5折 ', iconUrl: 'https://cdn.example/tag.png', color: '#EF4444' },
+      },
+      {
+        modelId: 'malformed', modelName: 'Malformed', provider: 'LobsterAI', apiFormat: 'openai',
+        customTag: { text: '新品', iconUrl: 'javascript:alert(1)', color: 'red' },
+      },
+      {
+        modelId: 'untagged', modelName: 'Untagged', provider: 'LobsterAI', apiFormat: 'openai',
+        customTag: { text: '  ' },
+      },
+    ]);
+
+    expect(tagged.customTag).toEqual({ text: '限时5折', iconUrl: 'https://cdn.example/tag.png', color: '#EF4444' });
+    expect(malformed.customTag).toEqual({ text: '新品', iconUrl: undefined, color: undefined });
+    expect(untagged.customTag).toBeUndefined();
+  });
 });
 
 describe('auth-scoped renderer requests', () => {
