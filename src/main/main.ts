@@ -300,6 +300,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
@@ -8342,6 +8343,13 @@ if (!gotTheLock) {
     hasAuthTokens: () => getAuthTokens() !== null,
     fetchPublic: (url, options) => net.fetch(url, options),
     fetchWithAuth,
+  });
+
+  registerAccountMenuMoreHandlers({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    fetchPublic: (url, options) => net.fetch(url, options),
   });
 
   registerSubscriptionTrialIpcHandlers({

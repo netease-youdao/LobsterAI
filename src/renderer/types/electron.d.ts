@@ -1,5 +1,6 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type { GenerateSessionTitleRequest } from '../../common/sessionTitle';
+import type { AccountMenuMoreBridge } from '../../shared/accountMenuMore/constants';
 import type {
   ActivityActionResponse,
   ActivityContextResponse,
@@ -2107,6 +2108,7 @@ interface IElectronAPI {
   };
   feedback: FeedbackBridge;
   subscriptionTrial: SubscriptionTrialBridge;
+  accountMenuMore: AccountMenuMoreBridge;
   activity: {
     getSlot: (
       input: ActivityHostGetSlotInput,

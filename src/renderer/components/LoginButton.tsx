@@ -18,6 +18,11 @@ import soccerBallIconUrl from '../assets/icons/soccer-ball.svg';
 import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
 import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
 import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
+import {
+  type AccountMenuMoreLink,
+  accountMenuMoreStore,
+  getAccountMenuMoreNodes,
+} from '../services/accountMenuMore';
 import { authService } from '../services/auth';
 import { BrowserLoginStatus } from '../services/browserLoginSession';
 import {
@@ -35,6 +40,7 @@ import { RootState } from '../store';
 import type { FreeCreditsReward } from '../store/slices/authSlice';
 import { AccountConnectionNotice } from './AccountConnectionNotice';
 import { AccountConnectionState, getAccountConnectionState } from './accountConnectionState';
+import { AccountMenuMoreEntry } from './AccountMenuMoreEntry';
 import {
   type AccountPlanAnalyticsContext,
   getAccountMenuDisplayName,
@@ -349,6 +355,8 @@ const UserMenu: React.FC<UserMenuProps> = ({
   // The menu fetches on mount, so start in the loading state to avoid a
   // one-frame "--" flash before the mount effect runs.
   const [summaryLoading, setSummaryLoading] = useState(!connectionState);
+  const [moreMenuState, setMoreMenuState] = useState(() => accountMenuMoreStore.getCached());
+  const [moreMenuLoading, setMoreMenuLoading] = useState(() => !accountMenuMoreStore.hasLoaded());
 
   const refreshProfileSummary = useCallback(async () => {
     setSummaryLoading(true);
@@ -362,6 +370,20 @@ const UserMenu: React.FC<UserMenuProps> = ({
   useEffect(() => {
     if (!connectionState) void refreshProfileSummary();
   }, [connectionState, refreshProfileSummary]);
+
+  // Every open refreshes the server-configured "More" links; the cached copy
+  // renders meanwhile so the submenu is filled at once on later opens.
+  useEffect(() => {
+    let cancelled = false;
+    void accountMenuMoreStore.load().then(state => {
+      if (cancelled) return;
+      setMoreMenuState(state);
+      setMoreMenuLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const openPortalUrl = async (url: string) => {
     await window.electron.shell.openExternal(url);
@@ -573,6 +595,41 @@ const UserMenu: React.FC<UserMenuProps> = ({
     }
   };
 
+  const handleMoreLink = async (link: AccountMenuMoreLink) => {
+    const actionType = `open_more_${link.key}`;
+    try {
+      const result = await window.electron.shell.openExternal(link.url);
+      if (!result.success) {
+        writeAccountMenuRendererLog(
+          'warn',
+          `failed to open more menu link key=${link.key}: ${result.error ?? 'unknown'}`,
+        );
+        reportAccountMenuAction(actionType, {
+          creditItemCount: creditItems.length,
+          errorCode: 'open_external_failed',
+          hasCredits,
+          result: 'failed',
+        });
+        return;
+      }
+      onClose();
+      reportAccountMenuAction(actionType, {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      writeAccountMenuRendererLog('warn', `failed to open more menu link key=${link.key}: ${errorMessage}`);
+      reportAccountMenuAction(actionType, {
+        creditItemCount: creditItems.length,
+        errorCode: 'unknown',
+        hasCredits,
+        result: 'failed',
+      });
+    }
+  };
+
   const handleFinalReward = (reward: FreeCreditsReward) => {
     reportAccountMenuAction('open_credits_final_reward', {
       creditItemCount: creditItems.length,
@@ -628,6 +685,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
       ? i18nService.t('authPromoSubscriptionAction')
       : null;
   const finalRewards = getFinalRewards(profileSummary?.creditsResetCampaign);
+  const moreMenuNodes = getAccountMenuMoreNodes(moreMenuState, isEn);
 
   return (
     <div className="absolute bottom-full left-[-0.5rem] z-50 mb-1 max-h-[calc(100vh-4rem)] w-[14.5rem] overflow-x-hidden overflow-y-auto rounded-xl border border-border bg-surface shadow-popover popover-enter">
@@ -732,6 +790,13 @@ const UserMenu: React.FC<UserMenuProps> = ({
             window.dispatchEvent(new Event(FeedbackUiEvent.Open));
           }}
         />
+        <AccountMenuMoreEntry
+          title={i18nService.t('authMoreMenu')}
+          emptyText={i18nService.t('authMoreMenuEmpty')}
+          nodes={moreMenuNodes}
+          loading={moreMenuLoading}
+          onOpenLink={handleMoreLink}
+        />
       </div>
 
       <AccountMenuSeparator />
@@ -827,6 +892,11 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     });
   }, [authAccountScope, canLoadMenuDailyCheckIn]);
 
+  const prefetchMenu = useCallback(() => {
+    prefetchMenuDailyCheckIn();
+    if (isLoggedIn && !enterpriseAccountContext) accountMenuMoreStore.prefetch();
+  }, [enterpriseAccountContext, isLoggedIn, prefetchMenuDailyCheckIn]);
+
   // Warm the snapshot once the account is ready so the first open is instant.
   useEffect(() => {
     prefetchMenuDailyCheckIn();
@@ -845,6 +915,8 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       const target = event.target;
       const isEnterpriseAccountFlyout = target instanceof Element
         && target.closest('[data-enterprise-account-flyout="true"]') !== null;
+      const isAccountMenuFlyout = target instanceof Element
+        && target.closest('[data-account-menu-flyout="true"]') !== null;
       // Dialogs opened from the menu (e.g. the logout confirmation) are portaled
       // to <body>; clicks inside them must not dismiss the menu that owns them.
       const isInsideModal = target instanceof Element
@@ -853,6 +925,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         containerRef.current
         && !containerRef.current.contains(target as Node)
         && !isEnterpriseAccountFlyout
+        && !isAccountMenuFlyout
         && !isInsideModal
       ) {
         setShowMenu(false);
@@ -1085,8 +1158,8 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       <button
         type="button"
         onClick={handleClick}
-        onFocus={prefetchMenuDailyCheckIn}
-        onPointerEnter={prefetchMenuDailyCheckIn}
+        onFocus={prefetchMenu}
+        onPointerEnter={prefetchMenu}
         // Only the handoff itself blocks clicks; while waiting, a click reopens the page.
         disabled={isLoading || loginOpening}
         aria-busy={isLoading || loginInProgress}
