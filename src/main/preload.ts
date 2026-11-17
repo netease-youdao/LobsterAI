@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
 import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import { AccountMenuMoreIpc } from '../shared/accountMenuMore/constants';
 import {
   type ActivityHostExecuteActionInput,
   type ActivityHostGetContextInput,
@@ -1292,6 +1293,9 @@ contextBridge.exposeInMainWorld('electron', {
   },
   subscriptionTrial: {
     status: () => ipcRenderer.invoke(SubscriptionTrialIpc.Status),
+  },
+  accountMenuMore: {
+    get: () => ipcRenderer.invoke(AccountMenuMoreIpc.Get),
   },
   activity: {
     getSlot: (input: ActivityHostGetSlotInput) =>
