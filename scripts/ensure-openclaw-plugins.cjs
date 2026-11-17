@@ -43,9 +43,8 @@ const { QQ_PACKAGE_NAME, configureQQRuntimeEntry, prepareQQPackage } = require('
 const { pruneHostPeerLeftovers } = require('./openclaw-plugin-host-peer-leftovers.cjs');
 const { resolvePreinstalledPluginDir, verifyRuntimeBundledPlugin } = require('./openclaw-runtime-packaging.cjs');
 
-const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = process.platform === 'win32'
-  ? 20 * 60 * 1000
-  : 5 * 60 * 1000;
+// Stays above the patched 15-minute archive budget in OpenClaw on every platform.
+const OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS = 20 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -767,8 +766,8 @@ function main() {
             },
             stdio: 'inherit',
             // OpenClaw scans and extracts large signed plugin archives before
-            // dependency installation; keep the Windows wrapper above the
-            // runtime's extended archive budget so cleanup is not interrupted.
+            // dependency installation; keep the wrapper above the runtime's
+            // extended archive budget so cleanup is not interrupted.
             timeout: OPENCLAW_PLUGIN_INSTALL_TIMEOUT_MS,
           }
         );
