@@ -515,6 +515,7 @@ import {
   type DevelopmentMainWindowLoadRecovery,
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
+import { installMainWindowZoom, MAC_TRAFFIC_LIGHT_POSITION, scaleRendererCoordinates } from './libs/mainWindowZoom';
 import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { mediaConfirmationQuote } from './libs/mediaConfirmationRequests';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
@@ -5818,8 +5819,8 @@ if (!gotTheLock) {
 
   ipcMain.on(
     'window:showSystemMenu',
-    (_event, position: { x?: number; y?: number } | undefined) => {
-      showSystemMenu(position);
+    (event, position: { x?: number; y?: number } | undefined) => {
+      showSystemMenu(scaleRendererCoordinates(position, event.sender.getZoomFactor()));
     },
   );
 
@@ -10182,11 +10183,11 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     BrowserIpc.SetHostView,
-    (_event, request?: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
+    (event, request?: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => getAgentBrowserHost().setView({
         sessionId: request?.sessionId,
         visible: request?.visible === true,
-        bounds: request?.bounds,
+        bounds: scaleRendererCoordinates(request?.bounds, event.sender.getZoomFactor()),
       })),
   );
 
@@ -10255,7 +10256,7 @@ if (!gotTheLock) {
       const selectedTab = hostState.tabs.find(tab => tab.pageId === hostState.selectedPageId);
       return showAgentBrowserHostMenu({
         targetWindow,
-        position: request,
+        position: scaleRendererCoordinates(request, event.sender.getZoomFactor()),
         hasPage: Boolean(selectedTab),
         zoomFactor: selectedTab?.zoomFactor,
         darkMode: request?.darkMode,
@@ -12142,7 +12143,7 @@ if (!gotTheLock) {
     ) => {
       try {
         const { rect, defaultFileName } = options || {};
-        const captureRect = normalizeCaptureRect(rect);
+        const captureRect = normalizeCaptureRect(scaleRendererCoordinates(rect, event.sender.getZoomFactor()));
         if (!captureRect) {
           return { success: false, error: 'Capture rect is required' };
         }
@@ -12167,7 +12168,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        const captureRect = normalizeCaptureRect(options?.rect);
+        const captureRect = normalizeCaptureRect(scaleRendererCoordinates(options?.rect, event.sender.getZoomFactor()));
         if (!captureRect) {
           return { success: false, error: 'Capture rect is required' };
         }
@@ -15428,7 +15429,7 @@ if (!gotTheLock) {
       ...(isMac
         ? {
             titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: { x: 12, y: 20 },
+            trafficLightPosition: MAC_TRAFFIC_LIGHT_POSITION,
           }
         : isWindows
           ? {
@@ -15472,6 +15473,7 @@ if (!gotTheLock) {
     // 禁用窗口菜单
     mainWindow.setMenu(null);
     installEditContextMenu(mainWindow.webContents);
+    installMainWindowZoom(mainWindow, { isMac });
 
     // 处理 window.open 请求（企微 SDK 授权弹窗等）
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {

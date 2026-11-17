@@ -22,6 +22,7 @@ import type { Artifact } from '../../../types/artifact';
 import { createModalEscapeLayerId, isDismissEscapeEvent, isTopModalEscapeLayer, registerModalEscapeLayer, unregisterModalEscapeLayer } from '../../common/modalEscape';
 import MessageCopiedIcon from '../../icons/MessageCopiedIcon';
 import MessageCopyIcon from '../../icons/MessageCopyIcon';
+import { MAC_TRAFFIC_LIGHT_WIDE_INSET_CLASS } from '../../window/windowZoom';
 import { getImageArtifactSrc } from '../renderers/imageArtifactSource';
 import ImageRenderer from '../renderers/ImageRenderer';
 import { buildLocalFileSrc } from '../renderers/VideoRenderer';
@@ -422,7 +423,7 @@ export default function ImageEditor({ artifact, surface = ImageEditorSurface.Pan
   const fallbackSrc = getImageArtifactSrc(artifact);
   const platform = window.electron?.platform;
   const topBarClass = `pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-2 p-3 ${
-    isStudio ? `draggable ${platform === 'darwin' ? 'pl-[84px]' : ''} ${platform === 'win32' ? 'pr-[150px]' : ''}` : ''}`;
+    isStudio ? `draggable ${platform === 'darwin' ? MAC_TRAFFIC_LIGHT_WIDE_INSET_CLASS : ''} ${platform === 'win32' ? 'pr-[150px]' : ''}` : ''}`;
   if (initialFailed) return <div className="flex h-full flex-col">
     <div className={`flex items-center gap-2 px-4 py-2 ${isStudio ? 'draggable' : ''}`}><p className="flex-1 text-xs text-muted">{error || t('imageEditUnsupported')}</p>{studioClose}</div>
     <div className="min-h-0 flex-1"><ImageRenderer artifact={artifact} /></div>

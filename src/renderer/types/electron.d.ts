@@ -1017,6 +1017,7 @@ interface IElectronAPI {
     isMaximized: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;
     showSystemMenu: (position: { x: number; y: number }) => void;
+    onZoomChanged: (callback: (payload: import('../../shared/app/constants').WindowZoomChangedPayload) => void) => () => void;
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
