@@ -1292,8 +1292,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       ? `x${model.costMultiplier?.toFixed(2)}`
       : undefined;
 
-    // Keep names, tags and multipliers in fixed columns. Tags and multipliers
-    // align to their column starts so spare width cannot create leading gaps.
+    // Names truncate; tags sit side by side in an auto-width column (capped so
+    // the name keeps room), with the server-configured custom tag last.
+    // Multiplier and status keep fixed columns so they stay aligned.
     return (
       <button
         ref={selected ? selectedItemRef : undefined}
@@ -1307,7 +1308,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onBlur={handleModelHoverEnd}
         aria-disabled={blocked}
         aria-haspopup={thinkingSelectionEnabled && hasThinkingProtocol ? 'menu' : undefined}
-        className={`grid w-full grid-cols-[20px_minmax(0,1fr)_72px_40px_16px] items-center gap-x-1 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
+        className={`grid w-full grid-cols-[20px_minmax(0,1fr)_auto_40px_16px] items-center gap-x-1 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
           accountUnavailable
             ? 'cursor-not-allowed opacity-60'
             : busy
@@ -1328,7 +1329,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         >
           {model.presetId ? modelPresetName(model.presetId) : model.name}
         </span>
-        <span className="flex min-w-0 flex-col items-start gap-1">
+        <span className="flex min-w-0 max-w-[168px] items-center gap-1 overflow-hidden">
           {model.presetId && restricted && model.restrictionHint && (
             <span className="max-w-full truncate text-[10px] text-secondary" title={model.restrictionHint}>{model.restrictionHint}</span>
           )}
@@ -1336,18 +1337,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] leading-none text-red-600 dark:text-red-400" title={i18nService.t('modelLimitedFreeBadge')}>
               <GiftIcon className="h-3 w-3 shrink-0" strokeWidth={1.8} aria-hidden="true" />
               <span className="truncate">{i18nService.t('modelLimitedFreeBadge')}</span>
-            </span>
-          )}
-          {!model.presetId && model.customTag && (
-            <span
-              className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] leading-none"
-              style={modelCustomTagStyle(model.customTag.color)}
-              title={model.customTag.text}
-            >
-              {model.customTag.iconUrl && (
-                <img src={model.customTag.iconUrl} alt="" className="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
-              )}
-              <span className="truncate">{model.customTag.text}</span>
             </span>
           )}
           {model.subscriptionPriority && (
@@ -1360,6 +1349,18 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="flex max-w-full items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300" title={i18nService.t('modelSelectorAgenticVerifyingBadge')}>
               <ClockIcon className="h-3 w-3 shrink-0" />
               <span className="truncate">{i18nService.t('modelSelectorAgenticVerifyingBadge')}</span>
+            </span>
+          )}
+          {!model.presetId && model.customTag && (
+            <span
+              className="inline-flex shrink-0 items-center gap-[3px] whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] leading-none"
+              style={modelCustomTagStyle(model.customTag.color)}
+              title={model.customTag.text}
+            >
+              {model.customTag.iconUrl && (
+                <img src={model.customTag.iconUrl} alt="" className="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
+              )}
+              <span className="truncate">{model.customTag.text}</span>
             </span>
           )}
         </span>
