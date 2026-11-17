@@ -2,13 +2,13 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
+import { readSheetPreview } from '@/services/office/sheet/sheetPreview';
 
 import {
   type OfficePreviewZoomControlsConfig,
   useRegisterOfficePreviewZoomControls,
 } from '../common/OfficePreviewActionsContext';
 import { useOfficePreviewZoom } from '../common/OfficeZoomControls';
-import { getExtension } from './excelPreprocess';
 
 const t = (key: string) => i18nService.t(key);
 
@@ -36,9 +36,8 @@ interface SheetData {
 }
 
 interface SheetFallbackRendererProps {
-  data: ArrayBuffer;
+  data: ArrayBuffer | string;
   fileName: string;
-  error?: string | null;
 }
 
 const ROW_HEIGHT = 28;
@@ -62,17 +61,19 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
   const [sheets, setSheets] = useState<SheetData[]>([]);
   const [activeSheet, setActiveSheet] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [parsedInput, setParsedInput] = useState<SheetFallbackRendererProps | null>(null);
+  const isCurrent = parsedInput?.data === data && parsedInput.fileName === fileName;
   const parentRef = useRef<HTMLDivElement>(null);
   const { zoomFactor, zoomIn, zoomOut, resetZoom, handleWheelZoom } = useOfficePreviewZoom();
   const zoomControls = useMemo<OfficePreviewZoomControlsConfig | null>(() => {
-    if (sheets.length === 0) return null;
+    if (!isCurrent || error || sheets.length === 0) return null;
     return {
       zoomFactor,
       onZoomOut: zoomOut,
       onZoomIn: zoomIn,
       onResetZoom: resetZoom,
     };
-  }, [resetZoom, sheets.length, zoomFactor, zoomIn, zoomOut]);
+  }, [error, isCurrent, resetZoom, sheets.length, zoomFactor, zoomIn, zoomOut]);
 
   useRegisterOfficePreviewZoomControls(zoomControls);
 
@@ -92,13 +93,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     const parse = async () => {
       try {
         const XLSX = await import('xlsx');
-        const ext = getExtension(fileName);
-        const workbook = ext === '.csv' || ext === '.tsv'
-          ? XLSX.read(new TextDecoder('utf-8').decode(new Uint8Array(data)), {
-              type: 'string',
-              FS: ext === '.tsv' ? '\t' : undefined,
-            })
-          : XLSX.read(new Uint8Array(data), { type: 'array', cellStyles: true });
+        const workbook = readSheetPreview(XLSX, data, fileName);
 
         const parsed: SheetData[] = workbook.SheetNames.map(name => {
           const sheet = workbook.Sheets[name];
@@ -136,11 +131,16 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
         });
 
         if (!cancelled) {
+          setError(null);
           setSheets(parsed);
           setActiveSheet(0);
+          setParsedInput({ data, fileName });
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setParsedInput({ data, fileName });
+        }
       }
     };
 
@@ -148,7 +148,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     return () => { cancelled = true; };
   }, [data, fileName]);
 
-  const activeSheetData = sheets[activeSheet] || sheets[0] || null;
+  const activeSheetData = isCurrent ? sheets[activeSheet] || sheets[0] || null : null;
   const autoFitColWidths = useMemo(
     () => activeSheetData ? getAutoFitColumnWidths(activeSheetData.rows, activeSheetData.colWidths) : [],
     [activeSheetData],
@@ -158,7 +158,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     [activeSheetData, zoomFactor],
   );
 
-  if (error) {
+  if (isCurrent && error) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-sm text-red-500">
         {t('artifactDocumentError')}: {error}
@@ -166,7 +166,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     );
   }
 
-  if (sheets.length === 0) {
+  if (!isCurrent || sheets.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted">
         {t('artifactDocumentLoading')}
