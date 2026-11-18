@@ -1823,6 +1823,16 @@ test('getConfig returns the stored executionMode instead of forcing local', () =
   expect(new CoworkStore(db).getConfig().executionMode).toBe('sandbox');
 });
 
+test.each([
+  ['container', 'local'],
+  ['unknown', 'local'],
+  [' AUTO ', 'auto'],
+])('reads stored execution mode "%s" as %s', (raw, expected) => {
+  db.prepare('INSERT INTO cowork_config (key, value, updated_at) VALUES (?, ?, ?)')
+    .run('executionMode', raw, Date.now());
+  expect(store.getConfig().executionMode).toBe(expected);
+});
+
 test('defaults automatic skill review to disabled for users without the setting', () => {
   store.setConfig({ openClawHeartbeatEnabled: true });
 

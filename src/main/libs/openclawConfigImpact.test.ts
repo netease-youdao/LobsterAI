@@ -153,6 +153,14 @@ describe('OpenClaw config impact classification', () => {
     });
   });
 
+  test('ignores execution mode changes while still syncing changed gateway settings', () => {
+    const previous = { executionMode: 'local', skipMissedJobs: false };
+    const next = { ...previous, executionMode: 'sandbox' };
+    expect(classifyCoworkConfigChange(previous, next).impact).toBe(OpenClawConfigImpact.None);
+    expect(classifyCoworkConfigChange(previous, { ...next, skipMissedJobs: true }).impact)
+      .toBe(OpenClawConfigImpact.Sync);
+  });
+
   test('classifies skipMissedJobs changes as sync', () => {
     const result = classifyCoworkConfigChange(
       { skipMissedJobs: true },

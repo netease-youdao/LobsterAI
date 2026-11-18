@@ -16,7 +16,10 @@ import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
 import { ComputerUseMcpEnv, ComputerUseMcpServerName } from '../computerUse/computerUseMcpServer';
+import { CoworkStore } from '../coworkStore';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
+import { SqliteStore } from '../sqliteStore';
+import { prepareEnterpriseOpenclawConfig, syncEnterpriseConfig } from './enterpriseConfigSync';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
 import { CHROME_DISK_CACHE_SIZE_ARG, OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
 import { persistOpenClawConfigTarget } from './openclawConfigTarget';
@@ -246,6 +249,91 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(prepared).toMatchObject({ ok: true, changed: true });
     expect(prepared.target?.raw).toContain('4121');
     expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
+
+  test.each([
+    { stored: 'sandbox', importConfig: null, userMode: undefined, packageMode: undefined, expected: 'off' },
+    { stored: 'auto', importConfig: null, userMode: 'all', packageMode: undefined, expected: 'all' },
+    { stored: 'sandbox', importConfig: true, userMode: undefined, packageMode: undefined, expected: 'off' },
+    { stored: 'auto', importConfig: false, userMode: undefined, packageMode: undefined, expected: 'off' },
+    { stored: 'local', importConfig: true, userMode: undefined, packageMode: 'non-main', expected: 'non-main' },
+    { stored: 'local', importConfig: false, userMode: 'off', packageMode: 'all', expected: 'all' },
+    { stored: 'sandbox', importConfig: true, userMode: 'all', packageMode: 'off', expected: 'off' },
+    { stored: 'local', importConfig: false, userMode: 'non-main', packageMode: undefined, expected: 'non-main' },
+  ] as const)('delivers $expected for saved $stored, user $userMode, enterprise $packageMode, import $importConfig', async ({
+    stored, importConfig, userMode, packageMode, expected,
+  }) => {
+    const { app } = await import('electron');
+    const db = await SqliteStore.create(tmpDir);
+    const appPath = vi.spyOn(app, 'getPath').mockReturnValue(tmpDir);
+    try {
+      const cowork = new CoworkStore(db.getDatabase());
+      cowork.setConfig({ executionMode: stored, workingDirectory: tmpDir });
+      if (importConfig !== null) {
+        const packageDir = path.join(tmpDir, 'enterprise-config');
+        fs.mkdirSync(packageDir);
+        fs.writeFileSync(path.join(packageDir, 'manifest.json'), JSON.stringify({
+          name: 'Sandbox policy test', version: '1',
+          sync: { openclaw: importConfig, agents: false, skills: false, mcp: false },
+        }));
+        fs.writeFileSync(path.join(packageDir, 'openclaw.json'), JSON.stringify(
+          packageMode ? { agents: { defaults: { sandbox: { mode: packageMode } } } } : {},
+        ));
+        expect(syncEnterpriseConfig(
+          packageDir, db, {} as never, vi.fn(), vi.fn(),
+          config => cowork.setConfig(config), () => tmpDir,
+        )).not.toBeNull();
+      }
+
+      if (userMode) {
+        fs.writeFileSync(path.join(stateDir, 'openclaw.user.json'), JSON.stringify({
+          agents: { defaults: { sandbox: { mode: userMode } } },
+        }));
+      }
+      const sync = await createSync({
+        getCoworkConfig: () => cowork.getConfig(),
+        isEnterprise: () => Boolean(db.get('enterprise_config')),
+        userConfigOverlay: new OpenClawUserConfigOverlay({ getConfigDir: () => stateDir, getStore: () => db }),
+      });
+      const result = sync.prepare('startup');
+      if (!result.target) throw new Error(result.error || 'Missing prepared config');
+      result.target.raw = prepareEnterpriseOpenclawConfig(result.target.raw);
+      const delivered = persistOpenClawConfigTarget(configPath, result.target);
+      expect(JSON.parse(delivered).agents.defaults.sandbox.mode).toBe(expected);
+    } finally {
+      appPath.mockRestore();
+      db.close();
+    }
+  });
+
+  test('clears a retired enterprise default before applying user overrides without a model', async () => {
+    mockRuntimeState.rawApiConfig.config = null;
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: { defaults: { sandbox: { mode: 'all', workspaceAccess: 'ro' } } },
+    }));
+    const values = new Map<string, unknown>();
+    const userConfigOverlay = new OpenClawUserConfigOverlay({
+      getConfigDir: () => stateDir,
+      getStore: () => ({
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        set: (key: string, value: unknown) => { values.set(key, value); },
+      }),
+    });
+    const sync = await createSync({ userConfigOverlay });
+    const readSandbox = () => JSON.parse(fs.readFileSync(configPath, 'utf8')).agents.defaults.sandbox;
+
+    expect(sync.sync('enterprise-package-removed').ok).toBe(true);
+    expect(readSandbox()).toEqual({ mode: 'off', workspaceAccess: 'ro' });
+    const userConfigPath = path.join(stateDir, 'openclaw.user.json');
+    fs.writeFileSync(userConfigPath, JSON.stringify({
+      agents: { defaults: { sandbox: { mode: 'non-main' } } },
+    }));
+    expect(sync.sync('user-policy').ok).toBe(true);
+    expect(readSandbox()).toEqual({ mode: 'non-main', workspaceAccess: 'ro' });
+    fs.writeFileSync(userConfigPath, '{}');
+    expect(sync.sync('user-policy-removed').ok).toBe(true);
+    // OpenClaw defaults to off when the user override is removed.
+    expect(readSandbox()).toEqual({ workspaceAccess: 'ro' });
   });
 
   test('renders a byte-identical config on the next app launch', async () => {
