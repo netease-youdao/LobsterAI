@@ -4649,6 +4649,49 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(agentsMd).toContain('NOT user authorization to generate or spend credits');
     expect(agentsMd).toContain('## Local Time');
     expect(agentsMd).toContain('"Local time:" line');
+    // The in-app browser is shared, so a task that "ends the browser session"
+    // must not stop it under other sessions or close their signed-in tabs.
+    expect(agentsMd).toContain('Never call `action="stop"` on it');
+    expect(agentsMd).toContain('close only tabs you opened in this run');
+  });
+
+  test('writes one Office editing section and slims pristine template sections around user content', async () => {
+    const sync = await createSync();
+    const marker = '<!-- LobsterAI managed: do not edit below this line -->';
+    const workspaceDir = path.join(stateDir, 'workspace-main');
+    const agentsMdPath = path.join(workspaceDir, 'AGENTS.md');
+    const userSection = '## My Rules\n\n- Always answer in Chinese.';
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(agentsMdPath, [
+      '# AGENTS.md - Your Workspace',
+      '',
+      userSection,
+      '',
+      // Verbatim from OpenClaw's bundled template; its link does not resolve in a workspace.
+      '## Related',
+      '',
+      '- [Default AGENTS.md](/reference/AGENTS.default)',
+      '',
+      marker,
+      '',
+      '## Stale managed section',
+      '',
+    ].join('\n'), 'utf8');
+
+    expect(sync.sync('agents-md-slim').ok).toBe(true);
+
+    const [userContent, managedContent] = fs.readFileSync(agentsMdPath, 'utf8').split(marker);
+    expect(userContent).toBe(`# AGENTS.md - Your Workspace\n\n${userSection}\n\n`);
+    expect(managedContent).not.toContain('Stale managed section');
+    // Every request carries this file: the Office rules are stated once, not once per format.
+    expect(managedContent.match(/^## Editing Existing/gm)).toHaveLength(1);
+    expect(managedContent).toContain('`.xlsx`: `excel_read` / `excel_edit`');
+    expect(managedContent).toContain('another read verifies nothing and costs a full extra model request');
+
+    // A second sync finds nothing left to slim and leaves the file alone.
+    const firstWrite = fs.readFileSync(agentsMdPath, 'utf8');
+    expect(sync.sync('agents-md-slim-again').ok).toBe(true);
+    expect(fs.readFileSync(agentsMdPath, 'utf8')).toBe(firstWrite);
   });
 
   test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
@@ -4895,6 +4938,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const inAppConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(inAppConfig.browser).toMatchObject({
       defaultProfile: BrowserRuntimeProfile.InApp,
+      tabCleanup: { enabled: false },
       profiles: {
         [BrowserRuntimeProfile.InApp]: {
           driver: 'existing-session',
@@ -4927,6 +4971,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       defaultProfile: BrowserRuntimeProfile.Managed,
       headless: false,
     });
+    expect(fallbackConfig.browser.tabCleanup).toBeUndefined();
 
     browserDisplayMode = BrowserDisplayMode.External;
     const leaveInAppResult = inAppSync.sync('browser-web-access-leave-in-app');

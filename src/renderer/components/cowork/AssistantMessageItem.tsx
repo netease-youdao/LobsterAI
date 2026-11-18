@@ -31,8 +31,11 @@ export { MessageCopyButton as CopyButton } from './MessageActionButton';
 
 // Stays on one line: a narrow column shortens the date (assistantMessageMeta.css),
 // then the model inside the parentheses gives way; nothing wraps.
-export const MESSAGE_META_CLASS_NAME = 'cowork-message-meta mt-1 flex min-w-0 items-center gap-2 whitespace-nowrap text-[12px] font-normal leading-5 text-secondary select-none';
-const MESSAGE_META_ACTION_CLASS_NAME = 'inline-flex h-7 w-7 shrink-0 items-center justify-center [&>svg]:h-3.5 [&>svg]:w-3.5';
+// Every visible gap in the row is 12px: clickable items (usage chip, action
+// buttons) cancel their hover padding with a matching negative margin, and the
+// 26px action buttons around 14px icons leave the same 12px between icons.
+export const MESSAGE_META_CLASS_NAME = 'cowork-message-meta mt-1 flex min-w-0 items-center gap-3 whitespace-nowrap text-[12px] font-normal leading-5 text-secondary select-none';
+const MESSAGE_META_ACTION_CLASS_NAME = 'inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center [&>svg]:h-3.5 [&>svg]:w-3.5';
 
 const ForkButton: React.FC<{
   message: CoworkMessage;
@@ -106,22 +109,24 @@ export const AssistantMessageMeta: React.FC<{
     )}
     <MessageMetaDetails timestamp={timestamp} turnMetadata={turnMetadata} />
     {turnUsageSlot}
-    {onFork && <ForkButton message={message} onFork={() => onFork(message.id)} />}
-    <MessageCopyButton
-      className={MESSAGE_META_ACTION_CLASS_NAME}
-      content={copyContent}
-      disabled={!copyContent.trim()}
-      onCopy={(result) => reportConversationMessageAction({
-        actionType: 'copy_message',
-        message,
-        params: {
-          result,
-          copySource: 'assistant_message',
-          copiedLength: copyContent.length,
-        },
-      })}
-    />
-    {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
+    <div className="-ml-1.5 flex shrink-0 items-center">
+      {onFork && <ForkButton message={message} onFork={() => onFork(message.id)} />}
+      <MessageCopyButton
+        className={MESSAGE_META_ACTION_CLASS_NAME}
+        content={copyContent}
+        disabled={!copyContent.trim()}
+        onCopy={(result) => reportConversationMessageAction({
+          actionType: 'copy_message',
+          message,
+          params: {
+            result,
+            copySource: 'assistant_message',
+            copiedLength: copyContent.length,
+          },
+        })}
+      />
+      {enableMessageSpeech && <MessageSpeechButton messageId={message.id} content={copyContent} className={MESSAGE_META_ACTION_CLASS_NAME} />}
+    </div>
   </div>
 );
 

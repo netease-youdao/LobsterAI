@@ -7,7 +7,9 @@ import {
   DEFAULT_MANAGED_AGENT_ID,
   isCronSessionKey,
   isManagedSessionKey,
+  isOpenClawSystemAgentSessionKey,
   OpenClawChannelSessionSync,
+  OpenClawSystemAgentId,
   parseChannelSessionKey,
   parseManagedSessionKey,
 } from './openclawChannelSessionSync';
@@ -75,6 +77,38 @@ test('channel sync still recognizes real channel session keys', () => {
     conversationId: 'dm:ou_123',
   });
   expect(sync.isChannelSessionKey('agent:main:main')).toBe(true);
+});
+
+test('channel sync never maps OpenClaw system-agent session keys to local sessions', () => {
+  const sync = createSync();
+
+  for (const sessionKey of [
+    `agent:${OpenClawSystemAgentId.OpenClaw}:main`,
+    `agent:${OpenClawSystemAgentId.Crestodian}:main`,
+    'agent:OpenClaw:main',
+  ]) {
+    expect(isOpenClawSystemAgentSessionKey(sessionKey)).toBe(true);
+    expect(sync.isChannelSessionKey(sessionKey)).toBe(false);
+    expect(sync.resolveOrCreateMainAgentSession(sessionKey)).toBe(null);
+  }
+  expect(isOpenClawSystemAgentSessionKey('agent:main:main')).toBe(false);
+  expect(isOpenClawSystemAgentSessionKey('agent:openclaw-helper:main')).toBe(false);
+  expect(isOpenClawSystemAgentSessionKey('openclaw:main')).toBe(false);
+});
+
+test('channel sync still creates a local session for a regular agent main session', () => {
+  const createSession = vi.fn(() => ({ id: 'main-session-1' }));
+  const sync = new OpenClawChannelSessionSync({
+    coworkStore: {
+      getSession: () => null,
+      createSession,
+    } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/tmp',
+  });
+
+  expect(sync.resolveOrCreateMainAgentSession('agent:main:main')).toBe('main-session-1');
+  expect(createSession).toHaveBeenCalledOnce();
 });
 
 test('channel sync recognizes OpenClaw cron run-scoped session keys', () => {

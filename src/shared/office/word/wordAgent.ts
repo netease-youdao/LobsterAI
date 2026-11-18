@@ -115,11 +115,10 @@ export const WORD_AGENT_TOOL_DEFINITIONS = [
   },
 ] as const;
 
-/** Guidance for the managed AGENTS.md section: prefer live edits over rewriting the file. */
-export const WORD_AGENT_PROMPT = [
-  '## Editing Existing Documents',
-  '',
-  `- When the user wants to change an existing \`.docx\` and \`${WordAgentTool.Read}\` / \`${WordAgentTool.Edit}\` are available, use them instead of rewriting the file with scripts: edits appear live in LobsterAI's editor, keep styles and other content, and can be undone.`,
-  `- After a successful \`${WordAgentTool.Edit}\`, answer from its reply (the changed paragraphs as they now read, save status) and your earlier read, also when the user asks you to verify or check the change: the reply comes from the same open document a read would return, so another read verifies nothing and costs a full extra model request.`,
-  '- The editor tools open the file and report whether it saved; do not check the file with shell commands before or after editing.',
-].join('\n');
+/** What the managed AGENTS.md section says about these tools; the shared rules are in `buildOfficeAgentPrompt`. */
+export const WORD_AGENT_GUIDANCE = {
+  readTool: WordAgentTool.Read,
+  editTool: WordAgentTool.Edit,
+  keeps: 'keeps styles',
+  replyShows: 'paragraphs',
+} as const;

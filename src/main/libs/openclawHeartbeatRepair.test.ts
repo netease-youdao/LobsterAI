@@ -7,7 +7,6 @@ import {
   HEARTBEAT_EMPTY_TEMPLATE,
   isLegacyHeartbeatTemplate,
   repairHeartbeatFile,
-  stripProactiveHeartbeatSection,
 } from './openclawHeartbeatRepair';
 
 const LEGACY_PROSE = [
@@ -138,71 +137,5 @@ describe('repairHeartbeatFile', () => {
     const missingDir = path.join(workspaceDir, 'not-created');
     expect(repairHeartbeatFile(missingDir)).toBe(false);
     expect(fs.existsSync(missingDir)).toBe(false);
-  });
-});
-
-describe('stripProactiveHeartbeatSection', () => {
-  const template = [
-    '# AGENTS.md',
-    '',
-    '## Tools',
-    'Use tools well.',
-    '',
-    '## 💓 Heartbeats - Be Proactive!',
-    '',
-    "Don't just reply HEARTBEAT_OK every time. Use heartbeats productively!",
-    '',
-    '### Heartbeat vs Cron: When to Use Each',
-    '- batch checks together',
-    '',
-    '## Make It Yours',
-    'Edit freely.',
-  ].join('\n');
-
-  test('removes the section up to the next H2 heading', () => {
-    const result = stripProactiveHeartbeatSection(template);
-    expect(result).not.toContain('Be Proactive!');
-    expect(result).not.toContain('Heartbeat vs Cron');
-    expect(result).toContain('## Tools');
-    expect(result).toContain('## Make It Yours');
-  });
-
-  test('returns content unchanged when the section is absent', () => {
-    const content = '# AGENTS.md\n\n## Tools\n';
-    expect(stripProactiveHeartbeatSection(content)).toBe(content);
-  });
-
-  test('removes a trailing section with no following H2 heading', () => {
-    const content = [
-      '## Tools',
-      '',
-      '## 💓 Heartbeats - Be Proactive!',
-      'go check emails',
-    ].join('\n');
-    const result = stripProactiveHeartbeatSection(content);
-    expect(result).not.toContain('go check emails');
-    expect(result.trimEnd()).toBe('## Tools');
-  });
-
-  test('strips the section from the real bundled runtime template when present', () => {
-    const templatePath = path.join(
-      process.cwd(),
-      'vendor',
-      'openclaw-runtime',
-      'current',
-      'docs',
-      'reference',
-      'templates',
-      'AGENTS.md',
-    );
-    let bundled: string;
-    try {
-      bundled = fs.readFileSync(templatePath, 'utf8');
-    } catch {
-      return; // runtime not built in this checkout — covered by the fixture tests above
-    }
-    const result = stripProactiveHeartbeatSection(bundled);
-    expect(result).not.toContain('Be Proactive!');
-    expect(result).not.toContain('Track your checks');
   });
 });

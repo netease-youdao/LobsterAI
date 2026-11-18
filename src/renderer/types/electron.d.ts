@@ -1,5 +1,6 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type { GenerateSessionTitleRequest } from '../../common/sessionTitle';
+import type { AccountMenuMoreBridge } from '../../shared/accountMenuMore/constants';
 import type {
   ActivityActionResponse,
   ActivityContextResponse,
@@ -164,6 +165,8 @@ import type {
   OpenClawUserConfigActionResult,
   OpenClawUserConfigStatus,
 } from '../../shared/openclawUserConfig/constants';
+import type { PptAssetRequest, PptCatalog, PptPreparedFile } from '../../shared/pptCreation/constants';
+import type { PptCoverExportRequest,PptCoverRequest } from '../../shared/pptCreation/cover';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -1017,10 +1020,12 @@ interface IElectronAPI {
     isMaximized: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;
     showSystemMenu: (position: { x: number; y: number }) => void;
+    onZoomChanged: (callback: (payload: import('../../shared/app/constants').WindowZoomChangedPayload) => void) => () => void;
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
     startSession: (options: {
+      pptCover?: PptCoverRequest;
       analytics?: UsageContext;
       prompt: string;
       cwd?: string;
@@ -2105,6 +2110,7 @@ interface IElectronAPI {
   };
   feedback: FeedbackBridge;
   subscriptionTrial: SubscriptionTrialBridge;
+  accountMenuMore: AccountMenuMoreBridge;
   activity: {
     getSlot: (
       input: ActivityHostGetSlotInput,
@@ -2128,6 +2134,7 @@ interface IElectronAPI {
   };
   auth: {
     login: (loginUrl?: string) => Promise<AuthLoginResult>;
+    cancelLogin: () => Promise<{ success: boolean }>;
     exchange: (
       code: string,
     ) => Promise<{
@@ -2187,6 +2194,7 @@ interface IElectronAPI {
         limitedFreeStartAt?: string | null;
         limitedFreeEndAt?: string | null;
         subscriptionPriority?: boolean;
+        customTag?: unknown;
         busy?: boolean;
         moreModel?: boolean;
         accessible?: boolean;
@@ -2256,6 +2264,12 @@ interface IElectronAPI {
   imageCreation: {
     getCatalog: () => Promise<ImageCreationCatalog>;
     getReference: (exampleId: string) => Promise<ImageExampleReference>;
+  };
+  pptCreation: {
+    getCoverTemplate: (request: PptCoverRequest) => Promise<{ imageBase64: string }>;
+    exportCover: (request: PptCoverExportRequest) => Promise<PptPreparedFile>;
+    getCatalog: () => Promise<PptCatalog>;
+    getAsset: (request: PptAssetRequest) => Promise<PptPreparedFile>;
   };
   media: {
     getPreferences: (owner: string) => Promise<MediaPreferenceResult>;

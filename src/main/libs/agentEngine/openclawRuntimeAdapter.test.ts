@@ -45,6 +45,7 @@ import { CoworkSteerRejectReason, CoworkSteerStatus } from '../../../shared/cowo
 import { imageEditRegionPrompt } from '../../../shared/imageEditing/prompts';
 import { ImageEditOperation, type ImageEditRequest } from '../../../shared/imageEditing/types';
 import { OpenClawTranscriptSafetyLimit } from '../../../shared/openclawTranscript/constants';
+import { buildPptOutlineSystemPrompt, PPT_OUTLINE_CONTENT_GUIDANCE } from '../../../shared/pptCreation/outline';
 import { ProviderName } from '../../../shared/providers/constants';
 import { setLanguage, t } from '../../i18n';
 import { getServerApiBaseUrl } from '../endpoints';
@@ -2726,6 +2727,98 @@ test('pollChannelSessions still recovers a main session once meaningful history 
   ]);
 });
 
+test('OpenClaw system-agent run events never create a local session or turn', () => {
+  const sessionKey = 'agent:openclaw:main';
+  const runId = 'openclaw-turn-1';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'system-agent-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  const requests: string[] = [];
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      requests.push(method);
+      return { messages: [] };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+  const emitted = vi.fn();
+  adapter.on('message', emitted);
+  adapter.on('messageUpdate', emitted);
+  adapter.on('complete', emitted);
+  const assistantMessage = {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'Checking the MCP server config.' }],
+  };
+
+  for (const event of [
+    { event: 'agent', payload: { runId, sessionKey, stream: 'lifecycle', data: { phase: 'start' } } },
+    { event: 'agent', payload: { runId, sessionKey, stream: 'assistant', data: { text: 'Checking the MCP server config.' } } },
+    { event: 'chat', payload: { runId, sessionKey, state: 'delta', message: assistantMessage } },
+    { event: 'chat', payload: { runId, sessionKey, state: 'final', message: assistantMessage } },
+    { event: 'agent', payload: { runId, sessionKey, stream: 'lifecycle', data: { phase: 'end' } } },
+  ]) {
+    adapter.handleGatewayEvent(event);
+  }
+
+  expect(createSession).not.toHaveBeenCalled();
+  expect(adapter.activeTurns.size).toBe(0);
+  expect(adapter.sessionIdByRunId.has(runId)).toBe(false);
+  expect(adapter.sessionIdBySessionKey.has(sessionKey)).toBe(false);
+  expect(emitted).not.toHaveBeenCalled();
+  expect(requests).toEqual([]);
+});
+
+test('pollChannelSessions skips OpenClaw system-agent sessions even with history', async () => {
+  const sessionKey = 'agent:openclaw:main';
+  const { session, store } = createReconcileStore([], {
+    sessionId: 'system-agent-session-1',
+  });
+  const createSession = vi.fn(() => session);
+  const adapter = new OpenClawRuntimeAdapter({ ...store, createSession } as never, {});
+  const requests: string[] = [];
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async (method: string) => {
+      requests.push(method);
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            key: sessionKey,
+            sessionId: 'openclaw-gateway-1',
+            updatedAt: 102,
+          }],
+        };
+      }
+      return {
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'why is the MCP tool missing?' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'Checking the config.' }] },
+        ],
+      };
+    },
+  };
+  adapter.channelSessionSync = new OpenClawChannelSessionSync({
+    coworkStore: { ...store, createSession } as never,
+    imStore: {} as never,
+    getDefaultCwd: () => '/repo/main',
+  });
+
+  await adapter.pollChannelSessions();
+
+  expect(createSession).not.toHaveBeenCalled();
+  expect(adapter.sessionIdBySessionKey.has(sessionKey)).toBe(false);
+  expect(requests).toEqual(['sessions.list']);
+});
+
 test('cron session routing retains only the latest real gateway run key per job', () => {
   const { session, store } = createReconcileStore([], {
     sessionId: 'cron-session-1',
@@ -4288,6 +4381,14 @@ test('approved implementation exits plan mode and does not request another plan'
   expect(chatSendRequests[0].params.message).not.toContain('[Plan Mode reminder]');
 });
 
+test('presentation outline reminders preserve slide planning instead of injecting software sections', async () => {
+  const { adapter, requests } = createRunTurnAdapter();
+  await adapter.continueSession('session-1', '先整理八页水循环教学大纲', { systemPrompt: buildPptOutlineSystemPrompt() });
+  const message = requests.find(request => request.method === 'chat.send')?.params.message;
+  expect(message).toContain(PPT_OUTLINE_CONTENT_GUIDANCE);
+  expect(message).not.toContain('Implementation Approach, Key Changes');
+});
+
 test('a turn stores one W3C trace on its user message and sends it with chat.send', async () => {
   const { adapter, requests, session } = createRunTurnAdapter();
 
@@ -5403,7 +5504,7 @@ test('steer acknowledgement keeps a yielded run waiting for its subagents', asyn
   }
 });
 
-test('incomplete plan mode output requests one hidden completion retry', async () => {
+test.each([false, true])('incomplete plan mode output requests one hidden completion retry (PPT: %s)', async (pptOutline) => {
   vi.useFakeTimers();
   try {
     const { session, store } = createReconcileStore([
@@ -5430,6 +5531,7 @@ test('incomplete plan mode output requests one hidden completion retry', async (
     const sessionKey = `agent:main:lobsterai:${session.id}`;
     const turn = createActiveTurn(session.id, sessionKey, 'run-plan-short');
     turn.planMode = true;
+    turn.pptOutline = pptOutline;
     turn.currentText = 'Workspace 是空的，新项目。设计方向明确。';
     turn.currentAssistantSegmentText = turn.currentText;
     turn.agentAssistantTextLength = turn.currentText.length;
@@ -5458,6 +5560,9 @@ test('incomplete plan mode output requests one hidden completion retry', async (
       { timeoutMs: 90_000 },
     );
     expect(turn.planModeRecoveryAttempted).toBe(true);
+    if (pptOutline) {
+      expect(request).toHaveBeenCalledWith('chat.send', expect.objectContaining({ message: expect.stringContaining(PPT_OUTLINE_CONTENT_GUIDANCE) }), { timeoutMs: 90_000 });
+    }
     expect(turn.pendingOpenClawRetry).toBe(true);
     await expect(adapter.retryIncompletePlanModeResponse(
       session.id,

@@ -18,6 +18,7 @@ const RETAINED_PATCHES = [
   'openclaw-browser-blocked-hostnames.patch',
   'openclaw-browser-cdp-dispatch-rejection.patch',
   'openclaw-browser-navigation-error-containment.patch',
+  'openclaw-chat-metadata-binary-batch.patch',
   'openclaw-chat-send-cwd-decoupling.patch',
   'openclaw-chrome-mcp-process-recovery.patch',
   'openclaw-chrome-mcp-windows-native-snapshot.patch',
@@ -29,6 +30,7 @@ const RETAINED_PATCHES = [
   'openclaw-cron-preparation-failure-state.patch',
   'openclaw-cron-run-trace-isolation.patch',
   'openclaw-cron-skip-missed-jobs.patch',
+  'openclaw-deleted-agent-session-scan.patch',
   'openclaw-device-identity-preservation.patch',
   'openclaw-exec-command-description.patch',
   'openclaw-gateway-client-request-traceparent.patch',
@@ -44,6 +46,7 @@ const RETAINED_PATCHES = [
   'openclaw-low-level-dispatch-reply-reservation.patch',
   'openclaw-malformed-tool-call-continuation.patch',
   'openclaw-managed-image-replay.patch',
+  'openclaw-managed-media-deleted-agent-gc.patch',
   'openclaw-managed-npm-junction-cleanup.patch',
   'openclaw-managed-workspace-alias-follow.patch',
   'openclaw-memory-knn-child-electron-node-env.patch',
@@ -249,7 +252,8 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
     ]);
     expectPatchContains('openclaw-plugin-archive-windows-timeout.patch', [
       'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
-      'process.platform === "win32" ? 900_000 : 120_000',
+      // 120s timed out unpacking @openclaw/discord (5.7k files) on an Intel Mac.
+      'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS = 900_000;',
       'params.timeoutMs ?? DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
     ]);
     expectPatchContains('openclaw-project-memory-negative-probe.patch', [

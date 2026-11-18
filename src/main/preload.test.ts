@@ -8,6 +8,7 @@ import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
   ipcRenderer: { invoke: vi.fn() },
+  webFrame: { setZoomFactor: vi.fn() },
   webUtils: {},
 }));
 

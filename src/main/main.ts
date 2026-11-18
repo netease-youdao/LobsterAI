@@ -62,6 +62,7 @@ import {
   AuthIpcChannel,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  AuthLoginFailureReason,
   AuthRefreshOutcome,
   AuthRefreshReason,
   type AuthSessionChangedEvent,
@@ -199,6 +200,7 @@ import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationG
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
+import { hasLayerDecompositionWarning } from '../shared/media/warnings';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
 import { isChatPresetSession, type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
 import {
@@ -215,6 +217,7 @@ import {
   OpenClawLoopbackRepairOutcome,
 } from '../shared/openclawEngine/constants';
 import { OpenClawRepairPhase, OpenClawRepairStage } from '../shared/openclawEngine/repair';
+import type { PptCoverRequest } from '../shared/pptCreation/cover';
 import type { ProviderConfig } from '../shared/providers';
 import {
   ModelRuntimeProfile,
@@ -297,6 +300,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
@@ -319,6 +323,7 @@ import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
 import { registerOpenClawUserConfigHandlers } from './ipcHandlers/openclawUserConfig/handlers';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPluginHandlers } from './ipcHandlers/plugins';
+import { registerPptCreationHandlers } from './ipcHandlers/pptCreation';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -358,7 +363,8 @@ import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdate
 import { ArtifactFileWatcher } from './libs/artifactFileWatcher';
 import { openBrowserLogin } from './libs/authBrowserLogin';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
-import { startAuthLocalCallback } from './libs/authLocalCallbackServer';
+import { startAuthLocalCallback, stopAuthLocalCallback } from './libs/authLocalCallbackServer';
+import { AuthLoginAttempt } from './libs/authLoginAttempt';
 import {
   AuthSessionManager,
   resolveAuthSessionStatusFromError,
@@ -442,6 +448,7 @@ import {
   getImageCreationExamplesUrl,
   getKitStoreUrl,
   getPortalTasksUrl,
+  getPptCreationExamplesUrl,
   getServerApiBaseUrl,
   getSkillStoreUrl,
   refreshEndpointsTestMode,
@@ -509,9 +516,11 @@ import {
   type DevelopmentMainWindowLoadRecovery,
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
+import { installMainWindowZoom, MAC_TRAFFIC_LIGHT_POSITION, scaleRendererCoordinates } from './libs/mainWindowZoom';
 import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { mediaConfirmationQuote } from './libs/mediaConfirmationRequests';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
+import { formatMediaLayerLines } from './libs/mediaLayers';
 import { compactMediaDetails, compactMessageMetadataMedia, mediaSourceKey } from './libs/mediaMetadataCompaction';
 import { migrateInlineMediaMetadata } from './libs/mediaMetadataMigration';
 import {
@@ -624,6 +633,8 @@ import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './l
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { collectOpenWithArgv, findBundledPathArg, OpenWithPathQueue } from './libs/openWithPathQueue';
+import { applyCoverMediaPolicy } from './libs/pptCoverPolicy';
+import { PptCreationStore } from './libs/pptCreationStore';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { recordSessionModelChange } from './libs/sessionModelChange';
@@ -740,6 +751,9 @@ import { createWindowStatePersistManager } from './windowStatePersist';
 
 protocol.registerSchemesAsPrivileged([
   {
+    // localfile:// serves media from anywhere on disk. Pages can show those files but not read
+    // their bytes only because the scheme is not CORS-enabled and does not bypass CSP: never add
+    // `corsEnabled` or `bypassCSP` here.
     scheme: ArtifactPreviewProtocol.LocalFile,
     privileges: {
       standard: true,
@@ -5333,7 +5347,9 @@ if (!gotTheLock) {
     app.setAsDefaultProtocolClient('lobsterai');
   }
 
+  const authLoginAttempt = new AuthLoginAttempt();
   const authCallbackRouter = new AuthCallbackRouter({
+    acceptsCallback: () => authLoginAttempt.acceptsCallback(),
     getTarget: () => {
       if (!mainWindow || mainWindow.isDestroyed()) return null;
       return mainWindow.webContents;
@@ -5807,8 +5823,8 @@ if (!gotTheLock) {
 
   ipcMain.on(
     'window:showSystemMenu',
-    (_event, position: { x?: number; y?: number } | undefined) => {
-      showSystemMenu(position);
+    (event, position: { x?: number; y?: number } | undefined) => {
+      showSystemMenu(scaleRendererCoordinates(position, event.sender.getZoomFactor()));
     },
   );
 
@@ -6915,6 +6931,7 @@ if (!gotTheLock) {
         let resultLines: string[];
         let detailsAssets: unknown[] = composesImageEditLocally(statusImageEdit?.operation) ? [] : assets;
         let savedCount = 0;
+        let savedImageAssets: PersistedGeneratedImageAsset[] = [];
         if (status === 'succeeded' && statusMediaType === 'image' && ownerSessionId) {
           const persistResult = await persistGeneratedImages(ownerSessionId, assets, statusImageEdit, String(task.taskId));
           if (!isRequestAccountCurrent()) return staleAccountResult();
@@ -6922,6 +6939,7 @@ if (!gotTheLock) {
           if (persistResult && persistResult.saved.length > 0) {
             savedCount = persistResult.saved.length;
             detailsAssets = persistResult.saved;
+            savedImageAssets = persistResult.saved;
             resultLines = persistResult.saved.map(asset =>
               `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
             );
@@ -6960,6 +6978,8 @@ if (!gotTheLock) {
           ...(task.protocolVersion === MediaProtocol.Durable && !TERMINAL_MEDIA_TASK_STATUSES.has(status) ? ['This task continues in the background. Do not regenerate. Dependent steps must wait for a saved result.'] : []),
           ...(task.progress ? [`Progress: ${task.progress}%`] : []),
           ...(resultUrls.length > 0 ? [`Results:\n${resultLines.join('\n')}`] : []),
+          ...formatMediaLayerLines(task.layers, savedImageAssets),
+          ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
           ...(task.errorMessage ? [`Error: ${task.errorMessage}`] : []),
         ];
         const details = compactMediaDetails({
@@ -6976,6 +6996,7 @@ if (!gotTheLock) {
           status,
           generationStatus: task.status,
           billingStatus: task.billingStatus,
+          warnings: task.warnings,
           errorMessage: task.errorMessage,
           ...(deliveryPending ? { phase: MediaTaskPhase.Fetching, deliveryStatus: MediaDeliveryStatus.Retrying } : {}),
           ...(task.protocolVersion === MediaProtocol.Durable && status === MediaTaskStatus.Succeeded
@@ -7085,6 +7106,9 @@ if (!gotTheLock) {
         if (args.output_format) params.output_format = args.output_format;
         if (args.temperature != null) params.temperature = args.temperature;
         if (args.imageSize) params.imageSize = args.imageSize;
+        if (args.layerDecomposition != null) params.layer_decomposition = args.layerDecomposition;
+        if (args.layerDecompositionOptions) params.layer_decomposition_options = args.layerDecompositionOptions;
+        if (args.background) params.background = args.background;
       }
       if (args.count) params.count = args.count;
       if (args.durationSeconds != null) params.durationSeconds = args.durationSeconds;
@@ -7476,6 +7500,7 @@ if (!gotTheLock) {
         ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
         `Status: ${status}`,
         ...(task.quotaRemaining != null ? [`Quota remaining: ${task.quotaRemaining}`] : []),
+        ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
       ];
 
       if (status === 'succeeded' && mediaType === 'image' && ownerSessionId) {
@@ -7487,7 +7512,7 @@ if (!gotTheLock) {
           const fileLines = persistResult.saved.map(asset =>
             `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`
           );
-          lines.push(`Results:\n${fileLines.join('\n')}`);
+          lines.push(`Results:\n${fileLines.join('\n')}`, ...formatMediaLayerLines(task.layers, persistResult.saved));
         } else if (assets.length > 0 && !composesImageEditLocally(imageEdit?.operation)) {
           const resultLines = resultUrls.map((url, index) => `  - ![Generated image ${index + 1}](${url})`);
           lines.push(`Results:\n${resultLines.join('\n')}`);
@@ -7544,6 +7569,7 @@ if (!gotTheLock) {
           taskId: String(task.taskId),
           clientStartedAt,
           protocolVersion: task.protocolVersion,
+          warnings: task.warnings,
           createdAt: task.createdAt,
           deadlineAt: task.deadlineAt,
           phase: task.phase,
@@ -7772,7 +7798,9 @@ if (!gotTheLock) {
               continue;
             }
             const content = status === MediaTaskStatus.Succeeded
-              ? (saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))).join('\n')
+              ? [...(saved?.saved ?? []).map(asset => formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))),
+                ...formatMediaLayerLines(task.layers, saved?.saved),
+                ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : [])].join('\n')
               : String(task.errorMessage || t(status === MediaTaskStatus.Timeout ? 'mediaTaskTimedOut'
                 : status === MediaTaskStatus.Cancelled ? 'mediaTaskCancelled' : 'mediaTaskFailed'));
             emitMediaTaskMessage(tracker.sessionId, content, { toolResultDetails: details }, tracker);
@@ -7791,13 +7819,15 @@ if (!gotTheLock) {
               const fileLines = persistResult.saved.map(asset => `  - ${formatPersistedImageLink(asset, t('mediaImageSavedToRecovery'))}`);
               emitMediaTaskMessage(
                 tracker.sessionId,
-                `Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
+                [`Saved generated ${persistResult.saved.length === 1 ? 'image' : 'images'}:\n${fileLines.join('\n')}`,
+                  ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : [])].join('\n'),
                 {
                   toolResultDetails: {
                     taskId,
                     status: 'succeeded',
                     mediaType: 'image',
                     assets: persistResult.saved,
+                    warnings: task.warnings,
                   },
                 },
               );
@@ -7805,6 +7835,7 @@ if (!gotTheLock) {
               const resultLines = resultUrls.map((_url, index) => `  - Generated image ${index + 1}`);
               emitMediaTaskMessage(tracker.sessionId, [
                 'Image generation succeeded.',
+                ...(hasLayerDecompositionWarning(task.warnings) ? [t('mediaLayerDecompositionWarning')] : []),
                 `Task ID: ${taskId}`,
                 `Model: ${displayModel}`,
                 ...(modelSelectionReason ? [`Selection reason: ${modelSelectionReason}`] : []),
@@ -8266,17 +8297,32 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, (_event, { loginUrl }: { loginUrl?: string } = {}) => openBrowserLogin({
-    baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
-    openExternal: url => shell.openExternal(url),
-    // The callback may be shared by another login page and cleans itself up on timeout.
-    startLocalCallback: () => startAuthLocalCallback({
-      onCode: code => {
-        authCallbackRouter.handleAuthCode(code);
-        focusMainWindow('local auth callback');
-      },
-    }),
-  }));
+  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
+    const generation = authLoginAttempt.begin();
+    authCallbackRouter.clearPending();
+    await Promise.all([stopAuthLocalCallback(), authLoginAttempt.waitForExchange()]);
+    const isCurrent = () => authLoginAttempt.isCurrent(generation);
+    if (!isCurrent()) return { success: false, reason: AuthLoginFailureReason.Cancelled };
+    return openBrowserLogin({
+      baseUrl: loginUrl || `${getServerApiBaseUrl()}/login`,
+      openExternal: url => shell.openExternal(url),
+      isCurrent,
+      startLocalCallback: () => startAuthLocalCallback({
+        onCode: code => {
+          if (!isCurrent()) return;
+          authCallbackRouter.handleAuthCode(code);
+          focusMainWindow('local auth callback');
+        },
+      }),
+    });
+  });
+
+  ipcMain.handle(AuthIpcChannel.CancelLogin, async () => {
+    authLoginAttempt.cancel();
+    authCallbackRouter.clearPending();
+    await Promise.all([stopAuthLocalCallback(), authLoginAttempt.waitForExchange()]);
+    return { success: true };
+  });
 
   registerFeedbackIpc({
     ipcMain,
@@ -8299,6 +8345,13 @@ if (!gotTheLock) {
     fetchWithAuth,
   });
 
+  registerAccountMenuMoreHandlers({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    fetchPublic: (url, options) => net.fetch(url, options),
+  });
+
   registerSubscriptionTrialIpcHandlers({
     ipcMain,
     getMainWindow: () => mainWindow,
@@ -8310,11 +8363,12 @@ if (!gotTheLock) {
     fetchWithAuth,
   });
 
-  const activateLowCreditPurchaseOffer = async (): Promise<Record<string, unknown> | null> => {
+  const activateLowCreditPurchaseOffer = async (signal?: AbortSignal): Promise<Record<string, unknown> | null> => {
     try {
       const response = await fetchWithAuth(`${getServerApiBaseUrl()}/api/purchase-offers/low-credit/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
       });
       if (!response.ok) return null;
       const body = (await response.json()) as {
@@ -8329,7 +8383,7 @@ if (!gotTheLock) {
     }
   };
 
-  ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
+  ipcMain.handle(AuthIpcChannel.Exchange, (_event, { code }: { code: string }) => authLoginAttempt.runExchange(async (loginAttempt) => {
     const startingTokens = getAuthTokens();
     const startingUser = getAuthUser();
     const startingEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
@@ -8358,6 +8412,7 @@ if (!gotTheLock) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(withKeyfromBody({ authCode: code })),
+        signal: AbortSignal.any([loginAttempt.signal, AbortSignal.timeout(30_000)]),
       });
       if (!resp.ok) {
         return { success: false, error: `Exchange failed: ${resp.status}` };
@@ -8375,7 +8430,7 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
-      if (!isExchangeIntentCurrent()) {
+      if (!isExchangeIntentCurrent() || !loginAttempt.isCurrent()) {
         return { success: false, error: t('authAccountChanged') };
       }
 
@@ -8395,6 +8450,7 @@ if (!gotTheLock) {
       saveAuthUser(body.data.user);
       committedExchangeGeneration = exchangeAccountGeneration;
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
+      if (!loginAttempt.isCurrent()) throw new Error('Login was cancelled or replaced');
       const requiresEnterpriseContext = (
         readAccountMode(body.data) === EnterpriseAccountMode.Enterprise
         || body.data.quota.subscriptionStatus === AuthSubscriptionStatus.Enterprise
@@ -8421,7 +8477,8 @@ if (!gotTheLock) {
         `[Auth] exchange completed; enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
       const quota = normalizeQuota(body.data.quota);
-      const purchaseOffer = await activateLowCreditPurchaseOffer();
+      const purchaseOffer = await activateLowCreditPurchaseOffer(loginAttempt.signal);
+      if (!loginAttempt.isCurrent()) throw new Error('Login was cancelled or replaced');
       if (
         authAccountGeneration !== exchangeAccountGeneration
         || authExchangeIntentSequence !== exchangeIntent.intentId
@@ -8480,7 +8537,8 @@ if (!gotTheLock) {
         });
         console.warn('[Auth] rolled back local credentials after an incomplete exchange');
       }
-      console.error('[Auth] exchange failed:', error);
+      if (loginAttempt.isCurrent()) console.error('[Auth] exchange failed:', error);
+      else console.debug('[Auth] cancelled or replaced login exchange settled');
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Exchange failed',
@@ -8490,7 +8548,7 @@ if (!gotTheLock) {
         activeAuthExchangeIntent = null;
       }
     }
-  });
+  }));
 
   ipcMain.handle(AuthIpcChannel.GetUser, async () => {
     const createUnavailableResponse = () => {
@@ -10136,11 +10194,11 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     BrowserIpc.SetHostView,
-    (_event, request?: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
+    (event, request?: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => getAgentBrowserHost().setView({
         sessionId: request?.sessionId,
         visible: request?.visible === true,
-        bounds: request?.bounds,
+        bounds: scaleRendererCoordinates(request?.bounds, event.sender.getZoomFactor()),
       })),
   );
 
@@ -10209,7 +10267,7 @@ if (!gotTheLock) {
       const selectedTab = hostState.tabs.find(tab => tab.pageId === hostState.selectedPageId);
       return showAgentBrowserHostMenu({
         targetWindow,
-        position: request,
+        position: scaleRendererCoordinates(request, event.sender.getZoomFactor()),
         hasPage: Boolean(selectedTab),
         zoomFactor: selectedTab?.zoomFactor,
         darkMode: request?.darkMode,
@@ -10545,6 +10603,7 @@ if (!gotTheLock) {
         modelPresetId?: ModelPresetId;
         thinkingLevel?: string;
         mediaSelection?: MediaSelectionState;
+        pptCover?: PptCoverRequest;
         mediaReferences?: MediaAttachmentRefMain[];
         selectedTextSnippets?: CoworkSelectedTextSnippet[];
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
@@ -10648,12 +10707,13 @@ if (!gotTheLock) {
         }
 
         const turnIsPlan = containsPlanModePrompt(systemPrompt);
-        const turnMediaSelection = await mediaDefaults.turn({
+        let turnMediaSelection = await mediaDefaults.turn({
           selection: normalizeMediaSelectionState(options.mediaSelection),
           isPlan: turnIsPlan,
           explicitSkillIds: options.activeSkillIds,
           inheritedSkillIds: options.inheritedSkillIds,
         });
+        if (options.pptCover) turnMediaSelection = applyCoverMediaPolicy(await pptCreationStore.getCatalog(), options.pptCover, turnMediaSelection);
         if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
           return { success: false, error: t('authAccountChanged') };
         }
@@ -12055,6 +12115,11 @@ if (!gotTheLock) {
     getEndpoint: getImageCreationExamplesUrl,
     cacheDirectory: path.join(app.getPath('userData'), 'image-creation'),
   }));
+  const pptCreationStore = new PptCreationStore({
+    getEndpoint: getPptCreationExamplesUrl,
+    cacheDirectory: path.join(app.getPath('userData'), 'ppt-creation'),
+  });
+  registerPptCreationHandlers(pptCreationStore);
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
       schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },
@@ -12091,7 +12156,7 @@ if (!gotTheLock) {
     ) => {
       try {
         const { rect, defaultFileName } = options || {};
-        const captureRect = normalizeCaptureRect(rect);
+        const captureRect = normalizeCaptureRect(scaleRendererCoordinates(rect, event.sender.getZoomFactor()));
         if (!captureRect) {
           return { success: false, error: 'Capture rect is required' };
         }
@@ -12116,7 +12181,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        const captureRect = normalizeCaptureRect(options?.rect);
+        const captureRect = normalizeCaptureRect(scaleRendererCoordinates(options?.rect, event.sender.getZoomFactor()));
         if (!captureRect) {
           return { success: false, error: 'Capture rect is required' };
         }
@@ -12647,15 +12712,21 @@ if (!gotTheLock) {
     }
   });
   // ── Dreaming content display ──────────────────────────────────────────
-  ipcMain.handle('cowork:dreaming:status', async () => {
+  // Explicit agent ownership gives doctor.memory.* no implicit owner once a
+  // second agent exists, so always name the agent whose dreams are shown.
+  ipcMain.handle(CoworkIpcChannel.DreamingStatus, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
     try {
       const gwClient = openClawRuntimeAdapter?.getGatewayClient();
       if (!gwClient) {
         return { success: false, error: 'Gateway client not available' };
       }
+      const agentId = options?.agentId?.trim() || AgentId.Main;
       const result = await gwClient.request<Record<string, unknown>>(
         'doctor.memory.status',
-        {},
+        { agentId },
         { timeoutMs: 10_000 },
       );
       const dreaming = (result as any)?.dreaming;
@@ -12670,15 +12741,19 @@ if (!gotTheLock) {
       };
     }
   });
-  ipcMain.handle('cowork:dreaming:diary', async () => {
+  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
     try {
       const gwClient = openClawRuntimeAdapter?.getGatewayClient();
       if (!gwClient) {
         return { success: false, error: 'Gateway client not available' };
       }
+      const agentId = options?.agentId?.trim() || AgentId.Main;
       const result = await gwClient.request<Record<string, unknown>>(
         'doctor.memory.dreamDiary',
-        {},
+        { agentId },
         { timeoutMs: 10_000 },
       );
       return { success: true, data: result };
@@ -15377,7 +15452,7 @@ if (!gotTheLock) {
       ...(isMac
         ? {
             titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: { x: 12, y: 20 },
+            trafficLightPosition: MAC_TRAFFIC_LIGHT_POSITION,
           }
         : isWindows
           ? {
@@ -15421,6 +15496,7 @@ if (!gotTheLock) {
     // 禁用窗口菜单
     mainWindow.setMenu(null);
     installEditContextMenu(mainWindow.webContents);
+    installMainWindowZoom(mainWindow, { isMac });
 
     // 处理 window.open 请求（企微 SDK 授权弹窗等）
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {

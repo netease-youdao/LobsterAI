@@ -81,7 +81,7 @@ function manifestDirectory(root, identity) {
   return path.join(root, 'release', 'codown', identity.keyfrom, identity.version, `${identity.target}${identity.silent ? '-silent' : ''}`);
 }
 
-async function stageManifest(root, outputDir, identity, publicBaseUrl) {
+async function stageManifest(root, outputDir, identity, publicBaseUrl, deploymentTicketUrl) {
   const destination = manifestDirectory(root, identity);
   if (fs.existsSync(destination)) throw new Error(`Release snapshot already exists: ${destination}. Use codown:publish to retry it, or archive it before rebuilding.`);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -93,9 +93,15 @@ async function stageManifest(root, outputDir, identity, publicBaseUrl) {
       fs.copyFileSync(artifact.file, file, fs.constants.COPYFILE_EXCL);
       const digest = await fileDigest(file);
       if (!digest.size) throw new Error(`Empty artifact: ${artifact.name}`);
-      artifacts.push({ kind: artifact.kind, name: artifact.name, ...digest });
+      artifacts.push({ kind: artifact.kind, name: artifact.name, downloadUrl: artifactUrl(publicBaseUrl, identity.keyfrom, artifact.name), ...digest });
     }
-    const manifest = { schemaVersion: MANIFEST_VERSION, ...identity, publicBaseUrl: httpsUrl(publicBaseUrl, 'publicBaseUrl'), artifacts };
+    const manifest = {
+      schemaVersion: MANIFEST_VERSION,
+      ...identity,
+      publicBaseUrl: httpsUrl(publicBaseUrl, 'publicBaseUrl'),
+      deploymentTicketUrl: httpsUrl(deploymentTicketUrl, 'deploymentTicketUrl', { query: true }),
+      artifacts,
+    };
     fs.writeFileSync(path.join(staging, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     fs.renameSync(staging, destination);
     return path.join(destination, 'manifest.json');

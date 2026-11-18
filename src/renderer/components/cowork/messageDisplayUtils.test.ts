@@ -617,7 +617,7 @@ test('activity header label summarizes commands, reads, and edits in natural lan
   ])).toBe('运行了 3 个命令、读取了 2 个文件');
 
   expect(getActivityGroupHeaderLabel([
-    activityToolItem('tool-1', 'Edit'),
+    activityToolItem('tool-1', 'Edit', { result: 1 }),
     activityToolItem('tool-2', 'web_fetch'),
   ])).toBe('进行了 1 次编辑、调用了 1 次工具');
 
@@ -641,7 +641,43 @@ test('activity header label summarizes commands, reads, and edits in natural lan
   expect(getActivityGroupHeaderLabel([
     activityToolItem('tool-1', 'tavily__tavily_search', undefined, { query: 'youdao' }),
   ])).toBe('搜索了「youdao」');
-  expect(getActivityGroupHeaderLabel([activityToolItem('tool-1', 'write')])).toBe('写入了文件');
+  expect(getActivityGroupHeaderLabel([activityToolItem('tool-1', 'write', { result: 1 })])).toBe('已写入文件');
+});
+
+test('file summaries count distinct successful files, including repeated write and edit calls', () => {
+  expect(getActivityGroupHeaderLabel([
+    activityToolItem('write', 'write', { result: 1 }, { path: '/notes/week.md' }),
+    activityToolItem('edit', 'edit', { result: 2 }, { file_path: '/notes/week.md' }),
+    activityToolItem('other', 'edit', { result: 3 }, { path: '/archive/week.md' }),
+  ])).toBe('已修改 2 个文件');
+});
+
+test('failed and incomplete file edits never count as successfully modified files', () => {
+  const failed = activityToolItem('failed', 'edit', { result: 2 }, { path: '/notes/failed.md' });
+  if (failed.type === 'tool_group' && failed.group.toolResult) {
+    failed.group.toolResult.metadata = { isError: true };
+  }
+  const streaming = activityToolItem('streaming', 'write', { result: 3 }, { path: '/notes/streaming.md' });
+  if (streaming.type === 'tool_group' && streaming.group.toolResult) {
+    streaming.group.toolResult.metadata = { isStreaming: true };
+  }
+  expect(getActivityGroupHeaderLabel([
+    activityToolItem('success', 'edit', { result: 1 }, { path: '/notes/success.md' }),
+    failed,
+    streaming,
+    activityToolItem('stopped', 'write', undefined, { path: '/notes/stopped.md' }),
+  ])).toBe('已修改 1 个文件、有 1 次修改失败、有文件修改未完成');
+  expect(getActivityStepDoneLabel(failed)).toBe('修改失败：failed.md');
+  expect(getActivityStepDoneLabel(streaming)).toBe('尚未完成修改 streaming.md');
+});
+
+test('file errors carried in the error field are failures, and final streaming results are successful', () => {
+  const item = activityToolItem('file', 'edit', { result: 1 }, { path: '/notes/week.md' });
+  if (item.type !== 'tool_group' || !item.group.toolResult) throw new Error('Missing tool fixture');
+  item.group.toolResult.metadata = { error: 'Permission denied' };
+  expect(getActivityStepDoneLabel(item)).toBe('修改失败：week.md');
+  item.group.toolResult.metadata = { isStreaming: true, isFinal: true };
+  expect(getActivityStepDoneLabel(item)).toBe('已修改 week.md');
 });
 
 test('a folded run with one real step names that step, not a count', () => {

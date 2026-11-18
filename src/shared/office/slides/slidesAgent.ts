@@ -137,13 +137,12 @@ export const SLIDES_AGENT_TOOL_DEFINITIONS = [
   },
 ] as const;
 
-/** Guidance for the managed AGENTS.md section: prefer live edits over rewriting the file. */
-export const SLIDES_AGENT_PROMPT = [
-  '## Editing Existing Presentations',
-  '',
-  `- When the user wants to change an existing \`.pptx\` and \`${SlidesAgentTool.Read}\` / \`${SlidesAgentTool.Edit}\` are available, use them instead of rewriting the file with scripts: edits appear live in LobsterAI's editor, keep the theme, layouts, animations and other content, and can be undone as one step.`,
-  '- They change text and its formatting, table cells, shape positions and sizes, add text boxes, add, duplicate, move and delete slides, and write speaker notes.',
-  '- Use file-based tools only for what those tools cannot do (pictures, charts, new designs), when the presentation is reported as read-only or an edit is refused, or to create a new presentation.',
-  `- After a successful \`${SlidesAgentTool.Edit}\`, answer from its reply (the changed shapes' text as it now reads, save status) and your earlier read, also when the user asks you to verify or check the change: the reply comes from the same open presentation a read would return, so another read verifies nothing and costs a full extra model request.`,
-  '- The editor tools open the file and report whether it saved; do not check the file with shell commands before or after editing.',
-].join('\n');
+/** What the managed AGENTS.md section says about these tools; the shared rules are in `buildOfficeAgentPrompt`. */
+export const SLIDES_AGENT_GUIDANCE = {
+  readTool: SlidesAgentTool.Read,
+  editTool: SlidesAgentTool.Edit,
+  keeps: 'keeps the theme, layouts and animations',
+  replyShows: 'shape texts',
+  scope: 'They change text and its formatting, table cells, shape positions and sizes, add text boxes, add, duplicate, move and delete slides, and write speaker notes.',
+  fileBasedFor: 'pictures, charts, new designs',
+} as const;

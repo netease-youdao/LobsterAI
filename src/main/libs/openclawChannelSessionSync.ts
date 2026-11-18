@@ -68,6 +68,30 @@ export function isManagedSessionKey(sessionKey: string | undefined | null): bool
   return parseManagedSessionKey(sessionKey) !== null;
 }
 
+/**
+ * Agent ids OpenClaw reserves for its built-in system agents. Mirrors
+ * SYSTEM_AGENT_ROSTER_ENTRIES in OpenClaw's src/system-agent/agent-id.ts.
+ */
+export const OpenClawSystemAgentId = {
+  OpenClaw: 'openclaw',
+  Crestodian: 'crestodian',
+} as const;
+export type OpenClawSystemAgentId = typeof OpenClawSystemAgentId[keyof typeof OpenClawSystemAgentId];
+
+const OPENCLAW_SYSTEM_AGENT_IDS: ReadonlySet<string> = new Set(Object.values(OpenClawSystemAgentId));
+
+/**
+ * Whether a session key belongs to an OpenClaw system agent, e.g.
+ * "agent:openclaw:main" used by the `openclaw` delegate tool. These runs are
+ * internal: their transcript is in-memory only and the reply already returns
+ * to the calling session as a tool result, so they never map to a local
+ * Cowork session.
+ */
+export function isOpenClawSystemAgentSessionKey(sessionKey: string | undefined | null): boolean {
+  const agentId = extractAgentIdFromKey((sessionKey ?? '').trim());
+  return agentId !== null && OPENCLAW_SYSTEM_AGENT_IDS.has(agentId.toLowerCase());
+}
+
 /** Parse a channel sessionKey into platform + conversationId.
  *  Supports three formats:
  *  - OpenClaw format: "agent:{agentId}:{platform}:{subtype}:{conversationId}"
@@ -758,7 +782,11 @@ export class OpenClawChannelSessionSync {
 
   /** Check whether a sessionKey belongs to a recognized channel, main agent, or cron session. */
   isChannelSessionKey(sessionKey: string): boolean {
-    if (!sessionKey || isManagedSessionKey(sessionKey)) return false;
+    if (
+      !sessionKey
+      || isManagedSessionKey(sessionKey)
+      || isOpenClawSystemAgentSessionKey(sessionKey)
+    ) return false;
     if (parseChannelSessionKey(sessionKey) !== null) return true;
     if (MAIN_AGENT_SESSION_RE.test(sessionKey)) return true;
     if (isCronSessionKey(sessionKey)) return true;
@@ -771,7 +799,7 @@ export class OpenClawChannelSessionSync {
    * rather than per-channel sessions.
    */
   resolveOrCreateMainAgentSession(sessionKey: string): string | null {
-    if (isManagedSessionKey(sessionKey)) return null;
+    if (isManagedSessionKey(sessionKey) || isOpenClawSystemAgentSessionKey(sessionKey)) return null;
     if (!MAIN_AGENT_SESSION_RE.test(sessionKey)) return null;
 
     const cached = this.syncedSessionKeys.get(sessionKey);

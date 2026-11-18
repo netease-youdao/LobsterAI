@@ -137,13 +137,12 @@ export const SHEET_AGENT_TOOL_DEFINITIONS = [
   },
 ] as const;
 
-/** Guidance for the managed AGENTS.md section: prefer live edits over rewriting the file. */
-export const SHEET_AGENT_PROMPT = [
-  '## Editing Existing Spreadsheets',
-  '',
-  `- When the user wants to change an existing \`.xlsx\` and \`${SheetAgentTool.Read}\` / \`${SheetAgentTool.Edit}\` are available, use them instead of rewriting the file with scripts: edits appear live in LobsterAI's editor, keep charts, styles and other content, recalculate formulas, and can be undone as one step.`,
-  '- They also insert and delete rows and columns, add, rename, move, hide and delete sheets, and freeze panes; formulas, charts, names, conditional formats, data validation, links, notes and tables follow the moved cells like in Excel.',
-  '- Use file-based tools only for what those tools cannot do (building charts or pivot tables), when the workbook is reported as read-only or an edit is refused, or to create a new workbook.',
-  `- After a successful \`${SheetAgentTool.Edit}\`, answer from its reply (the written cells, recalculated) and your earlier read, also when the user asks you to verify or check the values: the reply comes from the same open workbook a read would return, so another read verifies nothing and costs a full extra model request.`,
-  '- The editor tools open the file and report whether it saved; do not check the file with shell commands before or after editing.',
-].join('\n');
+/** What the managed AGENTS.md section says about these tools; the shared rules are in `buildOfficeAgentPrompt`. */
+export const SHEET_AGENT_GUIDANCE = {
+  readTool: SheetAgentTool.Read,
+  editTool: SheetAgentTool.Edit,
+  keeps: 'keeps charts and styles, recalculates formulas',
+  replyShows: 'recalculated cells',
+  scope: 'They also insert and delete rows and columns, add, rename, move, hide and delete sheets, and freeze panes; formulas, charts, names, conditional formats, data validation, links, notes and tables follow the moved cells like in Excel.',
+  fileBasedFor: 'building charts or pivot tables',
+} as const;

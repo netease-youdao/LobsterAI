@@ -4,6 +4,11 @@ import { useSelector } from 'react-redux';
 
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
+import {
+  groupSkillsForPicker,
+  readRecentSkillIds,
+  recordSkillPickerUse,
+} from '../../services/skillPickerOrder';
 import { RootState } from '../../store';
 import { Skill } from '../../types/skill';
 import { PROMPT_SUBMENU_POSITION_CLASS, PromptSubmenuSide } from '../common/promptSubmenu';
@@ -46,8 +51,12 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const shouldUseFallbackDescription = i18nReady || i18nService.getLanguage() !== 'zh';
 
-  // Filter enabled skills based on search query, grouped so user-added
-  // skills always list before the built-in ones.
+  // Snapshot taken when the menu opens, so picking a skill does not reorder
+  // the list under the cursor during multi-select.
+  const [recentSkillIds, setRecentSkillIds] = useState<string[]>(() => readRecentSkillIds());
+
+  // Filter enabled skills based on search query and split them into the
+  // recently used, user-added and built-in groups.
   const matchesQuery = (s: Skill) => {
     const query = searchQuery.toLowerCase();
     const description = shouldUseFallbackDescription
@@ -55,15 +64,23 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
       : '';
     return s.name.toLowerCase().includes(query) || description.toLowerCase().includes(query);
   };
-  const enabledSkills = skills.filter(s => s.enabled);
-  const myFilteredSkills = enabledSkills
-    .filter(s => !s.isBuiltIn)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .filter(matchesQuery);
-  const builtInFilteredSkills = enabledSkills
-    .filter(s => s.isBuiltIn)
-    .filter(matchesQuery);
-  const filteredSkills = [...myFilteredSkills, ...builtInFilteredSkills];
+  const {
+    recent: recentFilteredSkills,
+    mine: myFilteredSkills,
+    builtIn: builtInFilteredSkills,
+  } = groupSkillsForPicker(skills, {
+    query: searchQuery,
+    matchesQuery,
+    recentSkillIds,
+    getDisplayName: s => skillService.getLocalizedSkillName(s.id, s.name),
+  });
+  const hasFilteredSkills = recentFilteredSkills.length > 0
+    || myFilteredSkills.length > 0
+    || builtInFilteredSkills.length > 0;
+
+  useEffect(() => {
+    if (isOpen) setRecentSkillIds(readRecentSkillIds());
+  }, [isOpen]);
 
   // Load localized skill descriptions from marketplace/localSkill metadata.
   useEffect(() => {
@@ -133,6 +150,10 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   }, [isOpen, onClose]);
 
   const handleSelectSkill = (skill: Skill) => {
+    // Only picking a skill counts as use; clearing a selection does not.
+    if (!activeSkillIds.includes(skill.id)) {
+      recordSkillPickerUse(skill.id);
+    }
     onSelectSkill(skill);
     // Don't close popover to allow multi-selection
   };
@@ -248,12 +269,18 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
 
       {/* Skills list */}
       <div className={listClassName} style={listStyle}>
-        {filteredSkills.length === 0 ? (
+        {!hasFilteredSkills ? (
           <div className={emptyStateClassName}>
             {i18nService.t('noSkillsAvailable')}
           </div>
         ) : (
           <>
+            {recentFilteredSkills.length > 0 && (
+              <>
+                <div className={groupLabelClassName}>{i18nService.t('skillGroupRecent')}</div>
+                {recentFilteredSkills.map(renderSkillItem)}
+              </>
+            )}
             {myFilteredSkills.length > 0 && (
               <>
                 <div className={groupLabelClassName}>{i18nService.t('skillGroupMine')}</div>

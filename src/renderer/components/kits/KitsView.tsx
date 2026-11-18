@@ -4,6 +4,7 @@ import { i18nService } from '../../services/i18n';
 import { MANAGEMENT_PAGE_TITLE_TEXT } from '../common/managementTypography';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import KitsManager from './KitsManager';
 
 interface KitsViewProps {
@@ -26,7 +27,7 @@ const KitsView: React.FC<KitsViewProps> = ({ isSidebarCollapsed, onToggleSidebar
       <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border shrink-0">
         <div className="flex items-center space-x-3 h-8">
           {isSidebarCollapsed && !isWindows && (
-            <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
+            <div className={`non-draggable flex items-center gap-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
               <button
                 type="button"
                 onClick={onToggleSidebar}

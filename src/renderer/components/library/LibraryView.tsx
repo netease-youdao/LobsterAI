@@ -78,6 +78,7 @@ import LocalFilesIcon from '../icons/LocalFilesIcon';
 import ShareUploadIcon from '../icons/ShareUploadIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import { LIBRARY_ACTION_MENU_WIDTH_PX } from './libraryActionMenuPresentation';
 import {
   createLibraryAnalyticsOperationId,
@@ -1710,7 +1711,7 @@ const LibraryViewContent: React.FC<LibraryViewProps> = ({
     >
       <div className="draggable flex h-12 shrink-0 items-center border-b border-border px-4">
         {isSidebarCollapsed && !isWindows && (
-          <div className={`non-draggable mr-2 flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
+          <div className={`non-draggable mr-2 flex items-center gap-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
             <button type="button" onClick={onToggleSidebar} aria-label={i18nService.t('expand')} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-secondary hover:bg-surface-raised">
               <SidebarToggleIcon className="h-4 w-4" isCollapsed />
             </button>

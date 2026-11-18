@@ -26,6 +26,20 @@ describe('Windows uninstall analytics integration contracts', () => {
     expect(installer).toContain('!include "${__FILEDIR__}\\nsis-uninstall-analytics.nsh"');
   });
 
+  test('uses Windows path separators in custom NSIS includes', () => {
+    // makensis on Windows splits an !include path only on "\" and then matches the
+    // remainder as a file name, so "${__FILEDIR__}/x.nsh" fails to resolve at build time.
+    for (const [file, source] of [
+      ['scripts/nsis-installer.nsh', installer],
+      ['scripts/nsis-uninstall-analytics.nsh', analytics],
+    ]) {
+      const forwardSlashIncludes = source
+        .split('\n')
+        .filter((line) => /^\s*!include\s/i.test(line) && line.includes('/'));
+      expect(forwardSlashIncludes, file).toEqual([]);
+    }
+  });
+
   test('captures only after confirmation/process stop, before file and optional user-data removal', () => {
     const check = macro(installer, 'customCheckAppRunning');
     expect(check.indexOf('!insertmacro LobsterPrepareUninstallAnalytics'))

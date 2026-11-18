@@ -290,3 +290,9 @@ export async function startAuthLocalCallback(
     }
   }
 }
+
+/** Close even a server that was still binding when the user cancelled. */
+export async function stopAuthLocalCallback(): Promise<void> {
+  const callback = activeCallback ?? await startingCallback;
+  await callback?.close();
+}

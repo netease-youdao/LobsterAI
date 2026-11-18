@@ -5,9 +5,11 @@ import {
   type CoworkMessageEditRequest,
   type CoworkMessageVersionSwitchRequest,
 } from '../../../shared/cowork/messageEdit';
+import { CoworkTurnOutcome } from '../../../shared/cowork/turnOutcome';
 import type { CoworkMessage, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import type { CoworkMessageEditOperation } from '../coworkMessageEditStore';
+import { type CoworkGatewayPosition, endsAtForkPoint } from '../coworkMessageVersionStore';
 import { extractGatewayMessageText } from '../openclawHistory';
 import { stripOpenClawLocalTimeContextFooter } from '../openclawLocalTimeContextPrompt';
 import { OpenClawGatewayMethod } from './constants';
@@ -52,6 +54,26 @@ function isExpectedPrefix(history: EditHistory, operation: CoworkMessageEditOper
   return JSON.stringify(historyEntryIds(history.messages)) === JSON.stringify(operation.prefixEntryIds);
 }
 
+/** Whether the gateway shows that position: its fork point when it has one, otherwise its branch tip. */
+function showsPosition(history: EditHistory, position: CoworkGatewayPosition): boolean {
+  return position.cutEntryId !== undefined
+    ? endsAtForkPoint(historyEntryIds(history.messages), position.cutEntryId)
+    : history.sessionInfo?.activeLeafEntryId === position.leafEntryId;
+}
+
+/** The user message right after a fork point on the active path, which a rewind cuts back to that point. */
+function entryAfterForkPoint(history: EditHistory, forkEntryId: string): string | undefined {
+  const entries = history.messages.filter(message => message.__openclaw?.id);
+  const forkIndex = forkEntryId ? entries.findIndex(message => message.__openclaw?.id === forkEntryId) : -1;
+  if (forkEntryId && forkIndex < 0) return undefined;
+  const next = entries[forkIndex + 1];
+  return next?.role === 'user' ? next.__openclaw?.id : undefined;
+}
+
+function gatewayActivePath(history: EditHistory) {
+  return { leafEntryId: history.sessionInfo?.activeLeafEntryId || undefined, entryIds: historyEntryIds(history.messages) };
+}
+
 function legacyPrompt(message: EditHistoryMessage): string {
   const text = stripOpenClawLocalTimeContextFooter(extractGatewayMessageText(message));
   const marker = '[Current user request]\n';
@@ -75,6 +97,50 @@ export function findEditableEntry(message: CoworkMessage, localUsers: CoworkMess
   const target = matches.length === 1 ? matches[0] : undefined;
   return target && typeof target.timestamp === 'number' && Math.abs(target.timestamp - message.timestamp) < 30_000
     ? target : undefined;
+}
+
+/** The gateway refuses transcript changes while a run settles, e.g. just after a stop, and writes nothing. */
+const GATEWAY_BUSY_REJECTION = 'while the agent is working';
+
+function belongsToRun(entry: EditHistoryMessage, runId: string): boolean {
+  const key = entry.__openclaw?.idempotencyKey;
+  return key === runId || Boolean(key?.startsWith(`${runId}:`));
+}
+
+/**
+ * A turn stopped or failed before the gateway recorded its user message
+ * exists only locally, so there is nothing to rewind for it.
+ */
+export function isUndeliveredTurn(message: CoworkMessage, history: EditHistory): boolean {
+  const runId = message.metadata?.openclawRequestId;
+  const outcome = message.metadata?.turnOutcome;
+  return message.type === 'user' && typeof runId === 'string' && message.metadata?.openclawEntryId === undefined
+    && (outcome === CoworkTurnOutcome.Stopped || outcome === CoworkTurnOutcome.Failed)
+    && !history.messages.some(entry => belongsToRun(entry, runId));
+}
+
+export interface EditBoundary {
+  /** Gateway entry to rewind to; absent when nothing from the edited message onward reached the gateway. */
+  entry?: EditHistoryMessage;
+  /** Local message that entry records. */
+  ownerId?: string;
+}
+
+/**
+ * An edit rewinds to the edited message or, when that never reached the
+ * gateway, to the first later message that did. Fails closed on anything ambiguous.
+ */
+export function resolveEditBoundary(message: CoworkMessage, localMessages: CoworkMessage[], history: EditHistory): EditBoundary | undefined {
+  const own = findEditableEntry(message, localMessages, history);
+  if (own) return { entry: own, ownerId: message.id };
+  const index = localMessages.findIndex(entry => entry.id === message.id);
+  if (index < 0 || !isUndeliveredTurn(message, history)) return undefined;
+  for (const later of localMessages.slice(index + 1)) {
+    if (later.type !== 'user' || isUndeliveredTurn(later, history)) continue;
+    const entry = findEditableEntry(later, localMessages, history);
+    return entry ? { entry, ownerId: later.id } : undefined;
+  }
+  return {};
 }
 
 export class CoworkMessageEditCoordinator {
@@ -144,17 +210,28 @@ export class CoworkMessageEditCoordinator {
       const history = await this.history(sessionKey);
       this.assertIdle(sessionId, history);
       if (this.deps.store.getSession(sessionId, 0)?.status === 'running') throw new Error(t('coworkEditBusy'));
-      const target = findEditableEntry(message, this.deps.store.getAllConversationMessages(sessionId), history);
+      const boundary = resolveEditBoundary(message, this.deps.store.getAllConversationMessages(sessionId), history);
+      const target = boundary?.entry;
       const entryId = target?.__openclaw?.id;
-      const originalLeafId = history.sessionInfo?.activeLeafEntryId;
-      if (!entryId || !originalLeafId || !history.sessionId) throw new Error(t('coworkEditUnsupported'));
-      this.deps.store.updateMessage(sessionId, message.id, { metadata: { ...message.metadata, openclawEntryId: entryId } });
+      // A transcript stopped at a fork point is returned to through a tip, never by switching to that point.
+      const path = gatewayActivePath(history);
+      const original = this.deps.store.messageVersions?.gatewayPosition(sessionId, path)
+        ?? (path.leafEntryId ? { leafEntryId: path.leafEntryId } : undefined);
+      const originalLeafId = original?.leafEntryId ?? undefined;
+      if (!boundary || (target && (!entryId || !originalLeafId || !history.sessionId))) {
+        throw new Error(t('coworkEditUnsupported'));
+      }
+      if (entryId && boundary.ownerId === message.id) {
+        this.deps.store.updateMessage(sessionId, message.id, { metadata: { ...message.metadata, openclawEntryId: entryId } });
+      }
       const operation: CoworkMessageEditOperation = {
         operationId: randomUUID(), sessionId, sessionKey, messageId: message.id,
-        prompt: request.prompt, entryId, originalLeafId, originalTranscriptId: history.sessionId,
+        prompt: request.prompt, entryId, originalLeafId, originalCutEntryId: original?.cutEntryId,
+        originalTranscriptId: history.sessionId,
         runId: randomUUID(), phase: CoworkMessageEditPhase.Prepared,
         removedImageIndexes: request.removedImageIndexes,
-        prefixEntryIds: historyEntryIds(history.messages.slice(0, history.messages.indexOf(target!))),
+        // With nothing to rewind, the resend builds on the whole current transcript.
+        prefixEntryIds: historyEntryIds(target ? history.messages.slice(0, history.messages.indexOf(target)) : history.messages),
       };
       try {
         this.deps.store.messageEdits.prepare(operation);
@@ -162,11 +239,7 @@ export class CoworkMessageEditCoordinator {
         console.warn('[CoworkEdit] could not prepare a safe edit boundary:', error);
         throw new Error(t('coworkEditUnsupported'));
       }
-      await this.deps.request(OpenClawGatewayMethod.SessionsRewind, { sessionKey, entryId });
-      const rewound = await this.history(sessionKey);
-      if (rewound.sessionId === history.sessionId || !isExpectedPrefix(rewound, operation)) {
-        throw new Error(t('coworkEditRecoveryFailed'));
-      }
+      if (entryId) await this.rewind(operation, history);
       this.deps.store.messageEdits.truncate(operation);
       this.deps.reset(sessionId);
       this.deps.store.messageEdits.setPhase(operation, CoworkMessageEditPhase.Sending);
@@ -194,13 +267,56 @@ export class CoworkMessageEditCoordinator {
     }
   }
 
+  private async rewind(operation: CoworkMessageEditOperation, history: EditHistory): Promise<void> {
+    try {
+      await this.deps.request(OpenClawGatewayMethod.SessionsRewind, { sessionKey: operation.sessionKey, entryId: operation.entryId });
+    } catch (error) {
+      if (!String(error).includes(GATEWAY_BUSY_REJECTION)) throw error;
+      // Neither transcript changed, so there is nothing to recover.
+      this.deps.store.messageEdits.cancelPrepared(operation);
+      throw new Error(t('coworkEditBusy'));
+    }
+    const rewound = await this.history(operation.sessionKey);
+    if (rewound.sessionId === history.sessionId || !isExpectedPrefix(rewound, operation)) {
+      throw new Error(t('coworkEditRecoveryFailed'));
+    }
+  }
+
   /** Version bookkeeping must never undo an edit the gateway has already accepted. */
   private recordVersion(operation: CoworkMessageEditOperation): void {
     try {
-      this.deps.store.messageVersions?.recordEdit(operation);
+      const versions = this.deps.store.messageVersions;
+      // Without a rewind there is no gateway branch to return to, so the replaced message is not kept.
+      if (operation.entryId) versions?.recordEdit(operation);
+      else versions?.recordUndeliveredEdit(operation);
     } catch (error) {
       console.warn('[CoworkEdit] could not keep the replaced conversation as a version:', error);
     }
+  }
+
+  /**
+   * Points the gateway at a position. A fork point stops being a branch tip
+   * once another version grows from it, so it is reached by rewinding the
+   * message after it, first switching to a tip through it when the current
+   * path does not pass through it. Each step is safe to repeat.
+   */
+  private async moveGateway(sessionKey: string, history: EditHistory, position: CoworkGatewayPosition): Promise<void> {
+    const { leafEntryId, cutEntryId } = position;
+    if (cutEntryId === undefined) {
+      if (leafEntryId === null) throw new Error('A gateway position without a tip needs a fork point.');
+      await this.deps.request(OpenClawGatewayMethod.SessionsBranchesSwitch, { sessionKey, leafEntryId });
+      return;
+    }
+    let current = history;
+    if (!entryAfterForkPoint(current, cutEntryId) && leafEntryId !== null) {
+      if (current.sessionInfo?.activeLeafEntryId !== leafEntryId) {
+        await this.deps.request(OpenClawGatewayMethod.SessionsBranchesSwitch, { sessionKey, leafEntryId });
+      }
+      current = await this.history(sessionKey);
+    }
+    const entryId = entryAfterForkPoint(current, cutEntryId);
+    if (!entryId) throw new Error('The version fork point is not on the active gateway path.');
+    await this.deps.request(OpenClawGatewayMethod.SessionsRewind, { sessionKey, entryId });
   }
 
   /**
@@ -213,21 +329,22 @@ export class CoworkMessageEditCoordinator {
     if (!pending) return undefined;
     const sessionKey = this.deps.resolveSessionKey(sessionId);
     if (!sessionKey) throw new Error(t('coworkVersionSwitchFailed'));
+    const target: CoworkGatewayPosition = { leafEntryId: pending.targetLeafEntryId, cutEntryId: pending.targetCutEntryId };
     let history = await this.history(sessionKey);
     this.assertIdle(sessionId, history);
-    if (history.sessionInfo?.activeLeafEntryId !== pending.targetLeafEntryId) {
+    if (!showsPosition(history, target)) {
+      let refusal: unknown;
       try {
-        await this.deps.request(OpenClawGatewayMethod.SessionsBranchesSwitch, {
-          sessionKey, leafEntryId: pending.targetLeafEntryId,
-        });
+        await this.moveGateway(sessionKey, history, target);
       } catch (error) {
+        refusal = error;
         console.warn('[CoworkEdit] the gateway refused a version switch:', error);
       }
       // An acknowledgement can be lost, so the transcript decides whether the switch happened.
       history = await this.history(sessionKey);
-      if (history.sessionInfo?.activeLeafEntryId !== pending.targetLeafEntryId) {
+      if (!showsPosition(history, target)) {
         versions.cancelSwitch(sessionId);
-        throw new Error(t('coworkVersionSwitchFailed'));
+        throw new Error(t(String(refusal).includes(GATEWAY_BUSY_REJECTION) ? 'coworkEditBusy' : 'coworkVersionSwitchFailed'));
       }
     }
     let headMessageId: string | undefined;
@@ -236,9 +353,8 @@ export class CoworkMessageEditCoordinator {
     } catch (error) {
       console.error('[CoworkEdit] could not show the switched version locally:', error);
       versions.cancelSwitch(sessionId);
-      await this.deps.request<unknown>(OpenClawGatewayMethod.SessionsBranchesSwitch, {
-        sessionKey, leafEntryId: pending.activeLeafEntryId,
-      }).catch((): undefined => undefined);
+      await this.moveGateway(sessionKey, history, { leafEntryId: pending.activeLeafEntryId, cutEntryId: pending.activeCutEntryId })
+        .catch((): undefined => undefined);
       throw new Error(t('coworkVersionSwitchFailed'));
     }
     this.deps.reset(sessionId);
@@ -261,10 +377,9 @@ export class CoworkMessageEditCoordinator {
       if (session.status === 'running') throw new Error(t('coworkEditBusy'));
       const history = await this.history(sessionKey);
       this.assertIdle(sessionId, history);
-      const activeLeafEntryId = history.sessionInfo?.activeLeafEntryId;
-      if (!activeLeafEntryId) throw new Error(t('coworkEditUnsupported'));
       try {
-        this.deps.store.messageVersions.beginSwitch(sessionId, request.messageId, request.targetIndex, activeLeafEntryId);
+        // A resend stopped before the gateway recorded it leaves the path at a fork point, or empty.
+        this.deps.store.messageVersions.beginSwitch(sessionId, request.messageId, request.targetIndex, gatewayActivePath(history));
       } catch (error) {
         console.warn('[CoworkEdit] the requested message version is unavailable:', error);
         throw new Error(t('coworkVersionSwitchFailed'));
@@ -308,16 +423,17 @@ export class CoworkMessageEditCoordinator {
         return;
       }
       this.assertIdle(sessionId, history);
-      if (history.sessionInfo?.activeLeafEntryId !== operation.originalLeafId && !isExpectedPrefix(history, operation)) {
+      // An edit that rewound nothing never moved the gateway, so only the local conversation returns.
+      const original: CoworkGatewayPosition = { leafEntryId: operation.originalLeafId ?? null, cutEntryId: operation.originalCutEntryId };
+      const moved = Boolean(operation.entryId) && !showsPosition(history, original);
+      if (moved && !isExpectedPrefix(history, operation)) {
         throw new Error(t('coworkEditChanged'));
       }
       this.deps.store.messageEdits.setPhase(operation, CoworkMessageEditPhase.Restoring);
-      if (history.sessionInfo?.activeLeafEntryId !== operation.originalLeafId) {
-        await this.deps.request(OpenClawGatewayMethod.SessionsBranchesSwitch, {
-          sessionKey: operation.sessionKey, leafEntryId: operation.originalLeafId,
-        });
+      if (moved) {
+        await this.moveGateway(operation.sessionKey, history, original);
         const restored = await this.history(operation.sessionKey);
-        if (restored.sessionInfo?.activeLeafEntryId !== operation.originalLeafId) throw new Error(t('coworkEditRecoveryFailed'));
+        if (!showsPosition(restored, original)) throw new Error(t('coworkEditRecoveryFailed'));
       }
       this.deps.store.messageEdits.restore(operation);
       this.deps.reset(sessionId);

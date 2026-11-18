@@ -27,6 +27,7 @@ import { WeixinPlugin } from '../../shared/im/weixin';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { NeteaseMailAuth, NeteaseMailTool } from '../../shared/neteaseMail/constants';
+import { buildOfficeAgentPrompt } from '../../shared/office/core/officeAgentPrompt';
 import { OFFICE_EDITORS } from '../../shared/office/editors';
 import {
   OPENCLAW_AUTOMATIONS_TOOL_NAME,
@@ -92,6 +93,7 @@ import {
   resolveManagedSessionModelTarget,
   resolveQualifiedAgentModelRef,
 } from './openclawAgentModels';
+import { slimPristineAgentsTemplateSections } from './openclawAgentsTemplate';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import { logOpenClawConfigLockDiagnostics } from './openclawConfigDiagnostics';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
@@ -104,7 +106,7 @@ import {
 import { OpenClawEmbeddingPluginId, resolveOpenClawEmbeddingProvider } from './openclawEmbeddingPlugins';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { escapeOpenClawEnvTemplate, escapeOpenClawEnvTemplateRecord } from './openclawEnvTemplate';
-import { repairHeartbeatFile, stripProactiveHeartbeatSection } from './openclawHeartbeatRepair';
+import { repairHeartbeatFile } from './openclawHeartbeatRepair';
 import { MANAGED_LOCAL_TIME_POLICY_PROMPT } from './openclawLocalTimeContextPrompt';
 import {
   withManagedOpenClawModelPolicy,
@@ -520,6 +522,8 @@ const MANAGED_BROWSER_POLICY_PROMPT = [
   '- Do not use `target="sandbox"` or `target="node"` unless a future LobsterAI version explicitly enables it.',
   '- If a browser call fails because the sandbox browser is unavailable, retry the same action with `target="host"`.',
   '- The `lobster-in-app` profile is LobsterAI\'s own browser bridge. If it is unavailable, report an internal LobsterAI browser startup failure; never tell the user to enable Chrome remote debugging or launch Chrome with debugging flags.',
+  '- `lobster-in-app` is one browser shared by every chat, IM conversation and scheduled task, and it holds the user\'s sign-ins. Never call `action="stop"` on it, even when a task says to end, close or restart the browser session: stopping it interrupts other running tasks and invalidates their tab ids.',
+  '- To finish browser work, close only tabs you opened in this run. Leave tabs you reused or did not open, especially signed-in ones. Some sites keep sign-in per tab: if a new tab shows the site signed out, check `action="tabs"` for an existing tab of that site before asking the user to sign in again.',
   `- When a page requires a password and \`${BrowserCredentialMcpServer.ModelToolName}\` is available, call it before asking the user to sign in manually. The tool can use an encrypted saved login without revealing its password to you.`,
   '- If no saved login is available, ask the user to sign in directly in the visible LobsterAI browser. Never ask the user to send a password in chat, and never search files, memory, or logs for passwords.',
 ].join('\n');
@@ -725,10 +729,10 @@ const readBundledOpenClawAgentsTemplate = (): string => {
       const content = fs.readFileSync(templatePath, 'utf8');
       const trimmed = stripTemplateFrontMatter(content);
       if (trimmed) {
-        // The bundled template tells the model to invent periodic checks and
-        // write them into HEARTBEAT.md; strip that section so new workspaces
-        // are not seeded with guidance that contradicts the heartbeat policy.
-        return stripProactiveHeartbeatSection(trimmed);
+        // Seed the slim form: the bundled template's proactive section tells
+        // the model to invent recurring checks, which contradicts the
+        // heartbeat policy, and its group-chat and tool notes are verbose.
+        return slimPristineAgentsTemplateSections(trimmed).trimEnd();
       }
     } catch {
       // Ignore missing/unreadable bundled templates and fall back below.
@@ -2254,6 +2258,10 @@ export class OpenClawConfigSync {
         return {
           ...commonConfig,
           defaultProfile: BrowserRuntimeProfile.InApp,
+          // Every in-app tab is agent-opened, so OpenClaw's idle sweep would
+          // close tabs the user signed in to; some sites keep sign-in per tab.
+          // AgentBrowserHost owns in-app tab lifecycle instead.
+          tabCleanup: { enabled: false },
           profiles: {
             [BrowserRuntimeProfile.InApp]: {
               driver: 'existing-session',
@@ -4197,9 +4205,8 @@ export class OpenClawConfigSync {
       sections.push(MANAGED_BROWSER_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
       sections.push(MANAGED_DELIVERABLE_LINKS_PROMPT);
-      for (const editor of OFFICE_EDITORS) {
-        if (editor.agent.prompt) sections.push(editor.agent.prompt);
-      }
+      const officePrompt = buildOfficeAgentPrompt(OFFICE_EDITORS);
+      if (officePrompt) sections.push(officePrompt);
       // Static policies that used to ride uncached in each session's first
       // message or each turn; here they sit in the cached prefix.
       sections.push(MANAGED_MEDIA_GENERATION_POLICY_PROMPT);
@@ -4228,7 +4235,10 @@ export class OpenClawConfigSync {
       const markerIdx = existingContent.indexOf(MARKER);
       const userContent =
         markerIdx >= 0 ? existingContent.slice(0, markerIdx).trimEnd() : existingContent.trimEnd();
-      const preservedUserContent = userContent || readBundledOpenClawAgentsTemplate();
+      // Sections the user or the agent edited do not match a shipped template
+      // and stay untouched; see openclawAgentsTemplate.ts.
+      const preservedUserContent =
+        slimPristineAgentsTemplateSections(userContent).trimEnd() || readBundledOpenClawAgentsTemplate();
 
       if (sections.length === 0) {
         // No managed content — remove the managed section if present,

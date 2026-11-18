@@ -2,6 +2,7 @@ import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
+  AuthLoginFailureReason,
   type AuthLoginResult,
   type AuthSessionChangedEvent,
   AuthSessionChangeReason,
@@ -42,7 +43,7 @@ import {
   type UserQuota,
 } from '../store/slices/authSlice';
 import { clearMediaAccountState } from '../store/slices/coworkSlice';
-import type { Model } from '../store/slices/modelSlice';
+import type { Model, ModelCustomTag } from '../store/slices/modelSlice';
 import {
   clearServerModels,
   ServerModelLoadStatus,
@@ -51,7 +52,7 @@ import {
   setServerModels,
 } from '../store/slices/modelSlice';
 import { AuthRecovery } from './authRecovery';
-import { browserLoginSession } from './browserLoginSession';
+import { browserLoginSession, BrowserLoginStatus } from './browserLoginSession';
 import { i18nService } from './i18n';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 import { getCreditQuotaSnapshot } from './lowCreditPurchaseOffer';
@@ -95,6 +96,7 @@ export interface PricingCatalogTextModel extends PricingCatalogBaseModel {
   limitedFreeStartAt?: string | null;
   limitedFreeEndAt?: string | null;
   subscriptionPriority?: boolean;
+  customTag?: unknown;
   busy?: boolean;
   supportsImage?: boolean;
   supportsThinking?: boolean;
@@ -148,6 +150,7 @@ export interface AvailableServerModelEntry {
   limitedFreeStartAt?: string | null;
   limitedFreeEndAt?: string | null;
   subscriptionPriority?: boolean;
+  customTag?: unknown;
   busy?: boolean;
 }
 
@@ -160,6 +163,23 @@ const readPositiveNumber = (value: unknown): number | undefined => (
     ? value
     : undefined
 );
+
+const MODEL_CUSTOM_TAG_COLOR = /^#[0-9A-Fa-f]{6}$/;
+
+/** Server-configured tag; anything malformed is dropped rather than rendered. */
+export const parseModelCustomTag = (value: unknown): ModelCustomTag | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const text = readString(raw.text);
+  if (!text) return undefined;
+  const iconUrl = readString(raw.iconUrl);
+  const color = readString(raw.color);
+  return {
+    text,
+    iconUrl: /^https?:\/\//i.test(iconUrl) ? iconUrl : undefined,
+    color: MODEL_CUSTOM_TAG_COLOR.test(color) ? color : undefined,
+  };
+};
 
 type AuthRendererLogLevel = 'debug' | 'info' | 'warn';
 
@@ -258,6 +278,7 @@ export function mapPricingCatalogTextModelsToServerModels(
       limitedFreeStartAt: model.limitedFreeStartAt,
       limitedFreeEndAt: model.limitedFreeEndAt,
       subscriptionPriority: model.subscriptionPriority,
+      customTag: parseModelCustomTag(model.customTag),
       busy: model.busy === true,
       moreModel: model.moreModel === true,
       accessible: false,
@@ -308,6 +329,7 @@ export function mapAvailableServerModelsToModels(
       limitedFreeStartAt: model.limitedFreeStartAt,
       limitedFreeEndAt: model.limitedFreeEndAt,
       subscriptionPriority: model.subscriptionPriority,
+      customTag: parseModelCustomTag(model.customTag),
       busy: model.busy === true,
       moreModel: model.moreModel === true,
       accessible: model.busy !== true && (model.accessible ?? true),
@@ -553,18 +575,23 @@ class AuthService {
    * Initiate login (opens system browser).
    */
   async login(): Promise<AuthLoginResult> {
+    const replacesAttempt = browserLoginSession.getSnapshot() !== null || browserLoginSession.isCancelled();
     const attemptId = ++this.loginAttemptSequence;
     writeAuthRendererLog('info', `login attempt ${attemptId} started`);
     browserLoginSession.start();
 
     try {
+      if (replacesAttempt) await window.electron.auth.cancelLogin();
       const loginUrl = await this.fetchLoginUrl();
+      if (attemptId !== this.loginAttemptSequence) {
+        return { success: false, reason: AuthLoginFailureReason.Cancelled };
+      }
       const result = await window.electron.auth.login(loginUrl);
       // A newer click owns the session; this result only matters to its caller.
       const isLatestAttempt = attemptId === this.loginAttemptSequence;
       if (result.success) {
         writeAuthRendererLog('info', `login attempt ${attemptId} handed off to the system browser`);
-        if (isLatestAttempt) {
+        if (isLatestAttempt && browserLoginSession.getSnapshot()?.status === BrowserLoginStatus.Opening) {
           browserLoginSession.handOff(result.redirectUrl ?? null);
           this.clearBrowserLoginSessionOnLogin();
         }
@@ -573,19 +600,40 @@ class AuthService {
           'warn',
           `login attempt ${attemptId} could not open the system browser reason=${result.reason ?? 'unknown'}`,
         );
-        if (isLatestAttempt) browserLoginSession.fail(result.redirectUrl ?? null);
+        if (isLatestAttempt && browserLoginSession.getSnapshot()?.status === BrowserLoginStatus.Opening) {
+          browserLoginSession.fail(result.redirectUrl ?? null);
+        }
       }
       return result;
     } catch (error) {
       writeAuthRendererLog('warn', `login attempt ${attemptId} failed before browser handoff`, error);
-      if (attemptId === this.loginAttemptSequence) browserLoginSession.clear();
+      if (attemptId === this.loginAttemptSequence) browserLoginSession.fail(null);
       throw error;
+    }
+  }
+
+  async cancelLogin(): Promise<void> {
+    this.loginAttemptSequence += 1;
+    this.cancelAuthRecovery();
+    store.dispatch(invalidateAuthAccountContext());
+    this.unsubBrowserLoginCompletion?.();
+    this.unsubBrowserLoginCompletion = null;
+    browserLoginSession.cancel();
+    try {
+      await window.electron.auth.cancelLogin();
+    } catch (error) {
+      writeAuthRendererLog('warn', 'failed to cancel browser login in the main process', error);
     }
   }
 
   /** Ends the visible login wait once the account is signed in, by any path. */
   private clearBrowserLoginSessionOnLogin(): void {
     this.unsubBrowserLoginCompletion?.();
+    if (store.getState().auth.isLoggedIn) {
+      this.unsubBrowserLoginCompletion = null;
+      browserLoginSession.clear();
+      return;
+    }
     const unsubscribe = store.subscribe(() => {
       if (!store.getState().auth.isLoggedIn) return;
       unsubscribe();
@@ -653,9 +701,13 @@ class AuthService {
    * Handle OAuth callback with auth code.
    */
   async handleCallback(code: string): Promise<boolean> {
+    if (browserLoginSession.isCancelled()) return false;
+    const attemptId = this.loginAttemptSequence;
+    browserLoginSession.verify();
     writeAuthRendererLog('info', 'received login callback; starting token exchange');
     try {
       const result = await window.electron.auth.exchange(code);
+      if (attemptId !== this.loginAttemptSequence || browserLoginSession.isCancelled()) return false;
       if (result.success && result.user) {
         writeAuthRendererLog('info', 'login callback exchange succeeded');
         this.cancelAuthRecovery();
@@ -667,6 +719,7 @@ class AuthService {
           result.purchaseOffer,
           result.enterpriseContext,
         );
+        browserLoginSession.clear();
         await this.loadServerModels();
         void this.refreshQuota({ refreshProfileSummary: true });
         return true;
@@ -674,6 +727,9 @@ class AuthService {
       writeAuthRendererLog('warn', 'login callback exchange was rejected');
     } catch (e) {
       writeAuthRendererLog('warn', 'login callback exchange failed', e);
+    }
+    if (attemptId === this.loginAttemptSequence && !browserLoginSession.isCancelled()) {
+      browserLoginSession.verificationFailed();
     }
     return false;
   }

@@ -8,6 +8,7 @@ import {
   SETTINGS_ITEM_TITLE_TEXT,
   SETTINGS_META_TEXT,
 } from '../settings/settingsTypography';
+import { flattenDiaryBody, formatDiaryChipLabel, parseDiaryEntries } from './dreamDiaryParser';
 
 interface DreamingSettingsSectionProps {
   dreamingEnabled: boolean;
@@ -37,74 +38,6 @@ const DREAMING_SCENE_STARS = [
   { top: '42%', left: '31%', size: 3, opacity: 0.55, tone: 'accent', delay: '0.9s' },
   { top: '39%', left: '89%', size: 2, opacity: 0.26, tone: 'soft', delay: '2s' },
 ] as const;
-
-// ── Diary parser (mirrors OpenClaw's parseDiaryEntries) ──────────────
-
-type DiaryEntry = {
-  date: string;
-  body: string;
-};
-
-const DIARY_START_RE = /<!--\s*openclaw:dreaming:diary:start\s*-->/;
-const DIARY_END_RE = /<!--\s*openclaw:dreaming:diary:end\s*-->/;
-
-function parseDiaryEntries(raw: string): DiaryEntry[] {
-  let content = raw;
-  const startMatch = DIARY_START_RE.exec(raw);
-  const endMatch = DIARY_END_RE.exec(raw);
-  if (startMatch && endMatch && endMatch.index > startMatch.index) {
-    content = raw.slice(startMatch.index + startMatch[0].length, endMatch.index);
-  }
-  const entries: DiaryEntry[] = [];
-  const blocks = content.split(/\n---\n/).filter((b) => b.trim().length > 0);
-  for (const block of blocks) {
-    const lines = block.trim().split('\n');
-    let date = '';
-    const bodyLines: string[] = [];
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!date && trimmed.startsWith('*') && trimmed.endsWith('*') && trimmed.length > 2) {
-        date = trimmed.slice(1, -1);
-        continue;
-      }
-      if (trimmed.startsWith('#') || trimmed.startsWith('<!--')) continue;
-      if (trimmed.length > 0) bodyLines.push(trimmed);
-    }
-    if (bodyLines.length > 0) {
-      entries.push({ date, body: bodyLines.join('\n') });
-    }
-  }
-  return entries;
-}
-
-function flattenDiaryBody(body: string): string[] {
-  return body
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(
-      (line) =>
-        line.length > 0 &&
-        line !== 'What Happened' &&
-        line !== 'Reflections' &&
-        line !== 'Candidates' &&
-        line !== 'Possible Lasting Updates',
-    )
-    .map((line) => line.replace(/\s*\[memory\/[^\]]+\]/g, ''))
-    .map((line) =>
-      line
-        .replace(/^(?:\d+\.\s+|-\s+(?:\[[^\]]+\]\s+)?(?:[a-z_]+:\s+)?)/i, '')
-        .replace(/^(?:likely_durable|likely_situational|unclear):\s+/i, '')
-        .trim(),
-    )
-    .filter((line) => line.length > 0);
-}
-
-function formatDiaryChipLabel(date: string): string {
-  const parsed = Date.parse(date);
-  if (!Number.isFinite(parsed)) return date;
-  const value = new Date(parsed);
-  return `${value.getMonth() + 1}/${value.getDate()}`;
-}
 
 function formatPhaseNextRun(nextRunAtMs?: number): string {
   if (!nextRunAtMs) return '—';
@@ -282,9 +215,23 @@ function SceneTab({ status, fallbackCron }: { status: DreamingStatusData; fallba
   );
 }
 
-function DiaryTab({ diary, loading, onRefresh }: {
+function DiaryRefreshButton({ loading, onRefresh }: { loading: boolean; onRefresh: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={loading}
+      className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
+    >
+      {loading ? i18nService.t('coworkDreamingDiaryRefreshing') : i18nService.t('coworkDreamingDiaryRefresh')}
+    </button>
+  );
+}
+
+function DiaryTab({ diary, loading, error, onRefresh }: {
   diary: DreamDiaryData | null;
   loading: boolean;
+  error: string | null;
   onRefresh: () => void;
 }) {
   const [page, setPage] = useState(0);
@@ -305,8 +252,20 @@ function DiaryTab({ diary, loading, onRefresh }: {
   if (!diary?.content || entries.length === 0) {
     return (
       <div className="flex min-h-[260px] flex-col items-center justify-center space-y-2 rounded-xl border border-border bg-surface text-center">
-        <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{i18nService.t('coworkDreamingDiaryEmpty')}</div>
-        <div className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingDiaryEmptyHint')}</div>
+        {error ? (
+          <>
+            <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{i18nService.t('coworkDreamingDiaryLoadError')}</div>
+            <div className={`max-w-md ${SETTINGS_DESCRIPTION_TEXT} text-secondary [overflow-wrap:anywhere]`}>{error}</div>
+          </>
+        ) : (
+          <>
+            <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{i18nService.t('coworkDreamingDiaryEmpty')}</div>
+            <div className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingDiaryEmptyHint')}</div>
+          </>
+        )}
+        <div className="pt-2">
+          <DiaryRefreshButton loading={loading} onRefresh={onRefresh} />
+        </div>
       </div>
     );
   }
@@ -318,15 +277,13 @@ function DiaryTab({ diary, loading, onRefresh }: {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className={`max-w-xl ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingDiaryHint')}</p>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={loading}
-          className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
-        >
-          {loading ? i18nService.t('coworkDreamingDiaryRefreshing') : i18nService.t('coworkDreamingDiaryRefresh')}
-        </button>
+        <DiaryRefreshButton loading={loading} onRefresh={onRefresh} />
       </div>
+      {error && (
+        <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300 [overflow-wrap:anywhere]">
+          {i18nService.t('coworkDreamingDiaryLoadError')}: {error}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {reversed.map((e, idx) => (
@@ -598,6 +555,7 @@ const DreamingSettingsSection: React.FC<DreamingSettingsSectionProps> = ({
   const [dreamDiary, setDreamDiary] = useState<DreamDiaryData | null>(null);
   const [_statusLoading, setStatusLoading] = useState(false);
   const [diaryLoading, setDiaryLoading] = useState(false);
+  const [diaryError, setDiaryError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const isPreset = useMemo(
@@ -689,13 +647,17 @@ const DreamingSettingsSection: React.FC<DreamingSettingsSectionProps> = ({
 
   const fetchDreamDiary = useCallback(async () => {
     setDiaryLoading(true);
+    setDiaryError(null);
     try {
       const result = await (window as any).electron.cowork.getDreamDiary();
       if (result?.success && result.data) {
         setDreamDiary(result.data);
+      } else if (!result?.success) {
+        // Keep the last diary visible; show why the refresh failed instead of an empty state.
+        setDiaryError(result?.error || i18nService.t('coworkDreamingDiaryLoadError'));
       }
     } catch {
-      // Diary is secondary content; keep the scene available if it fails.
+      setDiaryError(i18nService.t('coworkDreamingDiaryLoadError'));
     } finally {
       setDiaryLoading(false);
     }
@@ -765,7 +727,7 @@ const DreamingSettingsSection: React.FC<DreamingSettingsSectionProps> = ({
         )}
 
         {contentTab === 'diary' && (
-          <DiaryTab diary={dreamDiary} loading={diaryLoading} onRefresh={fetchDreamDiary} />
+          <DiaryTab diary={dreamDiary} loading={diaryLoading} error={diaryError} onRefresh={fetchDreamDiary} />
         )}
 
         {contentTab === 'advanced' && (

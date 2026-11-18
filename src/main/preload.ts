@@ -1,7 +1,8 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
 import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import { AccountMenuMoreIpc } from '../shared/accountMenuMore/constants';
 import {
   type ActivityHostExecuteActionInput,
   type ActivityHostGetContextInput,
@@ -12,7 +13,7 @@ import type { AgentModelSelectionMode } from '../shared/agent/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
 import type { AgentModelSelection } from '../shared/agent/modelSelection';
 import type { UsageContext } from '../shared/analytics/usage';
-import { AppIpcChannel, WindowIpcChannel } from '../shared/app/constants';
+import { AppIpcChannel, WindowIpcChannel, type WindowZoomChangedPayload } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
@@ -136,6 +137,8 @@ import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
+import { type PptAssetRequest, type PptCatalog, PptCreationIpc, type PptPreparedFile } from '../shared/pptCreation/constants';
+import { type PptCoverExportRequest, PptCoverIpc, type PptCoverRequest } from '../shared/pptCreation/cover';
 import { ModelContextWindowIpc, type ModelContextWindowRequest } from '../shared/providers/modelContextWindow';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
@@ -175,6 +178,11 @@ import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
+
+// Every page starts at 100%. Setting the zoom from the page also makes it a per-window zoom (see
+// installMainWindowZoom): Chromium then neither saves it across restarts nor shares it with other windows
+// of the same origin, which all windows are in development.
+webFrame.setZoomFactor(1);
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -437,6 +445,11 @@ contextBridge.exposeInMainWorld('electron', {
     isFullscreen: () => ipcRenderer.invoke(WindowIpcChannel.IsFullscreen),
     showSystemMenu: (position: { x: number; y: number }) =>
       ipcRenderer.send('window:showSystemMenu', position),
+    onZoomChanged: (callback: (payload: WindowZoomChangedPayload) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: WindowZoomChangedPayload) => callback(payload);
+      ipcRenderer.on(WindowIpcChannel.ZoomChanged, handler);
+      return () => ipcRenderer.removeListener(WindowIpcChannel.ZoomChanged, handler);
+    },
     onStateChanged: (
       callback: (state: {
         isMaximized: boolean;
@@ -670,6 +683,7 @@ contextBridge.exposeInMainWorld('electron', {
   cowork: {
     // Session management
     startSession: (options: {
+      pptCover?: PptCoverRequest;
       analytics?: UsageContext;
       prompt: string;
       cwd?: string;
@@ -867,8 +881,10 @@ contextBridge.exposeInMainWorld('electron', {
     readMemoryFileRaw: () => ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw),
     writeMemoryFileRaw: (input: { content: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
-    getDreamingStatus: () => ipcRenderer.invoke('cowork:dreaming:status'),
-    getDreamDiary: () => ipcRenderer.invoke('cowork:dreaming:diary'),
+    getDreamingStatus: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.DreamingStatus, options),
+    getDreamDiary: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.DreamingDiary, options),
     readBootstrapFile: (filename: string, options?: { agentId?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.BootstrapRead, filename, options),
     writeBootstrapFile: (filename: string, content: string, options?: { agentId?: string }) =>
@@ -1287,6 +1303,9 @@ contextBridge.exposeInMainWorld('electron', {
   subscriptionTrial: {
     status: () => ipcRenderer.invoke(SubscriptionTrialIpc.Status),
   },
+  accountMenuMore: {
+    get: () => ipcRenderer.invoke(AccountMenuMoreIpc.Get),
+  },
   activity: {
     getSlot: (input: ActivityHostGetSlotInput) =>
       ipcRenderer.invoke(ActivityIpc.HostGetSlot, input),
@@ -1551,6 +1570,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   auth: {
     login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
+    cancelLogin: () => ipcRenderer.invoke(AuthIpcChannel.CancelLogin),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),
@@ -1590,6 +1610,12 @@ contextBridge.exposeInMainWorld('electron', {
   imageCreation: {
     getCatalog: () => ipcRenderer.invoke(ImageCreationIpc.GetCatalog) as Promise<ImageCreationCatalog>,
     getReference: (exampleId: string) => ipcRenderer.invoke(ImageCreationIpc.GetReference, exampleId) as Promise<ImageExampleReference>,
+  },
+  pptCreation: {
+    getCatalog: () => ipcRenderer.invoke(PptCreationIpc.GetCatalog) as Promise<PptCatalog>,
+    getAsset: (request: PptAssetRequest) => ipcRenderer.invoke(PptCreationIpc.GetAsset, request) as Promise<PptPreparedFile>,
+    getCoverTemplate: (request: PptCoverRequest) => ipcRenderer.invoke(PptCoverIpc.Template, request) as Promise<{ imageBase64: string }>,
+    exportCover: (request: PptCoverExportRequest) => ipcRenderer.invoke(PptCoverIpc.Export, request) as Promise<PptPreparedFile>,
   },
   media: {
     getPreferences: (owner: string) =>

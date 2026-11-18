@@ -35,6 +35,7 @@ import { ModelPresetId } from '../shared/modelPresets/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
 // ---------------------------------------------------------------------------
@@ -283,6 +284,119 @@ test('getSession returns all messages when one has corrupt metadata', () => {
   // Null metadata → undefined
   const nullMsg = session!.messages.find((m) => m.id === 'msg-null')!;
   expect(nullMsg.metadata).toBeUndefined();
+});
+
+test('paged metadata: getSession opens a long session with corrupt metadata in the latest page', () => {
+  const sid = 'paged-corrupt-session';
+  const corruptId = 'paged-corrupt-message';
+  insertSession(sid);
+  insertMessage('earlier-user', sid, 'user', 'earlier message', '{}', 1, 1000);
+  for (let index = 1; index <= COWORK_MESSAGE_PAGE_SIZE; index++) {
+    const corrupt = index === COWORK_MESSAGE_PAGE_SIZE;
+    insertMessage(
+      corrupt ? corruptId : `page-message-${index}`,
+      sid,
+      corrupt ? 'tool_use' : 'assistant',
+      corrupt ? 'preserved tool content' : `reply ${index}`,
+      corrupt ? '{broken' : JSON.stringify({ index }),
+      index + 1,
+      1000 + index,
+    );
+  }
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const session = store.getSession(sid);
+    expect(session).not.toBeNull();
+    expect(session).toMatchObject({ messagesOffset: 1, totalMessages: COWORK_MESSAGE_PAGE_SIZE + 1 });
+    expect(session!.messages).toHaveLength(COWORK_MESSAGE_PAGE_SIZE);
+    expect(session!.messages[0]).toMatchObject({ id: 'page-message-1', metadata: { index: 1 } });
+    expect(session!.messages.at(-1)).toEqual({
+      id: corruptId,
+      type: 'tool_use',
+      content: 'preserved tool content',
+      timestamp: 1000 + COWORK_MESSAGE_PAGE_SIZE,
+      metadata: undefined,
+    });
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message ${corruptId} in session ${sid}, discarding metadata`,
+    );
+    expect(db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get(corruptId))
+      .toEqual({ metadata: '{broken' });
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('paged metadata: direct paging preserves order and content when one selected row is corrupt', () => {
+  const sid = 'paged-mixed-session';
+  const corruptId = 'selected-corrupt';
+  insertSession(sid);
+  insertMessage('excluded-corrupt', sid, 'tool_use', 'outside this page', '{broken', 1, 1000);
+  insertMessage('selected-valid', sid, 'user', 'valid content', '{"keep":true}', 2, 2000);
+  insertMessage(corruptId, sid, 'tool_use', 'corrupt metadata content', '{broken', 3, 3000);
+  insertMessage('selected-null', sid, 'assistant', 'null metadata content', null, 4, 4000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(store.getPagedSessionMessages(sid, 3, 1)).toEqual([
+      { id: 'selected-valid', type: 'user', content: 'valid content', timestamp: 2000, metadata: { keep: true } },
+      { id: corruptId, type: 'tool_use', content: 'corrupt metadata content', timestamp: 3000, metadata: undefined },
+      { id: 'selected-null', type: 'assistant', content: 'null metadata content', timestamp: 4000, metadata: undefined },
+    ]);
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message ${corruptId} in session ${sid}, discarding metadata`,
+    );
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('paged metadata: valid and null metadata and empty pages remain unchanged without warnings', () => {
+  const sid = 'paged-valid-session';
+  insertSession(sid);
+  insertMessage('valid', sid, 'user', 'valid content', '{"nested":{"keep":true}}', 1, 1000);
+  insertMessage('null', sid, 'assistant', 'null content', null, 2, 2000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(store.getPagedSessionMessages(sid, 2, 0)).toEqual([
+      { id: 'valid', type: 'user', content: 'valid content', timestamp: 1000, metadata: { nested: { keep: true } } },
+      { id: 'null', type: 'assistant', content: 'null content', timestamp: 2000, metadata: undefined },
+    ]);
+    expect(store.getPagedSessionMessages(sid, 2, 2)).toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test.each([
+  { name: 'getRecentConversationMessages', read: (id: string) => store.getRecentConversationMessages(id, 3) },
+  { name: 'getAllConversationMessages', read: (id: string) => store.getAllConversationMessages(id) },
+])('$name preserves messages with corrupt stored metadata', ({ read }) => {
+  const sid = 'conversation-metadata';
+  insertSession(sid);
+  insertMessage('excluded-tool', sid, 'tool_use', 'excluded tool', '{broken', 1, 1000);
+  insertMessage('valid', sid, 'user', 'valid content', '{"nested":{"keep":true}}', 2, 4000);
+  insertMessage('corrupt', sid, 'assistant', 'preserved content', '{broken', 3, 2000);
+  insertMessage('null', sid, 'assistant', 'null metadata', null, 4, 3000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(read(sid)).toEqual([
+      { id: 'valid', type: 'user', content: 'valid content', timestamp: 4000, metadata: { nested: { keep: true } } },
+      { id: 'corrupt', type: 'assistant', content: 'preserved content', timestamp: 2000, metadata: undefined },
+      { id: 'null', type: 'assistant', content: 'null metadata', timestamp: 3000, metadata: undefined },
+    ]);
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message corrupt in session ${sid}, discarding metadata`,
+    );
+    expect(db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get('corrupt'))
+      .toEqual({ metadata: '{broken' });
+  } finally {
+    warnSpy.mockRestore();
+  }
 });
 
 test('getSessionSearchMessagePage keeps absolute mixed-message offsets without returning metadata or tool content', () => {
@@ -1315,7 +1429,10 @@ test('forkSession copies stable history and records fork metadata', () => {
   expect(fork.messages.map((message) => message.content)).toEqual(['start here', 'finished answer']);
   expect(fork.messages.every((message) => !['msg-user', 'msg-assistant'].includes(message.id))).toBe(true);
   expect(fork.messages[0].metadata).toEqual({ keep: true });
-  expect(fork.messages[1].metadata).toEqual({ keep: 'yes' });
+  expect(fork.messages[1].metadata).toEqual({
+    keep: 'yes',
+    toolUseId: deriveForkToolUseId(fork.id, 'tool-done'),
+  });
 
   const forkRows = db
     .prepare('SELECT content, sequence FROM cowork_messages WHERE session_id = ? ORDER BY sequence ASC')
@@ -1324,6 +1441,27 @@ test('forkSession copies stable history and records fork metadata', () => {
     { content: 'start here', sequence: 1 },
     { content: 'finished answer', sequence: 3 },
   ]);
+});
+
+test('forkSession keeps parallel tool results paired with their calls', () => {
+  const sid = 'sess-fork-parallel-tools';
+  insertSession(sid);
+  insertMessage('msg-user-parallel', sid, 'user', 'write three files', null, 1, 1000);
+  insertMessage('use-1', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_00_a' }), 2, 2000);
+  insertMessage('use-2', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_01_b' }), 3, 2001);
+  insertMessage('result-2', sid, 'tool_result', 'wrote 2', JSON.stringify({ toolResult: 'wrote 2', toolUseId: 'call_01_b' }), 4, 2002);
+  insertMessage('result-1', sid, 'tool_result', 'wrote 1', JSON.stringify({ toolResult: 'wrote 1', toolUseId: 'call_00_a' }), 5, 2003);
+  insertMessage('msg-done-parallel', sid, 'assistant', 'done', null, 6, 3000);
+
+  const fork = store.forkSession({ sourceSessionId: sid });
+  const toolUseIdByContent = new Map(fork.messages.map(message => [message.content, message.metadata?.toolUseId]));
+
+  expect(toolUseIdByContent.get('wrote 1')).toBe(deriveForkToolUseId(fork.id, 'call_00_a'));
+  expect(toolUseIdByContent.get('wrote 2')).toBe(deriveForkToolUseId(fork.id, 'call_01_b'));
+  const [firstUse, secondUse] = fork.messages.filter(message => message.type === 'tool_use');
+  expect(firstUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 1'));
+  expect(secondUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 2'));
+  expect(fork.messages.some(message => message.metadata?.toolUseId === 'call_00_a')).toBe(false);
 });
 
 test('forkSession keeps the selected plan message when its streaming flag is stale', () => {

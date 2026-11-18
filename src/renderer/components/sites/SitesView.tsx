@@ -81,6 +81,7 @@ import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import { LibraryAnalyticsSurface } from '../library/libraryAnalytics';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import SiteAnalyticsChart from './SiteAnalyticsChart';
 import SiteDefaultIcon from './SiteDefaultIcon';
 import SiteDeleteWarnings from './SiteDeleteWarnings';
@@ -259,7 +260,7 @@ const SitesTopBar: React.FC<{
     <div className="draggable flex h-12 shrink-0 items-center border-b border-border px-4">
       <div className="flex h-8 items-center gap-3">
         {isSidebarCollapsed && !isWindows && (
-          <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
+          <div className={`non-draggable flex items-center gap-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
             <button
               type="button"
               onClick={onToggleSidebar}

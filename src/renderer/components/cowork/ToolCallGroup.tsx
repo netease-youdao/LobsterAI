@@ -6,8 +6,8 @@ import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json'
 import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
 import { ActivityPlanDetail } from './ActivityPlanDetail';
-import { ActivityLiveDetailLine, ActivityStepLine } from './ActivityStepLine';
-import { ActivityEntryVariant } from './constants';
+import { ActivityDetailDisclosure, ActivityLiveDetailLine, ActivityStepLine } from './ActivityStepLine';
+import { ActivityEntryVariant, ActivityStepKind } from './constants';
 import {
   bucketLength,
   getMessageLineCount,
@@ -46,7 +46,6 @@ import {
   type ToolGroupItem,
   truncatePreview,
 } from './messageDisplayUtils';
-import { DiffStatsBadge, getToolGroupDiffStats } from './toolDiffStats';
 
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
 
@@ -84,6 +83,8 @@ const ToolCallGroup: React.FC<{
   variant?: 'timeline' | ActivityEntryVariant;
   /** Whether the row reads as the step running right now; defaults to the step still running. */
   isLive?: boolean;
+  /** Opening a file-change summary also reveals its file details. */
+  defaultExpanded?: boolean;
 }> = ({
   group,
   mediaTaskPresentation,
@@ -93,9 +94,10 @@ const ToolCallGroup: React.FC<{
   footer,
   variant = 'timeline',
   isLive,
+  defaultExpanded = false,
 }) => {
   const { toolUse, toolResult } = group;
-  const shouldExpandByDefault = isMediaStatusPoll(group) && !mediaTaskPresentation;
+  const shouldExpandByDefault = defaultExpanded || (isMediaStatusPoll(group) && !mediaTaskPresentation);
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
   // Later calls on a task whose card is already shown are progress checks.
@@ -159,11 +161,20 @@ const ToolCallGroup: React.FC<{
     [rawToolName, toolInput],
   );
   const isEditWithDiff = diffDataList !== null && diffDataList.length > 0;
+  const stepItem: ConsolidatedItem = { type: 'tool_group', group };
+  const stepKind = getActivityStepKind(stepItem);
+  const isFileChange = stepKind === ActivityStepKind.Edit;
+  const fileContent = isFileChange && typeof toolInput?.content === 'string' ? toolInput.content : null;
   // A step is live until its result is final: a streaming result keeps the
   // pulse and shows the latest output line instead of a line count.
   const isRunning = isSessionStreaming && !isToolGroupSettled(group);
   const liveDetail = isRunning ? getActivityLiveDetail({ type: 'tool_group', group }) : null;
-  const diffStats = useMemo(() => getToolGroupDiffStats(group), [group]);
+  const fileDetailLabel = isExpanded ? 'coworkActivityHideDetails'
+    : isToolError ? 'coworkActivityViewError'
+      : isToolGroupSettled(group) ? 'coworkActivityViewChanges' : 'coworkActivityViewDetails';
+  const fileDetailDisclosure = isFileChange && (
+    <ActivityDetailDisclosure label={i18nService.t(fileDetailLabel)} isExpanded={isExpanded} />
+  );
   const reportToolToggle = (nextExpanded: boolean) => {
     const resultLength = toolResultDisplayRaw.length || collapsedToolResult?.text?.length || 0;
     reportConversationBlockAction({
@@ -288,6 +299,10 @@ const ToolCallGroup: React.FC<{
             </div>
           ) : activityPlan ? (
             <ActivityPlanDetail plan={activityPlan} mapDisplayText={mapDisplayText} />
+          ) : isFileChange && isToolError ? (
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-code text-red-500">
+              {displayToolResult}
+            </pre>
           ) : isEditWithDiff && diffDataList ? (
             <div className="space-y-2">
               {diffDataList.map((diff, idx) => (
@@ -298,24 +313,16 @@ const ToolCallGroup: React.FC<{
                   filePath={diff.filePath}
                 />
               ))}
-              {toolResult && (hasToolResultText || showNoDetailError) && (
-                <div>
-                  <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider mb-1">
-                    {i18nService.t('coworkToolResult')}
-                  </div>
-                  <div className="max-h-32 overflow-y-auto">
-                    <pre className={`text-code whitespace-pre-wrap break-words font-mono ${
-                      isToolError
-                        ? 'text-red-500'
-                        : hasToolResultText
-                          ? 'dark:text-claude-darkText text-claude-text'
-                          : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
-                    }`}>
-                      {displayToolResult}
-                    </pre>
-                  </div>
-                </div>
-              )}
+            </div>
+          ) : fileContent !== null ? (
+            <div className="overflow-hidden rounded-lg border border-border">
+              <div className="flex items-center gap-2 bg-surfaceInset px-3 py-1.5 text-xs text-secondary">
+                <span className="min-w-0 truncate">{toolInputSummary}</span>
+                <span className="flex-shrink-0">{i18nService.t('coworkActivityWrittenContent')}</span>
+              </div>
+              <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-code text-foreground">
+                {fileContent}
+              </pre>
             </div>
           ) : (
             <div className="space-y-2">
@@ -360,13 +367,11 @@ const ToolCallGroup: React.FC<{
   }
 
   if (variant === ActivityEntryVariant.Row) {
-    const stepItem: ConsolidatedItem = { type: 'tool_group', group };
     const isRowLive = isLive ?? isRunning;
-    const stepKind = getActivityStepKind(stepItem);
     const rowLiveDetail = isRowLive && !isExpanded ? getActivityLiveDetail(stepItem) : null;
     // Terminal output and diffs carry their own frame; anything else gets one
     // so it does not float loose under the step line.
-    const hasOwnFrame = isBashTool || isEditWithDiff;
+    const hasOwnFrame = isBashTool || (!isToolError && (isEditWithDiff || fileContent !== null));
     return (
       <div>
         <ActivityStepLine
@@ -376,7 +381,7 @@ const ToolCallGroup: React.FC<{
           hasError={isToolError}
           isExpanded={isExpanded}
           onToggle={handleToggle}
-          trailing={diffStats && <DiffStatsBadge stats={diffStats} className="text-sm" />}
+          trailing={fileDetailDisclosure}
         />
         {rowLiveDetail && (
           <ActivityLiveDetailLine
@@ -405,7 +410,9 @@ const ToolCallGroup: React.FC<{
         <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
       )}
       <button
+        type="button"
         onClick={handleToggle}
+        aria-expanded={isExpanded}
         className="w-full flex items-start gap-2 text-left group relative z-10"
       >
         <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
@@ -420,16 +427,18 @@ const ToolCallGroup: React.FC<{
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-sm font-medium text-secondary ${isRunning ? 'shimmer-text' : ''}`}>
-              {getMediaCallLabel(isRunning) ?? toolName}
+              {isFileChange
+                ? mapText(isRunning ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))
+                : getMediaCallLabel(isRunning) ?? toolName}
             </span>
-            {toolInputSummary && (
+            {toolInputSummary && !isFileChange && (
               <code className="text-code text-muted font-mono truncate max-w-full">
                 {toolInputSummary}
               </code>
             )}
-            {diffStats && <DiffStatsBadge stats={diffStats} className="text-xs" />}
+            {fileDetailDisclosure}
           </div>
-          {toolResult && !isRunning && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
+          {toolResult && !isRunning && !isTodoWriteTool && !isFileChange && (hasToolResultText || showNoDetailError) && (
             <div className={`text-xs mt-0.5 ${
               hasToolResultText
                 ? 'text-muted'
